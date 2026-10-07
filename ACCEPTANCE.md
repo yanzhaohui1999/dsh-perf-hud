@@ -28,8 +28,8 @@ dsh --profile web --dump-config | grep -A1 perf-hud             # 组合核对
 | # | 判据 | 实测 | 状态 |
 |---|---|---|---|
 | 1 | 精确归因开启后 rotator/notify-me 作为独立包名出现 | 线上真实 map:`sections=58`、包名与批次 entries **顺序完全一致**、每个 section 起止行共 **116 处断言 0 错**;`dsh-status-rotator` = section #56 offset.line=**128472**、`dsh-notify-me` = #57 offset.line=**137380**(`node tests/live-sourcemap.mjs`) | 机制已证;面板那一行需点一次「精确归因」(默认关,按规格) |
-| 2 | 渲染型卡顿 longtask 命中 > 0 且给出组件名 | 走查逻辑 6 条断言:最深具名组件、跳过 `Fragment`/`Memo` 等内建名、`displayName` 优先、2 秒窗口外引用被释放、无 fiber 返回 null、入口扫描上界 64 | 数字待点「自测:渲染卡顿」(一次提交 6000 节点) |
-| 3 | 空闲 60 秒基线,消息区速率接近 0;不为 0 能指名 | 门控 6 条断言(含**真跑一次窗口**);基线记录带 `domTop`(插件名 + 组件名);速率窗口从 80 秒缩到 12 秒,空闲能在 12 秒内归零 | 线上数字待一次空闲窗口 |
+| 2 | 渲染型卡顿 longtask 命中 > 0 且给出组件名 | **面板现场(用户截图 15:16)**:`Longtask 次数 3 次 · 归因命中 2`、`longtask 归因 2/3 · 组件 2` —— 命中 > 0 且给出了组件名 ✓;最差那条 298ms 显示「未归因」(不在插桩路径上,如实留空)。走查逻辑另有 8 条断言(最深具名组件、跳过 `Fragment`/`Memo` 内建名、**跳过压缩名 n5/t3**、`displayName` 优先、2 秒窗口外释放、无 fiber 返回 null、扫描上界 64) | **已达成** |
+| 3 | 空闲 60 秒基线,消息区速率接近 0;不为 0 能指名 | 面板现场(截图):`状态 空闲 22s · 空闲基线(60s)…`(窗口已在跑)、`消息区 3084 · +0/分`、`会话列表 24 · +0/分` —— **空闲时速率已经是 0**;基线记录带 `domTop`(插件名 + 组件名),门控另有 6 条断言含真跑一次窗口 | 速率已实测为 0;基线对象待空闲满 60 秒落地 |
 | 4 | 导出含三段 | 导出结构 11 条断言:`timeline`(每秒曲线/last60s/marks/idleBaseline)、`longTasks`(total/attributed/records,每条带 owner/component/source)、`isolation`(phase/via/candidates/baseline/results/restored) | 结构已证;真实 JSON 待点「导出 JSON」 |
 | 5 | 不动宿主持久化配置 | `cordis.patch.yml` 与备份 diff **只有服务自己改的 model 两行**;`session-persistence-jsonl` 仍在组合第 210 行;本轮未写 profile 任何文件;线上实测 `setBundle` 无 `confirm` → **400**,随后 `listBundles` 前后快照**一个字节没变** | 已证(线上对照) |
 
@@ -60,3 +60,11 @@ dsh --profile web --dump-config | grep -A1 perf-hud             # 组合核对
 - 面板「自测:渲染卡顿」:一次提交 6000 节点,制造真实渲染型长任务,longtask 明细给出组件名,「Longtask 次数 · 归因命中」+1。
 - 面板「导出 JSON」:文件含 `timeline` / `longTasks` / `isolation` 三段与 `verification` 判据。
 - 点「开始实验」跑一次完整隔离实验(每候选 60 秒,自动恢复并核验;需要浏览器保持打开)。
+
+## 面板现场实测(用户截图,2026-10-07 15:16,浏览器在 Windows 经 SSH 隧道)
+
+- 宿主 event-loop:**p50 1.28ms · p99 2.92ms**(面板「宿主 event-loop」行,真实运行中的宿主进程)
+- 宿主事件到达:`assistant/message 14 次 · 累计 44ms · 峰 5ms / turn/…` —— listener 口径的到达延迟在面板上真的有数
+- 链路 RTT 近60s:**p50 305ms · p99 305ms · 疑似链路** —— 这是真实链路(Windows 浏览器 → SSH 隧道 → Mac 127.0.0.1:3080);我在 Mac 本机 curl 同一条路由是 2.6ms。所以「疑似链路」判定正确,不是误报
+- DOM 写入:精确总次数 **17211**,Top 写入者 `(n5)`(压缩名,已在新版过滤掉)与 `(ChatNodeSeat)`,`其余 (111)`
+- 精确归因仍是关的(`0/0 批次分段`、`✗ rotator / ✗ notify-me`),归因表因此显示 `application批次(58 包)` / `(16 包)` 两行 —— 按规格默认关

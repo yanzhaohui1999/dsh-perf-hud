@@ -222,8 +222,11 @@ check('sectionOwner(表为空) = null', EX.sectionOwner({ offsets: [] }, 5), nul
 // ── A:批次标签 —— 绝不展开成多个名字 ───────────────────────────────
 const longUrl = `http://127.0.0.1:3080/plugins/??${Array.from({ length: 58 }, (_, i) => `p${i}/client.js`).join(',')}&rev=1`;
 const bundleKey = `bundle:${longUrl}`;
+// 关着的时候只给一行批次标签(不写"解析中",因为根本还没去解析)
+check('精确归因关着:批次标签不带状态后缀', EX.bundleLabel(bundleKey), '合并批次(58 包)');
+box.state.precise = true;
 box.bundleMaps.set(bundleKey, { state: 'pending' });
-check('58 包合并 URL 只给一行', EX.bundleLabel(bundleKey), '合并批次(58 包)·解析中');
+check('精确归因打开 + 未就绪:标成解析中', EX.bundleLabel(bundleKey), '合并批次(58 包)·解析中');
 box.bundleMaps.set(bundleKey, { state: 'ready' });
 check('解析完成后去掉状态后缀', EX.bundleLabel(bundleKey), '合并批次(58 包)');
 box.bundleMaps.set(bundleKey, { state: 'failed', reason: 'HTTP 403' });
@@ -244,6 +247,10 @@ check('没有 fiber 的节点 → null', EX.componentOf({ className: 'x' }), nul
 check('跳过 React 容器型内建名',
 	EX.componentOf({ __reactFiber$x: hostFiber(fnFiber(fnFiber(rootFiber, 'AppShell'), 'Fragment')) }), 'AppShell');
 check('没有具名函数组件 → null', EX.componentOf({ __reactFiber$x: hostFiber(rootFiber) }), null);
+check('跳过压缩名 n5,继续往上找真名',
+	EX.componentOf({ __reactFiber$m: hostFiber(fnFiber(fnFiber(rootFiber, 'AppShell'), 'n5')) }), 'AppShell');
+check('压缩名在整条链上都没有 → null',
+	EX.componentOf({ __reactFiber$m: hostFiber(fnFiber(rootFiber, 'n5')) }), null);
 check('displayName 优先于 name',
 	EX.componentOf({ __reactFiber$y: { type: Object.assign(named('RealName'), { displayName: 'Shown' }), return: null } }), 'Shown');
 

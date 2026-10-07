@@ -148,6 +148,7 @@ window.__ModuleLoader__.load({
 		/** 面板/归因表里显示的一行:批次名 + 包数(+状态),绝不展开成 58 个名字。 */
 		function bundleLabel(key) {
 			const meta = bundleMetaOf(key);
+			if (state.precise === false) return `${meta.phase === '' ? '合并' : meta.phase}批次(${meta.count} 包)`;
 			const entry = bundleMaps.get(key);
 			const status = entry === undefined || entry.state === 'pending'
 				? '·解析中'
@@ -422,6 +423,9 @@ window.__ModuleLoader__.load({
 				if (typeof type !== 'function') continue;
 				const name = type.displayName ?? type.name;
 				if (typeof name !== 'string' || name === '' || REACT_INTERNAL.has(name)) continue;
+				// 生产构建把组件名压成 n5 / t3 这种,对人毫无意义 —— 跳过它继续往上找,
+				// 别拿压缩名冒充"组件名"(线上实测 DOM 写入表里真的出现过 `(n5)`)。
+				if (/^[a-z]{1,2}\d{0,3}$/.test(name)) continue;
 				return name;
 			}
 			return null;
@@ -1517,7 +1521,7 @@ window.__ModuleLoader__.load({
 				collapse: '折叠', expand: '展开', sessions: '会话列表', messages: '消息区', perMin: '/分',
 				unattr: '帧内未归因', peak: '峰',
 				unattrHint: '帧间隔里没被插桩回调解释掉的部分:样式重算、绘制、以及等待 vsync。CSS 动画的开销只在这里现形。',
-				rateWindow: '速率近12s', heap: 'JS 堆', domWrites: 'DOM 写入(按插件)', est: '≈',
+				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', est: '≈',
 				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', times: ' 次',
 				perSec: '/s', samples: '次采样', unblamed: '未归因',
 				domWritesHint: '前一项是精确总次数;下面按插件给出估算(每 10 次采样一次栈,命中按 10 折算)。',
@@ -1541,7 +1545,7 @@ window.__ModuleLoader__.load({
 				collapse: 'Collapse', expand: 'Expand', sessions: 'Sessions', messages: 'Messages', perMin: '/min',
 				unattr: 'unattributed/frame', peak: 'peak',
 				unattrHint: 'Frame gap not explained by instrumented callbacks: style recalc, paint, and vsync wait. CSS-animation cost only shows up here.',
-				rateWindow: 'rate 12s', heap: 'JS heap', domWrites: 'DOM writes (by plugin)', est: '≈',
+				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', est: '≈',
 				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', times: '',
 				perSec: '/s', samples: ' samples', unblamed: 'unattributed',
 				domWritesHint: 'First number is the exact total; the rows below are estimates (stacks sampled every 10th write, hits scaled by 10).',
@@ -1571,7 +1575,9 @@ window.__ModuleLoader__.load({
 		const S = {
 			root: (open) => ({
 				position: 'fixed', right: 12, bottom: 12, zIndex: 60, pointerEvents: 'auto',
-				font: `13px/1.55 ${UI_FONT}`,
+				// 整数 px + 整数权重:11.5px / 650 这种分数值在 125%~150% 显示缩放下会被
+				// 浏览器合成加粗并重新栅格化,观感发糊 —— "糊糊的"最常见的来源。
+				font: `13px/1.5 ${UI_FONT}`,
 				background: 'var(--dsw-alias-bg-overlay)', color: 'var(--dsw-alias-label-primary)',
 				border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 12,
 				boxShadow: '0 10px 30px rgba(0,0,0,.28)', boxSizing: 'border-box',
@@ -1580,16 +1586,17 @@ window.__ModuleLoader__.load({
 					: { padding: '6px 10px' }),
 			}),
 			head: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-			brand: { fontWeight: 700, fontSize: 13.5, letterSpacing: '.01em', color: 'var(--dsw-alias-label-primary)' },
+			brand: { fontWeight: 700, fontSize: 14, color: 'var(--dsw-alias-label-primary)' },
 			row: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginTop: 5 },
-			label: { color: 'var(--dsw-alias-label-secondary)', fontWeight: 600, flex: '1 1 auto', minWidth: 0, whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.4 },
-			num: { fontFamily: MONO_FONT, fontWeight: 650, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', flex: '0 0 auto' },
-			strong: { fontWeight: 700, color: 'var(--dsw-alias-label-primary)' },
+			// 标签不换行、不收缩(原来 flex:1 1 auto 会被长数值挤成一字一行);
+			// 数值占满剩余宽度、右对齐、必要时在自己那一列换行。
+			label: { color: 'var(--dsw-alias-label-secondary)', fontWeight: 700, flex: '0 0 auto', whiteSpace: 'nowrap', lineHeight: 1.5 },
+			num: { fontFamily: MONO_FONT, fontWeight: 700, fontVariantNumeric: 'tabular-nums', flex: '1 1 auto', textAlign: 'right', whiteSpace: 'normal', overflowWrap: 'break-word', lineHeight: 1.5 },
 			btn: {
 				font: 'inherit', color: 'var(--dsw-alias-label-primary)', background: 'transparent',
 				border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 7, padding: '2px 8px', cursor: 'pointer', flex: '0 0 auto',
 			},
-			sub: { color: 'var(--dsw-alias-label-secondary)', fontSize: 11.5, marginTop: 2, paddingLeft: 12, lineHeight: 1.45, whiteSpace: 'normal', overflowWrap: 'anywhere' },
+			sub: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, marginTop: 3, lineHeight: 1.5, whiteSpace: 'normal', overflowWrap: 'break-word' },
 			sep: { marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--dsw-alias-border-l2)' },
 			buttons: { display: 'flex', gap: 8, marginTop: 7, flexWrap: 'wrap' },
 			input: { font: 'inherit', color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 7, padding: '2px 8px', flex: 1, minWidth: 0 },
@@ -1630,8 +1637,9 @@ window.__ModuleLoader__.load({
 			return `${clock(sample.t)} · ${sample.fps}fps · ${sample.frameMs}ms · LT×${sample.ltCount ?? 0}`;
 		}
 
+		/** 堆增速用 60 秒窗口(2 秒一采样 → 30 点):12 秒窗口会被 GC 锯齿放大成假数字。 */
 		function heapRateText() {
-			const perMin = rate(state.heapSeries);
+			const perMin = rate(state.heapSeries, 30);
 			return `${perMin >= 0 ? '+' : ''}${mb(perMin)}MB${translate('perMin')}`;
 		}
 
@@ -1691,7 +1699,7 @@ window.__ModuleLoader__.load({
 
 			const head = h('div', { style: S.head },
 				h('span', { style: S.brand }, t('title')),
-				h('span', { style: { ...S.num, marginLeft: 'auto', color: levelDown(state.fps, 50, 30) } }, `${state.fps.toFixed(1)} fps`),
+				h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelDown(state.fps, 50, 30) } }, `${state.fps.toFixed(1)} fps`),
 				h('button', {
 					type: 'button',
 					style: { ...S.btn, color: state.precise ? 'var(--dsw-alias-brand-primary)' : undefined },
@@ -1706,7 +1714,7 @@ window.__ModuleLoader__.load({
 				return h('div', { ref: setRoot, style: S.root(false) },
 					h('div', { style: S.head },
 						h('span', { style: S.brand }, t('title')),
-						h('span', { style: { ...S.num, marginLeft: 'auto', color: levelDown(state.fps, 50, 30) } }, `${state.fps.toFixed(0)} fps`),
+						h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelDown(state.fps, 50, 30) } }, `${state.fps.toFixed(0)} fps`),
 						h('span', { style: S.label }, `${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms`),
 						worst === null ? null : h('span', { style: S.label }, `LT ${worst.ms.toFixed(0)}ms`),
 						h('button', { type: 'button', style: S.btn, title: t('expand'), onClick: toggle }, '+'),
