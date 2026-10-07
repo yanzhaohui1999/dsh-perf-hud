@@ -2238,6 +2238,75 @@ window.__ModuleLoader__.load({
 			natives.setTimeout(() => URL.revokeObjectURL(url), 2000);
 		}
 
+		/**
+		 * 事故包:一份给"读它的人(或 agent)"的自描述文件。
+		 * 只放证据与口径,不做归因推断;并且**显式写出这次没拿到什么**(missing)以及怎么补齐 ——
+		 * 沿用"不许假装成功"那条:缺的东西写清楚,比不写有用。
+		 */
+		function incidentReport(id) {
+			const list = state.watch.incidents;
+			const incident = typeof id === 'number' ? list[id] ?? null : list.find((row) => row.id === id) ?? null;
+			if (incident === null) return null;
+			const missing = [];
+			const howToAdd = [];
+			if (state.watch.loafState !== 'on') {
+				missing.push(`loaf:脚本级归因(这一层唯一的"谁"的来源)—— ${state.watch.loafState}`);
+				howToAdd.push('LoAF 要 Chrome 123+ 且非 dsh-app:// 源;不满足时只能靠既有 longtask 明细与人工 trace');
+			} else if (incident.summary.topScripts.length === 0) {
+				missing.push('loaf-scripts:这一帧没有脚本(<5ms 的脚本不上报;Mac/Windows 桌面端 dsh-app:// 上恒为空)');
+			}
+			if (state.on === false) {
+				missing.push('instrumentation:四条腿的归因(没插桩就没有 DOM 写入与调度点包名)');
+				howToAdd.push('打开 HUD(面板「开启」或 __perfHud.enable())');
+			}
+			if (incident.env.precise === false) {
+				missing.push('precise:合并批次里的单包名(需要精确归因,会拉那份 12MB 的 map)');
+				howToAdd.push('面板「精确」或 __perfHud.setPrecise(true) —— 只能改善之后抓到的事故,这一条不会重放');
+			}
+			missing.push('devtools-trace:完整的 Chrome trace(页面内录不了)');
+			howToAdd.push('DevTools → Performance → 录制(勾 include script source maps)→ Save trace → Perfetto 打开');
+			missing.push('host-cpuprofile:宿主进程的 CPU 火焰图');
+			howToAdd.push('kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record;.cpuprofile 可用 speedscope 打开');
+			return {
+				plugin: PKG,
+				kind: 'perf-hud-incident',
+				exportedAt: new Date().toISOString(),
+				context: {
+					page: location.href,
+					userAgent: navigator.userAgent,
+					scenario: state.streaming ? 'streaming' : 'idle',
+					watch: watchStatus(),
+					thresholds: {
+						triggerMs: WATCH_TRIGGER_MS, gapMs: WATCH_GAP_MS,
+						preMs: WATCH_PRE_MS, postMs: WATCH_POST_MS,
+						keep: WATCH_INCIDENT_MAX, reactionMs: WATCH_REACTION_MS,
+					},
+					missing,
+					howToAdd,
+					howToRead: [
+						'incident.frames:窗口内每一帧(ms 是帧间隔;gap:true 表示 rAF 被挂起,不是卡顿)',
+						'incident.loaf:这十几秒里的长动画帧(blocking 是"挡了多久",scripts[] 是"谁")',
+						'incident.longTasks:既有四条腿落在窗口内的明细(owner=调度方包名,component=渲染方组件)',
+						'incident.summary:上面三块的汇总;这一层不做推断,结论请自己下',
+					],
+				},
+				incident,
+			};
+		}
+
+		/** 下载一份事故包。返回 false 表示没这个 id(不静默成功)。 */
+		function exportIncident(id) {
+			const report = incidentReport(id);
+			if (report === null) return false;
+			const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = `perf-hud-incident-${report.incident.id}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+			link.click();
+			natives.setTimeout(() => URL.revokeObjectURL(url), 2000);
+			return true;
+		}
+
 		function setEnabled(on) {
 			try { localStorage.setItem(LS_ON, on ? '1' : '0'); } catch (error) { /* 记住开关是尽力而为 */ }
 			if (on) start(); else stop();
@@ -2331,6 +2400,9 @@ window.__ModuleLoader__.load({
 				return list.find((row) => row.id === id) ?? null;
 			},
 			capture: captureNow,
+			/** 事故包:report(id) 拿对象(不下载),exportIncident(id) 触发下载。 */
+			report: incidentReport,
+			exportIncident,
 			/** 只清事故,不动别的读数 —— 与 clear() 分开,免得手滑丢掉等了很久的证据。 */
 			clearIncidents() {
 				state.watch.incidents.length = 0;

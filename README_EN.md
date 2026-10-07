@@ -4,7 +4,8 @@
 > *is it janky right now, and whose fault is it?*
 > Frames & worst frame · long tasks (with four-leg attribution) · per-plugin callback rate and sync time ·
 > DOM growth and writers · JS heap · host event loop & link RTT · an isolation experiment that disables
-> plugins one at a time · one-click JSON export.
+> plugins one at a time · one-click JSON export · an always-on night-watch recorder that keeps the
+> worst few stalls with a full evidence pack.
 
 <p>
 <img alt="status" src="https://img.shields.io/badge/status-unpublished-orange" />
@@ -14,6 +15,23 @@
 
 > ⚠️ **Not published to npm yet** (see [REVIEW.md](REVIEW.md)); for now install from a source checkout.
 > Docs are maintained in Chinese — [README.md](README.md) is the primary version.
+
+## Night watch: catching the stall you were not looking at
+
+The panel requires you to watch it; intermittent stalls happen exactly when you are not. So the plugin
+keeps a recorder on by default, and it patches nothing — it only uses the rAF loop that already runs plus
+one `PerformanceObserver` (LoAF, Chrome 123+):
+
+- a per-frame ring buffer (12000 frames ≈ 3.3 minutes at 60fps);
+- any frame over **100ms** (or LoAF `blockingDuration` over 100ms) is captured automatically: the
+  **10 seconds before** and 3 seconds after are sliced out verbatim;
+- only the worst **5** are kept; stalls that were captured but not good enough to keep are counted
+  separately (`dropped`) from stalls never captured;
+- multi-second "gaps" from a hidden tab are **not** stalls (rAF was suspended) and are marked `gap`;
+- `__perfHud.watch()` · `incidents()` · `report(0)` · `exportIncident(0)` · `capture(note)` · `clearIncidents()`.
+
+An incident pack carries `context.missing` — what this capture does **not** contain (no DevTools trace,
+no host CPU profile, platforms without LoAF) and how to get it — and it does no attribution inference.
 
 ## What it answers
 
@@ -127,7 +145,7 @@ is expensive in some usage", so do not read it as a causal proof.
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
 node tests/logic.mjs         # 152 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          #  24 assertions: real index.js driven by a fake ctx
-# 221 offline assertions total, no running DSH required
+# 229 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):

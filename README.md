@@ -2,7 +2,8 @@
 
 > **纯客户端性能 HUD**:右下角一块浮层,回答"现在卡不卡、卡在谁身上"。
 > 帧与最差帧 · Longtask(带四条腿归因)· 每插件回调速率与同步耗时 · DOM 增长与写入者 · JS 堆 ·
-> 宿主 event-loop 与链路 RTT · 隔离实验(逐个关插件做对照)· 一键导出 JSON。
+> 宿主 event-loop 与链路 RTT · 隔离实验(逐个关插件做对照)· 一键导出 JSON ·
+> **守夜层:偶发卡顿自动留存最差几次,连证据一次性导出**。
 
 <p>
 <img alt="status" src="https://img.shields.io/badge/status-%E6%9C%AA%E5%8F%91%E5%B8%83%EF%BC%88%E5%87%86%E5%A4%87%E4%B8%AD%EF%BC%89-orange" />
@@ -19,6 +20,7 @@
 - [✨ 它回答什么问题](#-它回答什么问题)
 - [🚀 安装](#-安装)
 - [📊 面板怎么读](#-面板怎么读)
+- [🛰️ 偶发卡顿:守夜层](#️-偶发卡顿守夜层)
 - [🔬 四条腿归因](#-四条腿归因)
 - [🧪 隔离实验](#-隔离实验)
 - [⚠️ 风险与边界(必读)](#-风险与边界必读)
@@ -35,6 +37,27 @@
 | 哪个插件在偷偷跑? | 按插件的回调执行速率(/s)、峰值速率、同步耗时;DOM 写入次数与写入者 |
 | 是插件的问题还是宿主/链路的问题? | 宿主 event-loop p50/p99/max + 链路 RTT/吞吐,附阈值判色与「链路已排除」结论 |
 | 关掉某个插件到底有没有用? | 隔离实验:逐个关闭 60 秒,和紧邻基线对照,并给出噪声底 |
+
+## 🛰️ 偶发卡顿:守夜层
+
+面板要你盯着看;偶发卡顿恰恰发生在你没看的时候。所以插件**默认开着一层不插桩的记录器**:
+
+- 每帧一条**帧级环形缓冲**(12000 条 ≈ 60fps 下 3.3 分钟),另加一个 LoAF 观察器(Chrome 123+);
+- 一帧超过 **100ms**(或 LoAF 的 `blockingDuration` 超过 100ms)就**自动抓一次**:前 10 秒 + 后 3 秒**原样切片**,不等你反应;
+- 只留最差 **5** 次;抓到了但不够差而丢掉的次数单独记(`dropped`),与"没抓到"分开;
+- 标签页隐藏造成的几百秒"间隙"**不算卡顿**(rAF 被挂起),事故包里标成 `gap`;
+- 这一层**不包装任何原型**:只用本来就在跑的 rAF 循环与一个 `PerformanceObserver`,所以默认开着也不改你的环境。
+
+```js
+__perfHud.watch()             // 在不在录、覆盖多少秒、LoAF 装没装上、抓到几次
+__perfHud.incidents()         // 最差几次的摘要(索引 0 最差)
+__perfHud.report(0)           // 完整事故包:帧序列 + LoAF 条目 + 窗口内 longtask + 环境读数
+__perfHud.exportIncident(0)   // 下载成 JSON —— 把这份丢给分析的人(或 agent)就行
+__perfHud.capture('切了视图')  // 手动标记"刚刚卡了一下"(自动回退 3 秒的反应时间)
+__perfHud.clearIncidents()    // 只清事故;clear() 刻意不动它
+```
+
+事故包自带 `context.missing`:这一次**没拿到什么**(没有 DevTools trace、没有宿主 CPU profile、平台不支持 LoAF……)以及怎么补 —— 缺的东西写清楚,比不写有用。它**不做归因推断**,只把当时的东西原样装好。
 
 ## 🚀 安装
 
@@ -121,6 +144,11 @@ dsh plugin --profile web add "$PWD"
 | 成员 | 作用 |
 |---|---|
 | `snapshot()` / `export()` | 导出的对象 / 触发下载 |
+| `watch()` | 守夜层状态(在不在录、覆盖秒数、LoAF 状态、抓到几次) |
+| `incidents()` / `incident(id)` | 最差几次的摘要 / 完整事故对象(索引 0 最差) |
+| `report(id)` / `exportIncident(id)` | 事故包对象 / 触发下载 |
+| `capture(note)` | 手动标记"刚刚卡了一下"(回退 3 秒反应时间) |
+| `clearIncidents()` | 只清事故(`clear()` 不动事故) |
 | `table()` / `ring` / `longTasks` | 归因表 / 环形缓冲 / 长任务明细 |
 | `verification()` | 验收自证(四条腿计数、独立包名、空闲基线、导出段名) |
 | `enable()` / `disable()` | 总开关(等价面板「开启/关闭」,会还原原型方法) |
@@ -136,9 +164,9 @@ dsh plugin --profile web add "$PWD"
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 186 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 194 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js
-# 合计 221 条断言,离线,无需 DSH 在跑
+# 合计 229 条断言,离线,无需 DSH 在跑
 ```
 
 线上验证(需要先换 cookie,步骤见 [AGENTS.md](AGENTS.md) §2.2):

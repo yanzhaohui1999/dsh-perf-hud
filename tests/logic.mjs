@@ -795,6 +795,7 @@ const watchPieces = [
 	extract(source, 'function assembleIncident('),
 	extract(source, 'function captureNow('),
 	extract(source, 'function watchStatus('),
+	extract(source, 'function incidentReport('),
 	extract(source, 'function round1('),
 ].join('\n');
 const watchBox = new Function(`
@@ -807,6 +808,9 @@ const watchBox = new Function(`
 	};
 	const performance = { now: () => nowMs, timeOrigin: 1700000000000 };
 	const document = { visibilityState: 'visible' };
+	const PKG = 'dsh-perf-hud';
+	const location = { href: 'http://127.0.0.1:3080/' };
+	const navigator = { userAgent: 'test-agent' };
 	const state = {
 		samplesLength: 1,
 		on: true, precise: false, streaming: true, heap: 1048576, host: null, hostAt: 0,
@@ -816,7 +820,7 @@ const watchBox = new Function(`
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
-		keepIncident, assembleIncident, captureNow, watchStatus, timers,
+		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, timers,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
 		setNow: (value) => { nowMs = value; },
 		runTimer: (index) => timers[index].fn(),
@@ -912,6 +916,27 @@ watch.state.watch.on = true;
 const status = watch.watchStatus();
 check('watchStatus 报出录制状态与阈值', [status.recording, status.loaf, status.triggers.frameMs, status.triggers.keep], [true, 'on', 100, 5]);
 check('watchStatus 报出帧样本数与留存清单', [status.frameSamples > 0, Array.isArray(status.kept), status.kept.length], [true, true, 3]);
+
+// 事故包:自描述头 + 缺失声明(缺什么、怎么补)
+check('事故包:不存在的 id 返回 null(不静默成功)', watch.incidentReport('nope'), null);
+const report = watch.incidentReport(0);
+check('事故包:kind 与 incident 对得上', [report.kind, report.incident.id, report.plugin], ['perf-hud-incident', 'i1', 'dsh-perf-hud']);
+check('事故包:带阈值与读取说明', [
+	report.context.thresholds.triggerMs,
+	report.context.howToRead.length,
+	report.context.page,
+], [100, 4, 'http://127.0.0.1:3080/']);
+check('事故包:如实列出没拿到的东西',
+	['precise:', 'devtools-trace:', 'host-cpuprofile:'].map((prefix) => report.context.missing.some((line) => line.startsWith(prefix))),
+	[true, true, true]);
+check('事故包:LoAF 装着但这帧没有脚本时,点明 scripts 为空', report.context.missing.some((line) => line.startsWith('loaf-scripts:')), true);
+watch.state.watch.loafState = 'unsupported:no-long-animation-frame';
+check('事故包:LoAF 没装时改成报 loaf 本身', watch.incidentReport(0).context.missing.some((line) => line.startsWith('loaf:')), true);
+watch.state.watch.loafState = 'on';
+watch.state.on = false;
+check('事故包:没插桩时点明四条腿归因缺失', watch.incidentReport(0).context.missing.some((line) => line.startsWith('instrumentation:')), true);
+check('事故包:缺失项都给了补齐办法', watch.incidentReport(0).context.howToAdd.length >= 2, true);
+watch.state.on = true;
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;

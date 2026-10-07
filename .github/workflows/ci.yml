@@ -36,9 +36,9 @@ jobs:
           node --check index.js
           node --check client.js
 
-      # 221 条离线断言:attribution 11 / logic 186 / host 24。
+      # 229 条离线断言:attribution 11 / logic 194 / host 24。
       # logic.mjs 会把 client.js 里的真函数抽进沙箱,所以它同时是客户端半的回归门。
-      - name: Offline suites (221 assertions)
+      - name: Offline suites (229 assertions)
         run: |
           node tests/attribution.mjs
           node tests/logic.mjs
@@ -55,4 +55,4 @@ jobs:
             total=$((total + count))
           done
           echo "total: $total"
-          test "$total" -eq 221
+          test "$total" -eq 229

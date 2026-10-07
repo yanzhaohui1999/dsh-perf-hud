@@ -320,6 +320,12 @@ perf-lens 在 `docs/evidence.md` §17 实测:`dsh-app://` 上 `PerformanceObserv
 2. **事故包**:`incident.json` + 缺失声明 + 可选 trace / `.cpuprofile`(§4.2)。
 3. **桌面端主进程取证**:`contentTracing` 环形 + `webContents.debugger` + `getAppMetrics`(§8)。
 
+**进度(2026-10-07)**
+
+- [x] 第 1 件:客户端守夜层 —— 帧级环形缓冲 + LoAF + 自动留存最差 5 次(`feat(client)`)。
+- [x] 第 2 件:事故包 —— `report(id)` / `exportIncident(id)`,含缺失声明与补齐办法。
+- [ ] 第 3 件:桌面端主进程取证(`contentTracing` 环形 + `webContents.debugger`)—— 未开始,需要 Electron 侧载体。
+
 **风险与前提**
 
 - perf-lens 的 **P1 #5「Auto deep-profile on a stall」是同款形态**(宿主侧,排 0.3.0)。→ 不要重复做宿主侧 deep profile;我们要么比它快,要么就站到它旁边只做**客户端那一半 + 跨进程合成**。
