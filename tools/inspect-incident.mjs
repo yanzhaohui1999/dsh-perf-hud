@@ -43,6 +43,32 @@ const frames = Array.isArray(incident.frames) ? incident.frames : [];
 const loaf = Array.isArray(incident.loaf) ? incident.loaf : [];
 const longTasks = Array.isArray(incident.longTasks) ? incident.longTasks : [];
 
+const liveRows = frames.filter((row) => row.gap !== true);
+const live = liveRows.map((row) => row.ms).sort((a, b) => a - b);
+const busyMs = liveRows.reduce((sum, row) => sum + row.ms, 0);
+// 包里没有 worstFrameJs / suspectedThrottle(改动之前采的、或从落盘读回的老包)就自己算一遍 ——
+// 判据与 client.js 里那份一致,免得老证据只剩一堆数字。
+const worstLive = liveRows.slice().sort((a, b) => b.ms - a.ms)[0];
+const worstJs = (() => {
+	if (worstLive === undefined) return 'none';
+	const start = worstLive.t - worstLive.ms;
+	const end = worstLive.t;
+	const hasJs = longTasks.some((row) => row.at < end && row.at + row.ms > start)
+		|| loaf.some((row) => row.t < end && row.t + row.dur > start);
+	return hasJs ? 'js' : 'none';
+})();
+const neighboursMs = (() => {
+	if (worstLive === undefined) return null;
+	const index = frames.indexOf(worstLive);
+	const around = frames.slice(Math.max(0, index - 5), index).concat(frames.slice(index + 1, index + 6))
+		.filter((row) => row.gap !== true).map((row) => row.ms).sort((a, b) => a - b);
+	return around.length === 0 ? null : Math.round(around[Math.floor(around.length / 2)] * 10) / 10;
+})();
+const suspectedThrottle = summary.suspectedThrottle !== undefined
+	? summary.suspectedThrottle
+	: worstLive !== undefined && worstLive.ms >= 500 && worstJs === 'none' && neighboursMs !== null && neighboursMs < 100;
+const jsFromPack = summary.worstFrameJs !== undefined;
+
 const pad = (text, size, align = 'left') => {
 	const s = String(text);
 	return s.length >= size ? s : align === 'right' ? s.padStart(size, ' ') : s.padEnd(size, ' ');
@@ -85,10 +111,8 @@ console.log(`帧         ${num(summary.frames, 0)} 帧  ·  最差 ${num(summary
 console.log(`超线帧     >50ms ${num(summary.framesOver50Ms, 0)}  ·  >100ms ${num(summary.framesOver100Ms, 0)}  ·  rAF 挂起 ${num(summary.hiddenGaps, 0)}`);
 console.log(`长动画帧   ${num(summary.loafEntries, 0)} 条  ·  累计 blocking ${num(summary.blockingMs)}ms`);
 console.log(`longtask   窗口内 ${num(summary.longTasksInWindow, 0)} 条`);
-if (summary.worstFrameJs !== undefined) {
-	console.log(`最差帧解释 ${summary.worstFrameJs === 'js' ? '有 longtask / LoAF 与它重叠' : '没有任何 longtask / LoAF 与它重叠'}  ·  前后帧中位 ${num(summary.worstFrameNeighboursMs)}ms`);
-}
-if (summary.suspectedThrottle === true) {
+console.log(`最差帧解释 ${worstJs === 'js' ? '有 longtask / LoAF 与它重叠' : '没有任何 longtask / LoAF 与它重叠'}  ·  前后帧中位 ${num(neighboursMs)}ms${jsFromPack ? '' : '  (包里没有这一栏,是本工具现算的)'}`);
+if (suspectedThrottle === true) {
 	console.log('⚠️ 疑似节流  最差这一帧没有 JS 证据、前后又都是健康帧 —— 更像浏览器把 rAF 节流/挂起了一次(遮挡、省电),而不是页面真的忙了这么久');
 }
 console.log(`页面       场景 ${summary.streaming === true ? '流式' : '空闲'}  ·  可见性 ${summary.visibility ?? '?'}  ·  DOM ${num((incident.env ?? {}).domNodes, 0)} 节点  ·  堆 ${num(((incident.env ?? {}).heapUsedBytes ?? 0) / 1048576)}MB  ·  插桩 ${(incident.env ?? {}).instrumented === true ? '开' : '关'}  ·  精确归因 ${(incident.env ?? {}).precise === true ? '开' : '关'}`);
@@ -132,12 +156,12 @@ console.log(bar);
 	console.log(axis.join('').trimEnd());
 }
 console.log('图例:█ >100ms · ▒ 50–100ms · · <50ms · _ rAF 挂起(不是卡顿)· 空白 没采到');
-const live = frames.filter((row) => row.gap !== true).map((row) => row.ms).sort((a, b) => a - b);
+
 let windowP50 = null;
 if (live.length > 0) {
 	const pick = (p) => live[Math.min(live.length - 1, Math.floor(p * live.length))];
 	windowP50 = pick(0.5);
-	console.log(`分位: p50 ${num(pick(0.5))}ms · p90 ${num(pick(0.9))}ms · p99 ${num(pick(0.99))}ms · max ${num(live[live.length - 1])}ms${summary.p50 === undefined ? '' : `  (包内 summary: p50 ${num(summary.p50)} / p90 ${num(summary.p90)} / p99 ${num(summary.p99)})`}`);
+	console.log(`分位: p50 ${num(pick(0.5))}ms · p90 ${num(pick(0.9))}ms · p99 ${num(pick(0.99))}ms · max ${num(live[live.length - 1])}ms · 在跑 ${num(busyMs / 1000)}s → ${num(busyMs > 0 ? Math.round((live.length * 1000 / busyMs) * 10) / 10 : 0)}fps${summary.p50 === undefined ? '' : `  (包内 summary: p50 ${num(summary.p50)} / p90 ${num(summary.p90)} / p99 ${num(summary.p99)})`}`);
 }
 // 会话基线:没有它,"最差帧 325ms" 判不出是这一段真的变坏了,还是这台机器一直这样
 {
