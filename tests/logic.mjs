@@ -779,7 +779,7 @@ check('verification 段报出独立包名(不含合并包 key)与 longtask 命�
 // 抽的是 client.js 里的真函数与真常量(连阈值一起抽,免得测试自己抄一份默认值)。
 const watchSource = (() => {
 	const from = source.indexOf('const WATCH_FRAMES');
-	const to = source.indexOf('\n', source.indexOf('const WATCH_REACTION_MS'));
+	const to = source.indexOf('\n', source.indexOf('const WATCH_PERSIST_MAX_BYTES'));
 	return source.slice(from, to);
 })();
 const watchPieces = [
@@ -795,6 +795,9 @@ const watchPieces = [
 	extract(source, 'function assembleIncident('),
 	extract(source, 'function captureNow('),
 	extract(source, 'function watchStatus('),
+	extract(source, 'function perfOrigin('),
+	extract(source, 'function saveIncidents('),
+	extract(source, 'function restoreIncidents('),
 	extract(source, 'function incidentReport('),
 	extract(source, 'function round1('),
 ].join('\n');
@@ -811,6 +814,14 @@ const watchBox = new Function(`
 	const PKG = 'dsh-perf-hud';
 	const location = { href: 'http://127.0.0.1:3080/' };
 	const navigator = { userAgent: 'test-agent' };
+	const LS_INCIDENTS = 'test:incidents';
+	const store = new Map();
+	let failWrites = false;
+	const localStorage = {
+		getItem: (key) => (store.has(key) ? store.get(key) : null),
+		setItem: (key, value) => { if (failWrites) throw new Error('QuotaExceededError'); store.set(key, value); },
+		removeItem: (key) => store.delete(key),
+	};
 	const state = {
 		samplesLength: 1,
 		on: true, precise: false, streaming: true, heap: 1048576, host: null, hostAt: 0,
@@ -820,7 +831,8 @@ const watchBox = new Function(`
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
-		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, timers,
+		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, timers, store,
+		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
 		setNow: (value) => { nowMs = value; },
 		runTimer: (index) => timers[index].fn(),
@@ -894,20 +906,27 @@ check('窗口带上了同时段的 longtask 明细', [firstIncident.summary.long
 check('事故带环境读数与墙上时间', [firstIncident.env.domNodes, firstIncident.at], [1234, new Date(1700000000000 + 10000).toISOString()]);
 
 // 归并:后摇没到就再来一次,算同一串(记 coalesced,不当成第二次事故)
-watch.setNow(1000);
-watch.watchFrame(900, 150, false);
+watch.setNow(50000);
+watch.watchFrame(49000, 150, false);
 check('后摇未到:先挂起,不出事故', [watch.state.watch.pending.cause, watch.state.watch.incidents.length], ['frame', 1]);
-watch.watchFrame(950, 300, false);
+watch.watchFrame(49500, 300, false);
 check('同一串里的第二次触发被归并', watch.state.watch.coalesced, 1);
 check('归并不新增事故', watch.state.watch.incidents.length, 1);
 watch.runTimer(watch.timers.length - 1);
 check('后摇到点才切片,严重度由触发那次决定', [watch.state.watch.captured, watch.state.watch.incidents.length], [2, 2]);
+check('窗口结束时刻被记为已覆盖', watch.state.watch.coveredUntil, 52000);
 
-// 手动标记:回退反应时间、立刻结算
-watch.setNow(50000);
+// 去重:已经落在这份窗口里的时刻不再另立一份(实测过一次卡顿裂成两份)
+watch.setNow(52500);
+watch.watchFrame(51500, 300, false);
+check('落在已覆盖窗口里的触发不再另立事故', [watch.state.watch.incidents.length, watch.state.watch.pending], [2, null]);
+check('去重也算归并(不假装它没发生)', watch.state.watch.coalesced, 2);
+
+// 手动标记:回退反应时间、立刻结算;落在窗口里也照样收(明确意图)
+watch.setNow(60000);
 const manual = watch.captureNow('刚切了视图');
 check('手动标记立刻出事故', [manual.ok, manual.incident.cause, manual.incident.note], [true, 'manual', '刚切了视图']);
-check('手动标记回退' + watch.WATCH.reaction + 'ms', Math.round(manual.incident.atPerfMs), 47000);
+check('手动标记回退' + watch.WATCH.reaction + 'ms', Math.round(manual.incident.atPerfMs), 57000);
 watch.state.watch.on = false;
 check('HUD 关着时手动标记如实说没在录', watch.captureNow().ok, false);
 
@@ -920,7 +939,7 @@ check('watchStatus 报出帧样本数与留存清单', [status.frameSamples > 0,
 // 事故包:自描述头 + 缺失声明(缺什么、怎么补)
 check('事故包:不存在的 id 返回 null(不静默成功)', watch.incidentReport('nope'), null);
 const report = watch.incidentReport(0);
-check('事故包:kind 与 incident 对得上', [report.kind, report.incident.id, report.plugin], ['perf-hud-incident', 'i1', 'dsh-perf-hud']);
+check('事故包:kind 与 incident 对得上', [report.kind, report.plugin, report.incident.id === watch.state.watch.incidents[0].id], ['perf-hud-incident', 'dsh-perf-hud', true]);
 check('事故包:带阈值与读取说明', [
 	report.context.thresholds.triggerMs,
 	report.context.howToRead.length,
@@ -937,6 +956,35 @@ watch.state.on = false;
 check('事故包:没插桩时点明四条腿归因缺失', watch.incidentReport(0).context.missing.some((line) => line.startsWith('instrumentation:')), true);
 check('事故包:缺失项都给了补齐办法', watch.incidentReport(0).context.howToAdd.length >= 2, true);
 watch.state.on = true;
+
+// 落盘:事故要活过刷新
+check('落盘:写入后 localStorage 里有那份事故', [watch.saveIncidents(), watch.store.has('test:incidents')], [true, true]);
+const persisted = JSON.parse(watch.store.get('test:incidents'));
+check('落盘:带版本号与保存时间', [persisted.v, typeof persisted.savedAt], [1, 'number']);
+const beforeClear = watch.state.watch.incidents.map((row) => ({ id: row.id, severity: row.severity }));
+check('落盘:写的顺序与内存里一致', persisted.incidents.map((row) => row.id), beforeClear.map((row) => row.id));
+watch.state.watch.incidents.length = 0;
+watch.restoreIncidents();
+check('读回:三份回来且顺序不变', watch.state.watch.incidents.map((row) => row.id), beforeClear.map((row) => row.id));
+check('读回:严重度一字不差', watch.state.watch.incidents.map((row) => row.severity), beforeClear.map((row) => row.severity));
+check('读回:标记 restored=true(跨会话的 perf 毫秒要按 env.perfOrigin 对齐)', watch.state.watch.incidents[0].restored, true);
+check('读回:计数如实', watch.state.watch.restored, 3);
+watch.store.set('test:incidents', JSON.stringify({ v: 1, incidents: [{ id: 'bad', severity: 1 }, { id: 'ok', severity: 5, frames: [], loaf: [] }] }));
+watch.state.watch.incidents.length = 0;
+watch.restoreIncidents();
+check('读回:形状不对的条目丢掉,合法的留下', watch.state.watch.incidents.map((row) => row.id), ['ok']);
+watch.setFail(true);
+check('落盘失败:不抛、返回 false、并记下原因', [watch.saveIncidents(), typeof watch.state.watch.persistError === 'string'], [false, true]);
+watch.setFail(false);
+watch.state.watch.persistError = null;
+// 字节上限:两条里最弱的那条太大 → 丢掉它再写
+watch.state.watch.incidents = [
+	{ id: 'small', severity: 100, frames: [], loaf: [] },
+	{ id: 'huge', severity: 50, frames: new Array(30000).fill({ t: 0, ms: 16, gap: false }), loaf: [] },
+];
+check('落盘:超过字节上限时丢掉最弱的再写', [watch.saveIncidents(), JSON.parse(watch.store.get('test:incidents')).incidents.map((row) => row.id)], [true, ['small']]);
+watch.state.watch.incidents.length = 0;
+check('落盘:清空后落盘的那份也是空的', [watch.saveIncidents(), JSON.parse(watch.store.get('test:incidents')).incidents.length], [true, 0]);
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;

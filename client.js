@@ -46,6 +46,7 @@ window.__ModuleLoader__.load({
 		const LS_MAP = 'dsh-perf-hud:map';     // 按 rev 缓存的 section 分段表
 		const LS_MARKS = 'dsh-perf-hud:marks';
 		const LS_GROUPS = 'dsh-perf-hud:groups';
+		const LS_INCIDENTS = 'dsh-perf-hud:incidents:v1';   // 守夜层留存的事故(要活过刷新)
 		const HOST_ROUTE = '/api/dsh-perf-hud/host';
 		const RTT_INTERVAL_MS = 10000;
 		const LOAD_INTERVAL_MS = 60000;
@@ -70,6 +71,7 @@ window.__ModuleLoader__.load({
 		const WATCH_TRIGGER_MS = 100;          // 帧间隔 / blockingDuration 越过它就起一次捕获
 		const WATCH_GAP_MS = 1000;             // 帧间隔超过它视为 rAF 挂起:是间隙,不是卡顿
 		const WATCH_REACTION_MS = 3000;        // 手动标记时回退的"人的反应时间"
+		const WATCH_PERSIST_MAX_BYTES = 524288;   // 事故落盘的字节上限(超了丢最弱的)
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
 		const REACT_INTERNAL = new Set(['Fragment', 'Suspense', 'StrictMode', 'Profiler', 'ForwardRef', 'Memo', 'Provider', 'Consumer', 'Root', 'Anonymous']);
 
@@ -625,6 +627,9 @@ window.__ModuleLoader__.load({
 				captured: 0,             // 一共捕获过几次
 				coalesced: 0,            // 被并进 pending 的触发次数(同一串卡顿算一次)
 				dropped: 0,              // 抓到了、但没比已留存的更差,于是丢掉的次数
+				restored: 0,             // 这次启动从落盘里读回了几条
+				persistError: null,      // 落盘失败的原因(失败就照实说,不假装存下来了)
+				coveredUntil: 0,         // 最近一份事故窗口的结束时刻(perf ms):这段不再另立事故
 			},
 			requestRender: null,     // 面板挂载时注册:用户动作要立刻重渲染,不能等 0.5 秒的定时器
 			displayKey: '',          // 面板显示值的指纹:没变就跳过这次 tick 的渲染
@@ -817,12 +822,16 @@ window.__ModuleLoader__.load({
 			return typeof ms === 'number' && ms >= WATCH_TRIGGER_MS ? round1(ms) : null;
 		}
 
-		/** perf 时间 → 墙上时间。用 timeOrigin 对齐;拿不到就退回 Date.now() - performance.now()。 */
-		function wallClock(perfMs) {
-			const origin = typeof performance.timeOrigin === 'number' && performance.timeOrigin > 0
+		/** 本页性能时钟的原点(墙上时间毫秒)。跨会话读事故时,perf 毫秒要靠它才能对齐。 */
+		function perfOrigin() {
+			return typeof performance.timeOrigin === 'number' && performance.timeOrigin > 0
 				? performance.timeOrigin
 				: Date.now() - performance.now();
-			return new Date(origin + perfMs).toISOString();
+		}
+
+		/** perf 时间 → 墙上时间。 */
+		function wallClock(perfMs) {
+			return new Date(perfOrigin() + perfMs).toISOString();
 		}
 
 		/** 一条 LoAF 里最多记 WATCH_SCRIPT_MAX 个脚本:只用于回答"谁",不做统计。 */
@@ -908,6 +917,13 @@ window.__ModuleLoader__.load({
 			const watch = state.watch;
 			if (watch.on === false) return null;
 			if (watch.pending !== null) { watch.coalesced += 1; return null; }
+			// 这个时刻已经被上一份事故的窗口覆盖了(证据就在那份包里),别再另立一份 ——
+			// 实测过一次卡顿裂成两份(第二份其实只是又碰了一下同一段窗口)。
+			// 手动标记例外:那是明确意图,哪怕落在窗口里也收。
+			if (cause !== 'manual' && watch.coveredUntil > 0 && at <= watch.coveredUntil) {
+				watch.coalesced += 1;
+				return null;
+			}
 			watch.pending = { cause, at, severity: round1(severity), note: note ?? null, until: at + WATCH_POST_MS };
 			const delay = Math.max(0, watch.pending.until - performance.now());
 			if (delay <= 0) return settleCapture();
@@ -1001,6 +1017,8 @@ window.__ModuleLoader__.load({
 					heapUsedBytes: state.heap,
 					instrumented: state.on,
 					precise: state.precise,
+					// 跨会话(落盘后重开页面)读这份事故时,perf 毫秒要靠它才能对齐墙上时间
+					perfOrigin: new Date(perfOrigin()).toISOString(),
 				},
 			};
 		}
@@ -1015,7 +1033,61 @@ window.__ModuleLoader__.load({
 			const incident = assembleIncident(pending);
 			watch.captured += 1;
 			incident.kept = keepIncident(incident);
+			watch.coveredUntil = pending.until;   // 这段窗口已经有主了,见 triggerCapture 的去重
+			saveIncidents();
 			return incident;
+		}
+
+		/**
+		 * 落盘:事故要能活过刷新 —— "等了很久才抓到"的东西丢了最肉疼。
+		 * localStorage 有配额,所以三步兜底:超过字节上限就丢最弱的 → 写失败再把列表砍半重试 →
+		 * 仍失败就把原因记进 persistError,并在 watch() 里照实说"这次没能落盘"。
+		 */
+		function saveIncidents() {
+			const watch = state.watch;
+			const list = watch.incidents.slice();
+			for (let attempt = 0; attempt < 3; attempt += 1) {
+				let payload;
+				try {
+					payload = JSON.stringify({ v: 1, savedAt: Date.now(), incidents: list });
+				} catch (error) {
+					watch.persistError = `serialize:${error instanceof Error ? error.message : String(error)}`;
+					return false;
+				}
+				if (payload.length > WATCH_PERSIST_MAX_BYTES && list.length > 1) {
+					list.pop();   // 列表按严重度降序,去掉最弱的那条
+					continue;
+				}
+				try {
+					localStorage.setItem(LS_INCIDENTS, payload);
+					watch.persistError = null;
+					return true;
+				} catch (error) {
+					watch.persistError = error instanceof Error ? error.message : String(error);
+					if (list.length > 1) { list.length = Math.ceil(list.length / 2); continue; }
+					return false;
+				}
+			}
+			return false;
+		}
+
+		/** 读回落盘的事故。形状不对的条目直接丢(丢了不会静默:restored 会告诉你读回几条)。 */
+		function restoreIncidents() {
+			const watch = state.watch;
+			let parsed = null;
+			try { parsed = JSON.parse(localStorage.getItem(LS_INCIDENTS) ?? 'null'); } catch (error) { return; }
+			if (parsed === null || Array.isArray(parsed.incidents) === false) return;
+			const rows = [];
+			for (const row of parsed.incidents) {
+				if (row === null || typeof row !== 'object') continue;
+				if (typeof row.id !== 'string' || typeof row.severity !== 'number') continue;
+				if (Array.isArray(row.frames) === false || Array.isArray(row.loaf) === false) continue;
+				row.restored = true;   // 跨会话的 perf 毫秒要靠 env.perfOrigin 对齐,标出来免得误读
+				rows.push(row);
+			}
+			rows.sort((a, b) => b.severity - a.severity);
+			watch.incidents = rows.slice(0, WATCH_INCIDENT_MAX);
+			watch.restored = watch.incidents.length;
 		}
 
 		/**
@@ -1043,6 +1115,8 @@ window.__ModuleLoader__.load({
 				captured: watch.captured,
 				coalesced: watch.coalesced,
 				dropped: watch.dropped,
+				restored: watch.restored,
+				persistError: watch.persistError,
 				kept: watch.incidents.map((row) => ({ id: row.id, severity: row.severity, cause: row.cause, at: row.at, note: row.note })),
 				triggers: {
 					frameMs: WATCH_TRIGGER_MS, gapMs: WATCH_GAP_MS,
@@ -1362,6 +1436,7 @@ window.__ModuleLoader__.load({
 				const parsed = JSON.parse(localStorage.getItem(LS_MARKS) ?? 'null');
 				if (Array.isArray(parsed)) state.marks = parsed.slice(-100);
 			} catch (error) { /* 标记坏了就算了 */ }
+			restoreIncidents();
 		}
 
 		function flush(force) {
@@ -2409,6 +2484,8 @@ window.__ModuleLoader__.load({
 				state.watch.captured = 0;
 				state.watch.coalesced = 0;
 				state.watch.dropped = 0;
+				state.watch.restored = 0;
+				saveIncidents();   // 落盘的那份也要清掉,否则刷新又"复活"
 				return true;
 			},
 			clear() {

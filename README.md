@@ -45,6 +45,7 @@
 - 每帧一条**帧级环形缓冲**(12000 条 ≈ 60fps 下 3.3 分钟),另加一个 LoAF 观察器(Chrome 123+);
 - 一帧超过 **100ms**(或 LoAF 的 `blockingDuration` 超过 100ms)就**自动抓一次**:前 10 秒 + 后 3 秒**原样切片**,不等你反应;
 - 只留最差 **5** 次;抓到了但不够差而丢掉的次数单独记(`dropped`),与"没抓到"分开;
+- 留存的事故**会落盘**(localStorage,上限 512KB):刷新页面、重启浏览器之后还在,`watch().restored` 告诉你这次读回了几条;写不进去会如实报 `persistError`,不假装存下来了;
 - 标签页隐藏造成的几百秒"间隙"**不算卡顿**(rAF 被挂起),事故包里标成 `gap`;
 - 这一层**不包装任何原型**:只用本来就在跑的 rAF 循环与一个 `PerformanceObserver`,所以默认开着也不改你的环境。
 
@@ -57,7 +58,7 @@ __perfHud.capture('切了视图')  // 手动标记"刚刚卡了一下"(自动回
 __perfHud.clearIncidents()    // 只清事故;clear() 刻意不动它
 ```
 
-事故包自带 `context.missing`:这一次**没拿到什么**(没有 DevTools trace、没有宿主 CPU profile、平台不支持 LoAF……)以及怎么补 —— 缺的东西写清楚,比不写有用。它**不做归因推断**,只把当时的东西原样装好。
+事故包是纯 JSON,人也能直接读;想看得舒服点:`node tools/inspect-incident.mjs <file.json>` 会渲染出帧条带(哪一格是哪个量级一眼可见)、窗口内的 longtask、LoAF 与按耗时排序的脚本。它自带 `context.missing`:这一次**没拿到什么**(没有 DevTools trace、没有宿主 CPU profile、平台不支持 LoAF……)以及怎么补 —— 缺的东西写清楚,比不写有用。它**不做归因推断**,只把当时的东西原样装好。
 
 ## 🚀 安装
 
@@ -164,9 +165,9 @@ dsh plugin --profile web add "$PWD"
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 194 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 208 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js
-# 合计 229 条断言,离线,无需 DSH 在跑
+# 合计 243 条断言,离线,无需 DSH 在跑
 ```
 
 线上验证(需要先换 cookie,步骤见 [AGENTS.md](AGENTS.md) §2.2):

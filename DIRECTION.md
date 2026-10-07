@@ -226,6 +226,8 @@
 - **LoAF 的浏览器覆盖是 Chrome 侧**:Firefox / Safari 未实现(MDN 标 not Baseline)。非 Chrome 需要保留旧腿 —— 因此"默认不插桩"只在 Chrome 成立,要有特征检测与降级路径。
 - **Perfetto 直接导入 `.cpuprofile`** 未确认(其文档列出的外部格式不含 `.cpuprofile`);speedscope 与 Chrome DevTools 的 Load profile 是已确认路径。
 - **combo URL(`??a.js,b.js`)在 DevTools 火焰图里的标注方式**未确认;本仓的 sourcemap 分段方案不受影响。
+- **LoAF 的 `blockingDuration` 语义尚未摸清**:受控实测里一帧 325ms、窗口 43 帧 >100ms,116 条 LoAF 的 blocking **全是 0**,而 longtask 表给出了 223ms 与组件名。已写进 AGENTS §8 第 10 条当坑记着;需要真人交互(非 CDP 触发)复测一次才能定论。
+- **事故落盘用的是 `localStorage`**:512KB 上限、超了丢最弱的、写失败报 `persistError`。它和"面板状态只进 localStorage"这条边界一致,但持久化内容比之前重了 —— 如果哪天要做到 10MB 级证据,得换 IndexedDB。
 - **桌面端的四条推论全部未实测**(见 §8;其中 Electron 侧的 API 形状已按 `electron.d.ts` 核对,运行时行为未测):插件能否安装、`connection.fetch.register` 在 Desktop 的 Host 子进程里是否同样可达、`webContents.debugger`(CDP)挂到应用窗口是否与私有 IPC/`dsh-app://` 协议冲突、hide 期间是否继续记录。
 - 本文 §2.1 的帧率/长任务数字来自 **headless、无 GPU** 环境,不可当作真实体验;RTT 与 LoAF 结论与该环境无关。
 - 面板截图留在 `/tmp/hud-panel.png`(冷启动)与 `/tmp/hud-panel-warm.png`(55s),是临时文件;重取方法见 §7。
@@ -323,7 +325,7 @@ perf-lens 在 `docs/evidence.md` §17 实测:`dsh-app://` 上 `PerformanceObserv
 **进度(2026-10-07)**
 
 - [x] 第 1 件:客户端守夜层 —— 帧级环形缓冲 + LoAF + 自动留存最差 5 次(`feat(client)`)。
-- [x] 第 2 件:事故包 —— `report(id)` / `exportIncident(id)`,含缺失声明与补齐办法。
+- [x] 第 2 件:事故包 —— `report(id)` / `exportIncident(id)`,含缺失声明与补齐办法;留存的事故落盘(活过刷新),`tools/inspect-incident.mjs` 可把它们渲染成人读的样子。
 - [ ] 第 3 件:桌面端主进程取证(`contentTracing` 环形 + `webContents.debugger`)—— 未开始,需要 Electron 侧载体。
 
 **风险与前提**

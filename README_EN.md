@@ -25,6 +25,7 @@ one `PerformanceObserver` (LoAF, Chrome 123+):
 - a per-frame ring buffer (12000 frames ≈ 3.3 minutes at 60fps);
 - any frame over **100ms** (or LoAF `blockingDuration` over 100ms) is captured automatically: the
   **10 seconds before** and 3 seconds after are sliced out verbatim;
+- kept incidents are persisted (localStorage, 512KB cap) and survive a reload; `watch().restored` says how many came back;
 - only the worst **5** are kept; stalls that were captured but not good enough to keep are counted
   separately (`dropped`) from stalls never captured;
 - multi-second "gaps" from a hidden tab are **not** stalls (rAF was suspended) and are marked `gap`;
@@ -145,7 +146,7 @@ is expensive in some usage", so do not read it as a causal proof.
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
 node tests/logic.mjs         # 152 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          #  24 assertions: real index.js driven by a fake ctx
-# 229 offline assertions total, no running DSH required
+# 243 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):

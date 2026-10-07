@@ -89,7 +89,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 194 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 208 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -230,6 +230,8 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 7. **`h(undefined, …)` 这类"引用了没声明"靠 `node --check` 拦不住**(语法合法)。实测事故:一次"整段替换样式块"把紧跟在 `const S` 之后的 `const signed` 与 `function PerfHudStress` 一起吞掉 → 文件里 `h(PerfHudStress, …)` 还在、定义没了 → React 抛 `Element type is invalid` → 外壳停用条目(面板凭空消失,只能刷新)。这就是 §3 那两条静态检查存在的原因。
 8. **名字黑名单是补丁**(§6.3):靠枚举宿主命名追不上宿主改名与压缩,真正的答案是四条腿交叉。
 9. **通知类插件可能整个会话零回调**:`dsh-notify-me` 实测从未出现在归因表里 —— 这是"它没干活",不是"没认出"。要验它,得先让它真的做点什么。
+10. **LoAF 的 `blockingDuration` 会是 0,哪怕这一帧确实很重**:受控实测(CDP 触发 `stress(8000, 200)`)那一帧帧间隔 **325.6ms**、窗口里 43 帧 >100ms,但同窗口 **116 条 LoAF 的 blocking 全是 0**;而既有的 longtask 表如实给出了 `223ms · 组件 PerfHud · 子树腿/DOM 写入腿 PerfHudStress`。所以:① **不要把 `blocking = 0` 读成"没有阻塞"**,它只说明这一帧里没有*被归因到*的长任务;② 事故的严重度以**帧间隔**为准,LoAF 的 blocking 只当补充。这次的 200ms 燃烧是经 CDP 触发的,所以不能反推"所有同步 JS 都不计"(可能只是没有 TaskAttribution)—— 换真人交互再测一次才算数。
+11. **改 `client.js` 时不要同时跑"受控实测"**:`dsh-client-hmr` 会热载新代码,正在跑的采集会**换到新实例**(seq 归零、状态重置),实验结果直接作废。实测踩过一次:边写落盘功能边跑受控捕获,拿到的 id 与时间戳全对不上。要采集就先把代码定下来。
 
 ---
 
