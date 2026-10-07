@@ -50,6 +50,7 @@ window.__ModuleLoader__.load({
 		const BASELINE_MS = 60000;
 		const STEP_MS = 60000;         // 隔离实验:每个候选"关闭后"的测量窗口
 		const BRACKET_MS = 30000;      // 隔离实验:每个候选前后各打一次基线(对照 + 噪声采样)
+		const EXPERIMENT_IDLE_WAIT_MS = 300000;   // 开跑前最多等 5 分钟,等会话空闲(流式窗口不可比)
 		const IDLE_GAP_MS = 3000;
 		const DEFAULT_CANDIDATES = ['dsh-status-rotator', 'dsh-notify-me', 'dsh-better-sidebar', 'dsh-context'];
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
@@ -1280,6 +1281,28 @@ window.__ModuleLoader__.load({
 			return true;
 		}
 
+		/**
+		 * 等会话空闲(连续 IDLE_GAP_MS 没有流式),最多等 waitMs。
+		 * 实测两次实验都跑在流式回合里,四行全被标"不可比" —— 与其事后标注,不如先等。
+		 */
+		async function waitForIdle(waitMs) {
+			const started = performance.now();
+			let calmSince = state.streaming ? 0 : performance.now();
+			while (performance.now() - started < waitMs) {
+				if (experiment.aborted === true) return false;
+				if (state.streaming) {
+					calmSince = 0;
+				} else if (calmSince === 0) {
+					calmSince = performance.now();
+				} else if (performance.now() - calmSince >= IDLE_GAP_MS) {
+					return true;
+				}
+				experiment.message = `等待会话空闲(${Math.round((performance.now() - started) / 1000)}s)`;
+				await sleep(1000);
+			}
+			return false;
+		}
+
 		/** 把候选恢复成原始开关状态;返回每一项的真实回执。 */
 		async function restoreCandidates(stateBefore) {
 			const restores = [];
@@ -1332,6 +1355,17 @@ window.__ModuleLoader__.load({
 			};
 		}
 
+		/**
+		 * 超出噪声的结论。
+		 * 窗口含流式时**不给结论** —— 自己刚声明"该对照不可比",却又列出「超出噪声 fps」,
+		 * 等于引诱读者挑一个数字当结论(实测第一版就被这么读)。
+		 */
+		function beyondNoiseText(row) {
+			if (row === null || row === undefined) return translate('notYet');
+			if (row.confounded === true) return translate('notApplicable');
+			return metricList(row.significant);
+		}
+
 		/** 超出噪声的指标名单,给面板一行用。 */
 		function metricList(sig) {
 			if (sig === null || sig === undefined) return translate('notYet');
@@ -1373,6 +1407,15 @@ window.__ModuleLoader__.load({
 				stateBefore.set(name, found === undefined ? null : found.enabled === true);
 			}
 			experiment.candidateState = [...stateBefore.entries()].map(([name, enabled]) => ({ name, enabledBefore: enabled }));
+
+			experiment.message = '等待会话空闲';
+			const calmed = await waitForIdle(EXPERIMENT_IDLE_WAIT_MS);
+			if (experiment.aborted === true) {
+				experiment.message = '已中止(还没开始测量)';
+			} else if (calmed === false) {
+				// 等不到也照跑,但把"这次对照会被标注不可比"说在前面,不偷偷给数字。
+				experiment.message = '一直有回合在跑,继续测量(各行会被标"不可比")';
+			}
 
 			experiment.message = `基线窗口 0(${Math.round(BRACKET_MS / 1000)}s)`;
 			// A/B/A:每个候选都跟"紧邻它前面的那个基线"对照,并在恢复后立刻再打一次基线 ——
@@ -1744,7 +1787,8 @@ window.__ModuleLoader__.load({
 				precise: '精确归因', preciseHint: '开启后按合并 bundle 的 sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)',
 				component: '组件', cumulative: '累计', maps: '批次分段',
 				stream: '状态', running: '流式', idle: '空闲', idleBase: '空闲基线(60s)', idleWriter: '空闲也在加节点的是',
-				notYet: '未采集', hostLoop: '宿主 event-loop', hostDown: '宿主不可用', link: '链路 RTT',
+				notYet: '未采集', hostLoop: '宿主 event-loop',
+				notApplicable: '不适用(窗口含流式)', hostDown: '宿主不可用', link: '链路 RTT',
 				hostEvents: '宿主事件到达', hostEventsHint: '宿主半用公开接口 ctx.on(\'session/event\') 记每条事件「提交(event.time)→到达监听器」的延迟;第一版想包 Context.emit,线上实测根本抓不到(该事件走带作用域过滤的派发),故改口径且写明',
 				notInstalled: '未安装', waiting: '已装,等事件',
 				sampling: '吞吐采样中', failed: '吞吐失败',
@@ -1756,7 +1800,7 @@ window.__ModuleLoader__.load({
 				stressHint: '自测:一次同步提交渲染 8000 个离屏节点 + 显式燃烧 80ms(节点数凑不稳,故明着燃烧),用来自检归因链路',
 				stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点',
 				stressNoTask: '未观察到长任务', stressCommit: '提交', stressBurn: '人为燃烧', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
-				expHint: '会临时关闭候选插件各 60 秒并逐项恢复;每步都记宿主回执,恢复后逐项核验。每个候选只跟紧邻基线对照,并给出基线漂移当噪声底。',
+				expHint: '开跑前会等会话空闲(最多 5 分钟;流式窗口的对照不可比)。随后逐候选关闭 60 秒并恢复,每步记宿主回执、恢复后逐项核验;每个候选只跟紧邻基线对照,基线漂移作为噪声底。',
 				method: '方法', noiseFloor: '噪声底', beyondNoise: '超出噪声', confounded: '窗口含流式,该对照不可比',
 				skipped: '跳过', restore: '恢复', marks: '场景标记',
 				via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
@@ -1776,7 +1820,8 @@ window.__ModuleLoader__.load({
 				precise: 'precise', preciseHint: 'Resolve single package names from the merged bundle sourcemap sections (lazy; one map fetch per rev)',
 				component: 'component', cumulative: 'total', maps: 'maps',
 				stream: 'state', running: 'streaming', idle: 'idle', idleBase: 'idle baseline (60s)', idleWriter: 'still adding nodes while idle',
-				notYet: 'n/a', hostLoop: 'host event-loop', hostDown: 'host n/a', link: 'link RTT',
+				notYet: 'n/a', hostLoop: 'host event-loop',
+				notApplicable: 'n/a (window had streaming)', hostDown: 'host n/a', link: 'link RTT',
 				hostEvents: 'host event arrival', hostEventsHint: 'The host half uses the public ctx.on(\'session/event\') and records commit(event.time)→listener arrival lag; the earlier attempt to wrap Context.emit never fired (that event uses scope-filtered dispatch)',
 				notInstalled: 'not installed', waiting: 'installed, waiting for events',
 				sampling: 'throughput sampling', failed: 'throughput failed',
@@ -1788,7 +1833,7 @@ window.__ModuleLoader__.load({
 				stressHint: 'Self-test: one synchronous commit rendering 8000 offscreen nodes plus an explicit 80ms burn (node counts alone are not reliable), to self-check the attribution chain',
 				stressRunning: 'self-test running', stressDone: 'self-test result', nodes: 'nodes',
 				stressNoTask: 'no long task observed', stressCommit: 'commit', stressBurn: 'synthetic burn', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable', stressFromDom: 'DOM write',
-				expHint: 'Temporarily disables each candidate for 60s and restores it; every step records the host receipt and the restore is verified. Each candidate is compared with its nearest baseline, with baseline drift reported as the noise floor.',
+				expHint: 'Waits for an idle session first (up to 5 min; streaming windows are not comparable). Then disables each candidate for 60s and restores it, recording the host receipt and verifying the restore. Each candidate is compared with its nearest baseline, with baseline drift as the noise floor.',
 				method: 'method', noiseFloor: 'noise floor', beyondNoise: 'beyond noise', confounded: 'window had streaming; this comparison is not valid',
 				skipped: 'skipped', restore: 'restore', marks: 'marks',
 				via: 'channel', viaRemote: 'ctx.remote (client remote)', viaRoute: 'host route /api/dsh-perf-hud/host', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
@@ -2137,7 +2182,7 @@ window.__ModuleLoader__.load({
 							h('span', { style: S.num }, row.delta === undefined || row.delta === null ? (row.reason ?? '') : `Δfps ${signed(row.delta.fps)} · ΔLT ${signed(row.delta.longTasks)}`)),
 						row.delta === undefined || row.delta === null ? null : h('div', { style: S.sub },
 							`ΔDOM ${signed(row.delta.domPerMin)}${t('perMin')} · ${t('restore')} ${row.restore?.ok === true ? '✓' : '✗'}` +
-							` · ${t('beyondNoise')} ${metricList(row.significant)}` +
+							` · ${t('beyondNoise')} ${beyondNoiseText(row)}` +
 							(row.confounded === true ? ` · ⚠️ ${t('confounded')}` : ''))))),
 					experiment.restored === null ? null : h('div', { style: S.sub },
 						`${t('restore')}: ${experiment.restored.ok === true ? `✓ ${experiment.restored.restores?.length ?? 0}` : `✗ ${experiment.restored.diff?.length ?? 0} 处不一致`}`),

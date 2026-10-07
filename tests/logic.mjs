@@ -174,7 +174,7 @@ const sandbox = `
 		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 		stressBurn: '人为燃烧',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
-		none: '无',
+		none: '无', notApplicable: '不适用(窗口含流式)',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -221,6 +221,7 @@ const newPieces = [
 	'function noiseFloor(',
 	'function significance(',
 	'function metricList(',
+	'function beyondNoiseText(',
 	'function isStreaming(',
 	'function idleTick(',
 	'function rate(',
@@ -242,7 +243,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -447,6 +448,13 @@ check('significance 逐指标判断是否超出噪声',
 check('metricList 列出超标指标', EX.metricList({ fps: false, longTasks: true, domPerMin: true }), 'LT/DOM');
 check('全部落在噪声内:明确写「无」,不把漂移说成效果',
 	EX.metricList({ fps: false, longTasks: false, domPerMin: false }), '无');
+// 自己声明"该对照不可比"却又列「超出噪声 fps」,等于引诱读者挑数字当结论
+check('窗口含流式:不给超出噪声的结论',
+	EX.beyondNoiseText({ confounded: true, delta: { fps: -1.5 }, significant: { fps: true, longTasks: false, domPerMin: false } }),
+	'不适用(窗口含流式)');
+check('窗口可比:正常给出超标指标',
+	EX.beyondNoiseText({ confounded: false, significant: { fps: false, longTasks: true, domPerMin: true } }), 'LT/DOM');
+check('没有结果时不写结论', EX.beyondNoiseText(null), '未采集');
 
 // ── E:空闲基线门控(含一次真的窗口采集) ─────────────────────────
 box.state.baselineMs = 100;    // 只跑一轮,省时间
