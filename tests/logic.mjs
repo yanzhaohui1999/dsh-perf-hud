@@ -132,6 +132,8 @@ const sandbox = `
 	const bundleMaps = new Map();
 	const bundleMeta = new Map();
 	const changedNodes = [];
+	// 只给这几个键的真实中文:断言要检查"人看到的字",不是 key
+	const translate = (key) => ({ sampling: '吞吐采样中', failed: '吞吐失败', suspect: '疑似链路', notYet: '未采集' })[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
 		{ id: 'sessions', label: () => '会话列表', find: () => null },
@@ -167,6 +169,7 @@ const newPieces = [
 	'function fiberOwner(',
 	'function percentile(',
 	'function linkStats(',
+	'function linkRowText(',
 	'function suspectLink(',
 	'function applyDeltas(',
 	'function isStreaming(',
@@ -189,7 +192,7 @@ const newPieces = [
 
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, setStreaming: (value) => { streamingFlag = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, applyDeltas, idleTick, snapshot, domWriteSnapshot, domWriteDelta } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, applyDeltas, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -297,6 +300,21 @@ box.state.fps = 12;
 check('FPS 也崩了就不甩锅给链路', EX.suspectLink(), false);
 box.state.link = [];
 check('没有样本时不误报', EX.suspectLink(), false);
+
+// 链路那一行必须自证完整:n= 露出来,吞吐三态都说清楚
+box.state.fps = 60;
+box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 10 }, { t: Date.now(), kind: 'rtt', rtt: 20 }];
+box.state.loadState = 'pending';
+check('吞吐还没跑:写"吞吐采样中"而不是留空', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 吞吐采样中');
+box.state.loadState = 'ok';
+box.state.linkText = '1200.8KB/s';
+check('吞吐就绪:接上数值', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 1200.8KB/s');
+box.state.loadState = 'failed';
+check('吞吐失败:如实写失败', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 吞吐失败');
+box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 400 }];
+box.state.loadState = 'ok';
+check('RTT 尖峰 + FPS 正常:追加疑似链路',
+	EX.linkRowText(), 'p50 400ms · p99 400ms (n=1) · 1200.8KB/s · 疑似链路');
 
 // 单样本:分位退化成它自己(顺带把这一组放在最后,避免污染上面的样本)
 check('linkStats 单样本 p50 = p99 = 自身', (() => { box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 7 }]; return [EX.linkStats().p50, EX.linkStats().p99]; })(), [7, 7]);

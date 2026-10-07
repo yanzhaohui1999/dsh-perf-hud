@@ -512,6 +512,7 @@ window.__ModuleLoader__.load({
 			hostWatchAsked: false,
 			hostWatchOff: false,
 			link: [],                // { t, kind, rtt, kbps?, error? }
+			loadState: 'pending',    // pending | ok | failed:吞吐那一格现在是哪种状态
 			linkAt: 0,
 			loadAt: 0,
 		};
@@ -965,6 +966,7 @@ window.__ModuleLoader__.load({
 					const kbps = rtt <= 0 ? 0 : round1(bytes / 1024 / (rtt / 1000));
 					state.link.push({ t: Date.now(), kind, rtt, kbps });
 					state.linkText = `${kbps}KB/s`;
+					state.loadState = 'ok';
 				} else {
 					state.link.push({ t: Date.now(), kind, rtt });
 				}
@@ -976,6 +978,7 @@ window.__ModuleLoader__.load({
 				await requestHostEventWatch();
 			} catch (error) {
 				state.hostError = error instanceof Error ? error.message : String(error);
+				if (kind === 'load') state.loadState = 'failed';
 				state.link.push({ t: Date.now(), kind, rtt: null, error: state.hostError });
 				if (state.link.length > 300) state.link.shift();
 			}
@@ -1031,6 +1034,14 @@ window.__ModuleLoader__.load({
 
 		function hostP99() {
 			return state.host?.eventLoop?.p99 ?? null;
+		}
+
+		/** 链路那一行的整句:样本数必须露出来 —— n=1 时 p50 会等于 p99,看着像 bug。 */
+		function linkRowText() {
+			const stats = linkStats();
+			if (stats.count === 0) return translate('notYet');
+			const throughput = state.loadState === 'pending' ? translate('sampling') : state.loadState === 'failed' ? translate('failed') : state.linkText;
+			return `p50 ${stats.p50}ms · p99 ${stats.p99}ms (n=${stats.count}) · ${throughput}${suspectLink() ? ` · ${translate('suspect')}` : ''}`;
 		}
 
 		/** RTT 尖峰而 FPS 正常 → 怀疑链路,而不是页面。 */
@@ -1463,6 +1474,8 @@ window.__ModuleLoader__.load({
 			startDomWatch();
 			sampleDom();
 			probeLink('rtt');
+			// 吞吐探针原来是首个 60 秒才跑,面板那一格会空一分钟看着像被截断 —— 先补一次。
+			natives.setTimeout(() => probeLink('load'), 3000);
 			state.linkTimer = natives.setInterval(() => probeLink('rtt'), RTT_INTERVAL_MS);
 			state.loadTimer = natives.setInterval(() => probeLink('load'), LOAD_INTERVAL_MS);
 		}
@@ -1570,6 +1583,8 @@ window.__ModuleLoader__.load({
 				notYet: '未采集', hostLoop: '宿主 event-loop', hostDown: '宿主不可用', link: '链路 RTT 近60s',
 				hostEvents: '宿主事件到达', hostEventsHint: '宿主半用公开接口 ctx.on(\'session/event\') 记每条事件「提交(event.time)→到达监听器」的延迟;第一版想包 Context.emit,线上实测根本抓不到(该事件走带作用域过滤的派发),故改口径且写明',
 				notInstalled: '未安装', waiting: '已装,等事件',
+				sampling: '吞吐采样中', failed: '吞吐失败',
+				linkHint: '每 10 秒一次 1KB 同源探测(带 cache-buster)算 RTT,n 是最近 60 秒的样本数;吞吐每 60 秒一次 64KB(启动后 3 秒先补一次)。RTT 尖峰而 FPS 正常 → 疑似链路',
 				suspect: '疑似链路', isolation: '隔离实验', candidate: '候选', baseline: '基线',
 				startExp: '开始实验', abortExp: '中止并恢复', stress: '自测:渲染卡顿',
 				stressHint: '自测:一次提交塞 6000 个节点制造真实渲染型长任务,用来验收 fiber 归因',
@@ -1594,6 +1609,8 @@ window.__ModuleLoader__.load({
 				notYet: 'n/a', hostLoop: 'host event-loop', hostDown: 'host n/a', link: 'link RTT 60s',
 				hostEvents: 'host event arrival', hostEventsHint: 'The host half uses the public ctx.on(\'session/event\') and records commit(event.time)→listener arrival lag; the earlier attempt to wrap Context.emit never fired (that event uses scope-filtered dispatch)',
 				notInstalled: 'not installed', waiting: 'installed, waiting for events',
+				sampling: 'throughput sampling', failed: 'throughput failed',
+				linkHint: 'A 1KB same-origin probe (cache-busted) every 10s gives RTT; n is the sample count over the last 60s. Throughput is a 64KB fetch every 60s (one extra 3s after start). RTT spikes with normal FPS -> link suspected',
 				suspect: 'link suspected', isolation: 'isolation', candidate: 'candidates', baseline: 'baseline',
 				startExp: 'Run experiment', abortExp: 'Abort and restore', stress: 'Self-test: render stall',
 				stressHint: 'Self-test: one commit of 6000 nodes to produce a real render long task for fiber attribution',
@@ -1821,10 +1838,8 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.label, title: t('hostEventsHint') }, t('hostEvents')),
 						h('span', { style: S.num }, hostEventsText())),
 					h('div', { style: S.row },
-						h('span', { style: S.label }, t('link')),
-						h('span', { style: { ...S.num, color: linkSuspect ? 'var(--dsw-alias-state-warn-primary)' : undefined } },
-							link.count === 0 ? t('notYet')
-								: `p50 ${link.p50}ms · p99 ${link.p99}ms${state.linkText === '' ? '' : ` · ${state.linkText}`}${linkSuspect ? ` · ${t('suspect')}` : ''}`)),
+						h('span', { style: S.label, title: t('linkHint') }, t('link')),
+						h('span', { style: { ...S.num, color: linkSuspect ? 'var(--dsw-alias-state-warn-primary)' : undefined } }, linkRowText())),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('idleBase')),
 						h('span', { style: S.num }, idleBase === null || idleBase === undefined
