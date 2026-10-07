@@ -44,7 +44,8 @@
 
 - 每帧一条**帧级环形缓冲**(12000 条 ≈ 60fps 下 3.3 分钟),另加一个 LoAF 观察器(Chrome 123+);
 - 一帧超过 **100ms**(或 LoAF 的 `blockingDuration` 超过 100ms)就**自动抓一次**:前 10 秒 + 后 3 秒**原样切片**,不等你反应;
-- 只留最差 **5** 次;抓到了但不够差而丢掉的次数单独记(`dropped`),与"没抓到"分开;
+- 只留最差 **10** 次;抓到了但不够差而丢掉的次数单独记(`dropped`),与"没抓到"分开;
+- 事故包把脚本 URL 抽成一张表(`urls` + `scripts[].u`):同一个 combo URL 会被写几十遍,抽表之后**一份小 4 倍**(实测 116.6KB → 29.6KB),信息一点没丢;
 - 留存的事故**会落盘**(localStorage,上限 512KB):刷新页面、重启浏览器之后还在,`watch().restored` 告诉你这次读回了几条;写不进去会如实报 `persistError`,不假装存下来了;
 - 标签页隐藏造成的几百秒"间隙"**不算卡顿**(rAF 被挂起),事故包里标成 `gap`;
 - 这一层**不包装任何原型**:只用本来就在跑的 rAF 循环与一个 `PerformanceObserver`,所以默认开着也不改你的环境。
@@ -165,9 +166,9 @@ dsh plugin --profile web add "$PWD"
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 214 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 218 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js
-# 合计 249 条断言,离线,无需 DSH 在跑
+# 合计 253 条断言,离线,无需 DSH 在跑
 ```
 
 线上验证(需要先换 cookie,步骤见 [AGENTS.md](AGENTS.md) §2.2):

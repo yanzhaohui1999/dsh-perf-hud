@@ -65,7 +65,7 @@ window.__ModuleLoader__.load({
 		const WATCH_FRAMES = 12000;            // 帧级环形缓冲条数(60fps ≈ 3.3 分钟)
 		const WATCH_LOAF_MAX = 200;            // 保留多少条长动画帧
 		const WATCH_SCRIPT_MAX = 12;           // 一条长动画帧最多记多少个脚本
-		const WATCH_INCIDENT_MAX = 5;          // 自动留存最差几次
+		const WATCH_INCIDENT_MAX = 10;         // 自动留存最差几次(真正的天花板是 WATCH_PERSIST_MAX_BYTES)
 		const WATCH_PRE_MS = 10000;            // 前摇:事件发生前的 10 秒
 		const WATCH_POST_MS = 3000;            // 后摇:事件发生后再等 3 秒才切片
 		const WATCH_TRIGGER_MS = 100;          // 帧间隔 / blockingDuration 越过它就起一次捕获
@@ -985,7 +985,36 @@ window.__ModuleLoader__.load({
 			const from = pending.at - WATCH_PRE_MS;
 			const to = pending.until;
 			const frames = frameRing.slice(from, to);
-			const loaf = state.watch.loaf.filter((row) => row.t >= from && row.t <= to);
+			const rows = state.watch.loaf.filter((row) => row.t >= from && row.t <= to);
+			// URL 抽表:实测一份事故里同一个 combo URL 会被写 27 遍 —— 116.6KB 里有 75.4KB 是
+			// 那个 2.9KB 的 URL 重复(导出的缩进版 138.6KB 里更糟)。脚本只留下标之后:
+			// 紧凑 29.6KB / 导出 51.5KB / 512KB 能放 17 条(原来 4 条)。信息一点没少。
+			// u = -1 表示这条脚本没有 URL。
+			const urls = [];
+			const urlIndex = (url) => {
+				if (typeof url !== 'string' || url === '') return -1;
+				const found = urls.indexOf(url);
+				if (found !== -1) return found;
+				urls.push(url);
+				return urls.length - 1;
+			};
+			const loaf = rows.map((row) => ({
+				t: row.t,
+				dur: row.dur,
+				blocking: row.blocking,
+				renderStart: row.renderStart,
+				styleAndLayoutStart: row.styleAndLayoutStart,
+				scripts: row.scripts.map((script) => ({
+					u: urlIndex(script.url),
+					fn: script.fn,
+					invoker: script.invoker,
+					invokerType: script.invokerType,
+					charPos: script.charPos,
+					ms: script.ms,
+					forcedMs: script.forcedMs,
+					pauseMs: script.pauseMs,
+				})),
+			}));
 			const longTasks = state.longTasks.filter((row) => row.at >= from && row.at <= to);
 			let worst = null;
 			let live = 0;
@@ -1027,10 +1056,13 @@ window.__ModuleLoader__.load({
 					loafEntries: loaf.length,
 					blockingMs: round1(blocking),
 					longTasksInWindow: longTasks.length,
-					topScripts: scripts.slice(0, 5),
+					topScripts: scripts.slice(0, 5).map((script) => ({
+						at: script.at, u: script.u, ms: script.ms, fn: script.fn, invokerType: script.invokerType, charPos: script.charPos,
+					})),
 					streaming: state.streaming,
 					visibility: document.visibilityState,
 				},
+				urls,                          // 脚本 URL 表(scripts[].u 是它的下标)
 				frames,
 				loaf,
 				longTasks,
@@ -2385,6 +2417,7 @@ window.__ModuleLoader__.load({
 			return {
 				plugin: PKG,
 				kind: 'perf-hud-incident',
+				schema: 2,                      // 2 = 脚本 URL 抽成 incident.urls + scripts[].u
 				exportedAt: new Date().toISOString(),
 				context: {
 					page: location.href,
@@ -2404,6 +2437,7 @@ window.__ModuleLoader__.load({
 						'incident.loaf[].blocking(blockingDuration)只累计"被归因到的 >50ms 长任务"的超出部分 —— **它可以是 0,而这一帧仍然有几百毫秒**。判严重度看帧间隔,blocking=0 不等于没卡',
 						'incident.longTasks 是既有四条腿落在窗口内的明细(at=任务开始的 perf 毫秒,t=上报时刻的墙钟毫秒),**它不是慢帧清单**:条数通常远少于超线帧',
 						'incident.baseline 是同一会话整个帧环的分布 —— 拿它和 summary 比,才知道这一段是"真的比平时差"还是"这台机器一直这样"',
+						'脚本的 URL 不在脚本里:incident.urls 是字符串表,scripts[].u 是它的下标(u=-1 表示没有 URL)—— 抽表是因为同一个 combo URL 会重复几十遍',
 						'incident.summary 只是上面几块的汇总;这一层不做推断,结论请自己下',
 					],
 				},

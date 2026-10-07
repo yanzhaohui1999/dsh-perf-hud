@@ -875,12 +875,12 @@ check('loafScripts 容忍 scripts 缺失', watch.loafScripts({}), []);
 check('wallClock 用 timeOrigin 对齐', watch.wallClock(10000), new Date(1700000000000 + 10000).toISOString());
 
 // 留存:满了以后"不够差"的丢掉、"更差"的顶掉最弱的一条
-for (const severity of [10, 20, 30, 40, 50]) watch.keepIncident({ id: `k${severity}`, severity });
-check('留存满了:按严重度降序、只留最差 N 次', watch.state.watch.incidents.map((row) => row.severity), [50, 40, 30, 20, 10]);
+for (const severity of [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]) watch.keepIncident({ id: `k${severity}`, severity });
+check('留存满了:按严重度降序、只留最差 N 次', watch.state.watch.incidents.map((row) => row.severity), [100, 90, 80, 70, 60, 50, 40, 30, 20, 10]);
 check('比现有最弱的还弱 → 丢掉,不进列表', watch.keepIncident({ id: 'weak', severity: 5 }), 'dropped');
-check('丢掉之后列表不变', watch.state.watch.incidents.map((row) => row.severity), [50, 40, 30, 20, 10]);
+check('丢掉之后列表不变', watch.state.watch.incidents.map((row) => row.severity), [100, 90, 80, 70, 60, 50, 40, 30, 20, 10]);
 check('更差的顶掉最弱那条', watch.keepIncident({ id: 'strong', severity: 99 }), 'replaced');
-check('顶掉之后仍降序且最弱的已出局', watch.state.watch.incidents.map((row) => row.severity), [99, 50, 40, 30, 20]);
+check('顶掉之后仍降序且最弱的已出局', watch.state.watch.incidents.map((row) => row.severity), [100, 99, 90, 80, 70, 60, 50, 40, 30, 20]);
 watch.state.watch.incidents.length = 0;
 watch.state.watch.dropped = 0;
 watch.state.watch.coalesced = 0;
@@ -936,18 +936,31 @@ check('HUD 关着时手动标记如实说没在录', watch.captureNow().ok, fals
 // 状态:照实报
 watch.state.watch.on = true;
 const status = watch.watchStatus();
-check('watchStatus 报出录制状态与阈值', [status.recording, status.loaf, status.triggers.frameMs, status.triggers.keep], [true, 'on', 100, 5]);
+check('watchStatus 报出录制状态与阈值', [status.recording, status.loaf, status.triggers.frameMs, status.triggers.keep], [true, 'on', 100, 10]);
 check('watchStatus 报出帧样本数与留存清单', [status.frameSamples > 0, Array.isArray(status.kept), status.kept.length], [true, true, 3]);
 
 // 事故包:自描述头 + 缺失声明(缺什么、怎么补)
 check('事故包:不存在的 id 返回 null(不静默成功)', watch.incidentReport('nope'), null);
 const report = watch.incidentReport(0);
+check('事故包:URL 抽表后脚本里不再内联 url', watch.incidentReport(0).incident.loaf.every((row) => row.scripts.every((script) => script.url === undefined && typeof script.u === 'number')), true);
+check('事故包:topScripts 也只留下标', watch.incidentReport(0).incident.summary.topScripts.every((script) => script.url === undefined), true);
+// 身材回归:同一个长 URL 重复 20 次,抽表之后事故包不该被它撑大
+const hugeUrl = `http://h/plugins/??${'p'.repeat(2000)}/client.js`;
+watch.state.watch.loaf.length = 0;
+for (let i = 0; i < 20; i += 1) {
+	watch.state.watch.loaf.push({ t: 60000 + i, dur: 10, blocking: 10, renderStart: 0, styleAndLayoutStart: 0, scripts: [{ url: hugeUrl, fn: null, invoker: null, invokerType: 'event-listener', charPos: 1, ms: 5, forcedMs: 0, pauseMs: 0 }] });
+}
+watch.setNow(75000);
+const big = watch.triggerCapture('frame', 70000, 200);
+const inlineSize = JSON.stringify({ ...big, urls: undefined, loaf: big.loaf.map((row) => ({ ...row, scripts: row.scripts.map((script) => ({ ...script, url: big.urls[script.u] })) })) }).length;
+check('事故:长 URL 重复 20 次只存一份', [big.urls.length, big.urls[0] === hugeUrl], [1, true]);
+check('事故:抽表后体积不到内联的一半', JSON.stringify(big).length < inlineSize / 2, true);
 check('事故包:kind 与 incident 对得上', [report.kind, report.plugin, report.incident.id === watch.state.watch.incidents[0].id], ['perf-hud-incident', 'dsh-perf-hud', true]);
 check('事故包:带阈值与读取说明', [
 	report.context.thresholds.triggerMs,
 	report.context.howToRead.length,
 	report.context.page,
-], [100, 6, 'http://127.0.0.1:3080/']);
+], [100, 7, 'http://127.0.0.1:3080/']);
 check('事故包:如实列出没拿到的东西',
 	['precise:', 'devtools-trace:', 'host-cpuprofile:'].map((prefix) => report.context.missing.some((line) => line.startsWith(prefix))),
 	[true, true, true]);
@@ -980,7 +993,7 @@ watch.restoreIncidents();
 check('读回:三份回来且顺序不变', watch.state.watch.incidents.map((row) => row.id), beforeClear.map((row) => row.id));
 check('读回:严重度一字不差', watch.state.watch.incidents.map((row) => row.severity), beforeClear.map((row) => row.severity));
 check('读回:标记 restored=true(跨会话的 perf 毫秒要按 env.perfOrigin 对齐)', watch.state.watch.incidents[0].restored, true);
-check('读回:计数如实', watch.state.watch.restored, 3);
+check('读回:计数如实', watch.state.watch.restored, beforeClear.length);
 watch.store.set('test:incidents', JSON.stringify({ v: 1, incidents: [{ id: 'bad', severity: 1 }, { id: 'ok', severity: 5, frames: [], loaf: [] }] }));
 watch.state.watch.incidents.length = 0;
 watch.restoreIncidents();

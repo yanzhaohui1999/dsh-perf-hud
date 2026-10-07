@@ -51,6 +51,14 @@ const num = (value, digits = 1) => (typeof value === 'number' ? String(Math.roun
 const sec = (ms) => `${ms >= 0 ? '+' : ''}${(ms / 1000).toFixed(1)}s`;
 const rule = (title) => `\n── ${title} ${'─'.repeat(Math.max(0, WIDTH - title.length - 4))}`;
 
+/** 脚本的 URL 现在放在 incident.urls 里(scripts[].u 是下标);旧包还是内联的 url。 */
+function scriptUrl(script) {
+	if (script === null || script === undefined) return '';
+	if (typeof script.url === 'string') return script.url;
+	const table = Array.isArray(incident.urls) ? incident.urls : [];
+	return typeof script.u === 'number' && script.u >= 0 && script.u < table.length ? table[script.u] : '';
+}
+
 /** 合并批次 URL 太长:只留第一个包名 + 包数。 */
 function shortUrl(url) {
 	if (typeof url !== 'string' || url === '') return '—';
@@ -64,7 +72,7 @@ function shortUrl(url) {
 
 // ── 1. 头部 ────────────────────────────────────────────────────────────
 const window0 = incident.window ?? {};
-console.log(`\n事故 ${incident.id ?? '?'}  ·  ${report.exportedAt ?? '?'}`);
+console.log(`\n事故 ${incident.id ?? '?'}  ·  ${report.exportedAt ?? '?'}${report.schema === undefined ? '' : `  ·  schema ${report.schema}`}`);
 console.log(`${file}`);
 console.log(rule('发生了什么'));
 console.log(`触发原因   ${incident.cause ?? '?'}${incident.cause === 'loaf' ? '(长动画帧的 blockingDuration 超线)' : incident.cause === 'frame' ? '(帧间隔超线)' : incident.cause === 'manual' ? '(手动标记)' : ''}`);
@@ -164,7 +172,7 @@ for (const row of loaf) for (const script of row.scripts) scripts.push({ at: row
 scripts.sort((a, b) => b.ms - a.ms);
 if (scripts.length === 0) console.log('(没有脚本级归因:见下面的缺失声明)');
 for (const script of scripts.slice(0, 10)) {
-	console.log(`  ${pad(`${num(script.ms)}ms`, 8, 'right')}  ${pad(script.invokerType ?? '—', 16)}  ${shortUrl(script.url)}`);
+	console.log(`  ${pad(`${num(script.ms)}ms`, 8, 'right')}  ${pad(script.invokerType ?? '—', 16)}  ${shortUrl(scriptUrl(script))}`);
 	console.log(`            invoker ${script.invoker ?? '—'}${script.fn === null || script.fn === undefined ? '' : `  ·  fn ${script.fn}`}${script.charPos === null || script.charPos === undefined ? '' : `  ·  charPos ${script.charPos}`}${script.forcedMs > 0 ? `  ·  强制样式布局 ${num(script.forcedMs)}ms` : ''}`);
 }
 

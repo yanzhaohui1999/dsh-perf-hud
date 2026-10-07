@@ -227,7 +227,7 @@
 - **Perfetto 直接导入 `.cpuprofile`** 未确认(其文档列出的外部格式不含 `.cpuprofile`);speedscope 与 Chrome DevTools 的 Load profile 是已确认路径。
 - **combo URL(`??a.js,b.js`)在 DevTools 火焰图里的标注方式**未确认;本仓的 sourcemap 分段方案不受影响。
 - **LoAF 的 `blockingDuration` 语义尚未摸清**:受控实测里一帧 325ms、窗口 43 帧 >100ms,116 条 LoAF 的 blocking **全是 0**,而 longtask 表给出了 223ms 与组件名。已写进 AGENTS §8 第 10 条当坑记着;需要真人交互(非 CDP 触发)复测一次才能定论。
-- **事故落盘用的是 `localStorage`**:512KB 上限、超了丢最弱的、写失败报 `persistError`。它和"面板状态只进 localStorage"这条边界一致,但持久化内容比之前重了 —— 如果哪天要做到 10MB 级证据,得换 IndexedDB。
+- **落盘容量:选了"缩小数据"而不是"扩大容量"**(2026-10-07,实测决定)。一份事故:紧凑 **116.6KB** / 导出缩进 **138.6KB**;分块看 **`loaf` 占 77.9%**,而它里面 **75.4KB 是同一个 2.9KB 的 combo URL 重复了 27 遍**,`summary.topScripts` 又抄了 14.7KB。抽成 URL 表(`incident.urls` + `scripts[].u`)后:**29.6KB / 51.5KB**,512KB 从放 4 条变成放 **17** 条,信息零损失。gzip 也能压到 7.7KB,但抽表后只到 6.8KB —— 说明 gzip 省的就是这块重复,那就直接去掉它,不必引入编解码器和异步恢复。结论:留存 5 → **10** 条;天花板仍是 512KB 字节上限(约 17 条),`localStorage` 够用,**暂时不需要 IndexedDB**;真要"存一整天"(上百条)再换,那时按时间淘汰而不是按严重度。
 - **桌面端的四条推论全部未实测**(见 §8;其中 Electron 侧的 API 形状已按 `electron.d.ts` 核对,运行时行为未测):插件能否安装、`connection.fetch.register` 在 Desktop 的 Host 子进程里是否同样可达、`webContents.debugger`(CDP)挂到应用窗口是否与私有 IPC/`dsh-app://` 协议冲突、hide 期间是否继续记录。
 - 本文 §2.1 的帧率/长任务数字来自 **headless、无 GPU** 环境,不可当作真实体验;RTT 与 LoAF 结论与该环境无关。
 - 面板截图留在 `/tmp/hud-panel.png`(冷启动)与 `/tmp/hud-panel-warm.png`(55s),是临时文件;重取方法见 §7。
