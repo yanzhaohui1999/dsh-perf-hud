@@ -2590,10 +2590,25 @@ window.__ModuleLoader__.load({
 		 * 只放证据与口径,不做归因推断;并且**显式写出这次没拿到什么**(missing)以及怎么补齐 ——
 		 * 沿用"不许假装成功"那条:缺的东西写清楚,比不写有用。
 		 */
-		function incidentReport(id) {
+		/**
+		 * 取一条事故:数字 = 按严重度的下标(0 最差),字符串 = id,`'latest'` = 时刻最新的那条。
+		 * 面板上那个「导出最近一次」以前导的就是下标 0 —— 那是**最差**的一次,而落盘读回的旧事故
+		 * 常常正是最差的,于是"最近一次"导出来的是一份几天前的证据(实测踩过两次)。
+		 */
+		function pickIncident(id) {
 			const list = state.watch.incidents;
-			const incident = typeof id === 'number' ? list[id] ?? null : list.find((row) => row.id === id) ?? null;
-			if (incident === null) return null;
+			if (id === 'latest') {
+				let newest = null;
+				for (const row of list) if (newest === null || row.at > newest.at) newest = row;
+				return newest;
+			}
+			if (typeof id === 'number') return list[id] ?? null;
+			return list.find((row) => row.id === id) ?? null;
+		}
+
+		function incidentReport(id) {
+			const incident = pickIncident(id);
+			if (incident === null || incident === undefined) return null;
 			const missing = [];
 			const howToAdd = [];
 			if (state.watch.loafState !== 'on') {
@@ -2760,11 +2775,7 @@ window.__ModuleLoader__.load({
 			incidents: () => state.watch.incidents.map((row) => ({
 				id: row.id, severity: row.severity, cause: row.cause, at: row.at, note: row.note, kept: row.kept, summary: row.summary,
 			})),
-			incident: (id) => {
-				const list = state.watch.incidents;
-				if (typeof id === 'number') return list[id] ?? null;
-				return list.find((row) => row.id === id) ?? null;
-			},
+			incident: pickIncident,   // 数字 = 下标(0 最差)/ id / 'latest' = 时刻最新
 			capture: captureNow,
 			/** 事故包:report(id) 拿对象(不下载),exportIncident(id) 触发下载。 */
 			report: incidentReport,
@@ -3150,7 +3161,7 @@ window.__ModuleLoader__.load({
 				watchNone: '还没抓到', watchOff: '未开录', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉',
 				watchHint: '默认常开、不插桩:一个 rAF 循环 + 一个 LoAF 观察器。帧间隔(或 LoAF 的 blockingDuration)超过 100ms 就自动抓「前 10 秒 + 后 3 秒」原样切片,只留最差 10 次并落盘(刷新后还在;落盘另有 512KB 上限,超了就裁掉最弱的并在这一行标出「裁掉 N」)要抓偶发卡顿就让它一直开着 —— 出事后用「导出最近一次」把证据包交给分析者。',
 				watchMark: '标记刚才', watchMarkHint: '手动记一次「刚刚卡了一下」:自动回退 3 秒(人的反应时间),立刻切片,并把上面输入框的备注原样写进证据包',
-				watchExport: '导出最近一次', watchExportHint: '下载一份自包含的证据包(帧序列 + LoAF + 窗口内 longtask + 环境与缺失声明);也可以用 __perfHud.exportIncident(id) 指定某一条',
+				watchExport: '导出最近一次', watchExportHint: '下载**时刻最新**那一条的完整证据包(帧序列 + LoAF + 窗口内 longtask + 环境与缺失声明;不是最差那条)。要别的:__perfHud.exportIncident(\'i55\') 按 id、或 exportIncident(0) 取最差的',
 				watchManualNote: '手动标记',
 			},
 			en: {
@@ -3201,7 +3212,7 @@ window.__ModuleLoader__.load({
 				watchNone: 'nothing caught yet', watchOff: 'not recording', watchPersistFailed: 'persist failed', watchTrimmed: 'trimmed',
 				watchHint: 'On by default and it patches nothing: one rAF loop plus one LoAF observer. When a frame interval (or LoAF blockingDuration) crosses 100ms it captures the 10s before and 3s after verbatim, keeps the worst 10, and persists them (they survive a reload). Leave it running to catch intermittent stalls; after one, hand the evidence pack to an analyst with "Export latest".',
 				watchMark: 'Mark just now', watchMarkHint: 'Manually record "it just stuttered": rewinds 3s (human reaction time), slices immediately, and copies the note from the input above into the pack',
-				watchExport: 'Export latest', watchExportHint: 'Download one self-contained evidence pack (frames + LoAF + long tasks in the window + environment and missing-data notes); __perfHud.exportIncident(id) picks a specific one',
+				watchExport: 'Export latest', watchExportHint: 'Download the **newest by time** incident (frames + LoAF + long tasks in the window + environment and missing-data notes; not the worst one). For others: __perfHud.exportIncident(\'i55\') by id, or exportIncident(0) for the worst',
 				watchManualNote: 'manual mark',
 			},
 		};
@@ -3627,7 +3638,7 @@ window.__ModuleLoader__.load({
 						state.watch.incidents.map((row, index) => h('div', { key: row.id, style: S.sub }, watchRowText(row, index)))),
 					h('div', { style: S.buttons },
 						h('button', { type: 'button', style: S.btn, disabled: state.watch.on === false, title: t('watchMarkHint'), onClick: () => { W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft); setDraft(''); } }, t('watchMark')),
-						h('button', { type: 'button', style: S.btn, disabled: state.watch.incidents.length === 0, title: t('watchExportHint'), onClick: () => W.__perfHud.exportIncident(0) }, t('watchExport'))),
+						h('button', { type: 'button', style: S.btn, disabled: state.watch.incidents.length === 0, title: t('watchExportHint'), onClick: () => W.__perfHud.exportIncident('latest') }, t('watchExport'))),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('marks')),
 						h('span', { style: S.num }, state.marks.length === 0 ? t('none') : `${state.marks.length} · ${clock(state.marks[state.marks.length - 1]?.t ?? Date.now())}`)),

@@ -844,6 +844,7 @@ const watchPieces = [
 	extract(source, 'function perfOrigin('),
 	extract(source, 'function saveIncidents('),
 	extract(source, 'function restoreIncidents('),
+	extract(source, 'function pickIncident('),
 	extract(source, 'function incidentReport('),
 	extract(source, 'function round1('),
 ].join('\n');
@@ -886,7 +887,7 @@ const watchBox = new Function(`
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
-		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, timers, store,
+		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, timers, store,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1066,6 +1067,18 @@ check('切片时给每条脚本记了 pkg 与 pkgVia(这里 packageOfScript 是�
 	return [probe.summary.pkgCoverage, 'pkg' in script, script.pkgVia];
 })(), [{ resolved: 0, total: 1 }, true, 'stub']);
 watch.state.watch.coveredUntil = 0;
+check('取件:下标 0 是最差,latest 是时刻最新 —— 面板那个按钮以前导的是最差', (() => {
+	const saved = watch.state.watch.incidents.slice();
+	watch.state.watch.incidents.length = 0;
+	watch.state.watch.incidents.push(
+		{ id: 'i-old-worst', severity: 900, at: '2026-10-07T10:00:00.000Z', summary: {}, frames: [], loaf: [], longTasks: [], urls: [], env: {} },
+		{ id: 'i-new-mild', severity: 120, at: '2026-10-07T18:00:00.000Z', summary: {}, frames: [], loaf: [], longTasks: [], urls: [], env: {} },
+	);
+	const picked = [watch.pickIncident(0).id, watch.pickIncident('latest').id, watch.pickIncident('i-new-mild').id, watch.pickIncident('不存在')];
+	watch.state.watch.incidents.length = 0;
+	for (const row of saved) watch.state.watch.incidents.push(row);
+	return [picked[0], picked[1], picked[2], picked[3]];
+})(), ['i-old-worst', 'i-new-mild', 'i-new-mild', undefined]);
 check('事故包:URL 抽表后脚本里不再内联 url', watch.incidentReport(0).incident.loaf.every((row) => row.scripts.every((script) => script.url === undefined && typeof script.u === 'number')), true);
 check('事故包:topScripts 也只留下标', watch.incidentReport(0).incident.summary.topScripts.every((script) => script.url === undefined), true);
 // 身材回归:同一个长 URL 重复 20 次,抽表之后事故包不该被它撑大
