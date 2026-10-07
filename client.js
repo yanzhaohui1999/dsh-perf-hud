@@ -328,7 +328,10 @@ window.__ModuleLoader__.load({
 		 */
 		function looksLikeInfrastructure(name) {
 			if (typeof name !== 'string' || name === '') return false;
-			if (/Slot|Outlet/.test(name)) return true;
+			// 清单来自实测观察到的宿主组件:槽位座(SlotOutlet)、布局列(CenterColumn)、
+			// 各种 Provider/Boundary/Context。插件若真把组件叫 XxxColumn 会被跳过 ——
+			// 代价是这次归属退到另一条腿,比把宿主列名当答案好(另一条腿会交叉验证)。
+			if (/Slot|Outlet|Column/.test(name)) return true;
 			if (/(Boundary|Provider|Context)$/.test(name)) return true;
 			return false;
 		}
@@ -1840,6 +1843,12 @@ window.__ModuleLoader__.load({
 			verification,
 		};
 
+		/** 合计耗时:小于 0.05ms/s 不写成 0 —— "0"读起来像"一点都没花",其实是四舍五入没了。 */
+		function msPerSecText(value) {
+			if (!(value > 0)) return '0ms/s';
+			return value < 0.05 ? '<0.1ms/s' : `${round1(value)}ms/s`;
+		}
+
 		/** 折叠摘要里的一句话节点数:取不到就如实说未采集。 */
 		function containerNodes(id) {
 			const entry = state.targets.get(id);
@@ -1888,7 +1897,7 @@ window.__ModuleLoader__.load({
 				unattr: '帧内未归因', peak: '峰',
 				unattrHint: '帧间隔里没被插桩回调解释掉的部分:样式重算、绘制、以及等待 vsync。CSS 动画的开销只在这里现形。',
 				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', est: '≈',
-				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', times: ' 次',
+				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', hit: '命中', times: ' 次',
 				perSec: '/s', samples: '次采样', unblamed: '未归因',
 				domWritesHint: '前一项是精确总次数;下面按插件给出估算(每 10 次采样一次栈,命中按 10 折算)。',
 				precise: '精确归因', preciseHint: '开启后按合并 bundle 的 sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)',
@@ -1924,7 +1933,7 @@ window.__ModuleLoader__.load({
 				unattr: 'unattributed/frame', peak: 'peak',
 				unattrHint: 'Frame gap not explained by instrumented callbacks: style recalc, paint, and vsync wait. CSS-animation cost only shows up here.',
 				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', est: '≈',
-				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', times: '',
+				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', hit: 'hit', times: '',
 				perSec: '/s', samples: ' samples', unblamed: 'unattributed',
 				domWritesHint: 'First number is the exact total; the rows below are estimates (stacks sampled every 10th write, hits scaled by 10).',
 				precise: 'precise', preciseHint: 'Resolve single package names from the merged bundle sourcemap sections (lazy; one map fetch per rev)',
@@ -2216,7 +2225,7 @@ window.__ModuleLoader__.load({
 					h('span', { style: { ...S.num, color: levelUp(state.frameWorst, 60, 120) } },
 						`${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms · ` +
 						`LT ${worst === null ? t('none') : `${worst.ms.toFixed(0)}ms ${blameText(worst)}`}` +
-						` · ${t('hits')} ${state.ltBlamed}/${state.ltTotal}`)),
+						` · ${t('hit')} ${state.ltBlamed}/${state.ltTotal}`)),
 				// ── 常显 2:帧里"JS 之外"的残差(唯一能反映 CSS/绘制卡顿的数字)──
 				h('div', { style: S.row },
 					h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),
@@ -2225,7 +2234,7 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.sep },
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('blame')),
-						h('span', { style: S.num }, `${state.attributedPerSec.toFixed(0)}ms/s`)),
+						h('span', { style: S.num }, msPerSecText(state.attributedPerSec))),
 					h('div', null, top.map((row, index) => h('div', { key: row.id, style: S.row },
 						h('span', { style: S.label, title: `${row.id} · ${row.msps}ms${t('perSec')} · ${t('cumulative')} ${row.count}× / ${row.ms.toFixed(0)}ms` }, `${index + 1}. ${short(row.id)}`),
 						h('span', { style: S.num }, `${row.cps}${t('perSec')} · ${t('peak')} ${row.cpsPeak}`)))),

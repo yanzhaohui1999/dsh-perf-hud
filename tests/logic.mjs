@@ -228,6 +228,7 @@ const newPieces = [
 	'const LS_GROUPS = ',
 	'function containerNodes(',
 	'function toggleGroup(',
+	'function msPerSecText(',
 	'function looksLikeInfrastructure(',
 	'function blameText(',
 	'function beyondNoiseText(',
@@ -252,7 +253,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, looksLikeInfrastructure, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, looksLikeInfrastructure, msPerSecText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -350,6 +351,8 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 	// 宿主外壳组件不该被当成"谁在渲染"(实测命中报成 SlotOutlet)
 	check('looksLikeInfrastructure 认外壳:SlotOutlet', EX.looksLikeInfrastructure('SlotOutlet'), true);
 	check('looksLikeInfrastructure 认外壳:ConfigProvider', EX.looksLikeInfrastructure('ConfigProvider'), true);
+	check('looksLikeInfrastructure 认外壳:CenterColumn(布局列)', EX.looksLikeInfrastructure('CenterColumn'), true);
+	check('合计耗时:极小值不写成 0', [EX.msPerSecText(0), EX.msPerSecText(0.02), EX.msPerSecText(1.25)], ['0ms/s', '<0.1ms/s', '1.3ms/s']);
 	check('looksLikeInfrastructure 不误伤真组件',
 		[EX.looksLikeInfrastructure('ChatView'), EX.looksLikeInfrastructure('PerfHudStress'), EX.looksLikeInfrastructure('dsh-perf-hud')],
 		[false, false, false]);
