@@ -502,6 +502,7 @@ window.__ModuleLoader__.load({
 			baselineAt: 0,
 			baselineRunning: false,
 			baselineMs: null,        // 覆盖空闲基线窗口长度(默认 BASELINE_MS),自测用
+			errors: [],              // 面板自己捕获的渲染错误(导出件里能读到)
 			marks: [],
 			markDraft: '',
 			// D 宿主/链路
@@ -1435,6 +1436,7 @@ window.__ModuleLoader__.load({
 				},
 				link: { stats60s: linkStats(), throughput: state.linkText, suspect: suspectLink(), samples: state.link.slice(-120) },
 				verification: verification(),
+				errors: state.errors,
 			};
 		}
 
@@ -1584,6 +1586,8 @@ window.__ModuleLoader__.load({
 				hostEvents: '宿主事件到达', hostEventsHint: '宿主半用公开接口 ctx.on(\'session/event\') 记每条事件「提交(event.time)→到达监听器」的延迟;第一版想包 Context.emit,线上实测根本抓不到(该事件走带作用域过滤的派发),故改口径且写明',
 				notInstalled: '未安装', waiting: '已装,等事件',
 				sampling: '吞吐采样中', failed: '吞吐失败',
+				renderError: '面板渲染出错', retry: '重试',
+				renderErrorHint: '采集没停:上面是错误原文;点「重试」恢复面板,或直接导出(errors 段里也有)',
 				linkHint: '每 10 秒一次 1KB 同源探测(带 cache-buster)算 RTT,n 是最近 60 秒的样本数;吞吐每 60 秒一次 64KB(启动后 3 秒先补一次)。RTT 尖峰而 FPS 正常 → 疑似链路',
 				suspect: '疑似链路', isolation: '隔离实验', candidate: '候选', baseline: '基线',
 				startExp: '开始实验', abortExp: '中止并恢复', stress: '自测:渲染卡顿',
@@ -1610,6 +1614,8 @@ window.__ModuleLoader__.load({
 				hostEvents: 'host event arrival', hostEventsHint: 'The host half uses the public ctx.on(\'session/event\') and records commit(event.time)→listener arrival lag; the earlier attempt to wrap Context.emit never fired (that event uses scope-filtered dispatch)',
 				notInstalled: 'not installed', waiting: 'installed, waiting for events',
 				sampling: 'throughput sampling', failed: 'throughput failed',
+				renderError: 'panel render error', retry: 'Retry',
+				renderErrorHint: 'Collection keeps running: the raw error is above. Retry to restore, or export (also in the errors section)',
 				linkHint: 'A 1KB same-origin probe (cache-busted) every 10s gives RTT; n is the sample count over the last 60s. Throughput is a 64KB fetch every 60s (one extra 3s after start). RTT spikes with normal FPS -> link suspected',
 				suspect: 'link suspected', isolation: 'isolation', candidate: 'candidates', baseline: 'baseline',
 				startExp: 'Run experiment', abortExp: 'Abort and restore', stress: 'Self-test: render stall',
@@ -1657,6 +1663,81 @@ window.__ModuleLoader__.load({
 			buttons: { display: 'flex', gap: 8, marginTop: 7, flexWrap: 'wrap' },
 			input: { font: 'inherit', color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 7, padding: '2px 8px', flex: 1, minWidth: 0 },
 		};
+
+		/** 带符号的数值(Δ 用):非数字就原样转字符串。 */
+		const signed = (value) => (typeof value === 'number' ? `${value >= 0 ? '+' : ''}${Math.round(value * 10) / 10}` : String(value));
+
+		/**
+		 * 自测用的重组件:一次提交塞进 count 个节点,制造真实的渲染型 longtask。
+		 *
+		 * ⚠️ 这个声明曾被"排版改造"整段替换时吞掉过一次:文件里 h(PerfHudStress, …) 还在、
+		 * 定义没了 → React 抛 "Element type is invalid" → 外壳的 SlotErrorBoundary 把
+		 * 整个槽位条目停用(面板凭空消失)。现在 tests/logic.mjs 有静态检查钉住这类引用。
+		 */
+		function PerfHudStress(props) {
+			const items = [];
+			for (let i = 0; i < props.count; i += 1) items.push(h('span', { key: i }, '.'));
+			return h('div', { style: { position: 'fixed', left: -9999, top: 0, width: 1, height: 1, overflow: 'hidden' } }, items);
+		}
+
+		/**
+		 * 面板自己捕获渲染错误。
+		 *
+		 * 外壳(dsh-client-ui-renderer 的 SlotErrorBoundary)一看到条目渲染抛错就把该条目
+		 * **永久停用**(active:false,面板凭空消失,只能刷新页面)。实测点「自测」中过一次。
+		 * 所以条目内部必须自带边界:出错降级成一块小面板,并把错误写进导出件 ——
+		 * 否则连错误原文都拿不到。
+		 */
+		function recordError(error, info) {
+			state.errors.push({
+				t: Date.now(),
+				iso: new Date().toISOString(),
+				name: error instanceof Error ? error.name : 'Error',
+				message: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error && typeof error.stack === 'string' ? error.stack.split('\n').slice(0, 4).join(' | ').slice(0, 600) : '',
+				where: typeof info?.componentStack === 'string' ? info.componentStack.split('\n').slice(1, 4).join(' | ').trim().slice(0, 300) : '',
+			});
+			if (state.errors.length > 5) state.errors.shift();
+			dirty = true;
+			flush(true);
+		}
+
+		class HudBoundary extends React.Component {
+			constructor(props) {
+				super(props);
+				this.state = { error: null };
+			}
+
+			static getDerivedStateFromError(error) {
+				return { error: error instanceof Error ? error : new Error(String(error)) };
+			}
+
+			componentDidCatch(error, info) {
+				recordError(error, info);
+			}
+
+			render() {
+				if (this.state.error === null) return this.props.children;
+				return this.props.renderError(this.state.error, () => this.setState({ error: null }));
+			}
+		}
+
+		/** 出错时的降级面板:错误摊在明面上,而且仍然能导出。 */
+		function renderErrorView(error, retry) {
+			const message = error instanceof Error ? error.message : String(error);
+			return h('div', {
+				ref: (element) => { state.root = element; },
+				style: { ...S.root(true), width: 380 },
+			},
+				h('div', { style: S.head },
+					h('span', { style: S.brand }, translate('title')),
+					h('span', { style: { ...S.label, color: 'var(--dsw-alias-state-error-primary)' } }, translate('renderError'))),
+				h('div', { style: { ...S.sub, color: 'var(--dsw-alias-label-primary)' } }, `${error instanceof Error ? error.name : 'Error'}: ${message}`.slice(0, 500)),
+				h('div', { style: S.sub }, translate('renderErrorHint')),
+				h('div', { style: S.buttons },
+					h('button', { type: 'button', style: S.btn, onClick: retry }, translate('retry')),
+					h('button', { type: 'button', style: S.btn, onClick: exportJson }, translate('exportJson'))));
+		}
 
 		/**
 		 * 阈值配色(越大越糟:帧耗时 / longtask):>= warn 变黄,>= bad 变红。
@@ -1846,7 +1927,7 @@ window.__ModuleLoader__.load({
 							? t('notYet')
 							: `${idleBase.fps}fps · LT ${idleBase.longTasks} · ${idleBase.domPerMin}${t('perMin')}`)),
 					idleBase === null || idleBase === undefined || idleBase.domPerMin <= 0 ? null : h('div', { style: S.sub },
-						`${t('idleWriter')}: ${idleBase.domTop.map((row) => `${short(row.id)}${row.component === null ? '' : `(${row.component})`}`).join(' / ') || t('none')}`)),
+						`${t('idleWriter')}: ${(idleBase.domTop ?? []).map((row) => `${short(row?.id ?? '?')}${row?.component === null || row?.component === undefined ? '' : `(${row.component})`}`).join(' / ') || t('none')}`)),
 
 				// ── 隔离实验 ──
 				h('div', { style: S.sep },
@@ -1862,7 +1943,7 @@ window.__ModuleLoader__.load({
 						),
 						row.delta === undefined ? null : h('div', { style: S.sub }, `ΔDOM ${signed(row.delta.domPerMin)}${t('perMin')} · ${t('restore')} ${row.restore?.ok === true ? '✓' : '✗'}`)))),
 					experiment.restored === null ? null : h('div', { style: S.sub },
-						`${t('restore')}: ${experiment.restored.ok ? `✓ ${experiment.restored.restores.length}` : `✗ ${experiment.restored.diff.length} 处不一致`}`),
+						`${t('restore')}: ${experiment.restored.ok === true ? `✓ ${experiment.restored.restores?.length ?? 0}` : `✗ ${experiment.restored.diff?.length ?? 0} 处不一致`}`),
 					h('div', { style: S.buttons },
 						h('button', { type: 'button', style: S.btn, disabled: experiment.phase === 'running', onClick: () => runExperiment() }, t('startExp')),
 						h('button', { type: 'button', style: S.btn, onClick: () => abortExperiment() }, t('abortExp')),
@@ -1873,8 +1954,9 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.sep },
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('marks')),
-						h('span', { style: S.num }, state.marks.length === 0 ? t('none') : `${state.marks.length} · ${clock(state.marks[state.marks.length - 1].t)}`)),
-					state.marks.length === 0 ? null : h('div', { style: S.sub }, `${state.marks[state.marks.length - 1].note === '' ? t('noNote') : state.marks[state.marks.length - 1].note} · ${state.marks[state.marks.length - 1].fps}fps · LT ${state.marks[state.marks.length - 1].longTask === null ? t('none') : `${state.marks[state.marks.length - 1].longTask.ms}ms`}`),
+						h('span', { style: S.num }, state.marks.length === 0 ? t('none') : `${state.marks.length} · ${clock(state.marks[state.marks.length - 1]?.t ?? Date.now())}`)),
+					state.marks.length === 0 ? null : h('div', { style: S.sub },
+						`${(state.marks[state.marks.length - 1]?.note || t('noNote'))} · ${state.marks[state.marks.length - 1]?.fps ?? '?'}fps · LT ${state.marks[state.marks.length - 1]?.longTask ? `${state.marks[state.marks.length - 1].longTask.ms}ms` : t('none')}`),
 					h('div', { style: S.buttons },
 						h('input', {
 							type: 'text',
@@ -1889,7 +1971,7 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.sep },
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('verify')),
-						h('span', { style: S.num }, `${v.precise.mapStates.ready}/${v.precise.bundles} ${t('maps')}`)),
+						h('span', { style: S.num }, `${v.precise.mapStates?.ready ?? 0}/${v.precise.bundles} ${t('maps')}`)),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('vPrecise')),
 						h('span', { style: S.num }, `${v.ownPackageNames['dsh-status-rotator'] ? '✓' : '✗'} rotator / ${v.ownPackageNames['dsh-notify-me'] ? '✓' : '✗'} notify-me`)),
@@ -1904,7 +1986,10 @@ window.__ModuleLoader__.load({
 					h('button', { type: 'button', style: S.btn, onClick: exportJson }, t('exportJson')),
 					h('button', { type: 'button', style: S.btn, onClick: () => W.__perfHud.clear() }, t('clear'))));
 
-			return h('div', { ref: setRoot, style: S.root(true) }, head, body, state.stressNodes > 0 ? h(PerfHudStress, { count: state.stressNodes }) : null);
+			// 自带边界:渲染抛错时只降级成一块小面板,不让外壳把整个条目停用。
+			return h(HudBoundary, { renderError: renderErrorView },
+				h('div', { ref: setRoot, style: S.root(true) }, head, body,
+					state.stressNodes > 0 ? h(PerfHudStress, { count: Math.min(state.stressNodes, 6000) }) : null));
 		}
 
 		// ───────────────────────────────── 装配 ─────────────────────────────────

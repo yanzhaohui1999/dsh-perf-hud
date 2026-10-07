@@ -115,6 +115,40 @@ check('worstSecond 取窗口内最差', api.worstSecond().frameMs, 220);
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;
 
+// ── 静态检查:引用了但没声明的标识符(2026-10-07 真事故的回归) ──────
+// 事故:一次"整段替换样式块"把 PerfHudStress 与 signed 的声明一起吞了,
+// 文件里 h(PerfHudStress, …) 还在、定义没了。node --check 完全看不出来(语法合法),
+// 结果 React 抛 "Element type is invalid",外壳的 SlotErrorBoundary 直接把整个槽位条目
+// 停用 —— 面板凭空消失。所以这里用正则做一层廉价的"未声明引用"检查。
+{
+	const declared = new Set();
+	for (const pattern of [/\bfunction\s+([A-Za-z_$][\w$]*)/g, /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g, /\bclass\s+([A-Za-z_$][\w$]*)/g]) {
+		for (const match of source.matchAll(pattern)) declared.add(match[1]);
+	}
+	// 解构声明:const [open, setOpen] = / const { a, b } =
+	for (const match of source.matchAll(/\b(?:const|let|var)\s*[[{]([^\]}]*)[\]}]/g)) {
+		for (const part of match[1].split(',')) {
+			const name = part.split(':').pop().trim().replace(/^\s*\.\.\./, '');
+			if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
+		}
+	}
+	const GLOBALS = new Set(['Math', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date', 'Error', 'Set', 'Map', 'WeakMap', 'Promise', 'Symbol', 'BigInt', 'Reflect', 'Proxy', 'RegExp', 'Function', 'Intl', 'fetch', 'setTimeout', 'setInterval', 'clearInterval', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance', 'document', 'window', 'location', 'localStorage', 'navigator', 'console', 'URL', 'Blob', 'Response', 'Request', 'Headers', 'Node', 'Element', 'MutationObserver', 'PerformanceObserver', 'parseInt', 'parseFloat', 'isFinite', 'isNaN', 'require', 'super', 'globalThis', 'structuredClone', 'queueMicrotask', 'TextEncoder', 'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'await', 'of', 'in', 'function', 'delete', 'void', 'do', 'else', 'case', 'throw', 'yield', 'get', 'set', 'async']);
+
+	// 样式字符串里的 CSS 函数(var(--x)/rgba(...))不是 JS 调用
+	const CSS_FUNCS = new Set(['var', 'rgb', 'rgba', 'hsl', 'hsla', 'calc', 'clamp', 'minmax', 'color-mix', 'linear-gradient', 'radial-gradient', 'url']);
+	const components = [...new Set([...source.matchAll(/\bh\(\s*([A-Z][\w$]*)/g)].map((m) => m[1]))];
+	check('h() 引用的组件都声明了(PerfHudStress 事故回归)',
+		components.filter((name) => !declared.has(name)), []);
+
+	const renderRegion = source.slice(source.indexOf('function PerfHud('));
+	const bare = [...new Set([...renderRegion.matchAll(/(?<![.\w$])([a-z_$][\w$]*)\s*\(/g)].map((m) => m[1]))];
+	check('面板渲染区的函数调用都有声明(signed 事故回归)',
+		bare.filter((name) => !declared.has(name) && !GLOBALS.has(name) && !CSS_FUNCS.has(name)), []);
+
+	// 导出里必须有错误账本(下次再抛错,导出件能带出原文)
+	check('client.js 带 errors 导出段', /errors:\s*state\.errors/.test(source), true);
+}
+
 // ═══════════════ A/B/C/D/E 新增逻辑的离线验证 ═══════════════
 // 第二个沙箱:把新函数连同它们依赖的最小环境一起装进去。
 const sandbox = `
