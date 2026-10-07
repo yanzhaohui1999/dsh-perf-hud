@@ -915,7 +915,36 @@ check('窗口里最差帧与计数(gap 不算帧、不算最差)',
 	[150, 3, 1, 1, 1]);
 check('窗口带上了同时段的 longtask 明细', [firstIncident.summary.longTasksInWindow, firstIncident.longTasks[0].owner], [1, 'dsh-x']);
 check('事故带环境读数与墙上时间', [firstIncident.env.domNodes, firstIncident.at], [1234, new Date(1700000000000 + 10000).toISOString()]);
-check('事故带会话基线(整个帧环的分布)', [firstIncident.baseline.frames, firstIncident.baseline.p50, firstIncident.baseline.worstMs], [5, 20, 150]);
+check('事故带会话基线,而且**排除了本窗口**(含自己就永远"比不上")', [firstIncident.baseline.frames, firstIncident.baseline.p50, firstIncident.baseline.worstMs], [1, 17, 17]);
+watch.state.watch.coveredUntil = 0;
+watch.state.longTasks.length = 0;
+watch.state.watch.loaf.length = 0;
+watch.frameRing.reset();
+for (let i = 0; i < 8; i += 1) watch.frameRing.push(70000 + i * 16.7, 16.7, false);
+watch.frameRing.push(70200, 983.7, false);
+for (let i = 0; i < 8; i += 1) watch.frameRing.push(70300 + i * 16.7, 16.7, false);
+watch.setNow(80000);
+const throttle = watch.triggerCapture('frame', 70200, 983.7);
+check('疑似节流:最差帧没有 JS 证据、前后都是健康帧 → 标出来(真实数据里的那一帧)',
+	[throttle.summary.worstFrameMs, throttle.summary.worstFrameJs, throttle.summary.worstFrameNeighboursMs, throttle.summary.suspectedThrottle],
+	[983.7, 'none', 16.7, true]);
+check('有 JS 重叠时不算节流', (() => {
+	watch.frameRing.reset();
+	for (let i = 0; i < 8; i += 1) watch.frameRing.push(90000 + i * 16.7, 16.7, false);
+	watch.frameRing.push(90200, 983.7, false);
+	watch.state.longTasks.push({ t: Date.now(), at: 89400, ms: 800, owner: 'dsh-x', component: 'ChatView', source: 'render' });
+	watch.state.watch.coveredUntil = 0;
+	watch.setNow(95000);
+	const withJs = watch.triggerCapture('frame', 90200, 983.7);
+	return [withJs.summary.worstFrameJs, withJs.summary.suspectedThrottle];
+})(), ['js', false]);
+// 上面两条是探针(严重度最高,排在队首):去掉它们,把状态还原成后面的用例期望的样子
+watch.state.watch.incidents.splice(0, 2);
+watch.state.watch.captured = 1;
+watch.state.watch.coalesced = 0;
+watch.state.watch.dropped = 0;
+watch.state.watch.trimmedByBytes = 0;
+watch.state.watch.coveredUntil = 0;
 check('会话基线:ms 数组里的间隙不算帧', watch.frameRing.reset() === undefined && (watch.frameRing.push(1, 16, false), watch.frameRing.push(2, 300, true), watch.frameRing.push(3, 20, false), watch.frameRing.stats().frames), 2);
 
 // 归并:后摇没到就再来一次,算同一串(记 coalesced,不当成第二次事故)
@@ -988,7 +1017,7 @@ check('事故包:带阈值与读取说明', [
 	report.context.thresholds.triggerMs,
 	report.context.howToRead.length,
 	report.context.page,
-], [100, 7, 'http://127.0.0.1:3080/']);
+], [100, 8, 'http://127.0.0.1:3080/']);
 check('事故包:如实列出没拿到的东西',
 	['precise:', 'devtools-trace:', 'host-cpuprofile:'].map((prefix) => report.context.missing.some((line) => line.startsWith(prefix))),
 	[true, true, true]);

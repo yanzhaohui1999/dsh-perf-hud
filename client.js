@@ -817,18 +817,29 @@ window.__ModuleLoader__.load({
 			 * 整个环的分布 = 会话基线。没有它,"最差帧 325ms" 判不出是"这一段变坏了"还是
 			 * "这台机器/这个浏览器一直这样"(实测 headless 全程 16fps,单看绝对值会误判)。
 			 */
-			stats() {
+			stats(excludeFrom, excludeTo) {
+				// 可以排除一个区间:_基线必须把这次事故自己排除掉_,否则"比会话最差还差"
+				// 永远不可能成立(基线里就含着它),而那正是读者要问的问题。
 				const live = [];
 				for (let i = 0; i < this.size; i += 1) {
 					const index = (this.head - this.size + i + WATCH_FRAMES) % WATCH_FRAMES;
 					if (this.gap[index] === 1) continue;
+					if (typeof excludeFrom === 'number' && this.at[index] >= excludeFrom && this.at[index] <= excludeTo) continue;
 					live.push(this.ms[index]);
 				}
 				if (live.length === 0) return null;
 				live.sort((a, b) => a - b);
 				const pick = (p) => round1(live[Math.min(live.length - 1, Math.floor(p * live.length))]);
-				const oldest = this.at[(this.head - this.size + WATCH_FRAMES) % WATCH_FRAMES];
-				const newest = this.at[(this.head - 1 + WATCH_FRAMES) % WATCH_FRAMES];
+				// 跨度按"剩下的帧"两端算:排除掉中间一段之后,fps 不该把那段时长算进去
+				let oldest = Infinity;
+				let newest = -Infinity;
+				for (let i = 0; i < this.size; i += 1) {
+					const index = (this.head - this.size + i + WATCH_FRAMES) % WATCH_FRAMES;
+					if (this.gap[index] === 1) continue;
+					if (typeof excludeFrom === 'number' && this.at[index] >= excludeFrom && this.at[index] <= excludeTo) continue;
+					if (this.at[index] < oldest) oldest = this.at[index];
+					if (this.at[index] > newest) newest = this.at[index];
+				}
 				const span = round1(newest - oldest);
 				return {
 					frames: live.length,
@@ -1034,6 +1045,25 @@ window.__ModuleLoader__.load({
 			scripts.sort((a, b) => b.ms - a.ms);
 			let blocking = 0;
 			for (const row of loaf) blocking += row.blocking;
+			// 最差那一帧有没有 JS 解释?用 longtask / LoAF 与它的区间是否重叠判。
+			// 再往前一步:如果它既没有 JS 证据、前后又都是健康帧,那更可能是**浏览器把 rAF
+			// 节流/挂起了一次**(Windows 遮挡、省电),不是页面真的忙了这么久 —— 实测有一帧
+			// 983.7ms,前后都是 16.7ms(正好 60fps),而 983.7 恰好卡在 1 秒间隙线下面。
+			let worstJs = 'none';
+			let suspectedThrottle = false;
+			let neighboursMs = null;
+			if (worst !== null) {
+				const start = worst.t - worst.ms;
+				const end = worst.t;
+				const hasJs = longTasks.some((row) => row.at < end && row.at + row.ms > start)
+					|| loaf.some((row) => row.t < end && row.t + row.dur > start);
+				worstJs = hasJs ? 'js' : 'none';
+				const index = frames.indexOf(worst);
+				const around = frames.slice(Math.max(0, index - 5), index).concat(frames.slice(index + 1, index + 6))
+					.filter((row) => row.gap === false).map((row) => row.ms).sort((a, b) => a - b);
+				neighboursMs = around.length === 0 ? null : round1(around[Math.floor(around.length / 2)]);
+				suspectedThrottle = worst.ms >= 500 && hasJs === false && neighboursMs !== null && neighboursMs < WATCH_TRIGGER_MS;
+			}
 			return {
 				id: `i${(state.watch.seq += 1)}`,
 				cause: pending.cause,          // frame / loaf / manual
@@ -1060,6 +1090,9 @@ window.__ModuleLoader__.load({
 					topScripts: scripts.slice(0, 5).map((script) => ({
 						at: script.at, u: script.u, ms: script.ms, fn: script.fn, invokerType: script.invokerType, charPos: script.charPos,
 					})),
+					worstFrameJs: worstJs,                  // js = 有 longtask/LoAF 重叠;none = 没有任何 JS 解释
+					worstFrameNeighboursMs: neighboursMs,   // 最差帧前后各 5 帧的中位(健康帧 ≈ 16.7ms)
+					suspectedThrottle,                      // true = 更像 rAF 被节流/挂起,而不是页面真忙
 					streaming: state.streaming,
 					visibility: document.visibilityState,
 				},
@@ -1067,7 +1100,7 @@ window.__ModuleLoader__.load({
 				frames,
 				loaf,
 				longTasks,
-				baseline: frameRing.stats(),   // 整个帧环的分布:用来判"这一段是不是真的比平时差"
+				baseline: frameRing.stats(from, to),   // 排除本窗口之后的分布:含自己就永远"比不上"
 				host: state.host === null || state.host === undefined ? null : {
 					at: state.hostAt > 0 ? new Date(state.hostAt).toISOString() : null,
 					// 快照年龄:这份宿主数据是事故时刻之前多少毫秒采到的(正 = 更早,负 = 事故之后才采到)。
@@ -2446,7 +2479,8 @@ window.__ModuleLoader__.load({
 						'incident.loaf 与 incident.frames 是**同一信号的两个视图**(LoAF 的 t+dur 就落在某一帧上),不是两份独立证据:别相加,也别当互相印证',
 						'incident.loaf[].blocking(blockingDuration)只累计"被归因到的 >50ms 长任务"的超出部分 —— **它可以是 0,而这一帧仍然有几百毫秒**。判严重度看帧间隔,blocking=0 不等于没卡',
 						'incident.longTasks 是既有四条腿落在窗口内的明细(at=任务开始的 perf 毫秒,t=上报时刻的墙钟毫秒),**它不是慢帧清单**:条数通常远少于超线帧',
-						'incident.baseline 是同一会话整个帧环的分布 —— 拿它和 summary 比,才知道这一段是"真的比平时差"还是"这台机器一直这样"',
+						'incident.baseline 是**除这一段之外**整个帧环的分布(故意排除本窗口,否则"比会话最差还差"永远不成立)—— 拿它和 summary 比,才知道这一段是真的比平时差还是这台机器一直这样',
+						'summary.worstFrameJs / suspectedThrottle:最差那一帧有没有 longtask / LoAF 与它重叠;若 none 且前后帧都健康(worstFrameNeighboursMs < 100),更像浏览器把 rAF 节流或挂起了一次,不是页面真忙了那么久',
 						'脚本的 URL 不在脚本里:incident.urls 是字符串表,scripts[].u 是它的下标(u=-1 表示没有 URL)—— 抽表是因为同一个 combo URL 会重复几十遍',
 						'incident.summary 只是上面几块的汇总;这一层不做推断,结论请自己下',
 					],

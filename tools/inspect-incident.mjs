@@ -85,6 +85,12 @@ console.log(`帧         ${num(summary.frames, 0)} 帧  ·  最差 ${num(summary
 console.log(`超线帧     >50ms ${num(summary.framesOver50Ms, 0)}  ·  >100ms ${num(summary.framesOver100Ms, 0)}  ·  rAF 挂起 ${num(summary.hiddenGaps, 0)}`);
 console.log(`长动画帧   ${num(summary.loafEntries, 0)} 条  ·  累计 blocking ${num(summary.blockingMs)}ms`);
 console.log(`longtask   窗口内 ${num(summary.longTasksInWindow, 0)} 条`);
+if (summary.worstFrameJs !== undefined) {
+	console.log(`最差帧解释 ${summary.worstFrameJs === 'js' ? '有 longtask / LoAF 与它重叠' : '没有任何 longtask / LoAF 与它重叠'}  ·  前后帧中位 ${num(summary.worstFrameNeighboursMs)}ms`);
+}
+if (summary.suspectedThrottle === true) {
+	console.log('⚠️ 疑似节流  最差这一帧没有 JS 证据、前后又都是健康帧 —— 更像浏览器把 rAF 节流/挂起了一次(遮挡、省电),而不是页面真的忙了这么久');
+}
 console.log(`页面       场景 ${summary.streaming === true ? '流式' : '空闲'}  ·  可见性 ${summary.visibility ?? '?'}  ·  DOM ${num((incident.env ?? {}).domNodes, 0)} 节点  ·  堆 ${num(((incident.env ?? {}).heapUsedBytes ?? 0) / 1048576)}MB  ·  插桩 ${(incident.env ?? {}).instrumented === true ? '开' : '关'}  ·  精确归因 ${(incident.env ?? {}).precise === true ? '开' : '关'}`);
 const env = incident.env ?? {};
 if (env.viewport !== undefined) console.log(`渲染环境   视口 ${env.viewport}  ·  DPR ${num(env.devicePixelRatio, 2)}  ·  逻辑核 ${num(env.hardwareConcurrency, 0)}  ·  UA ${String(context.userAgent ?? '').slice(0, 56)}`);
@@ -139,14 +145,18 @@ if (live.length > 0) {
 	if (baseline === null || baseline === undefined) {
 		console.log('会话基线   (没有:旧版本的事故包不带这个字段)');
 	} else {
-		const ratio = windowP50 === null || !(baseline.p50 > 0) ? null : windowP50 / baseline.p50;
-		const verdict = ratio === null ? '没法比'
-			: ratio >= 1.5 ? `明显差于平时(×${ratio.toFixed(2)})`
-				: ratio >= 1.15 ? `略差于平时(×${ratio.toFixed(2)})`
-					: `与本会话平时基本一致(×${ratio.toFixed(2)})`;
-		const worseThanSession = typeof incident.summary.worstFrameMs === 'number' && typeof baseline.worstMs === 'number' && incident.summary.worstFrameMs > baseline.worstMs;
-		console.log(`会话基线   全会话 ${num(baseline.frames, 0)} 帧 / ${num((baseline.spanMs ?? 0) / 1000)}s / ${num(baseline.fps)}fps · p50 ${num(baseline.p50)}ms · p90 ${num(baseline.p90)}ms · 最差 ${num(baseline.worstMs)}ms`);
-		console.log(`对比       ${verdict}${worseThanSession ? ' · 而且本窗口的最差帧超过了整个会话的最差帧' : ''}`);
+		// 两种形状要分开判:尖刺看最差帧的倍数,慢性劣化看 p50。只看 p50 会把 983ms 的
+		// 单帧尖刺判成"与平时一致"(实测踩过)。
+		const p50Ratio = windowP50 === null || !(baseline.p50 > 0) ? null : windowP50 / baseline.p50;
+		const worstRatio = typeof summary.worstFrameMs === 'number' && baseline.worstMs > 0 ? summary.worstFrameMs / baseline.worstMs : null;
+		const spike = worstRatio !== null && worstRatio >= 2 && (p50Ratio === null || p50Ratio < 1.15);
+		const verdict = spike ? `**单帧尖刺**:本窗口最差 ${num(summary.worstFrameMs)}ms 是会话其余部分最差(${num(baseline.worstMs)}ms)的 ×${worstRatio.toFixed(1)},而 p50 与平时一致`
+			: worstRatio !== null && worstRatio >= 1.5 ? `明显差于平时(最差 ×${worstRatio.toFixed(1)})`
+				: p50Ratio !== null && p50Ratio >= 1.5 ? `整段慢性劣化(p50 ×${p50Ratio.toFixed(2)})`
+					: p50Ratio !== null && p50Ratio >= 1.15 ? `略差于平时(p50 ×${p50Ratio.toFixed(2)})`
+						: '与本会话其余部分基本一致';
+		console.log(`会话基线   其余 ${num(baseline.frames, 0)} 帧 / ${num((baseline.spanMs ?? 0) / 1000)}s / ${num(baseline.fps)}fps · p50 ${num(baseline.p50)}ms · p90 ${num(baseline.p90)}ms · 最差 ${num(baseline.worstMs)}ms`);
+		console.log(`对比       ${verdict}`);
 	}
 }
 
