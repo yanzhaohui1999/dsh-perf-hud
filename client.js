@@ -1603,7 +1603,7 @@ window.__ModuleLoader__.load({
 			 * 现在:立即触发一次重渲染,渲染完由子组件自己清空,并在面板上写明进度与结果。
 			 */
 			stress(nodes) {
-				const count = typeof nodes === 'number' && nodes > 0 ? Math.min(nodes, 40000) : 12000;
+				const count = typeof nodes === 'number' && nodes > 0 ? Math.min(nodes, 40000) : 20000;
 				state.stressNodes = count;
 				state.stress = {
 					at: Date.now(),
@@ -1674,7 +1674,7 @@ window.__ModuleLoader__.load({
 				linkHint: '每 10 秒一次 1KB 同源探测(带 cache-buster)算 RTT,n 是最近 60 秒的样本数;吞吐每 60 秒一次 64KB(启动后 3 秒先补一次)。p99 > 300ms 且 FPS 正常且 n≥2 才判「疑似链路」',
 				suspect: '疑似链路', isolation: '隔离实验', candidate: '候选', baseline: '基线',
 				startExp: '开始实验', abortExp: '中止并恢复', stress: '自测:渲染卡顿',
-				stressHint: '自测:一次提交塞 12000 个节点制造真实渲染型长任务(节点在屏幕外,结果看上面这行的读数)',
+				stressHint: '自测:一次同步提交渲染 20000 个离屏节点并强制布局,制造真实渲染型长任务;结果看上面这行的读数',
 				stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点',
 				stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 				expHint: '会临时关闭候选插件各 60 秒并逐项恢复;每步都记宿主回执,恢复后逐项核验。',
@@ -1704,7 +1704,7 @@ window.__ModuleLoader__.load({
 				linkHint: 'A 1KB same-origin probe (cache-busted) every 10s gives RTT; n is the sample count over the last 60s. Throughput is a 64KB fetch every 60s (one extra 3s after start). \"Link suspected\" needs p99 > 300ms, normal FPS, and n >= 2',
 				suspect: 'link suspected', isolation: 'isolation', candidate: 'candidates', baseline: 'baseline',
 				startExp: 'Run experiment', abortExp: 'Abort and restore', stress: 'Self-test: render stall',
-				stressHint: 'Self-test: one commit of 12000 offscreen nodes to produce a real render long task (read the line above for the result)',
+				stressHint: 'Self-test: one synchronous commit rendering 20000 offscreen nodes with forced layout, to produce a real render long task (read the line above)',
 				stressRunning: 'self-test running', stressDone: 'self-test result', nodes: 'nodes',
 				stressNoTask: 'no long task observed', stressCommit: 'commit', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable', stressFromDom: 'DOM write',
 				expHint: 'Temporarily disables each candidate for 60s and restores it; every step records the host receipt and the restore is verified.',
@@ -1765,7 +1765,7 @@ window.__ModuleLoader__.load({
 			const started = performance.now();
 			const items = [];
 			for (let i = 0; i < props.count; i += 1) items.push(h('span', { key: i }, '.'));
-			// 这次提交一结束就:① 清空标记(否则面板每 0.5 秒重渲染都会再造一万多个节点)
+			// 这次提交一结束就:① 清空标记(否则面板每 0.5 秒重渲染都会再造两万个节点)
 			// ② 记下"渲染→提交"的墙钟耗时 —— 不依赖 longtask,切片提交也能给出真实数字。
 			React.useEffect(() => {
 				state.stressNodes = 0;
@@ -1773,7 +1773,12 @@ window.__ModuleLoader__.load({
 					state.stress.commitMs = Math.round((performance.now() - started) * 10) / 10;
 				}
 			}, []);
-			return h('div', { style: { position: 'fixed', left: -9999, top: 0, width: 1, height: 1, overflow: 'hidden' } }, items);
+			return h('div', {
+				// 读 offsetHeight = 在当前任务里强制布局。实测:不强制时浏览器可以把布局推迟到下一帧,
+				// 任务里只剩 React 提交那十几毫秒 → 根本凑不出 >50ms 的长任务(自测时有时无就是这个)。
+				ref: (element) => { if (element !== null) void element.offsetHeight; },
+				style: { position: 'fixed', left: -9999, top: 0, width: 1, height: 1, overflow: 'hidden' },
+			}, items);
 		}
 
 		/**
