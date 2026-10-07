@@ -423,9 +423,10 @@ window.__ModuleLoader__.load({
 				if (typeof type !== 'function') continue;
 				const name = type.displayName ?? type.name;
 				if (typeof name !== 'string' || name === '' || REACT_INTERNAL.has(name)) continue;
-				// 生产构建把组件名压成 n5 / t3 这种,对人毫无意义 —— 跳过它继续往上找,
-				// 别拿压缩名冒充"组件名"(线上实测 DOM 写入表里真的出现过 `(n5)`)。
-				if (/^[a-z]{1,2}\d{0,3}$/.test(name)) continue;
+				// 生产构建会把组件名压成 n5 / t3 / Bn 这种(大小写都有),对人毫无意义 ——
+				// 跳过它继续往上找。代价是极少数真的只有 1~2 个字母的组件名会被略过,
+				// 换来的是不再拿压缩名冒充"组件名"(线上导出里真出现过 `(n5)` 和 `(Bn)`)。
+				if (/^[A-Za-z]{1,2}\d{0,3}$/.test(name)) continue;
 				return name;
 			}
 			return null;

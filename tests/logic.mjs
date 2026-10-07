@@ -253,6 +253,8 @@ check('跳过压缩名 n5,继续往上找真名',
 	EX.componentOf({ __reactFiber$m: hostFiber(fnFiber(fnFiber(rootFiber, 'AppShell'), 'n5')) }), 'AppShell');
 check('压缩名在整条链上都没有 → null',
 	EX.componentOf({ __reactFiber$m: hostFiber(fnFiber(rootFiber, 'n5')) }), null);
+check('大写压缩名 Bn 同样跳过',
+	EX.componentOf({ __reactFiber$b: hostFiber(fnFiber(fnFiber(rootFiber, 'AppShell'), 'Bn')) }), 'AppShell');
 check('displayName 优先于 name',
 	EX.componentOf({ __reactFiber$y: { type: Object.assign(named('RealName'), { displayName: 'Shown' }), return: null } }), 'Shown');
 
