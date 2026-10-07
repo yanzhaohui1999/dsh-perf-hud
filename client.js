@@ -55,6 +55,16 @@ window.__ModuleLoader__.load({
 		const REACT_INTERNAL = new Set(['Fragment', 'Suspense', 'StrictMode', 'Profiler', 'ForwardRef', 'Memo', 'Provider', 'Consumer', 'Root', 'Anonymous']);
 
 		const W = window;
+		// 自测要的是"一次同步提交"里的重负载。React 18 默认会把长渲染时间切片,
+		// 切片之后每片都很小 → 根本不会出现 longtask(实测点自测卡在"进行中"就是这个)。
+		// react-dom 的 flushSync 能强制同步提交;模块表里拿不到就如实退化,并在面板写明。
+		let flushSync = null;
+		try {
+			const reactDom = require('react-dom');
+			if (reactDom !== null && reactDom !== undefined && typeof reactDom.flushSync === 'function') flushSync = reactDom.flushSync;
+		} catch (error) {
+			flushSync = null;
+		}
 		// 原生调度器:插桩前后都从这里取,保证能恢复、且自身循环零开销。
 		const natives = {
 			setTimeout: W.setTimeout.bind(W),
@@ -1055,11 +1065,19 @@ window.__ModuleLoader__.load({
 			const mark = state.stress;
 			if (mark === null) return translate('stressHint');
 			const hit = state.longTasks
-				.filter((row) => row.t >= mark.at - 500 && row.t <= mark.at + 6000)
+				.filter((row) => row.t >= mark.at - 500 && row.t <= mark.at + 8000)
 				.reduce((top, row) => (top === null || row.ms > top.ms ? row : top), null);
-			if (hit === null) return `${translate('stressRunning')}: ${mark.nodes} ${translate('nodes')} …`;
-			const who = hit.component === null ? translate('unblamed') : hit.component;
-			return `${translate('stressDone')}: ${Math.round(hit.ms)}ms · ${who}${hit.owner === null ? '' : ` (${short(hit.owner)})`}`;
+			const mode = mark.sync === true ? translate('stressSync') : translate('stressSliced');
+			const flush = flushSync === null ? ` · ${translate('stressNoFlush')}` : '';
+			const commit = mark.commitMs === undefined ? '' : ` · ${translate('stressCommit')} ${mark.commitMs}ms(${mode})${flush}`;
+			if (hit !== null) {
+				const who = hit.component === null ? translate('unblamed') : hit.component;
+				return `${translate('stressDone')}: ${Math.round(hit.ms)}ms · ${who}${hit.owner === null ? '' : ` (${short(hit.owner)})`}${commit}`;
+			}
+			if (mark.commitMs !== undefined) return `${translate('stressDone')}: ${translate('stressNoTask')}${commit}`;
+			// 状态必须能收敛:以前没有超时出口,一旦没长任务就永远停在"进行中"。
+			if (Date.now() - mark.at > 8000) return `${translate('stressDone')}: ${translate('stressNoTask')}(8s)${flush}`;
+			return `${translate('stressRunning')}: ${mark.nodes} ${translate('nodes')} …`;
 		}
 
 		/** 链路那一行的整句:样本数必须露出来 —— n=1 时 p50 会等于 p99,看着像 bug。 */
@@ -1576,9 +1594,20 @@ window.__ModuleLoader__.load({
 			stress(nodes) {
 				const count = typeof nodes === 'number' && nodes > 0 ? Math.min(nodes, 40000) : 12000;
 				state.stressNodes = count;
-				state.stress = { at: Date.now(), nodes: count };
-				natives.setTimeout(() => { state.stressNodes = 0; }, 3000);
-				if (typeof state.requestRender === 'function') state.requestRender();
+				state.stress = { at: Date.now(), nodes: count, sync: flushSync !== null, commitMs: undefined };
+				natives.setTimeout(() => { state.stressNodes = 0; }, 5000);
+				const render = state.requestRender;
+				if (typeof render !== 'function') return;
+				if (flushSync !== null) {
+					// 一次同步提交:整个 1.2 万节点都在同一个任务里,长任务与 fiber 归属才算数。
+					try {
+						flushSync(() => render());
+						return;
+					} catch (error) {
+						state.stress.sync = false;   // flushSync 用不了就走普通重渲染
+					}
+				}
+				render();
 			},
 			host: () => state.host,
 			hostEvents(on) {
@@ -1630,6 +1659,7 @@ window.__ModuleLoader__.load({
 				startExp: '开始实验', abortExp: '中止并恢复', stress: '自测:渲染卡顿',
 				stressHint: '自测:一次提交塞 12000 个节点制造真实渲染型长任务(节点在屏幕外,结果看上面这行的读数)',
 				stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点',
+				stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用',
 				expHint: '会临时关闭候选插件各 60 秒并逐项恢复;每步都记宿主回执,恢复后逐项核验。',
 				skipped: '跳过', restore: '恢复', marks: '场景标记', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
 				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
@@ -1659,6 +1689,7 @@ window.__ModuleLoader__.load({
 				startExp: 'Run experiment', abortExp: 'Abort and restore', stress: 'Self-test: render stall',
 				stressHint: 'Self-test: one commit of 12000 offscreen nodes to produce a real render long task (read the line above for the result)',
 				stressRunning: 'self-test running', stressDone: 'self-test result', nodes: 'nodes',
+				stressNoTask: 'no long task observed', stressCommit: 'commit', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable',
 				expHint: 'Temporarily disables each candidate for 60s and restores it; every step records the host receipt and the restore is verified.',
 				skipped: 'skipped', restore: 'restore', marks: 'marks', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
 				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
@@ -1714,10 +1745,17 @@ window.__ModuleLoader__.load({
 		 * 整个槽位条目停用(面板凭空消失)。现在 tests/logic.mjs 有静态检查钉住这类引用。
 		 */
 		function PerfHudStress(props) {
+			const started = performance.now();
 			const items = [];
 			for (let i = 0; i < props.count; i += 1) items.push(h('span', { key: i }, '.'));
-			// 这一次提交结束就清空:否则面板每 0.5 秒重渲染都会再造一遍一万多个节点。
-			React.useEffect(() => { state.stressNodes = 0; }, []);
+			// 这次提交一结束就:① 清空标记(否则面板每 0.5 秒重渲染都会再造一万多个节点)
+			// ② 记下"渲染→提交"的墙钟耗时 —— 不依赖 longtask,切片提交也能给出真实数字。
+			React.useEffect(() => {
+				state.stressNodes = 0;
+				if (state.stress !== null && state.stress.commitMs === undefined) {
+					state.stress.commitMs = Math.round((performance.now() - started) * 10) / 10;
+				}
+			}, []);
 			return h('div', { style: { position: 'fixed', left: -9999, top: 0, width: 1, height: 1, overflow: 'hidden' } }, items);
 		}
 

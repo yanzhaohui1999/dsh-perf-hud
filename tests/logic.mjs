@@ -167,9 +167,11 @@ const sandbox = `
 	const bundleMeta = new Map();
 	const changedNodes = [];
 	// 只给这几个键的真实中文:断言要检查"人看到的字",不是 key
+	let flushSync = null;   // 沙箱里的 react-dom flushSync(与真实一致:拿不到就是 null)
 	const translate = (key) => ({
 		sampling: '吞吐采样中', failed: '吞吐失败', suspect: '疑似链路', notYet: '未采集',
 		stressHint: 'stressHint', stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点', unblamed: '未归因',
+		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -232,6 +234,7 @@ const newPieces = [
 
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, setStreaming: (value) => { streamingFlag = value; },
+		setFlushSync: (value) => { flushSync = value; },
 		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, applyDeltas, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
@@ -349,7 +352,21 @@ box.state.stress = { at: Date.now(), nodes: 12000 };
 check('已点、长任务还没到:显示进行中', EX.stressText(), '自测进行中: 12000 节点 …');
 box.state.longTasks = [{ t: Date.now(), ms: 128.4, owner: 'dsh-x', component: 'PerfHudStress' }];
 check('长任务到了:给出耗时与组件名', EX.stressText(), '自测结果: 128ms · PerfHudStress (dsh-x)');
+box.setFlushSync(() => {});   // 真实场景里"同步提交"就意味着 flushSync 可用
+box.state.stress = { at: Date.now(), nodes: 12000, sync: true, commitMs: 300 };
+check('同步提交 + 长任务:附带提交耗时与模式',
+	EX.stressText(), '自测结果: 128ms · PerfHudStress (dsh-x) · 提交 300ms(同步)');
+box.setFlushSync(null);
+// 真实现场:React 时间切片 → 没有长任务。状态必须收敛并说明原因,不能永远"进行中"
+box.state.longTasks = [];
+box.state.stress = { at: Date.now(), nodes: 12000, sync: false, commitMs: 420 };
+check('切片提交没有长任务:如实说明并给提交耗时',
+	EX.stressText(), '自测结果: 未观察到长任务 · 提交 420ms(切片) · flushSync 不可用');
+box.state.stress = { at: Date.now() - 9000, nodes: 12000, sync: false };
+check('8 秒还没有任何结果:超时收敛,不再卡在"进行中"',
+	EX.stressText(), '自测结果: 未观察到长任务(8s) · flushSync 不可用');
 box.state.longTasks = [{ t: Date.now() - 60000, ms: 999, owner: null, component: null }];
+box.state.stress = { at: Date.now(), nodes: 12000, sync: false };
 check('窗口外的老长任务不算这次自测的结果', EX.stressText(), '自测进行中: 12000 节点 …');
 
 // 链路那一行必须自证完整:n= 露出来,吞吐三态都说清楚
