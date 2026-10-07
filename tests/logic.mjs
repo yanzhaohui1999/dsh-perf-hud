@@ -178,6 +178,7 @@ const sandbox = `
 		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 		stressBurn: '人为燃烧',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
+		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchManualNote: '手动标记',
 		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
@@ -795,6 +796,9 @@ const watchPieces = [
 	extract(source, 'function assembleIncident('),
 	extract(source, 'function captureNow('),
 	extract(source, 'function watchStatus('),
+	extract(source, 'function watchPanelText('),
+	extract(source, 'function watchLatestText('),
+	extract(source, 'function watchRowText('),
 	extract(source, 'function perfOrigin('),
 	extract(source, 'function saveIncidents('),
 	extract(source, 'function restoreIncidents('),
@@ -815,6 +819,11 @@ const watchBox = new Function(`
 	const location = { href: 'http://127.0.0.1:3080/' };
 	const navigator = { userAgent: 'test-agent', hardwareConcurrency: 10 };
 	const W = { innerWidth: 1600, innerHeight: 900, devicePixelRatio: 2 };
+	// 面板文案用的两个桩:断言只检查"人看到的字",key 兜底返回 key 本身
+	const translate = (key) => ({
+		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', times: ' 次',
+	})[key] ?? key;
+	const clock = (ms) => { const d = new Date(ms); const pad = (n) => (String(n).length < 2 ? '0' + n : String(n)); return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()); };
 	const LS_INCIDENTS = 'test:incidents';
 	const store = new Map();
 	let failWrites = false;
@@ -833,6 +842,7 @@ const watchBox = new Function(`
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, timers, store,
+		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
 		setNow: (value) => { nowMs = value; },
@@ -938,6 +948,24 @@ watch.state.watch.on = true;
 const status = watch.watchStatus();
 check('watchStatus 报出录制状态与阈值', [status.recording, status.loaf, status.triggers.frameMs, status.triggers.keep], [true, 'on', 100, 10]);
 check('watchStatus 报出帧样本数与留存清单', [status.frameSamples > 0, Array.isArray(status.kept), status.kept.length], [true, true, 3]);
+
+// 面板上那一行:抓到几次 / 最差多少 / 备注 / 没抓到 / 没开录
+check('守夜行:抓到次数 + 最差严重度', watch.watchPanelText().startsWith('抓到 3 次 · 最差 300ms'), true);
+check('守夜行:带备注时列出最近一条', (() => {
+	watch.state.watch.incidents.unshift({ id: 'x1', severity: 12, cause: 'manual', at: '2026-10-07T00:00:00.000Z', note: '刚切了视图' });
+	const text = watch.watchLatestText();
+	watch.state.watch.incidents.shift();     // 验完挪走:后面的 incidentReport(0) 还要靠真事故
+	return text.includes('刚切了视图');
+})(), true);
+check('工具清单行:带序号与 id', watch.watchRowText({ id: 'x1', severity: 12, cause: 'manual', at: '2026-10-07T00:00:00.000Z', note: null }, 4).startsWith('5. x1 · manual · 12ms'), true);
+check('守夜行:关掉时说未开录', (() => { watch.state.watch.on = false; const text = watch.watchPanelText(); watch.state.watch.on = true; return text; })(), '未开录');
+check('守夜行:没抓到也照实说,并把阈值写出来', (() => {
+	const keptRows = watch.state.watch.incidents.splice(0, watch.state.watch.incidents.length);
+	const emptyText = watch.watchPanelText();
+	const emptyLatest = watch.watchLatestText();
+	watch.state.watch.incidents.push(...keptRows);
+	return emptyText.startsWith('还没抓到(≥100ms)') && emptyLatest === null;
+})(), true);
 
 // 事故包:自描述头 + 缺失声明(缺什么、怎么补)
 check('事故包:不存在的 id 返回 null(不静默成功)', watch.incidentReport('nope'), null);

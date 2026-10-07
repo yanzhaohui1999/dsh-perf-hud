@@ -59,6 +59,8 @@ __perfHud.capture('切了视图')  // 手动标记"刚刚卡了一下"(自动回
 __perfHud.clearIncidents()    // 只清事故;clear() 刻意不动它
 ```
 
+**面板上能看到:** 常显区一行 `守夜 抓到 N 次 · 最差 X ms`(附带最近那一条的时刻与备注);工具箱里有最差几次的清单 + 「标记刚才」(手动补记,自动回退 3 秒)与「导出最近一次」两个按钮;面板折叠成小药丸时也会显示抓到几次 —— 这个数字就是"行车记录仪在工作"的那盏灯。
+
 事故包带**会话基线**(整个帧环的 p50/p90/最差),所以能直接回答「这一段是真的比平时差,还是这台机器一直这样」;它是纯 JSON,人也能直接读;想看得舒服点:`node tools/inspect-incident.mjs <file.json>` 会渲染出帧条带(哪一格是哪个量级一眼可见)、窗口内的 longtask、LoAF 与按耗时排序的脚本。它自带 `context.missing`:这一次**没拿到什么**(没有 DevTools trace、没有宿主 CPU profile、平台不支持 LoAF……)以及怎么补 —— 缺的东西写清楚,比不写有用。它**不做归因推断**,只把当时的东西原样装好。
 
 ## 🚀 安装
@@ -166,9 +168,9 @@ dsh plugin --profile web add "$PWD"
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 218 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 223 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js
-# 合计 253 条断言,离线,无需 DSH 在跑
+# 合计 258 条断言,离线,无需 DSH 在跑
 ```
 
 线上验证(需要先换 cookie,步骤见 [AGENTS.md](AGENTS.md) §2.2):

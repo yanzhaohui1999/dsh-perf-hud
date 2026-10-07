@@ -2765,6 +2765,39 @@ window.__ModuleLoader__.load({
 			return `${translate('isolation')} ${experiment.phase} · ${translate('marks')} ${state.marks.length}`;
 		}
 
+		/**
+		 * 守夜层在面板上的那一行:抓到几次、最差多少、有几条是刷新后读回来的。
+		 * 没抓到也照实说(把当前阈值写出来,免得读成"守夜没在工作")。
+		 */
+		function watchPanelText() {
+			const watch = state.watch;
+			if (watch.on === false) return translate('watchOff');
+			if (watch.incidents.length === 0) return `${translate('watchNone')}(≥${WATCH_TRIGGER_MS}ms)`;
+			const worst = watch.incidents[0];
+			return `${translate('watchCaught')} ${watch.incidents.length}${translate('times')} · ${translate('watchWorst')} ${Math.round(worst.severity)}ms` +
+				(watch.restored === 0 ? '' : ` · ${translate('watchRestored')} ${watch.restored}`) +
+				(watch.persistError === null ? '' : ` · ⚠️ ${translate('watchPersistFailed')}`);
+		}
+
+		/** 守夜层那一行的补充:最差那条事故是什么、什么时候、带没带备注。 */
+		function watchLatestText() {
+			const row = state.watch.incidents[0];
+			if (row === undefined) return null;
+			const at = Date.parse(row.at);
+			return `${row.id} · ${row.cause} · ${Math.round(row.severity)}ms` +
+				(Number.isFinite(at) ? ` · ${clock(at)}` : '') +
+				(row.note === null || row.note === undefined ? '' : ` · ${row.note}`);
+		}
+
+		/** 工具箱里的一条事故:`1. i7 · frame · 326ms · 14:48 · 读回`。 */
+		function watchRowText(row, index) {
+			const at = Date.parse(row.at);
+			return `${index + 1}. ${row.id} · ${row.cause} · ${Math.round(row.severity)}ms` +
+				(Number.isFinite(at) ? ` · ${clock(at)}` : '') +
+				(row.restored === true ? ` · ${translate('watchRestored')}` : '') +
+				(row.note === null || row.note === undefined ? '' : ` · ${row.note}`);
+		}
+
 		/** 概览的 hover:把口径(四条腿)与名字分布都摊开,免得只看到一个被抬高的命中率。 */
 		function overviewTitle() {
 			const tally = longTaskTally();
@@ -2891,6 +2924,13 @@ window.__ModuleLoader__.load({
 				via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
 				unattrShort: '未归因', unattrSuffix: '/帧', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
 				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
+				// 守夜层(默认常开、不插桩):面板上只露一行状态 + 工具箱里的清单与两个按钮
+				watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOnDisk: '落盘',
+				watchNone: '还没抓到', watchOff: '未开录', watchPersistFailed: '落盘失败',
+				watchHint: '默认常开、不插桩:一个 rAF 循环 + 一个 LoAF 观察器。帧间隔(或 LoAF 的 blockingDuration)超过 100ms 就自动抓「前 10 秒 + 后 3 秒」原样切片,只留最差 10 次并落盘(刷新后还在)。要抓偶发卡顿就让它一直开着 —— 出事后用「导出最近一次」把证据包交给分析者。',
+				watchMark: '标记刚才', watchMarkHint: '手动记一次「刚刚卡了一下」:自动回退 3 秒(人的反应时间),立刻切片,并把上面输入框的备注原样写进证据包',
+				watchExport: '导出最近一次', watchExportHint: '下载一份自包含的证据包(帧序列 + LoAF + 窗口内 longtask + 环境与缺失声明);也可以用 __perfHud.exportIncident(id) 指定某一条',
+				watchManualNote: '手动标记',
 			},
 			en: {
 				title: 'Perf HUD', off: 'off', turnOn: 'on', turnOff: 'off',
@@ -2936,6 +2976,12 @@ window.__ModuleLoader__.load({
 				via: 'channel', viaRemote: 'ctx.remote (client remote)', viaRoute: 'host route /api/dsh-perf-hud/host',
 				unattrShort: 'unattr', unattrSuffix: '/frame', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
 				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
+				watch: 'Night watch', watchCaught: 'caught', watchWorst: 'worst', watchRestored: 'restored', watchOnDisk: 'on disk',
+				watchNone: 'nothing caught yet', watchOff: 'not recording', watchPersistFailed: 'persist failed',
+				watchHint: 'On by default and it patches nothing: one rAF loop plus one LoAF observer. When a frame interval (or LoAF blockingDuration) crosses 100ms it captures the 10s before and 3s after verbatim, keeps the worst 10, and persists them (they survive a reload). Leave it running to catch intermittent stalls; after one, hand the evidence pack to an analyst with "Export latest".',
+				watchMark: 'Mark just now', watchMarkHint: 'Manually record "it just stuttered": rewinds 3s (human reaction time), slices immediately, and copies the note from the input above into the pack',
+				watchExport: 'Export latest', watchExportHint: 'Download one self-contained evidence pack (frames + LoAF + long tasks in the window + environment and missing-data notes); __perfHud.exportIncident(id) picks a specific one',
+				watchManualNote: 'manual mark',
 			},
 		};
 		const fallback = (key) => DICT.zh[key] ?? key;
@@ -3222,6 +3268,7 @@ window.__ModuleLoader__.load({
 						h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(0)} fps`),
 						h('span', { style: S.label }, `${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms`),
 						worst === null ? null : h('span', { style: S.label }, `LT ${worst.ms.toFixed(0)}ms`),
+						state.watch.incidents.length === 0 ? null : h('span', { style: S.label, title: t('watchHint') }, `${t('watchCaught')} ${state.watch.incidents.length}${t('times')}`),
 						h('button', { type: 'button', style: S.btn, title: t('expand'), onClick: toggle }, '+'),
 						h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff'))));
 			}
@@ -3258,6 +3305,13 @@ window.__ModuleLoader__.load({
 					rest.length === 0 ? null : h('div', { style: S.row },
 						h('span', { style: S.label, title: restTitleText(rest) }, `${t('rest')} (${rest.length})`),
 						h('span', { style: S.num }, restValueText(rest)))),
+
+				// ── 常显 4:守夜(偶发卡顿的入口:抓到几次、最差多少)──
+				h('div', { style: S.sep },
+					h('div', { style: S.row },
+						h('span', { style: S.label, title: t('watchHint') }, t('watch')),
+						h('span', { style: S.num }, watchPanelText())),
+					watchLatestText() === null ? null : h('div', { style: S.sub }, watchLatestText())),
 
 				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
 				group('detail', t('groupDetail'), detailSummary(),
@@ -3342,6 +3396,15 @@ window.__ModuleLoader__.load({
 						h('button', { type: 'button', style: S.btn, onClick: () => abortExperiment() }, t('abortExp')),
 						h('button', { type: 'button', style: S.btn, title: t('stressHint'), onClick: () => W.__perfHud.stress() }, t('stress'))),
 					h('div', { style: S.sub }, stressText()),
+					// 守夜层:最差几次的清单 + 手动补记 + 导出最近一次
+					h('div', { style: S.row },
+						h('span', { style: S.label, title: t('watchHint') }, t('watch')),
+						h('span', { style: S.num }, watchPanelText())),
+					state.watch.incidents.length === 0 ? null : h('div', null,
+						state.watch.incidents.map((row, index) => h('div', { key: row.id, style: S.sub }, watchRowText(row, index)))),
+					h('div', { style: S.buttons },
+						h('button', { type: 'button', style: S.btn, disabled: state.watch.on === false, title: t('watchMarkHint'), onClick: () => { W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft); setDraft(''); } }, t('watchMark')),
+						h('button', { type: 'button', style: S.btn, disabled: state.watch.incidents.length === 0, title: t('watchExportHint'), onClick: () => W.__perfHud.exportIncident(0) }, t('watchExport'))),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('marks')),
 						h('span', { style: S.num }, state.marks.length === 0 ? t('none') : `${state.marks.length} · ${clock(state.marks[state.marks.length - 1]?.t ?? Date.now())}`)),
