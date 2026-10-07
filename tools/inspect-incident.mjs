@@ -78,6 +78,8 @@ console.log(`超线帧     >50ms ${num(summary.framesOver50Ms, 0)}  ·  >100ms $
 console.log(`长动画帧   ${num(summary.loafEntries, 0)} 条  ·  累计 blocking ${num(summary.blockingMs)}ms`);
 console.log(`longtask   窗口内 ${num(summary.longTasksInWindow, 0)} 条`);
 console.log(`页面       场景 ${summary.streaming === true ? '流式' : '空闲'}  ·  可见性 ${summary.visibility ?? '?'}  ·  DOM ${num((incident.env ?? {}).domNodes, 0)} 节点  ·  堆 ${num(((incident.env ?? {}).heapUsedBytes ?? 0) / 1048576)}MB  ·  插桩 ${(incident.env ?? {}).instrumented === true ? '开' : '关'}  ·  精确归因 ${(incident.env ?? {}).precise === true ? '开' : '关'}`);
+const env = incident.env ?? {};
+if (env.viewport !== undefined) console.log(`渲染环境   视口 ${env.viewport}  ·  DPR ${num(env.devicePixelRatio, 2)}  ·  逻辑核 ${num(env.hardwareConcurrency, 0)}  ·  UA ${String(context.userAgent ?? '').slice(0, 56)}`);
 
 // ── 2. 帧条带 ──────────────────────────────────────────────────────────
 console.log(rule(`帧条带(每个字符一格,共 ${WIDTH} 格 ≈ ${((window0.toMs - window0.fromMs) / WIDTH / 1000).toFixed(2)} 秒/格)`));
@@ -117,9 +119,27 @@ console.log(bar);
 }
 console.log('图例:█ >100ms · ▒ 50–100ms · · <50ms · _ rAF 挂起(不是卡顿)· 空白 没采到');
 const live = frames.filter((row) => row.gap !== true).map((row) => row.ms).sort((a, b) => a - b);
+let windowP50 = null;
 if (live.length > 0) {
 	const pick = (p) => live[Math.min(live.length - 1, Math.floor(p * live.length))];
+	windowP50 = pick(0.5);
 	console.log(`分位: p50 ${num(pick(0.5))}ms · p90 ${num(pick(0.9))}ms · p99 ${num(pick(0.99))}ms · max ${num(live[live.length - 1])}ms`);
+}
+// 会话基线:没有它,"最差帧 325ms" 判不出是这一段真的变坏了,还是这台机器一直这样
+{
+	const baseline = incident.baseline;
+	if (baseline === null || baseline === undefined) {
+		console.log('会话基线   (没有:旧版本的事故包不带这个字段)');
+	} else {
+		const ratio = windowP50 === null || !(baseline.p50 > 0) ? null : windowP50 / baseline.p50;
+		const verdict = ratio === null ? '没法比'
+			: ratio >= 1.5 ? `明显差于平时(×${ratio.toFixed(2)})`
+				: ratio >= 1.15 ? `略差于平时(×${ratio.toFixed(2)})`
+					: `与本会话平时基本一致(×${ratio.toFixed(2)})`;
+		const worseThanSession = typeof incident.summary.worstFrameMs === 'number' && typeof baseline.worstMs === 'number' && incident.summary.worstFrameMs > baseline.worstMs;
+		console.log(`会话基线   全会话 ${num(baseline.frames, 0)} 帧 / ${num((baseline.spanMs ?? 0) / 1000)}s / ${num(baseline.fps)}fps · p50 ${num(baseline.p50)}ms · p90 ${num(baseline.p90)}ms · 最差 ${num(baseline.worstMs)}ms`);
+		console.log(`对比       ${verdict}${worseThanSession ? ' · 而且本窗口的最差帧超过了整个会话的最差帧' : ''}`);
+	}
 }
 
 // ── 3. 表 ──────────────────────────────────────────────────────────────
@@ -154,7 +174,7 @@ const thresholds = context.thresholds ?? {};
 console.log(`阈值       触发 ${num(thresholds.triggerMs, 0)}ms  ·  间隙 ${num(thresholds.gapMs, 0)}ms  ·  前摇 ${num(thresholds.preMs, 0)}ms  ·  后摇 ${num(thresholds.postMs, 0)}ms  ·  保留 ${num(thresholds.keep, 0)} 次  ·  手动回退 ${num(thresholds.reactionMs, 0)}ms`);
 const watch = context.watch ?? {};
 console.log(`守夜层     录制 ${watch.recording === true ? '中' : '停'}  ·  LoAF ${watch.loaf ?? '?'}  ·  帧样本 ${num(watch.frameSamples, 0)}/${num(watch.frameBudget, 0)}(覆盖 ${num((watch.coveredMs ?? 0) / 1000)}s)  ·  捕获 ${num(watch.captured, 0)} 次(归并 ${num(watch.coalesced, 0)} · 丢弃 ${num(watch.dropped, 0)} · 读回 ${num(watch.restored, 0)})`);
-console.log(`宿主       ${incident.host === null || incident.host === undefined ? '(没有宿主数据)' : `p99 ${num((incident.host.eventLoop ?? {}).p99)}ms  ·  快照距事件 ${num(incident.host.lagAheadMs, 0)}ms  ·  ${incident.host.at ?? '?'}`}`);
+console.log(`宿主       ${incident.host === null || incident.host === undefined ? '(没有宿主数据)' : `p99 ${num((incident.host.eventLoop ?? {}).p99)}ms  ·  快照年龄 ${num(incident.host.snapshotAgeMs, 0)}ms(正数=比事故更早采到)  ·  ${incident.host.at ?? '?'}`}`);
 console.log('这次**没有**拿到:');
 for (const line of context.missing ?? []) console.log(`  · ${line}`);
 console.log('要补的话:');

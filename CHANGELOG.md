@@ -9,6 +9,7 @@
 ### 新增
 
 - **事故落盘**:留存的事故进 `localStorage`(512KB 上限,超了丢最弱的;写失败如实报 `persistError`),刷新/重启后仍在;每条带 `env.perfOrigin`,跨会话读时 perf 毫秒能对齐墙上时间
+- **事故包 v2(按一次独立盲读的反馈改的)**:加 `incident.baseline`(整个帧环的分布,用来判断"这一段是不是真的比平时差"而不是只看绝对值)、`env.viewport/devicePixelRatio/hardwareConcurrency`(渲染环境)、宿主 `snapshotAgeMs`(原来那个 `lagAheadMs` 口径没定义);`howToRead` 补三个坑(frames 与 loaf 是同一信号的两个视图、`blocking=0` 不等于没卡、longTasks 不是慢帧清单);`missing` 补 compositor / 记录器自开销 / 对照基线,`howToAdd` 补零成本检查(`chrome://gpu`、Rendering 面板的 Frame Rendering Stats)
 - **守夜层(默认常开、不插桩)**:帧级环形缓冲(12000 帧)+ LoAF 观察器;一帧 >100ms 自动抓「前 10 秒 + 后 3 秒」原样切片,只留最差 5 次;`__perfHud.watch() / incidents() / report() / exportIncident() / capture() / clearIncidents()`;事故包自带缺失声明(没有 DevTools trace、没有宿主 CPU profile 都照实写)
 - **四条腿长任务归因**,同时给出不一致的两条:`fiber` 祖先走查 / `子树` 走查(`alternate === null`,补"整棵挂载"的空档)/ `DOM 写入` 插桩(1/10 采样,估算带 `≈`)/ `包名`(调度点插桩 × 长任务时间重叠)
 - **精确归因**:按合并 bundle 自带的 indexed sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)
@@ -35,7 +36,7 @@
 - 概览改块式左对齐 + 主动断行(名字相同时整行不显示);补长度预算断言(36/60/30/30/34/24)
 - 隔离实验主指标改用「每帧未归因残差」,并收窄口径为"空闲筛查,不是因果证明"
 - 合并判色:FPS ≤50 或最差帧 ≥120ms → 黄;≤30 或 ≥200ms → 红(任一触发即降色)
-- 测试:243 条离线断言(attribution 11 / logic 208 / host 24)+ 两个线上套件
+- 测试:249 条离线断言(attribution 11 / logic 214 / host 24)+ 两个线上套件
 
 ### 文档
 

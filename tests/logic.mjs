@@ -813,7 +813,8 @@ const watchBox = new Function(`
 	const document = { visibilityState: 'visible' };
 	const PKG = 'dsh-perf-hud';
 	const location = { href: 'http://127.0.0.1:3080/' };
-	const navigator = { userAgent: 'test-agent' };
+	const navigator = { userAgent: 'test-agent', hardwareConcurrency: 10 };
+	const W = { innerWidth: 1600, innerHeight: 900, devicePixelRatio: 2 };
 	const LS_INCIDENTS = 'test:incidents';
 	const store = new Map();
 	let failWrites = false;
@@ -904,6 +905,8 @@ check('窗口里最差帧与计数(gap 不算帧、不算最差)',
 	[150, 3, 1, 1, 1]);
 check('窗口带上了同时段的 longtask 明细', [firstIncident.summary.longTasksInWindow, firstIncident.longTasks[0].owner], [1, 'dsh-x']);
 check('事故带环境读数与墙上时间', [firstIncident.env.domNodes, firstIncident.at], [1234, new Date(1700000000000 + 10000).toISOString()]);
+check('事故带会话基线(整个帧环的分布)', [firstIncident.baseline.frames, firstIncident.baseline.p50, firstIncident.baseline.worstMs], [5, 20, 150]);
+check('会话基线:ms 数组里的间隙不算帧', watch.frameRing.reset() === undefined && (watch.frameRing.push(1, 16, false), watch.frameRing.push(2, 300, true), watch.frameRing.push(3, 20, false), watch.frameRing.stats().frames), 2);
 
 // 归并:后摇没到就再来一次,算同一串(记 coalesced,不当成第二次事故)
 watch.setNow(50000);
@@ -944,7 +947,7 @@ check('事故包:带阈值与读取说明', [
 	report.context.thresholds.triggerMs,
 	report.context.howToRead.length,
 	report.context.page,
-], [100, 4, 'http://127.0.0.1:3080/']);
+], [100, 6, 'http://127.0.0.1:3080/']);
 check('事故包:如实列出没拿到的东西',
 	['precise:', 'devtools-trace:', 'host-cpuprofile:'].map((prefix) => report.context.missing.some((line) => line.startsWith(prefix))),
 	[true, true, true]);
@@ -955,6 +958,15 @@ watch.state.watch.loafState = 'on';
 watch.state.on = false;
 check('事故包:没插桩时点明四条腿归因缺失', watch.incidentReport(0).context.missing.some((line) => line.startsWith('instrumentation:')), true);
 check('事故包:缺失项都给了补齐办法', watch.incidentReport(0).context.howToAdd.length >= 2, true);
+check('事故包:独立读者点出的三条缺口也列进 missing',
+	['compositor:', 'recorder-cost:', 'baseline:'].map((prefix) => watch.incidentReport(0).context.missing.some((line) => line.startsWith(prefix))),
+	[true, true, true]);
+check('事故包:带上渲染环境(视口 / DPR / 核数)',
+	[watch.incidentReport(0).incident.env.viewport, watch.incidentReport(0).incident.env.devicePixelRatio, watch.incidentReport(0).incident.env.hardwareConcurrency],
+	['1600×900', 2, 10]);
+check('事故包:宿主快照用一个有定义的口径(年龄,正数=更早)',
+	typeof watch.incidentReport(0).incident.host === 'object', true);
+check('会话基线:帧环为空时是 null,不编数字', watch.frameRing.reset() === undefined && watch.frameRing.stats(), null);
 watch.state.on = true;
 
 // 落盘:事故要活过刷新

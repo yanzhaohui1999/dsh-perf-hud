@@ -812,6 +812,33 @@ window.__ModuleLoader__.load({
 				return out;
 			},
 			reset() { this.head = 0; this.size = 0; this.total = 0; },
+			/**
+			 * 整个环的分布 = 会话基线。没有它,"最差帧 325ms" 判不出是"这一段变坏了"还是
+			 * "这台机器/这个浏览器一直这样"(实测 headless 全程 16fps,单看绝对值会误判)。
+			 */
+			stats() {
+				const live = [];
+				for (let i = 0; i < this.size; i += 1) {
+					const index = (this.head - this.size + i + WATCH_FRAMES) % WATCH_FRAMES;
+					if (this.gap[index] === 1) continue;
+					live.push(this.ms[index]);
+				}
+				if (live.length === 0) return null;
+				live.sort((a, b) => a - b);
+				const pick = (p) => round1(live[Math.min(live.length - 1, Math.floor(p * live.length))]);
+				const oldest = this.at[(this.head - this.size + WATCH_FRAMES) % WATCH_FRAMES];
+				const newest = this.at[(this.head - 1 + WATCH_FRAMES) % WATCH_FRAMES];
+				const span = round1(newest - oldest);
+				return {
+					frames: live.length,
+					spanMs: span,
+					fps: span <= 0 ? null : round1((live.length * 1000) / span),
+					p50: pick(0.5),
+					p90: pick(0.9),
+					p99: pick(0.99),
+					worstMs: round1(live[live.length - 1]),
+				};
+			},
 		};
 
 		/**
@@ -1007,9 +1034,12 @@ window.__ModuleLoader__.load({
 				frames,
 				loaf,
 				longTasks,
+				baseline: frameRing.stats(),   // 整个帧环的分布:用来判"这一段是不是真的比平时差"
 				host: state.host === null || state.host === undefined ? null : {
 					at: state.hostAt > 0 ? new Date(state.hostAt).toISOString() : null,
-					lagAheadMs: state.hostAt > 0 ? round1(Date.now() - state.hostAt) : null,
+					// 快照年龄:这份宿主数据是事故时刻之前多少毫秒采到的(正 = 更早,负 = 事故之后才采到)。
+					// 以前这里写的是"距现在多久",口径没定义,读的人只能猜。
+					snapshotAgeMs: state.hostAt > 0 ? Math.round(perfOrigin() + pending.at - state.hostAt) : null,
 					eventLoop: state.host.eventLoop ?? null,
 				},
 				env: {
@@ -1019,6 +1049,11 @@ window.__ModuleLoader__.load({
 					precise: state.precise,
 					// 跨会话(落盘后重开页面)读这份事故时,perf 毫秒要靠它才能对齐墙上时间
 					perfOrigin: new Date(perfOrigin()).toISOString(),
+					// 渲染环境:判断"这段是坏还是这台机器一直这样"的另一个前提
+					viewport: `${W.innerWidth}×${W.innerHeight}`,
+					devicePixelRatio: W.devicePixelRatio,
+					hardwareConcurrency: navigator.hardwareConcurrency ?? null,
+					visibility: document.visibilityState,
 				},
 			};
 		}
@@ -2340,8 +2375,13 @@ window.__ModuleLoader__.load({
 			}
 			missing.push('devtools-trace:完整的 Chrome trace(页面内录不了)');
 			howToAdd.push('DevTools → Performance → 录制(勾 include script source maps)→ Save trace → Perfetto 打开');
-			missing.push('host-cpuprofile:宿主进程的 CPU 火焰图');
-			howToAdd.push('kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record;.cpuprofile 可用 speedscope 打开');
+			missing.push('compositor:帧时间到底花在合成 / 光栅 / GPU 的哪一段(这一层只看得到主线程侧)');
+			missing.push('recorder-cost:本记录器自身的开销没有独立测量(它每帧跑一次 rAF 采样)');
+			missing.push('baseline:同环境 / 跨会话的对照基线(这份包里只有本次会话的分布)');
+			missing.push('host-cpuprofile:宿主进程的 CPU 火焰图(只有当宿主 event-loop 也高时才值得做)');
+			howToAdd.push('零成本、当场可做:chrome://gpu 看是不是落到了软件渲染;DevTools → Rendering 打开 Frame Rendering Stats(FPS 表)与 Paint flashing —— 页面完全静止时帧率是否也上不去');
+			howToAdd.push('判定"主线程之外":Performance 面板录 5 秒,看 Main 轨道的忙碌时间是否远小于墙钟(与 blocking=0 / scripts 为空互相印证)');
+			howToAdd.push('宿主火焰图:kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record;.cpuprofile 可用 speedscope 打开');
 			return {
 				plugin: PKG,
 				kind: 'perf-hud-incident',
@@ -2359,10 +2399,12 @@ window.__ModuleLoader__.load({
 					missing,
 					howToAdd,
 					howToRead: [
-						'incident.frames:窗口内每一帧(ms 是帧间隔;gap:true 表示 rAF 被挂起,不是卡顿)',
-						'incident.loaf:这十几秒里的长动画帧(blocking 是"挡了多久",scripts[] 是"谁")',
-						'incident.longTasks:既有四条腿落在窗口内的明细(owner=调度方包名,component=渲染方组件)',
-						'incident.summary:上面三块的汇总;这一层不做推断,结论请自己下',
+						'incident.frames:窗口内每一帧(t 是 perf 毫秒,要靠 incident.env.perfOrigin 换成墙钟;ms 是帧间隔;gap:true 表示 rAF 被挂起,不是卡顿)。首帧可能晚于 window.fromMs —— 窗口边界与采样边界不重合是正常的',
+						'incident.loaf 与 incident.frames 是**同一信号的两个视图**(LoAF 的 t+dur 就落在某一帧上),不是两份独立证据:别相加,也别当互相印证',
+						'incident.loaf[].blocking(blockingDuration)只累计"被归因到的 >50ms 长任务"的超出部分 —— **它可以是 0,而这一帧仍然有几百毫秒**。判严重度看帧间隔,blocking=0 不等于没卡',
+						'incident.longTasks 是既有四条腿落在窗口内的明细(at=任务开始的 perf 毫秒,t=上报时刻的墙钟毫秒),**它不是慢帧清单**:条数通常远少于超线帧',
+						'incident.baseline 是同一会话整个帧环的分布 —— 拿它和 summary 比,才知道这一段是"真的比平时差"还是"这台机器一直这样"',
+						'incident.summary 只是上面几块的汇总;这一层不做推断,结论请自己下',
 					],
 				},
 				incident,
