@@ -10,6 +10,8 @@
 
 **这个工具该是"行车记录仪 + 事故包",不是"仪表盘"**:默认静默常驻、自动抓住那一下、一次抓全、产出给分析者(尤其给 agent)读的证据包;官方短期内不会和它撞,归因是护城河。
 
+**2026-10-07 补充**:生态侧的复核(谁在同一条路上、他们放弃了什么)见 [LANDSCAPE.md](LANDSCAPE.md);结论仍是这一句,但有两处要修正 —— ①"守夜"这个**形态**已被 perf-lens 排进路线图(P1 #5,宿主侧,0.3.0),空的只是**客户端侧事故包 + 跨进程取证**;②桌面端(`dsh-app://`)上 LoAF 的 `scripts` 恒空,所以 §8 里"用 LoAF 做桌面脚本级归因"的假设不成立,见 §8 的修正段。方向本身不变,转向决定见 §9。
+
 ---
 
 ## 1. 评审提出的问题(原始清单)
@@ -174,7 +176,7 @@
 - **官方的性能形态是 CI 预算,不是用户面板**(§3.2);上游最近的 `perf(...)` 提交全是**产品优化**(tool-arg 流式、会话列表时间切片、长会话渲染、鲸鱼动画),不是监控工具。
 - **官方对"常驻日志"是保守的**:`.agents/notes/implemented/architecture/2026-09-22-fatal-diagnostics-and-crash-reports.md` 里,连续日志设计是 **future work**,姿态为"闭集事件词表 + 脱敏 + 限速";原始内容只在**一次性崩溃报告**里保留,且有界(64KiB)、owner-only、本地、用户可见。
 - **Web 端产品分析被明确排除**(`dsh-api-remotes` README:"Web usage is excluded")→ 不存在"官方遥测长成性能面板"这条路。
-- **真正会撞的两处**:①官方给 DOM 打 `data-dsh-plugin` 或开放 per-plugin 钩子 → 归因贬值,此时应**主动消费**(插件变准,不对抗);②官方做"诊断面板"会抢入口,但它是**事后/致命**视角,不是"卡顿现场"。策略:定位成"官方基准的补充 + 官方数据的消费者",格式对齐(owner-only、有界、标准 trace/cpuprofile),被收编时是数据源而不是竞品。→ **桌面端(Desktop)会改变这里的几条结论,见 §8。**
+- **真正会撞的两处**:①官方给 DOM 打 `data-dsh-plugin` 或开放 per-plugin 钩子 → 归因贬值,此时应**主动消费**(插件变准,不对抗);②官方做"诊断面板"会抢入口,但它是**事后/致命**视角,不是"卡顿现场"。策略:定位成"官方基准的补充 + 官方数据的消费者",格式对齐(owner-only、有界、标准 trace/cpuprofile),被收编时是数据源而不是竞品。→ **桌面端(Desktop)会改变这里的几条结论,见 §8;生态里各家的逐条复核(装机量、技术硬点、他们明确放弃了什么)见 [LANDSCAPE.md](LANDSCAPE.md)。**
 
 ### 4.4 理想形态
 
@@ -194,6 +196,8 @@
 ---
 
 ## 5. 已定决策与最小改造路径
+
+> 转向的完整取舍(保留 / 停投 / 明确不做,以及为什么)见 §9;本节是执行面上的最小路径。
 
 **决策**
 
@@ -265,6 +269,15 @@
 - 于是桌面端的事故包能装下 Web 端根本拿不到的东西:一份**真实的 Chrome trace**(Perfetto / DevTools 直接可开)+ 渲染进程 CPU profile(`webContents.debugger` + `Profiler` domain)+ 宿主进程 profile(Host 是 Electron 的子进程)+ **按进程的 CPU/内存**(`getAppMetrics`)。§4.2 那张表里所有"只存在于当时"的证据,在桌面端都有对应的引擎级来源。
 - 代价与边界:这几样都是**主进程**能力,所以"守夜"在桌面端要由一个 Electron 侧的组件承担(现有插件形态是 `dsh.bundle.patch` 的 Node 半边 + 浏览器半边,能不能拿到主进程句柄需要另做设计);缓冲占用与采样的常驻开销、category 清单、以及打包版里的可用性都要实测。
 
+**⚠️ 修正:桌面端会同时废掉 in-page 的脚本级归因**
+
+perf-lens 在 `docs/evidence.md` §17 实测:`dsh-app://` 上 `PerformanceObserver` 照常交付长帧(`blockingDuration` 最高 352 ms),但 **`scripts.length === 0` 对每一帧都成立**(900 条长帧样本)。也就是说 **§3.1 那条"用 LoAF 替换调度点插桩"的策略在桌面端不成立**。桌面端剩下的两条路是:
+
+1. **V8 CallSite**(我们现在那条老路):perf-lens 记录到的脚本位置形如 `dsh-app://app/plugins/??<id,id,…>&rev=<rev>:LINE:COLUMN` —— 位置信息在,所以 sourcemap 分段照样能用;
+2. **主进程侧取证**(本节的 CDP / `contentTracing`)—— 打包版默认**不带 `--remote-debugging-port`**(只有 `apps/desktop/scripts/dev.ts` 传),所以外部 attach 不可用,只能由 Electron 主进程自己挂。
+
+于是"桌面端更有意义"这句话要说得更准确:**不是"桌面端更好",而是"桌面端把归因预算从 in-page 挪到了主进程"** —— 普通 Web 端靠 LoAF 就能做好脚本级归因,桌面端必须靠主进程 trace,而后者恰好能给出 Web 端永远拿不到的东西(见上一段的 trace + 双 profile + 按进程指标)。
+
 **推论:为什么"有意义"**
 
 1. **守夜形态与桌面生命周期天然吻合**:用户整天开着、关窗不停 —— 偶发卡顿本来就发生在这样的使用里;常驻记录器的边际成本更低、命中率更高。
@@ -277,3 +290,38 @@
 - **sourcemap 缓存的策略会失效**:Desktop 把插件 bundle 响应标成 `no-store`,且 rev 每次启动都变 → 现在"按 `rev` 缓存那份 12MB map"在桌面端**每次启动都要重拉一次**。长期用就得改成按内容哈希缓存,或改成"只在需要还原某个事故时按需拉一次"。
 - **hide 期间的行为要定**:页面 continue,守夜缓冲是否继续、要不要降采样 —— 需实测。
 - **两条可达性未验证**:本插件在 Desktop 的 profile 里能否安装;客户端半边只依赖 `slots` / `locale` / React(与 sandbox 约束不冲突),但宿主半边的 `connection.fetch.register` 与 `pluginManager` 在 Desktop 的 Host 子进程里是否同样可达,得实测。
+
+---
+
+## 9. 转向(2026-10-07)
+
+**从"一个四条腿的仪表盘"转向"客户端守夜记录器 + 事故包";面板与隔离实验退到二级。** 依据:生态复核见 [LANDSCAPE.md](LANDSCAPE.md),桌面端与 LoAF 的事实见 §8。
+
+**保留(生态里只有我们有;桌面端 LoAF 失效后更重要)**
+
+- fiber / 子树 / DOM 写入三条腿 —— 唯一在产的 `dsh-perf` 按插件归因坏着,perf-lens 明确不做组件级。
+- sourcemap 单包名还原 —— 但降级为"**按需、只还原这一个事故**";默认改用 combo 边界算术(perf-lens 的 `start(i+1)=start(i)+len+2`),算术认不出新格式再退回 map。
+- 宿主 event-loop 采样 + bundle 读写代理(带 confirm 安全线)。
+
+**停投(建议,理由在 LANDSCAPE)**
+
+- 隔离实验 → 让给 `dsh-performance-guard`:它的 profile 复制 + 重启 + 配对 CI/Hedges' g 比我们的 A/B/A 硬。本仓改成**交接**:导出可疑集 + 一行可复制的隔离命令。
+- 「验收自证」不再占常显区;聚合导出不再当主产物(降为二级概览)。
+
+**明确不做**
+
+- 治理类特性(写批频控、publish gate、`content-visibility` 补丁)—— `dsh-perf` 的地盘。
+- bisection 工作流 —— performance-guard 的地盘(perf-lens 也在路线图里明确让给它)。
+- 宿主侧每插件 CPU / 堆 / 磁盘 / 进程树 —— perf-lens 的地盘,它已有 always-on JSONL 与进程树。
+
+**唯一新增(三件,全部服务于同一个问题:"我今天用下来,哪一段最卡、是谁")**
+
+1. **客户端守夜层**:帧级环形缓冲 + LoAF + 自动保留最差 N 次;不插桩(§4.1)。
+2. **事故包**:`incident.json` + 缺失声明 + 可选 trace / `.cpuprofile`(§4.2)。
+3. **桌面端主进程取证**:`contentTracing` 环形 + `webContents.debugger` + `getAppMetrics`(§8)。
+
+**风险与前提**
+
+- perf-lens 的 **P1 #5「Auto deep-profile on a stall」是同款形态**(宿主侧,排 0.3.0)。→ 不要重复做宿主侧 deep profile;我们要么比它快,要么就站到它旁边只做**客户端那一半 + 跨进程合成**。
+- 桌面端要另做 Electron 侧载体(§8),是新工程量,不是改几行。
+- 守夜层的成本纪律来自对手的实测:always-on `async_hooks` 在 promise 密集路径 2.3–2.6×(LANDSCAPE §4)。默认模式**只许**挂 rAF + `PerformanceObserver`。

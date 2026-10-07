@@ -243,7 +243,8 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献流程:报 bug、提 PR、提交前自检 |
 | [ACCEPTANCE.md](ACCEPTANCE.md) | 验收判据与实测数字(含评审响应记录) |
 | [REVIEW.md](REVIEW.md) | 发布就绪评审:缺口、证据、待办清单 |
-| [DIRECTION.md](DIRECTION.md) | 方向评审与设计讨论:为什么从"仪表盘"改成"行车记录仪 + 事故包"、官方会不会撞、理想形态 |
+| [DIRECTION.md](DIRECTION.md) | 方向评审与设计讨论:为什么从"仪表盘"改成"行车记录仪 + 事故包"、官方会不会撞、理想形态、转向取舍 |
+| [LANDSCAPE.md](LANDSCAPE.md) | 生态与撞车矩阵:各家的装机量 / 技术硬点 / 他们明确放弃了什么 / 我们仍空着的位置(带复核命令与来源标注) |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更 |
 
 ---
@@ -254,7 +255,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 2. 打 tag `vX.Y.Z`(**tag 必须与 `version` 一致**),在 GitHub 建 Release。
 3. `.github/workflows/release.yml` 在该 Release 发布时自动 `npm publish`(用 **npm Trusted Publishing / OIDC**,不配 `NPM_TOKEN`)。
 4. 首次需要在 npmjs.com 手动建包并配 Trusted Publisher(Provider: GitHub Actions;填 owner / repo / `release.yml`)。
-5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/en.json` / `LICENSE`,以及 README 链接到的全部文档(`README_EN` / `CONTRIBUTING` / `CHANGELOG` / `AGENTS` / `ACCEPTANCE` / `REVIEW`)—— 漏一份,npm 页面上就是一个死链。`release.yml` 的 Pack and inspect 步骤逐份 grep,漏了就失败。
+5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/en.json` / `LICENSE`,以及 README 与 AGENTS 链接到的全部文档(`README_EN` / `CONTRIBUTING` / `CHANGELOG` / `AGENTS` / `ACCEPTANCE` / `REVIEW` / `DIRECTION` / `LANDSCAPE`)—— 漏一份,npm 页面上就是一个死链。`release.yml` 的 Pack and inspect 步骤逐份 grep,漏了就失败。
 
 ---
 
