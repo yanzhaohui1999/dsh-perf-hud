@@ -1,8 +1,8 @@
 # dsh-perf-hud 仓库规则(AGENTS)
 
-> 本文含**项目全局开发规则 + 源码级机制**(面向贡献者与 agent)。
-> 装什么怎么用、读数怎么看 → [README.md](README.md);验收数字 → [ACCEPTANCE.md](ACCEPTANCE.md);
-> 发布缺口与门槛 → [REVIEW.md](REVIEW.md)。
+> 本文含**项目全局开发规则 + 源码级机制 + 方向取舍**(面向贡献者与 agent)。
+> 装什么怎么用、读数怎么看 → [README.md](README.md);发布门槛与验收证据 → [REVIEW.md](REVIEW.md);
+> 变更历史 → [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -11,7 +11,24 @@
 **纯客户端性能 HUD**:一个浏览器半(`client.js`,右下角浮层)+ 一个宿主半(`index.js`,只提供事件循环与 bundle 代理两个探针)。
 它**测量别人的性能**,所以它自己必须便宜、可关、可还原 —— 这条决定了下面几乎所有规则。
 
-不做的事:
+### 0.1 定位:行车记录仪 + 事故包(2026-10-07 起)
+
+要回答的问题只有一个:**"我今天用下来,哪一段最卡、是谁"**。卡顿是偶发的,指望人盯着面板就等于
+永远抓不到 —— 所以主体不是"仪表盘",而是**默认常开、事后能回看的记录器**:
+
+| 模式 | 什么时候 | 做什么 | 成本 |
+|---|---|---|---|
+| **守夜**(默认常开) | 一直 | 帧级环形缓冲 + LoAF 观察器;自动留存最差 10 次并落盘 | 零插桩:只挂本来就在跑的 rAF 与一个 `PerformanceObserver` |
+| **现场**(展开面板) | 想看一眼 | 概览(卡不卡 + 最差那条是谁)/ 回调归因 Top3 / 守夜那行;其余四组折叠 | 可忽略 |
+| **深录**(显式) | 要抓全 | 才打开原型插桩(DOM 写入 1/10 采样 + 调度点抓栈)与「精确归因」 | 有代价,必须显式开 |
+
+**明确不做**(生态里已经有人做了;重复做比谁都不做更糟,详见 §12):
+
+- 治理类特性(写盘频控、列表 publish gate、`content-visibility` 补丁)—— `@linxin666/dsh-perf` 的地盘;
+- bisection 工作流(隔离 profile + 重启 + 配对 CI/Hedges' g)—— `dsh-performance-guard` 的地盘;
+- 宿主侧每插件 CPU / 堆 / 磁盘 / 进程树 —— `dsh-perf-lens` 的地盘(它已有常驻 JSONL 与进程树)。
+
+**仍然不做的事**:
 
 - 不碰 DSH 源码,不注册服务,不监听 `session/event`(除非用户显式开 `watchEvents`)。
 - 不写任何自己的持久化状态到 profile;面板状态只进 `localStorage`。
@@ -106,7 +123,7 @@ DSH_COOKIE=… node tests/live-host.mjs        # 真实路由;退出码 3 = 宿�
 - **口径有歧义就加断言,不要加注释**:注释不能防回归,断言能。
 - **静态检查必须有牙齿**:`logic.mjs` 顶部两条(① `h(Uppercase…)` 引用的组件必须声明过;② 面板渲染区里的裸函数调用必须声明过)是"整段替换吞掉相邻声明"事故的回归测试(§8 第 7 条);验证它的办法是把声明删掉看它是否报出名字。
 - **宿主半可离线真跑**:`tests/host.mjs` 用假 `ctx`(含 `connection.fetch.register` / `pluginManager` / `ctx.on`)驱动真实 `index.js`,断言路由、事件循环升温、confirm 安全线。
-- 断言总数写进 [README.md](README.md) 与 [ACCEPTANCE.md](ACCEPTANCE.md),**改数字要同步改文档**;CI 里有一条门禁专门核这个。
+- 断言总数写进 [README.md](README.md) 与 [REVIEW.md](REVIEW.md),**改数字要同步改文档**;CI 里有一条门禁专门核这个。
 
 ---
 
@@ -145,7 +162,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **能不说就不说**:「最多」与「最差那条」名字相同时整行不显示(它只是把同一句话说两遍);说明文字放 `title` 悬停,不占正文。
 - **长度预算**:概览两行与四个折叠组摘要都有字符上限(36 / 60 / **34** / 30 / 34 / 24 —— 取证明细多带一个「未归因」数字,2026-10-07 从 30 放宽到 34),由 `tests/logic.mjs` 钉住 —— 本会话看不到浏览器渲染,只能靠预算把"又挤成三行"这类回归钉在测试里。改文案必须重跑。
 - **单位一致性**:同一张表里不许一处给 `/s`、另一处给累计;任何"和邻居不同单位"的读数都要有断言(曾出现"上面是 /s、下面给累计")。
-- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键;兜底策略与"哪些串还没进词典"见 [REVIEW.md](REVIEW.md) §2。
+- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键;兜底策略与"哪些串还没进词典"见 [REVIEW.md](REVIEW.md) §3(仍未做)。
 - **插桩必须可还原**:包装 `setTimeout/setInterval/rAF` 与 `appendChild/insertBefore/setAttribute` 时,保存原生引用、只在"当前仍是我们那个 wrapper"时才还原(避免踩掉别人的包装)。
 - **改 `client.js` 一律用带锚点的小批次**:一次替换一个可唯一匹配的片段,失败即整批作废。本项目有**两次**"整段替换吞掉相邻声明"的事故(§8 第 7 条)。
 
@@ -240,16 +257,15 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 
 ## 9. 文档地图
 
+> 只有这六份。**不再新增带日期的记录文档** —— 结论并进这里的对应小节,历史进 [CHANGELOG.md](CHANGELOG.md)。
+
 | 文件 | 管什么 |
 |---|---|
 | [README.md](README.md) | 用户视角:装什么、怎么装、读数怎么看、有什么风险 |
 | [README_EN.md](README_EN.md) | 英文版(摘要式,结论与中文版一致) |
-| [AGENTS.md](AGENTS.md)(本文) | 开发规则 + 源码级机制 + 已知坑 |
+| [AGENTS.md](AGENTS.md)(本文) | 开发规则 + 源码级机制 + 已知坑 + 方向取舍(§0.1)+ 竞争位置(§12) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献流程:报 bug、提 PR、提交前自检 |
-| [ACCEPTANCE.md](ACCEPTANCE.md) | 验收判据与实测数字(含评审响应记录) |
-| [REVIEW.md](REVIEW.md) | 发布就绪评审:缺口、证据、待办清单 |
-| [DIRECTION.md](DIRECTION.md) | 方向评审与设计讨论:为什么从"仪表盘"改成"行车记录仪 + 事故包"、官方会不会撞、理想形态、转向取舍 |
-| [LANDSCAPE.md](LANDSCAPE.md) | 生态与撞车矩阵:各家的装机量 / 技术硬点 / 他们明确放弃了什么 / 我们仍空着的位置(带复核命令与来源标注) |
+| [REVIEW.md](REVIEW.md) | 发布:对外门槛、验收判据与实测证据、仍未做 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更 |
 
 ---
@@ -260,10 +276,54 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 2. 打 tag `vX.Y.Z`(**tag 必须与 `version` 一致**),在 GitHub 建 Release。
 3. `.github/workflows/release.yml` 在该 Release 发布时自动 `npm publish`(用 **npm Trusted Publishing / OIDC**,不配 `NPM_TOKEN`)。
 4. 首次需要在 npmjs.com 手动建包并配 Trusted Publisher(Provider: GitHub Actions;填 owner / repo / `release.yml`)。
-5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/en.json` / `LICENSE`,以及 README 与 AGENTS 链接到的全部文档(`README_EN` / `CONTRIBUTING` / `CHANGELOG` / `AGENTS` / `ACCEPTANCE` / `REVIEW` / `DIRECTION` / `LANDSCAPE`)—— 漏一份,npm 页面上就是一个死链。`release.yml` 的 Pack and inspect 步骤逐份 grep,漏了就失败。
+5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/en.json` / `LICENSE`,以及 README 与 AGENTS 链接到的全部文档(`README_EN` / `CONTRIBUTING` / `REVIEW` / `CHANGELOG` / `AGENTS`)—— 漏一份,npm 页面上就是一个死链。`release.yml` 的 Pack and inspect 步骤逐份 grep,漏了就失败。
 
 ---
 
 ## 11. 当前状态
 
-尚未发布。代码与打包面都已就绪(`npm test` 全绿、`npm pack --dry-run` 产物完整),剩下的是对外动作:仓库已建(私有,`yanzhaohui1999/dsh-perf-hud`)→ 转公开 → npm 首发 → 提收录 PR。逐项清单与门槛见 [REVIEW.md](REVIEW.md) §5 与 §1。
+尚未发布。代码与打包面都已就绪(`npm test` 全绿、`npm pack --dry-run` 产物完整),剩下的是对外动作:仓库已建(私有,`yanzhaohui1999/dsh-perf-hud`)→ 转公开 → npm 首发 → 提收录 PR。门槛、验收证据与还没做的事见 [REVIEW.md](REVIEW.md) §1 / §2 / §3。
+
+---
+
+## 12. 竞争与位置(2026-10-07 复核)
+
+数值是 2026-10-07 当场查的(npm 窗口 `2026-09-05` → `2026-10-04`),**会过期,要用就自己重跑**
+(命令在本节末尾)。判断三家时只用了两样东西:他们自己的源码/文档原文,和我当场查到的数字。
+
+| 包 / 仓库 | 形态 | 撞我们哪块 | 势能 |
+|---|---|---|---|
+| `@linxin666/dsh-perf` | 宿主 + 客户端 HUD | 帧 / FPS / 长任务 / 宿主 event-loop / 内存 / 按插件归因 | **15,194 次/月**(生态第一,v0.3.14);仓库是通用插件仓 `zhu1090093659/dsh-web`(★8,471) |
+| `dsh-fast`(PerryLink) | 宿主只读 | 会话加载 / spill / 压缩诊断 | 3,226 次/月 |
+| `dsh-perfscope`(Evhye38496) | 静态体检 | 插件健康评分 | 846 次/月 |
+| `dsh-performance-guard`(qinshige) | 宿主 + 客户端 | 隔离实验 + 诊断报告 | 435 次/月 |
+| `Nwflower/dsh-perf-lens` | 宿主 + 客户端 | 四条腿里的三条 + 宿主半 | **未发 npm**,★0,创建 2026-10-05 |
+
+三条最有用的结论:
+
+1. **`@linxin666/dsh-perf` 的"按插件"归因是坏的**:它靠 `element.closest('[data-dsh-plugin]')`,
+   而这个属性在上游 `0.2.1-alpha.1` 全仓 **0 命中** —— 官方外壳挂的节点拿不到名字,基本全落进
+   `rest` 桶。它的强项在治理(写盘频控、列表 publish gate),不在测量。
+2. **perf-lens 明确放弃了两块,正好是我们的位置**:它的路线图「What not to build」写着不做
+   **客户端 FPS/长任务面板**(让给 dsh-perf)与 **bisection**(让给 performance-guard);它自己把
+   jank 视图收到了 LoAF 的"脚本 + 强制样式布局",没有组件级归因(它明确否掉了 DOM 根启发式,
+   理由是"测的是 DOM churn、真正的卡是每次变更的 JS 扫描时间")。
+3. **它的市场数据是错的**:`docs/landscape-survey.md` 与 `roadmap-proposals.md` 都写
+   `@linxin666/dsh-perf` 是 59,960 /「60k installs a month」,实测同窗口是 **15,194** ——
+   引用任何人的市场结论前自己查一遍。
+
+**一条桌面端的硬事实**(来自 perf-lens 的 `docs/evidence.md` §17,实测 900 条长帧):
+`dsh-app://` 上 `PerformanceObserver` 照常交付长帧,但 **`scripts` 恒为空** —— LoAF 的脚本级归因
+只在 http(s) 源有效;桌面端能走的是 V8 CallSite 与主进程侧 CDP / `contentTracing`,而打包版
+默认**不带** `--remote-debugging-port`。
+
+复核命令:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' https://registry.npmjs.org/dsh-perf-hud   # 404 = 名字还空着
+curl -s 'https://api.npmjs.org/downloads/point/2026-09-05:2026-10-04/@linxin666%2Fdsh-perf'
+curl -s https://api.github.com/repos/Nwflower/dsh-perf-lens
+curl -s https://raw.githubusercontent.com/Nwflower/dsh-perf-lens/HEAD/docs/roadmap-proposals.md
+```
+
+---

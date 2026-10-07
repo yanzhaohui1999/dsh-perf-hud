@@ -9,7 +9,7 @@ English summary follows the Chinese text below.
 ## 开始之前
 
 - 先读 [README.md](README.md) 了解面板能力与读数口径,再读 [AGENTS.md](AGENTS.md) —— 那里是**开发规则**(硬约束、门禁、提交规范、代码约定),本文不重复。
-- 想知道"为什么这么设计、哪些路已经试过并证伪" → [AGENTS.md](AGENTS.md) §6(源码级机制)与 §8(已证伪的死路);想核对实测数字 → [ACCEPTANCE.md](ACCEPTANCE.md);想知道发布还差什么 → [REVIEW.md](REVIEW.md)。
+- 想知道"为什么这么设计、哪些路已经试过并证伪" → [AGENTS.md](AGENTS.md) §0.1(方向取舍)/ §6(源码级机制)/ §8(已证伪的死路);想知道发布门槛、验收证据与还差什么 → [REVIEW.md](REVIEW.md)。
 
 ## 报告 Bug
 
@@ -71,7 +71,7 @@ node tests/host.mjs          # 24 条
 ## 文档与翻译
 
 - 用户可见的行为变化必须同步 [README.md](README.md) 与 [README_EN.md](README_EN.md);开发规则变化同步 [AGENTS.md](AGENTS.md)。
-- 断言数字(268 = 11 + 233 + 24)出现在 README / ACCEPTANCE / AGENTS 里,**改了要一起改**。
+- 断言数字(268 = 11 + 233 + 24)出现在 README / REVIEW / AGENTS / CONTRIBUTING 里,**改了要一起改**(CI 有一条门禁专门核这个)。
 - 英文版可以只覆盖主路径,但**不要写与中文不一致的结论**。
 
 ## 行为准则

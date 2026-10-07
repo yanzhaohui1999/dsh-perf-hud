@@ -22,10 +22,7 @@
     "CONTRIBUTING.md",
     "CHANGELOG.md",
     "AGENTS.md",
-    "ACCEPTANCE.md",
     "REVIEW.md",
-    "DIRECTION.md",
-    "LANDSCAPE.md",
     "LICENSE"
   ],
   "scripts": {
