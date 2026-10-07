@@ -532,9 +532,13 @@ check('最多与主名字不同时才追加一行(主动断行,不靠宽度)',
 		const text = EX.overviewLine2();
 		return text.split('\n').length === 2 && text.split('\n')[1].includes('ChatView 22×');
 	})(), true);
-check('四个折叠组摘要的长度预算(单行;取证明细多带一个「未归因」数字,放到 34)',
-	[EX.detailSummary().length <= 34, EX.domSummary().length <= 30, EX.hostSummary().length <= 34, EX.toolsSummary().length <= 24],
+// 真实量级(五位数)也要能一行放下 —— 桩里的小数字曾经把这条断言喂成了"通过"
+box.state.mutations = 36250;
+box.state.unattrAvg = 17.3;
+check('四个折叠组摘要的长度预算(按真实量级:五位数 + 小数)', [EX.detailSummary().length <= 26, EX.domSummary().length <= 30, EX.hostSummary().length <= 34, EX.toolsSummary().length <= 24],
 	[true, true, true, true]);
+box.state.mutations = 0;
+box.state.unattrAvg = 0;
 
 // ── 面板分层:折叠状态与摘要 ───────────────────────────────────────
 check('默认全部收起(过程/取证/工具不占常显篇幅)',
@@ -1088,11 +1092,23 @@ watch.setFail(false);
 watch.state.watch.persistError = null;
 // 字节上限:两条里最弱的那条太大 → 丢掉它再写
 watch.state.watch.incidents = [
-	{ id: 'small', severity: 100, frames: [], loaf: [] },
-	{ id: 'huge', severity: 50, frames: new Array(30000).fill({ t: 0, ms: 16, gap: false }), loaf: [] },
+	{ id: 'small', severity: 100, at: '2026-10-07T00:00:01.000Z', cause: 'frame', frames: [], loaf: [] },
+	{ id: 'huge', severity: 50, at: '2026-10-07T00:00:02.000Z', cause: 'frame', frames: new Array(120000).fill({ t: 0, ms: 16, gap: false }), loaf: [] },   // ~3.2MB,真能超 2MB 上限
 ];
 check('落盘:超过字节上限时丢掉最弱的再写', [watch.saveIncidents(), JSON.parse(watch.store.get('test:incidents')).incidents.map((row) => row.id)], [true, ['small']]);
 check('落盘:内存里也按同一份裁掉(看到的 = 刷新后还在的)', watch.state.watch.incidents.map((row) => row.id), ['small']);
+check('落盘:同一时刻同一原因的两条被去重(不占两个留存位)', (() => {
+	watch.state.watch.deduped = 0;
+	watch.state.watch.incidents = [
+		{ id: 'a', severity: 10, at: '2026-10-07T00:00:09.000Z', cause: 'loaf', frames: [], loaf: [] },
+		{ id: 'b', severity: 9, at: '2026-10-07T00:00:09.000Z', cause: 'loaf', frames: [], loaf: [] },
+	];
+	return [watch.saveIncidents(), watch.state.watch.incidents.map((row) => row.id), watch.state.watch.deduped];
+})(), [true, ['a'], 1]);
+check('落盘:缺少 at/cause 的条目不被当成重复吃掉', (() => {
+	watch.state.watch.incidents = [{ id: 'x', severity: 5, frames: [], loaf: [] }, { id: 'y', severity: 4, frames: [], loaf: [] }];
+	return [watch.saveIncidents(), JSON.parse(watch.store.get('test:incidents')).incidents.map((row) => row.id)];
+})(), [true, ['x', 'y']]);
 check('落盘:裁掉几条单独计数,不混进 dropped', [watch.state.watch.trimmedByBytes, watch.state.watch.dropped], [1, 0]);
 check('守夜行:裁过就写出来', watch.watchPanelText().includes('裁掉 1'), true);
 watch.state.watch.trimmedByBytes = 0;

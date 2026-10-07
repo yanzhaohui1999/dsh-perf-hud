@@ -71,7 +71,7 @@ window.__ModuleLoader__.load({
 		const WATCH_TRIGGER_MS = 100;          // 帧间隔 / blockingDuration 越过它就起一次捕获
 		const WATCH_GAP_MS = 1000;             // 帧间隔超过它视为 rAF 挂起:是间隙,不是卡顿
 		const WATCH_REACTION_MS = 3000;        // 手动标记时回退的"人的反应时间"
-		const WATCH_PERSIST_MAX_BYTES = 524288;   // 事故落盘的字节上限(超了丢最弱的)
+		const WATCH_PERSIST_MAX_BYTES = 2097152;  // 事故落盘的字节上限(超了丢最弱的);512KB 时实测只装得下 8 条
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
 		const REACT_INTERNAL = new Set(['Fragment', 'Suspense', 'StrictMode', 'Profiler', 'ForwardRef', 'Memo', 'Provider', 'Consumer', 'Root', 'Anonymous']);
 
@@ -932,7 +932,10 @@ window.__ModuleLoader__.load({
 				const observer = new Observer((list) => {
 					for (const entry of list.getEntries()) watchLoaf(entry);
 				});
-				observer.observe({ type: 'long-animation-frame', buffered: true });
+				// 不带 buffered:每次重新挂观察器(disable→enable、HMR 重载)都会把最近 200 条重放
+				// 一遍,同一个 startTime 于是被重新触发 —— 实测同一次卡顿裂成了 i2 / i29 / i31
+				// 三条不同 id 的事故(时间戳一模一样)。挂上之前的帧我们本来也没采,不需要它。
+				observer.observe({ type: 'long-animation-frame' });
 				watch.loafObserver = observer;
 				watch.loafState = 'on';
 			} catch (error) {
@@ -1164,7 +1167,21 @@ window.__ModuleLoader__.load({
 		 */
 		function saveIncidents() {
 			const watch = state.watch;
-			const list = watch.incidents.slice();
+			// 按触发时刻去重:同一 at(0.1ms 精度)就是同一次事件 —— 即使 id 不同也只留一条。
+			// 这是兜底:buffered 重放那条根因已修,但读回来的旧数据里可能还带着重复。
+			const seenAt = new Set();
+			const list = [];
+			for (const row of watch.incidents) {
+				// 只有两个字段都在才谈得上"同一次事件";缺字段的一律不参与去重(不能把它们
+				// 当成同一条而把真事故吃掉)。
+				const key = typeof row.at === 'string' && typeof row.cause === 'string' ? `${row.at}|${row.cause}` : null;
+				if (key !== null) {
+					if (seenAt.has(key)) { watch.deduped += 1; continue; }
+					seenAt.add(key);
+				}
+				list.push(row);
+			}
+			const afterDedupe = list.length;
 			for (let attempt = 0; attempt < 3; attempt += 1) {
 				let payload;
 				try {
@@ -1181,13 +1198,13 @@ window.__ModuleLoader__.load({
 					localStorage.setItem(LS_INCIDENTS, payload);
 					watch.persistError = null;
 					// 内存里也按同一份裁掉:"看到的"必须等于"刷新后还在的"。
-					// 以前这里只裁落盘的那份,面板说"抓到 10 次"、刷新后只回来 7 条,对不上。
-					const trimmed = watch.incidents.length - list.length;
-					if (trimmed > 0) {
+					// 以前这里只裁落盘的那份,面板说"抓到 10 次"、刷新后可能只回来 7 条,对不上。
+					// 两个计数分开:去重的算 deduped,字节装不下的才算 trimmedByBytes。
+					if (watch.incidents.length !== list.length) {
 						watch.incidents.length = 0;
 						for (const row of list) watch.incidents.push(row);
-						watch.trimmedByBytes += trimmed;
 					}
+					watch.trimmedByBytes += Math.max(0, afterDedupe - list.length);
 					return true;
 				} catch (error) {
 					watch.persistError = error instanceof Error ? error.message : String(error);
@@ -1218,8 +1235,11 @@ window.__ModuleLoader__.load({
 			const seen = new Set();
 			const unique = [];
 			for (const row of rows) {
-				if (seen.has(row.id)) { watch.deduped += 1; continue; }
-				seen.add(row.id);
+				const key = typeof row.at === 'string' && typeof row.cause === 'string' ? `${row.at}|${row.cause}` : null;
+				if (key !== null) {
+					if (seen.has(key)) { watch.deduped += 1; continue; }
+					seen.add(key);
+				}
 				unique.push(row);
 			}
 			watch.incidents = unique.slice(0, WATCH_INCIDENT_MAX);
@@ -2830,7 +2850,9 @@ window.__ModuleLoader__.load({
 		function detailSummary() {
 			const second = worstSecond();
 			// 帧内未归因搬进这一组之后,它的数字要留在摘要上 —— 否则常显就更"瞎"了
-			return `${translate('worstSecondShort')} ${second === null ? translate('none') : `${second.frameMs.toFixed(0)}ms`} · ${translate('unattrShort')} ${state.unattrAvg.toFixed(0)}ms · ${translate('domWritesShort')} ${state.mutations}`;
+			// 只留"结论对"(最差秒 + 未归因):加上 DOM 写入那一段,真实量级(五位数)会在 396px
+			// 里挤成两行(实测截图),而 DOM 写入展开就能看到,不必占摘要。
+			return `${translate('worstSecondShort')} ${second === null ? translate('none') : `${second.frameMs.toFixed(0)}ms`} · ${translate('unattrShort')} ${state.unattrAvg.toFixed(0)}ms`;
 		}
 
 		function domSummary() {
