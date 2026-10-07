@@ -1980,6 +1980,21 @@ window.__ModuleLoader__.load({
 			return `${row.cps}${translate('perSec')} · ${translate('peak')} ${row.cpsPeak}${translate('perSec')}`;
 		}
 
+		/**
+		 * 「其余」行:和上面三行**同一套单位**(本秒速率 + 本秒耗时),累计值收进悬停。
+		 * 原来这行给的是累计次数/累计耗时,和上面的 `/s` 并排出现,同一张表两套单位 —— 必然读错。
+		 */
+		function restValueText(rows) {
+			return `${round1(rows.reduce((sum, row) => sum + row.cps, 0))}${translate('perSec')} · ` +
+				`${round1(rows.reduce((sum, row) => sum + row.msps, 0))}ms${translate('perSec')}`;
+		}
+
+		function restTitleText(rows) {
+			const count = rows.reduce((sum, row) => sum + row.count, 0);
+			const ms = rows.reduce((sum, row) => sum + row.ms, 0);
+			return `${translate('restHint')}\n${translate('cumulative')} ${count}${translate('times')} / ${ms.toFixed(0)}ms`;
+		}
+
 		/** 合计耗时:小于 0.05ms/s 不写成 0 —— "0"读起来像"一点都没花",其实是四舍五入没了。 */
 		function msPerSecText(value) {
 			if (!(value > 0)) return '0ms/s';
@@ -2081,6 +2096,7 @@ window.__ModuleLoader__.load({
 				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', hit: '命中', times: ' 次',
 				maxBlame: '最多', topBlame: '归属 Top', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名',
 				blameHint: '本秒执行速率 / 峰值速率(EMA 平滑后的每秒执行次数)与合计耗时;悬停某一行看它的执行次数、同步耗时与累计',
+				restHint: '其余 = 除 Top3 之外还有几个归属方(名字各不相同,按累计耗时排在后面);这一行给的是它们的合计速率',
 				cnExec: '该秒执行', cnCost: '该秒同步耗时',
 				cnScope: '口径:只含 setTimeout/setInterval/requestAnimationFrame 这三次调度的回调;事件处理器 / Promise / 微任务 / React 自身调度不计入,所以这是下界',
 				perSec: '/s', samples: '次采样', unblamed: '未归因',
@@ -2122,6 +2138,7 @@ window.__ModuleLoader__.load({
 				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', hit: 'hit', times: '',
 				maxBlame: 'top', topBlame: 'attribution top', legFiber: 'fiber', legSubtree: 'subtree', legDom: 'DOM write', legOwner: 'package',
 				blameHint: 'Per-second execution rate / peak rate (EMA-smoothed) plus the summed synchronous time; hover a row for its execution count, cost and cumulative totals',
+				restHint: 'rest = how many further owners fall outside the top 3 (distinct names, ranked by cumulative time); this row shows their combined rate',
 				cnExec: 'executed this second', cnCost: 'sync time this second',
 				cnScope: 'Scope: only callbacks scheduled through setTimeout/setInterval/requestAnimationFrame; event handlers, Promises, microtasks and React\'s own scheduling are not counted, so this is a lower bound',
 				perSec: '/s', samples: ' samples', unblamed: 'unattributed',
@@ -2387,8 +2404,6 @@ window.__ModuleLoader__.load({
 			const rows = pluginTable();
 			const top = rows.slice(0, TOP_N);
 			const rest = rows.slice(TOP_N);
-			const restMs = rest.reduce((sum, row) => sum + row.ms, 0);
-			const restCount = rest.reduce((sum, row) => sum + row.count, 0);
 
 			const head = h('div', { style: S.head },
 				h('span', { style: S.brand }, t('title')),
@@ -2441,8 +2456,8 @@ window.__ModuleLoader__.load({
 						}, `${index + 1}. ${short(row.id)}`),
 						h('span', { style: S.num }, attrText(row))))),
 					rest.length === 0 ? null : h('div', { style: S.row },
-						h('span', { style: S.label }, `${t('rest')} (${rest.length})`),
-						h('span', { style: S.num }, `${restCount}× ${restMs.toFixed(0)}ms`))),
+						h('span', { style: S.label, title: restTitleText(rest) }, `${t('rest')} (${rest.length})`),
+						h('span', { style: S.num }, restValueText(rest)))),
 
 				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
 				group('detail', t('groupDetail'), detailSummary(),
