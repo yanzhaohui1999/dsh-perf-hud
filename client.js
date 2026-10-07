@@ -1986,7 +1986,43 @@ window.__ModuleLoader__.load({
 			return value < 0.05 ? '<0.1ms/s' : `${round1(value)}ms/s`;
 		}
 
-		/** 概览的 hover:把口径(三条腿)与名字分布都摊开,免得只看到一个被抬高的命中率。 */
+		/** 概览第一行:帧 + 长任务 + 命中(短,必须一行放得下)。 */
+		function overviewLine1() {
+			const worst = worstLongTask();
+			return `${translate('overviewFrame')} ${state.frameWorst.toFixed(0)}ms · LT ${worst === null ? translate('none') : `${worst.ms.toFixed(0)}ms`} · ${translate('hit')} ${state.ltBlamed}/${state.ltTotal}`;
+		}
+
+		/** 概览第二行:归属 + 最多(名字可能长,允许它自己换行,左对齐就不会参差)。 */
+		function overviewLine2() {
+			const worst = worstLongTask();
+			const tally = longTaskTally();
+			const blame = worst === null ? translate('none') : blameText(worst);
+			const top = tally.topNames.length === 0 ? '' : ` · ${translate('maxBlame')} ${short(tally.topNames[0][0])} ${tally.topNames[0][1]}×`;
+			return `${translate('overviewBlame')} ${blame}${top}`;
+		}
+
+		/** 折叠组的一句话摘要:刻意短 —— 摘要自己换行会比正文更难看(实测)。 */
+		function detailSummary() {
+			const second = worstSecond();
+			return `${translate('worstSecondShort')} ${second === null ? translate('none') : `${second.frameMs.toFixed(0)}ms`} · ${translate('domWrites')} ${state.mutations}`;
+		}
+
+		function domSummary() {
+			return `${state.dom.total}${translate('nodesSuffix')} ${rateText(state.dom.series)} · ${translate('messages')} ${containerNodes('messages')}`;
+		}
+
+		function hostSummary() {
+			const eventLoop = state.host === null || state.host === undefined ? null : state.host.eventLoop;
+			const link = linkStats();
+			const host = state.hostError !== null ? translate('hostDown') : eventLoop === null ? translate('notYet') : `p50 ${eventLoop.p50} / p99 ${eventLoop.p99}ms`;
+			return `${translate('hostShort')} ${host} · RTT ${link.count === 0 ? translate('notYet') : `${link.p50}ms`}`;
+		}
+
+		function toolsSummary() {
+			return `${translate('isolation')} ${experiment.phase} · ${translate('marks')} ${state.marks.length}`;
+		}
+
+		/** 概览的 hover:把口径(四条腿)与名字分布都摊开,免得只看到一个被抬高的命中率。 */
 		function overviewTitle() {
 			const tally = longTaskTally();
 			return `${translate('overviewHint')}\n` +
@@ -2049,6 +2085,7 @@ window.__ModuleLoader__.load({
 				precise: '精确归因', preciseHint: '开启后按合并 bundle 的 sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)',
 				component: '组件', cumulative: '累计', maps: '批次分段',
 				overview: '概览', overviewHint: '三秒判断:最差帧 + 最差 longtask 及其归属 + 归因命中数',
+				overviewFrame: '帧', overviewBlame: '归属', worstSecondShort: '最差秒', hostShort: '宿主',
 				groupDetail: '取证明细', groupDom: 'DOM 与堆', groupHost: '宿主与链路', groupTools: '工具箱', nodesSuffix: ' 节点',
 				stream: '状态', running: '流式', idle: '空闲', idleBase: '空闲基线(60s)', idleWriter: '空闲也在加节点的是',
 				notYet: '未采集', hostLoop: '宿主 event-loop',
@@ -2086,6 +2123,7 @@ window.__ModuleLoader__.load({
 				precise: 'precise', preciseHint: 'Resolve single package names from the merged bundle sourcemap sections (lazy; one map fetch per rev)',
 				component: 'component', cumulative: 'total', maps: 'maps',
 				overview: 'overview', overviewHint: 'Three-second read: worst frame + worst longtask and its owner + attribution hit ratio',
+				overviewFrame: 'frame', overviewBlame: 'blame', worstSecondShort: 'worst sec', hostShort: 'host',
 				groupDetail: 'forensics', groupDom: 'DOM & heap', groupHost: 'host & link', groupTools: 'toolbox', nodesSuffix: ' nodes',
 				stream: 'state', running: 'streaming', idle: 'idle', idleBase: 'idle baseline (60s)', idleWriter: 'still adding nodes while idle',
 				notYet: 'n/a', hostLoop: 'host event-loop',
@@ -2143,6 +2181,11 @@ window.__ModuleLoader__.load({
 				border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 7, padding: '2px 8px', cursor: 'pointer', flex: '0 0 auto',
 			},
 			sub: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, marginTop: 3, lineHeight: 1.5, whiteSpace: 'normal', overflowWrap: 'break-word' },
+			// 长文本不要塞进"标签左 / 数值右"的 flex 行:右对齐 + 换行会参差得像段落(实测被吐槽过)。
+			// 块式:标签独占一行,值左对齐换行;pre-line 让 \n 成为受控断行。
+			block: { display: 'block', marginTop: 2 },
+			blockLabel: { color: 'var(--dsw-alias-label-secondary)', fontWeight: 700 },
+			blockValue: { marginTop: 2, whiteSpace: 'pre-line', lineHeight: 1.5, overflowWrap: 'break-word', fontVariantNumeric: 'tabular-nums' },
 			sep: { marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--dsw-alias-border-l2)' },
 			buttons: { display: 'flex', gap: 8, marginTop: 7, flexWrap: 'wrap' },
 			input: { font: 'inherit', color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 7, padding: '2px 8px', flex: 1, minWidth: 0 },
@@ -2334,7 +2377,6 @@ window.__ModuleLoader__.load({
 			const linkSuspect = suspectLink();
 			const idleBase = state.idleBaseline;
 			const v = verification();
-			const writeTop = domWriteTable()[0] ?? null;
 			const tally = longTaskTally();
 			const rows = pluginTable();
 			const top = rows.slice(0, TOP_N);
@@ -2367,13 +2409,11 @@ window.__ModuleLoader__.load({
 			}
 
 			const body = h('div', null,
-				// ── 常显 1:卡不卡 + 谁的锅(原来"最差帧/长任务/命中"三行合一行)──
-				h('div', { style: S.row },
-					h('span', { style: S.label, title: overviewTitle() }, t('overview')),
-					h('span', { style: { ...S.num, color: levelUp(state.frameWorst, 60, 120) } },
-						`${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms · ` +
-						`LT ${worst === null ? t('none') : `${worst.ms.toFixed(0)}ms ${blameText(worst)}`}` +
-						` · ${t('hit')} ${state.ltBlamed}/${state.ltTotal}${tally.topNames.length === 0 ? '' : ` · ${t('maxBlame')} ${short(tally.topNames[0][0])} ${tally.topNames[0][1]}×`}`)),
+				// ── 常显 1:卡不卡 + 谁的锅 ──
+				// 块式而不是 flex 行:这一行长文本换行在右对齐下会参差得像段落(实测被吐槽)。
+				h('div', { style: S.block, title: overviewTitle() },
+					h('div', { style: S.blockLabel }, t('overview')),
+					h('div', { style: { ...S.blockValue, color: levelUp(state.frameWorst, 60, 120) } }, `${overviewLine1()}\n${overviewLine2()}`)),
 
 				// ── 常显 2:帧里"JS 之外"的残差(唯一能反映 CSS/绘制卡顿的数字)──
 				h('div', { style: S.row },
@@ -2392,8 +2432,10 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.num }, `${restCount}× ${restMs.toFixed(0)}ms`))),
 
 				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
-				group('detail', t('groupDetail'),
-					`${t('worstSecond')} ${worstSecondText()} · ${t('domWrites')} ${state.mutations}${writeTop === null ? '' : ` · ${short(writeTop.id)}`}`,
+				group('detail', t('groupDetail'), detailSummary(),
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('worstSecond')),
+						h('span', { style: S.num }, worstSecondText())),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('topBlame')),
 						h('span', { style: S.num }, tally.topNames.length === 0
@@ -2408,8 +2450,7 @@ window.__ModuleLoader__.load({
 					writeRows()),
 
 				// ── 折叠 2:DOM 与堆 ──
-				group('dom', t('groupDom'),
-					`${state.dom.total}${t('nodesSuffix')} ${rateText(state.dom.series)} · ${t('messages')} ${containerNodes('messages')}${state.heap === null ? '' : ` · ${t('heap')} ${mb(state.heap)}MB`}`,
+				group('dom', t('groupDom'), domSummary(),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, `${t('dom')} · ${t('rateWindow')}`),
 						h('span', { style: S.num }, `${state.dom.total} · ${rateText(state.dom.series)}`)),
@@ -2424,8 +2465,7 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.num }, `${mb(state.heap)}MB · ${heapRateText()}`))),
 
 				// ── 折叠 3:宿主与链路(排查"是页面卡还是链路卡"才看)──
-				group('host', t('groupHost'),
-					`${t('hostLoop')} ${loop === null ? (state.hostError === null ? t('notYet') : t('hostDown')) : `p50 ${loop.p50}ms · p99 ${loop.p99}ms`} · ${t('link')} ${link.count === 0 ? t('notYet') : `p50 ${link.p50}ms`}`,
+				group('host', t('groupHost'), hostSummary(),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('stream')),
 						h('span', { style: S.num }, `${state.streaming ? t('running') : t('idle')}${state.streaming || state.idleSince === 0 ? '' : ` ${Math.round((performance.now() - state.idleSince) / 1000)}s`}${state.baselineRunning ? ` · ${t('idleBase')}…` : ''}`)),
@@ -2449,8 +2489,7 @@ window.__ModuleLoader__.load({
 						`${t('idleWriter')}: ${(idleBase.domTop ?? []).map((row) => `${short(row?.id ?? '?')}${row?.component === null || row?.component === undefined ? '' : `(${row.component})`}`).join(' / ') || t('none')}`)),
 
 				// ── 折叠 4:工具箱(隔离实验 / 场景标记 / 验收)──
-				group('tools', t('groupTools'),
-					`${t('isolation')} ${experiment.phase}${experiment.phase === 'running' ? ` ${experiment.message}` : ''} · ${t('marks')} ${state.marks.length}`,
+				group('tools', t('groupTools'), toolsSummary(),
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: `${t('expHint')}\n${t('method')}: ${experiment.method}` }, t('isolation')),
 						h('span', { style: S.num }, experimentText())),

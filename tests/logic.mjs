@@ -178,7 +178,7 @@ const sandbox = `
 		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 		stressBurn: '人为燃烧',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
-		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入',
+		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -240,6 +240,13 @@ const newPieces = [
 	'function applyLongTaskStats(',
 	'function longTaskTally(',
 	'function blameText(',
+	'function overviewLine1(',
+	'function overviewLine2(',
+	'function detailSummary(',
+	'function domSummary(',
+	'function hostSummary(',
+	'function toolsSummary(',
+	'const rateText = (series) => {',
 	'function beyondNoiseText(',
 	'function isStreaming(',
 	'function idleTick(',
@@ -262,7 +269,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, looksLikeInfrastructure, msPerSecText, attrText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, looksLikeInfrastructure, msPerSecText, attrText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -435,6 +442,26 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 		tally.topNames.map((row) => [row[0], row[1]]), [['ChatView', 2], ['StartedBashRow', 1], ['dsh-x', 1]]);
 	check('归属分布:Top 截断到 3', [tally.top.length, tally.topNames.length], [3, 3]);
 	// HUD 自己的 DOM 写入必须不记账(实测摘要里出现过 (PerfHud) 顶在第一名)
+
+// ── 排版预算:概览与折叠摘要必须一行放得下(实测被吐槽过参差换行) ──
+box.state.frameWorst = 17;
+box.state.ltTotal = 16;
+box.state.ltBlamed = 15;
+box.state.dom = { total: 5408, series: [{ t: 0, n: 5600 }, { t: 12000, n: 5408 }] };
+box.state.mutations = 98121;
+box.state.targets = new Map([['messages', { nodes: 3285, series: [] }]]);
+box.state.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: 'FileTree', subtreeComponent: 'ConfirmDialog', domComponent: null }];
+box.state.ltNames.clear();
+box.state.ltLegs = { fiber: 0, subtree: 0, dom: 0, owner: 0, none: 0 };
+EX.applyLongTaskStats(box.state.longTasks[0]);
+box.state.ltNames.set('ChatView', 5);
+check('概览第一行的长度预算', EX.overviewLine1().length <= 36, true);
+check('概览第二行的长度预算(允许左对齐换行一次)', EX.overviewLine2().length <= 60, true);
+check('概览第二行带上归属与最多',
+	EX.overviewLine2().includes('ConfirmDialog') && EX.overviewLine2().includes('ChatView 5×'), true);
+check('四个折叠组摘要的长度预算(单行)',
+	[EX.detailSummary().length <= 30, EX.domSummary().length <= 30, EX.hostSummary().length <= 34, EX.toolsSummary().length <= 24],
+	[true, true, true, true]);
 
 // ── 面板分层:折叠状态与摘要 ───────────────────────────────────────
 check('默认全部收起(过程/取证/工具不占常显篇幅)',
