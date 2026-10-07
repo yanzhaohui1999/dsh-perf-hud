@@ -503,6 +503,8 @@ window.__ModuleLoader__.load({
 			baselineRunning: false,
 			baselineMs: null,        // 覆盖空闲基线窗口长度(默认 BASELINE_MS),自测用
 			errors: [],              // 面板自己捕获的渲染错误(导出件里能读到)
+			stress: null,            // 最近一次自测 { at, nodes }
+			requestRender: null,     // 面板挂载时注册:自测要立刻重渲染,不能等 0.5 秒的定时器
 			marks: [],
 			markDraft: '',
 			// D 宿主/链路
@@ -1048,6 +1050,18 @@ window.__ModuleLoader__.load({
 			return kbps >= 1024 ? `${Math.round(kbps / 1024 * 10) / 10}MB/s` : `${kbps}KB/s`;
 		}
 
+		/** 自测状态:点了必须看得见进度与结果,否则"毫无反应"就是必然观感。 */
+		function stressText() {
+			const mark = state.stress;
+			if (mark === null) return translate('stressHint');
+			const hit = state.longTasks
+				.filter((row) => row.t >= mark.at - 500 && row.t <= mark.at + 6000)
+				.reduce((top, row) => (top === null || row.ms > top.ms ? row : top), null);
+			if (hit === null) return `${translate('stressRunning')}: ${mark.nodes} ${translate('nodes')} …`;
+			const who = hit.component === null ? translate('unblamed') : hit.component;
+			return `${translate('stressDone')}: ${Math.round(hit.ms)}ms · ${who}${hit.owner === null ? '' : ` (${short(hit.owner)})`}`;
+		}
+
 		/** 链路那一行的整句:样本数必须露出来 —— n=1 时 p50 会等于 p99,看着像 bug。 */
 		function linkRowText() {
 			const stats = linkStats();
@@ -1552,8 +1566,20 @@ window.__ModuleLoader__.load({
 			experiment: runExperiment,
 			abortExperiment,
 			baselines: () => ({ idle: state.idleBaseline, experiment: experiment.baseline }),
-			/** 渲染型卡顿自测:一次提交里塞进 N 个节点,用来验收 fiber 归因。 */
-			stress(nodes) { state.stressNodes = typeof nodes === 'number' && nodes > 0 ? Math.min(nodes, 40000) : 6000; natives.setTimeout(() => { state.stressNodes = 0; }, 400); },
+			/**
+			 * 渲染型卡顿自测:一次提交里塞进 N 个节点,用来验收 fiber 归因。
+			 *
+			 * 两个坑都踩过:① 清理定时器(400ms)比面板重渲染间隔(500ms)还短,节点还没被渲染
+			 * 就被清了 —— 表现是"点了毫无反应";② 节点在屏幕外,即使生效也没有任何可见反馈。
+			 * 现在:立即触发一次重渲染,渲染完由子组件自己清空,并在面板上写明进度与结果。
+			 */
+			stress(nodes) {
+				const count = typeof nodes === 'number' && nodes > 0 ? Math.min(nodes, 40000) : 12000;
+				state.stressNodes = count;
+				state.stress = { at: Date.now(), nodes: count };
+				natives.setTimeout(() => { state.stressNodes = 0; }, 3000);
+				if (typeof state.requestRender === 'function') state.requestRender();
+			},
 			host: () => state.host,
 			hostEvents(on) {
 				if (on === false) {
@@ -1602,7 +1628,8 @@ window.__ModuleLoader__.load({
 				linkHint: '每 10 秒一次 1KB 同源探测(带 cache-buster)算 RTT,n 是最近 60 秒的样本数;吞吐每 60 秒一次 64KB(启动后 3 秒先补一次)。p99 > 300ms 且 FPS 正常且 n≥2 才判「疑似链路」',
 				suspect: '疑似链路', isolation: '隔离实验', candidate: '候选', baseline: '基线',
 				startExp: '开始实验', abortExp: '中止并恢复', stress: '自测:渲染卡顿',
-				stressHint: '自测:一次提交塞 6000 个节点制造真实渲染型长任务,用来验收 fiber 归因',
+				stressHint: '自测:一次提交塞 12000 个节点制造真实渲染型长任务(节点在屏幕外,结果看上面这行的读数)',
+				stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点',
 				expHint: '会临时关闭候选插件各 60 秒并逐项恢复;每步都记宿主回执,恢复后逐项核验。',
 				skipped: '跳过', restore: '恢复', marks: '场景标记', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
 				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
@@ -1630,7 +1657,8 @@ window.__ModuleLoader__.load({
 				linkHint: 'A 1KB same-origin probe (cache-busted) every 10s gives RTT; n is the sample count over the last 60s. Throughput is a 64KB fetch every 60s (one extra 3s after start). \"Link suspected\" needs p99 > 300ms, normal FPS, and n >= 2',
 				suspect: 'link suspected', isolation: 'isolation', candidate: 'candidates', baseline: 'baseline',
 				startExp: 'Run experiment', abortExp: 'Abort and restore', stress: 'Self-test: render stall',
-				stressHint: 'Self-test: one commit of 6000 nodes to produce a real render long task for fiber attribution',
+				stressHint: 'Self-test: one commit of 12000 offscreen nodes to produce a real render long task (read the line above for the result)',
+				stressRunning: 'self-test running', stressDone: 'self-test result', nodes: 'nodes',
 				expHint: 'Temporarily disables each candidate for 60s and restores it; every step records the host receipt and the restore is verified.',
 				skipped: 'skipped', restore: 'restore', marks: 'marks', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
 				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
@@ -1688,6 +1716,8 @@ window.__ModuleLoader__.load({
 		function PerfHudStress(props) {
 			const items = [];
 			for (let i = 0; i < props.count; i += 1) items.push(h('span', { key: i }, '.'));
+			// 这一次提交结束就清空:否则面板每 0.5 秒重渲染都会再造一遍一万多个节点。
+			React.useEffect(() => { state.stressNodes = 0; }, []);
 			return h('div', { style: { position: 'fixed', left: -9999, top: 0, width: 1, height: 1, overflow: 'hidden' } }, items);
 		}
 
@@ -1815,7 +1845,12 @@ window.__ModuleLoader__.load({
 			const setRoot = React.useCallback((element) => { state.root = element; }, []);
 			React.useEffect(() => {
 				const id = natives.setInterval(() => force((n) => (n + 1) % 1000000), 500);
-				return () => natives.clearInterval(id);
+				// 自测需要"点了立刻渲染":把它暴露给模块级,而不是等下一次 0.5 秒 tick。
+				state.requestRender = () => force((n) => (n + 1) % 1000000);
+				return () => {
+					natives.clearInterval(id);
+					state.requestRender = null;
+				};
 			}, []);
 
 			const t = translate;
@@ -1959,6 +1994,7 @@ window.__ModuleLoader__.load({
 						h('button', { type: 'button', style: S.btn, disabled: experiment.phase === 'running', onClick: () => runExperiment() }, t('startExp')),
 						h('button', { type: 'button', style: S.btn, onClick: () => abortExperiment() }, t('abortExp')),
 						h('button', { type: 'button', style: S.btn, title: t('stressHint'), onClick: () => W.__perfHud.stress() }, t('stress'))),
+					h('div', { style: S.sub }, stressText()),
 					h('div', { style: S.sub }, t('expHint'))),
 
 				// ── 场景标记 ──

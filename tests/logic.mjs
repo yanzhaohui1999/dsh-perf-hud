@@ -167,7 +167,10 @@ const sandbox = `
 	const bundleMeta = new Map();
 	const changedNodes = [];
 	// 只给这几个键的真实中文:断言要检查"人看到的字",不是 key
-	const translate = (key) => ({ sampling: '吞吐采样中', failed: '吞吐失败', suspect: '疑似链路', notYet: '未采集' })[key] ?? key;
+	const translate = (key) => ({
+		sampling: '吞吐采样中', failed: '吞吐失败', suspect: '疑似链路', notYet: '未采集',
+		stressHint: 'stressHint', stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点', unblamed: '未归因',
+	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
 		{ id: 'sessions', label: () => '会话列表', find: () => null },
@@ -203,6 +206,8 @@ const newPieces = [
 	'function fiberOwner(',
 	'function percentile(',
 	'function linkStats(',
+	'function short(',
+	'function stressText(',
 	'function linkRowText(',
 	'function throughputText(',
 	'function suspectLink(',
@@ -227,7 +232,7 @@ const newPieces = [
 
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, setStreaming: (value) => { streamingFlag = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, applyDeltas, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, applyDeltas, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -335,6 +340,17 @@ box.state.fps = 12;
 check('FPS 也崩了就不甩锅给链路', EX.suspectLink(), false);
 box.state.link = [];
 check('没有样本时不误报', EX.suspectLink(), false);
+
+// 自测必须"点了看得见":三种状态都要有明确文案(曾因清理定时器比渲染间隔短而毫无反应)
+box.state.stress = null;
+check('自测没跑过:显示按钮提示', EX.stressText(), 'stressHint');
+box.state.longTasks = [];
+box.state.stress = { at: Date.now(), nodes: 12000 };
+check('已点、长任务还没到:显示进行中', EX.stressText(), '自测进行中: 12000 节点 …');
+box.state.longTasks = [{ t: Date.now(), ms: 128.4, owner: 'dsh-x', component: 'PerfHudStress' }];
+check('长任务到了:给出耗时与组件名', EX.stressText(), '自测结果: 128ms · PerfHudStress (dsh-x)');
+box.state.longTasks = [{ t: Date.now() - 60000, ms: 999, owner: null, component: null }];
+check('窗口外的老长任务不算这次自测的结果', EX.stressText(), '自测进行中: 12000 节点 …');
 
 // 链路那一行必须自证完整:n= 露出来,吞吐三态都说清楚
 box.state.fps = 60;
