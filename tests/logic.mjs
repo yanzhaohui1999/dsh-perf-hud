@@ -178,7 +178,7 @@ const sandbox = `
 		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 		stressBurn: '人为燃烧',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
-		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', perSec: '/s', peak: '峰',
+		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -206,6 +206,10 @@ const newPieces = [
 	'function bundleLabel(',
 	'function sectionOwner(',
 	'const FIBER_SCAN_MAX = ',
+	'const DESCEND_MAX = ',
+	'function usableComponentName(',
+	'function descendantComponentOf(',
+	'function subtreeOwner(',
 	'const LT_WINDOW_MS = ',
 	'const MUT_SAMPLE = ',
 	'const MUT_TOP = ',
@@ -258,7 +262,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, looksLikeInfrastructure, msPerSecText, attrText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, looksLikeInfrastructure, msPerSecText, attrText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -323,6 +327,41 @@ const boundaryClass = function HudBoundaryLike() {};
 boundaryClass.prototype.componentDidCatch = function () {};
 check('跳过错误边界,继续往上找真组件',
 	EX.componentOf({ __reactFiber$bd: hostFiber({ type: boundaryClass, return: fnFiber(rootFiber, 'RealThing') }) }), 'RealThing');
+
+// 子树腿:切视图那种"整棵新子树一次性挂载",答案在**子树里**,不在祖先上
+// (实测:切 dsh-context 的上下文视图,祖先方向只能得到宿主容器 DefaultConversationViews)
+const leafFiber = (name) => ({ type: name === null ? 'span' : named(name), child: null, sibling: null, alternate: null });
+const tabContainer = {
+	__reactFiber$tab: {
+		type: 'div', alternate: {},
+		child: { type: 'div', child: leafFiber('ContextPane'), sibling: null, alternate: null },
+		sibling: null,
+	},
+};
+check('子树腿:新挂载子树里的第一个具名组件',
+	EX.descendantComponentOf(tabContainer), 'ContextPane');
+const layered = {
+	__reactFiber$lay: {
+		type: 'div', alternate: {},
+		child: { type: 'div', child: { type: named('SlotOutlet'), child: leafFiber('RealPane'), sibling: null, alternate: null }, sibling: null, alternate: null },
+		sibling: null,
+	},
+};
+check('子树腿:子树里的外壳名同样跳过', EX.descendantComponentOf(layered), 'RealPane');
+check('子树腿:没有 fiber 就没有', EX.descendantComponentOf({ className: 'x' }), null);
+check('切视图场景的展示:祖先容器 + 子树里的真组件',
+	EX.blameText({ component: 'DefaultConversationViews', subtreeComponent: 'ContextPane', domComponent: null, owner: null }),
+	'DefaultConversationViews / ContextPane(子树)');
+check('只有子树腿时它就是答案(而不是未归因)',
+	EX.blameText({ component: null, subtreeComponent: 'ContextPane', domComponent: null, owner: null }), 'ContextPane(子树)');
+check('腿判定:子树腿单列', EX.legOf({ component: null, subtreeComponent: 'X', domComponent: null, owner: null }), 'subtree');
+check('主名字优先级:fiber > 子树 > DOM > 包名',
+	[
+		EX.primaryBlame({ component: 'A', subtreeComponent: 'B', domComponent: 'C', owner: 'D' }),
+		EX.primaryBlame({ component: null, subtreeComponent: 'B', domComponent: 'C', owner: 'D' }),
+		EX.primaryBlame({ component: null, subtreeComponent: null, domComponent: 'C', owner: 'D' }),
+		EX.primaryBlame({ component: null, subtreeComponent: null, domComponent: null, owner: 'D' }),
+	], ['A', 'B', 'C', 'D']);
 check('跳过压缩名 n5,继续往上找真名',
 	EX.componentOf({ __reactFiber$m: hostFiber(fnFiber(fnFiber(rootFiber, 'AppShell'), 'n5')) }), 'AppShell');
 check('压缩名在整条链上都没有 → null',
@@ -377,7 +416,7 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 	// 命中率说明不了问题(DOM 腿在流式时几乎必然命中)——要看名字分布。
 	// 并且钉住"命中"与"分布"是同一套判定(旧版 ltBlamed 漏了 dom 腿,两者对不上)。
 	box.state.ltNames.clear();
-	box.state.ltLegs = { fiber: 0, dom: 0, owner: 0, none: 0 };
+	box.state.ltLegs = { fiber: 0, subtree: 0, dom: 0, owner: 0, none: 0 };
 	box.state.ltTotal = 5;
 	const longRows = [
 		{ t: 1, component: 'ChatView', domComponent: 'X', owner: null },

@@ -459,19 +459,68 @@ window.__ModuleLoader__.load({
 				// 而且常常就套在真正的渲染组件外面(实测自测结果报成 HudBoundary 就是它挡的)。
 				if (type.prototype !== undefined
 					&& (typeof type.prototype.componentDidCatch === 'function' || typeof type.getDerivedStateFromError === 'function')) continue;
-				const name = type.displayName ?? type.name;
-				if (typeof name !== 'string' || name === '' || REACT_INTERNAL.has(name) || looksLikeInfrastructure(name)) continue;
-				// 生产构建会把组件名压成 n5 / t3 / Bn 这种(大小写都有),对人毫无意义 ——
-				// 跳过它继续往上找。代价是极少数真的只有 1~2 个字母的组件名会被略过,
-				// 换来的是不再拿压缩名冒充"组件名"(线上导出里真出现过 `(n5)` 和 `(Bn)`)。
-				if (/^[A-Za-z]{1,2}\d{0,3}$/.test(name)) continue;
+				const name = usableComponentName(type);
+				if (name === null) continue;
 				return name;
+			}
+			return null;
+		}
+
+		/**
+		 * 从被改动节点**往子树里**找名字 —— 补"整棵子树一次性挂载"这一个空档。
+		 *
+		 * 实测场景:切到 dsh-context 的「上下文」视图时,React 把新视图整棵挂进宿主容器,
+		 * 观察器只看到"容器变了",往祖先方向找只能得到宿主容器(DefaultConversationViews)。
+		 * 真正的插件组件在子树里 —— 优先看 **alternate === null** 的孩子(React 用这个标记
+		 * "这一次新挂载的子树"),没有就退化为有界广度优先。
+		 */
+		function descendantComponentOf(node) {
+			const fiber = fiberOf(node);
+			if (fiber === null) return null;
+			const fresh = [];
+			const all = [];
+			for (let child = fiber.child; child !== null && child !== undefined; child = child.sibling) {
+				all.push(child);
+				if (child.alternate === null || child.alternate === undefined) fresh.push(child);
+			}
+			const roots = fresh.length > 0 ? fresh : all;
+			const queue = roots.slice();
+			let visited = 0;
+			while (queue.length > 0 && visited < DESCEND_MAX) {
+				const current = queue.shift();
+				if (current === null || current === undefined) continue;
+				visited += 1;
+				const name = usableComponentName(current.type ?? current.elementType);
+				if (name !== null) return name;
+				if (current.child !== null && current.child !== undefined) queue.push(current.child);
+				if (current.sibling !== null && current.sibling !== undefined) queue.push(current.sibling);
+			}
+			return null;
+		}
+
+		/** 被改动节点的子树里的组件名(入口扫描有上界,理由同 fiberOwner)。 */
+		function subtreeOwner() {
+			const now = performance.now();
+			trimChangedNodes(now);
+			let scanned = 0;
+			for (let i = changedNodes.length - 1; i >= 0 && scanned < 8; i -= 1, scanned += 1) {
+				const name = descendantComponentOf(changedNodes[i].node);
+				if (name !== null) return name;
 			}
 			return null;
 		}
 
 		/** 最近 2 秒被改动过的节点里,能给出组件名的那个(相当于"这次渲染是谁"). */
 		const FIBER_SCAN_MAX = 64;   // 每次 longtask 最多试 64 个入口:够用,且不会变成新的长任务
+		const DESCEND_MAX = 200;     // 往子树里找时最多访问 200 个 fiber
+		/** 名字是否够格当归属:具名函数组件、非 React 内建、非宿主外壳、非压缩名。 */
+		function usableComponentName(type) {
+			if (typeof type !== 'function') return null;
+			const name = type.displayName ?? type.name;
+			if (typeof name !== 'string' || name === '' || REACT_INTERNAL.has(name) || looksLikeInfrastructure(name)) return null;
+			if (/^[A-Za-z]{1,2}\d{0,3}$/.test(name)) return null;
+			return name;
+		}
 
 		function fiberOwner() {
 			const now = performance.now();
@@ -517,7 +566,7 @@ window.__ModuleLoader__.load({
 			longTasks: [],           // { t, at, ms, owner }
 			ltTotal: 0,              // 观察到的 longtask 条数
 			ltNames: new Map(),      // 归属名字的累计计数(与 ltTotal 同窗口,不受 200 条明细上限影响)
-			ltLegs: { fiber: 0, dom: 0, owner: 0, none: 0 },   // 三条腿的累计命中数
+			ltLegs: { fiber: 0, subtree: 0, dom: 0, owner: 0, none: 0 },   // 四条腿的累计命中数
 			ltBlamed: 0,             // 其中成功指认出"谁干的"的条数
 			ltThisSecond: 0,
 			ltPerSec: 0,             // 上一秒的 longtask 条数(写进每秒采样)
@@ -762,6 +811,7 @@ window.__ModuleLoader__.load({
 			const owner = blame(entry.startTime, entry.duration);
 			const component = fiberOwner();
 			const domComponent = recentWriteComponent(entry.startTime, entry.duration);
+			const subtreeComponent = subtreeOwner();
 			state.ltTotal += 1;
 			state.ltThisSecond += 1;
 			state.longTasks.push({
@@ -770,6 +820,7 @@ window.__ModuleLoader__.load({
 				ms: round1(entry.duration),
 				owner,
 				component,
+				subtreeComponent,
 				domComponent,
 				source: owner === null ? (component === null ? 'none' : 'render') : (component === null ? 'scheduler' : 'scheduler+render'),
 			});
@@ -1131,6 +1182,7 @@ window.__ModuleLoader__.load({
 		 */
 		function legOf(row) {
 			if ((row.component ?? null) !== null && looksLikeInfrastructure(row.component) === false) return 'fiber';
+			if ((row.subtreeComponent ?? null) !== null) return 'subtree';
 			if ((row.domComponent ?? null) !== null) return 'dom';
 			if ((row.owner ?? null) !== null) return 'owner';
 			return 'none';
@@ -1163,7 +1215,10 @@ window.__ModuleLoader__.load({
 		function longTaskTally() {
 			const legs = state.ltLegs;
 			const top = [...state.ltNames.entries()].sort((a, b) => b[1] - a[1]);
-			return { fiber: legs.fiber, dom: legs.dom, owner: legs.owner, none: legs.none, total: state.ltTotal, top, topNames: top.slice(0, 3) };
+			return {
+				fiber: legs.fiber, subtree: legs.subtree, dom: legs.dom, owner: legs.owner, none: legs.none,
+				total: state.ltTotal, top, topNames: top.slice(0, 3),
+			};
 		}
 
 		/**
@@ -1178,6 +1233,8 @@ window.__ModuleLoader__.load({
 			if (row === null || row === undefined) return null;
 			const fiber = row.component ?? null;
 			if (fiber !== null && looksLikeInfrastructure(fiber) === false) return fiber;
+			const subtree = row.subtreeComponent ?? null;
+			if (subtree !== null) return subtree;
 			const dom = row.domComponent ?? null;
 			if (dom !== null) return dom;
 			if (fiber !== null) return fiber;
@@ -1188,10 +1245,17 @@ window.__ModuleLoader__.load({
 		function blameText(row) {
 			if (row === null || row === undefined) return translate('none');
 			const fiber = row.component ?? null;
+			const subtree = row.subtreeComponent ?? null;
 			const dom = row.domComponent ?? null;
+			// 祖先方向拿到的名字(容器)与子树方向拿到的名字同时给出:切视图这类"整棵挂载"
+			// 场景,答案在子树里;而流式那种增量更新,答案在祖先方向。
 			if (fiber !== null && looksLikeInfrastructure(fiber) === false) {
-				return dom !== null && dom !== fiber ? `${fiber} / ${dom}(${translate('stressFromDom')})` : fiber;
+				const backup = subtree !== null && subtree !== fiber ? subtree : (dom !== null && dom !== fiber ? dom : null);
+				if (backup === null) return fiber;
+				const label = subtree !== null && subtree !== fiber ? translate('legSubtree') : translate('stressFromDom');
+				return `${fiber} / ${backup}(${label})`;
 			}
+			if (subtree !== null) return `${subtree}(${translate('legSubtree')})`;
 			if (dom !== null) return `${dom}(${translate('stressFromDom')})`;
 			if (fiber !== null) return fiber;
 			if (row.owner !== null && row.owner !== undefined) return short(row.owner);
@@ -1838,7 +1902,7 @@ window.__ModuleLoader__.load({
 				state.ltTotal = 0;
 				state.ltBlamed = 0;
 				state.ltNames.clear();
-				state.ltLegs = { fiber: 0, dom: 0, owner: 0, none: 0 };
+				state.ltLegs = { fiber: 0, subtree: 0, dom: 0, owner: 0, none: 0 };
 				state.recent.length = 0;
 				recentWrites.length = 0;
 				state.lastTick = 0;
@@ -1926,7 +1990,7 @@ window.__ModuleLoader__.load({
 		function overviewTitle() {
 			const tally = longTaskTally();
 			return `${translate('overviewHint')}\n` +
-				`${translate('hit')} = 三条腿任一命中:${translate('legFiber')} ${tally.fiber} · ${translate('legDom')} ${tally.dom} · ${translate('legOwner')} ${tally.owner} · ${translate('unblamed')} ${tally.none}` +
+				`${translate('hit')} = 四条腿任一命中:${translate('legFiber')} ${tally.fiber} · ${translate('legSubtree')} ${tally.subtree} · ${translate('legDom')} ${tally.dom} · ${translate('legOwner')} ${tally.owner} · ${translate('unblamed')} ${tally.none}` +
 				(tally.topNames.length === 0 ? '' : `\n${translate('topBlame')}: ${tally.topNames.map(([name, count]) => `${name} ${count}×`).join(' · ')}`);
 		}
 
@@ -1979,7 +2043,7 @@ window.__ModuleLoader__.load({
 				unattrHint: '帧间隔里没被插桩回调解释掉的部分:样式重算、绘制、以及等待 vsync。CSS 动画的开销只在这里现形。',
 				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', est: '≈',
 				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', hit: '命中', times: ' 次',
-				maxBlame: '最多', topBlame: '归属 Top', legFiber: 'fiber', legDom: 'DOM写入', legOwner: '包名',
+				maxBlame: '最多', topBlame: '归属 Top', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名',
 				perSec: '/s', samples: '次采样', unblamed: '未归因',
 				domWritesHint: '前一项是精确总次数;下面按插件给出估算(每 10 次采样一次栈,命中按 10 折算)。',
 				precise: '精确归因', preciseHint: '开启后按合并 bundle 的 sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)',
@@ -2016,7 +2080,7 @@ window.__ModuleLoader__.load({
 				unattrHint: 'Frame gap not explained by instrumented callbacks: style recalc, paint, and vsync wait. CSS-animation cost only shows up here.',
 				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', est: '≈',
 				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', hit: 'hit', times: '',
-				maxBlame: 'top', topBlame: 'attribution top', legFiber: 'fiber', legDom: 'DOM write', legOwner: 'package',
+				maxBlame: 'top', topBlame: 'attribution top', legFiber: 'fiber', legSubtree: 'subtree', legDom: 'DOM write', legOwner: 'package',
 				perSec: '/s', samples: ' samples', unblamed: 'unattributed',
 				domWritesHint: 'First number is the exact total; the rows below are estimates (stacks sampled every 10th write, hits scaled by 10).',
 				precise: 'precise', preciseHint: 'Resolve single package names from the merged bundle sourcemap sections (lazy; one map fetch per rev)',
@@ -2336,8 +2400,8 @@ window.__ModuleLoader__.load({
 							? t('none')
 							: tally.topNames.map(([name, count]) => `${short(name)} ${count}×`).join(' · ') + (tally.top.length > 3 ? ` · ${t('rest')} ${tally.top.length - 3}` : ''))),
 					h('div', { style: S.row },
-						h('span', { style: S.label }, `${t('hit')} (${t('legFiber')}/${t('legDom')}/${t('legOwner')})`),
-						h('span', { style: S.num }, `${tally.fiber}/${tally.dom}/${tally.owner}${tally.none === 0 ? '' : ` · ${t('unblamed')} ${tally.none}`}`)),
+						h('span', { style: S.label }, `${t('hit')} (${t('legFiber')}/${t('legSubtree')}/${t('legDom')}/${t('legOwner')})`),
+						h('span', { style: S.num }, `${tally.fiber}/${tally.subtree}/${tally.dom}/${tally.owner}${tally.none === 0 ? '' : ` · ${t('unblamed')} ${tally.none}`}`)),
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('domWritesHint') }, t('domWrites')),
 						h('span', { style: S.num }, String(state.mutations))),
