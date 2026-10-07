@@ -1249,6 +1249,13 @@ window.__ModuleLoader__.load({
 			via: null,            // 'remote' | 'route' | null:数据实际从哪条通道来的
 		};
 
+		/** 两条通道给同一份人话:bundle 读写到底是走客户端 remote 还是本插件的宿主路由。 */
+		function viaLabel(via) {
+			if (via === 'remote') return `${translate('via')} ${translate('viaRemote')}`;
+			if (via === 'route') return `${translate('via')} ${translate('viaRoute')}`;
+			return `${translate('via')} ${translate('notYet')}`;
+		}
+
 		function experimentText() {
 			const parts = [experiment.phase];
 			if (experiment.message !== '') parts.push(experiment.message);
@@ -1332,7 +1339,10 @@ window.__ModuleLoader__.load({
 			experiment.baseline = await measureWindow('baseline', STEP_MS);
 
 			try {
-				for (const name of experiment.candidates) {
+				const total = experiment.candidates.length;
+				for (let position = 0; position < total; position += 1) {
+					const name = experiment.candidates[position];
+					const step = `${position + 1}/${total}`;
 					if (experiment.aborted === true) break;
 					const before = stateBefore.get(name);
 					if (before === null) {
@@ -1343,7 +1353,7 @@ window.__ModuleLoader__.load({
 						experiment.results.push({ name, applied: false, reason: '本来就是关闭状态,无法对比' });
 						continue;
 					}
-					experiment.message = `${name}:关闭`;
+					experiment.message = `${step} ${name}:关闭`;
 					const off = await bundleOp('setBundle', { op: 'setBundle', name, enabled: false, confirm: true });
 					const offApplied = off.ok === true && off.result?.application === 'applied';
 					const row = {
@@ -1357,9 +1367,9 @@ window.__ModuleLoader__.load({
 						experiment.results.push(row);
 						continue;
 					}
-					experiment.message = `${name}:测量窗口`;
+					experiment.message = `${step} ${name}:测量窗口(60s)`;
 					row.window = await measureWindow(`off:${name}`, STEP_MS);
-					experiment.message = `${name}:恢复`;
+					experiment.message = `${step} ${name}:恢复`;
 					const back = await bundleOp('setBundle', { op: 'setBundle', name, enabled: true, confirm: true });
 					row.restore = {
 						ok: back.ok === true && back.result?.application === 'applied',
@@ -1477,6 +1487,7 @@ window.__ModuleLoader__.load({
 					phase: experiment.phase,
 					message: experiment.message,
 					via: experiment.via,
+					viaLabel: viaLabel(experiment.via),
 					startedAt: experiment.startedAt > 0 ? new Date(experiment.startedAt).toISOString() : null,
 					candidates: experiment.candidates,
 					candidateState: experiment.candidateState,
@@ -1686,7 +1697,8 @@ window.__ModuleLoader__.load({
 				stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点',
 				stressNoTask: '未观察到长任务', stressCommit: '提交', stressBurn: '人为燃烧', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 				expHint: '会临时关闭候选插件各 60 秒并逐项恢复;每步都记宿主回执,恢复后逐项核验。',
-				skipped: '跳过', restore: '恢复', marks: '场景标记', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
+				skipped: '跳过', restore: '恢复', marks: '场景标记',
+				via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
 				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
 			},
 			en: {
@@ -1716,7 +1728,8 @@ window.__ModuleLoader__.load({
 				stressRunning: 'self-test running', stressDone: 'self-test result', nodes: 'nodes',
 				stressNoTask: 'no long task observed', stressCommit: 'commit', stressBurn: 'synthetic burn', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable', stressFromDom: 'DOM write',
 				expHint: 'Temporarily disables each candidate for 60s and restores it; every step records the host receipt and the restore is verified.',
-				skipped: 'skipped', restore: 'restore', marks: 'marks', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
+				skipped: 'skipped', restore: 'restore', marks: 'marks',
+				via: 'channel', viaRemote: 'ctx.remote (client remote)', viaRoute: 'host route /api/dsh-perf-hud/host', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
 				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
 			},
 		};
@@ -2052,7 +2065,7 @@ window.__ModuleLoader__.load({
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('isolation')),
 						h('span', { style: S.num }, experimentText())),
-					h('div', { style: S.sub }, `${t('candidate')}: ${experiment.candidates.join(' ')}${experiment.via === null ? '' : ` · via ${experiment.via}`}`),
+					h('div', { style: S.sub }, `${t('candidate')}: ${experiment.candidates.join(' ')}${experiment.via === null ? '' : ` · ${viaLabel(experiment.via)}`}`),
 					experiment.baseline === null ? null : h('div', { style: S.sub }, `${t('baseline')}: ${experiment.baseline.fps}fps · LT ${experiment.baseline.longTasks} · ${experiment.baseline.domPerMin}${t('perMin')}`),
 					experiment.results.length === 0 ? null : h('div', null, experiment.results.map((row) => h('div', { key: row.name },
 						h('div', { style: S.row },
