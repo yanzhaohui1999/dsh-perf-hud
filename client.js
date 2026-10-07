@@ -59,6 +59,17 @@ window.__ModuleLoader__.load({
 		const EXPERIMENT_LOAD_PERIOD_MS = 250;    // 合成负载:两拍之间的间隔
 		const IDLE_GAP_MS = 3000;
 		const EXPERIMENT_MAX_CANDIDATES = 4;   // 隔离实验最多测几个候选(每个 ≈90 秒:60s 窗口 + 前后基线)
+		// 守夜层(默认常开、不插桩):帧级环形缓冲 + LoAF 观察器 + 最差 N 次事件留存。
+		// 它要解决的不是"读数更全",而是"卡顿发生时你没在看,事后还能把那 10 秒捞回来"。
+		const WATCH_FRAMES = 12000;            // 帧级环形缓冲条数(60fps ≈ 3.3 分钟)
+		const WATCH_LOAF_MAX = 200;            // 保留多少条长动画帧
+		const WATCH_SCRIPT_MAX = 12;           // 一条长动画帧最多记多少个脚本
+		const WATCH_INCIDENT_MAX = 5;          // 自动留存最差几次
+		const WATCH_PRE_MS = 10000;            // 前摇:事件发生前的 10 秒
+		const WATCH_POST_MS = 3000;            // 后摇:事件发生后再等 3 秒才切片
+		const WATCH_TRIGGER_MS = 100;          // 帧间隔 / blockingDuration 越过它就起一次捕获
+		const WATCH_GAP_MS = 1000;             // 帧间隔超过它视为 rAF 挂起:是间隙,不是卡顿
+		const WATCH_REACTION_MS = 3000;        // 手动标记时回退的"人的反应时间"
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
 		const REACT_INTERNAL = new Set(['Fragment', 'Suspense', 'StrictMode', 'Profiler', 'ForwardRef', 'Memo', 'Provider', 'Consumer', 'Root', 'Anonymous']);
 
@@ -601,6 +612,20 @@ window.__ModuleLoader__.load({
 			groups: { detail: false, dom: false, host: false, tools: false },
 			stress: null,            // 最近一次自测 { at, nodes, burnMs, sync, commitMs }
 			stressBurn: 0,           // 自测渲染时显式燃烧的毫秒数
+			// G 守夜层:默认常开,不包装任何原型;开关跟着总开关走
+			watch: {
+				on: false,
+				loaf: [],                // 最近的 LoAF 摘要(时间升序)
+				loafObserver: null,
+				loafState: 'not-started',   // not-started / on / stopped / unsupported:… / error:…
+				incidents: [],           // 最差 N 次(severity 降序,取用按索引 0 最差)
+				pending: null,           // 正在等后摇的那一次
+				pendingTimer: 0,
+				seq: 0,
+				captured: 0,             // 一共捕获过几次
+				coalesced: 0,            // 被并进 pending 的触发次数(同一串卡顿算一次)
+				dropped: 0,              // 抓到了、但没比已留存的更差,于是丢掉的次数
+			},
 			requestRender: null,     // 面板挂载时注册:用户动作要立刻重渲染,不能等 0.5 秒的定时器
 			displayKey: '',          // 面板显示值的指纹:没变就跳过这次 tick 的渲染
 			marks: [],
@@ -744,6 +769,289 @@ window.__ModuleLoader__.load({
 			setAttribute: mutationWrapper(mutNatives.setAttribute),
 		};
 
+		// ───────────── G. 守夜层:帧级环形缓冲 + LoAF(默认常开,不插桩)─────────────
+		// 它解决的问题只有一个:卡顿发生时你不在看面板,事后还要能把它捞出来。
+		// 所以这一层**不包装任何原型**(不碰 setTimeout/rAF/DOM 方法),只用本来就在跑的
+		// rAF 循环 + 一个 PerformanceObserver —— 代价接近零,因此可以默认开着。
+		// 代价是归因比四条腿弱:这里没有 fiber / 子树 / 调度点包名;它靠 LoAF 给的脚本 URL
+		// 与 forcedStyleAndLayoutDuration,加上既有 longtask 表落在窗口内的明细。
+		// 它**不做推断** —— 只把当时的东西原样装进事故包,结论留给读它的人(或 agent)。
+
+		/** 帧级环形缓冲:每帧一条,满了覆盖最早的。12000 条 ≈ 60fps 下 3.3 分钟。 */
+		const frameRing = {
+			at: new Float64Array(WATCH_FRAMES),   // perf 毫秒用 float64:float32 在几小时后会丢到 ~1ms
+			ms: new Float32Array(WATCH_FRAMES),
+			gap: new Uint8Array(WATCH_FRAMES),    // 1 = rAF 被挂起(页面隐藏),不是卡顿
+			head: 0,
+			size: 0,
+			total: 0,
+			push(at, ms, isGap) {
+				this.at[this.head] = at;
+				this.ms[this.head] = ms;
+				this.gap[this.head] = isGap ? 1 : 0;
+				this.head = (this.head + 1) % WATCH_FRAMES;
+				if (this.size < WATCH_FRAMES) this.size += 1;
+				this.total += 1;
+			},
+			/** 按时间升序取 [from, to] 区间(两端含)。环形里天然升序,所以过了 to 就可以停。 */
+			slice(from, to) {
+				const out = [];
+				const first = (this.head - this.size + WATCH_FRAMES) % WATCH_FRAMES;
+				for (let i = 0; i < this.size; i += 1) {
+					const index = (first + i) % WATCH_FRAMES;
+					const at = this.at[index];
+					if (at < from) continue;
+					if (at > to) break;
+					out.push({ t: round1(at), ms: round1(this.ms[index]), gap: this.gap[index] === 1 });
+				}
+				return out;
+			},
+			reset() { this.head = 0; this.size = 0; this.total = 0; },
+		};
+
+		/**
+		 * 触发判据:低于 WATCH_TRIGGER_MS 的帧不配叫卡顿。纯函数,便于单测,
+		 * 也便于回答"为什么这次没抓到"。返回严重度,不触发返回 null。
+		 */
+		function watchTrigger(ms) {
+			return typeof ms === 'number' && ms >= WATCH_TRIGGER_MS ? round1(ms) : null;
+		}
+
+		/** perf 时间 → 墙上时间。用 timeOrigin 对齐;拿不到就退回 Date.now() - performance.now()。 */
+		function wallClock(perfMs) {
+			const origin = typeof performance.timeOrigin === 'number' && performance.timeOrigin > 0
+				? performance.timeOrigin
+				: Date.now() - performance.now();
+			return new Date(origin + perfMs).toISOString();
+		}
+
+		/** 一条 LoAF 里最多记 WATCH_SCRIPT_MAX 个脚本:只用于回答"谁",不做统计。 */
+		function loafScripts(entry) {
+			const out = [];
+			try {
+				const scripts = Array.isArray(entry.scripts) ? entry.scripts : [];
+				for (const script of scripts) {
+					if (out.length >= WATCH_SCRIPT_MAX) break;
+					out.push({
+						url: typeof script.sourceURL === 'string' ? script.sourceURL : null,
+						fn: typeof script.sourceFunctionName === 'string' && script.sourceFunctionName !== '' ? script.sourceFunctionName : null,
+						invoker: typeof script.invoker === 'string' ? script.invoker.slice(0, 80) : null,
+						invokerType: script.invokerType ?? null,
+						charPos: typeof script.sourceCharPosition === 'number' ? script.sourceCharPosition : null,
+						ms: round1(script.duration ?? 0),
+						forcedMs: round1(script.forcedStyleAndLayoutDuration ?? 0),
+						pauseMs: round1(script.pauseDuration ?? 0),
+					});
+				}
+			} catch (error) { /* 条目形状变了:宁可少记,不要抛 */ }
+			return out;
+		}
+
+		/** 收一条长动画帧。触发按 blockingDuration —— 它才是"这一帧挡了多久",纯渲染不算卡。 */
+		function watchLoaf(entry) {
+			const watch = state.watch;
+			const row = {
+				t: round1(entry.startTime),
+				dur: round1(entry.duration),
+				blocking: round1(entry.blockingDuration ?? 0),
+				renderStart: round1(entry.renderStart ?? 0),
+				styleAndLayoutStart: round1(entry.styleAndLayoutStart ?? 0),
+				scripts: loafScripts(entry),
+			};
+			watch.loaf.push(row);
+			if (watch.loaf.length > WATCH_LOAF_MAX) watch.loaf.splice(0, watch.loaf.length - WATCH_LOAF_MAX);
+			const severity = watchTrigger(row.blocking);
+			if (severity !== null) triggerCapture('loaf', entry.startTime, severity);
+		}
+
+		/** 装上 LoAF 观察器(可还原:stop() 里 disconnect)。返回状态串,照实写进导出件。 */
+		function startLoaf() {
+			const watch = state.watch;
+			if (watch.loafObserver !== null) return watch.loafState;
+			const Observer = W.PerformanceObserver;
+			if (typeof Observer !== 'function') return (watch.loafState = 'unsupported:no-PerformanceObserver');
+			const supported = Observer.supportedEntryTypes;
+			if (Array.isArray(supported) && supported.indexOf('long-animation-frame') === -1) {
+				return (watch.loafState = 'unsupported:no-long-animation-frame');
+			}
+			try {
+				const observer = new Observer((list) => {
+					for (const entry of list.getEntries()) watchLoaf(entry);
+				});
+				observer.observe({ type: 'long-animation-frame', buffered: true });
+				watch.loafObserver = observer;
+				watch.loafState = 'on';
+			} catch (error) {
+				watch.loafState = `error:${error instanceof Error ? error.message : String(error)}`;
+			}
+			return watch.loafState;
+		}
+
+		/**
+		 * 每帧一次(从 FPS 循环里调)。
+		 * 帧间隔超过 WATCH_GAP_MS 说明 rAF 被挂起(标签页隐藏/系统休眠):那是间隙,
+		 * 既不算卡顿也不触发 —— 否则每次切回标签页都会"抓到"一次几百秒的假事故。
+		 */
+		function watchFrame(at, ms, isGap) {
+			if (state.watch.on === false) return;
+			frameRing.push(at, ms, isGap);
+			if (isGap) return;
+			const severity = watchTrigger(ms);
+			if (severity !== null) triggerCapture('frame', at, severity);
+		}
+
+		/**
+		 * 起一次捕获。同时只留一个 pending:一次卡顿通常是一串,归并成一条比抓成一堆碎
+		 * 事件有用(被归并的次数记进 coalesced,不假装没发生)。
+		 */
+		function triggerCapture(cause, at, severity, note) {
+			const watch = state.watch;
+			if (watch.on === false) return null;
+			if (watch.pending !== null) { watch.coalesced += 1; return null; }
+			watch.pending = { cause, at, severity: round1(severity), note: note ?? null, until: at + WATCH_POST_MS };
+			const delay = Math.max(0, watch.pending.until - performance.now());
+			if (delay <= 0) return settleCapture();
+			watch.pendingTimer = natives.setTimeout(settleCapture, Math.ceil(delay));
+			return null;
+		}
+
+		/**
+		 * 留存策略:只留最严重的 WATCH_INCIDENT_MAX 次。
+		 * "抓到了但没留存"和"没抓到"是两件事,所以 dropped 单独计数,不混进 captured。
+		 */
+		function keepIncident(incident) {
+			const watch = state.watch;
+			const list = watch.incidents;
+			const full = list.length >= WATCH_INCIDENT_MAX;
+			if (full && incident.severity <= list[list.length - 1].severity) {
+				watch.dropped += 1;
+				return 'dropped';
+			}
+			if (full) list.pop();
+			list.push(incident);
+			list.sort((a, b) => b.severity - a.severity);
+			return full ? 'replaced' : 'kept';
+		}
+
+		/**
+		 * 把一个事件窗口切成事故包:前摇 WATCH_PRE_MS + 后摇 WATCH_POST_MS,原样带上帧序列、
+		 * LoAF 条目、窗口内的 longtask 明细。严重度取"触发时的值"与"窗口里最差帧"的较大者 ——
+		 * 手动标记传进来的 0 因此不会因为"不够差"而被留存策略丢掉。
+		 */
+		function assembleIncident(pending) {
+			const from = pending.at - WATCH_PRE_MS;
+			const to = pending.until;
+			const frames = frameRing.slice(from, to);
+			const loaf = state.watch.loaf.filter((row) => row.t >= from && row.t <= to);
+			const longTasks = state.longTasks.filter((row) => row.at >= from && row.at <= to);
+			let worst = null;
+			let live = 0;
+			let over50 = 0;
+			let over100 = 0;
+			let gaps = 0;
+			for (const row of frames) {
+				if (row.gap) { gaps += 1; continue; }
+				live += 1;
+				if (row.ms >= 50) over50 += 1;
+				if (row.ms >= 100) over100 += 1;
+				if (worst === null || row.ms > worst.ms) worst = row;
+			}
+			const scripts = [];
+			for (const row of loaf) for (const script of row.scripts) scripts.push({ at: row.t, ...script });
+			scripts.sort((a, b) => b.ms - a.ms);
+			let blocking = 0;
+			for (const row of loaf) blocking += row.blocking;
+			return {
+				id: `i${(state.watch.seq += 1)}`,
+				cause: pending.cause,          // frame / loaf / manual
+				note: pending.note,
+				kept: null,                    // settleCapture 填 kept / replaced / dropped
+				severity: round1(Math.max(pending.severity, worst === null ? 0 : worst.ms)),
+				atPerfMs: round1(pending.at),
+				at: wallClock(pending.at),
+				window: {
+					fromMs: round1(from), toMs: round1(to),
+					preMs: WATCH_PRE_MS, postMs: WATCH_POST_MS,
+					from: wallClock(from), to: wallClock(to),
+				},
+				summary: {
+					worstFrameMs: worst === null ? null : worst.ms,
+					worstFrameAt: worst === null ? null : wallClock(worst.t),
+					frames: live,
+					framesOver50Ms: over50,
+					framesOver100Ms: over100,
+					hiddenGaps: gaps,
+					loafEntries: loaf.length,
+					blockingMs: round1(blocking),
+					longTasksInWindow: longTasks.length,
+					topScripts: scripts.slice(0, 5),
+					streaming: state.streaming,
+					visibility: document.visibilityState,
+				},
+				frames,
+				loaf,
+				longTasks,
+				host: state.host === null || state.host === undefined ? null : {
+					at: state.hostAt > 0 ? new Date(state.hostAt).toISOString() : null,
+					lagAheadMs: state.hostAt > 0 ? round1(Date.now() - state.hostAt) : null,
+					eventLoop: state.host.eventLoop ?? null,
+				},
+				env: {
+					domNodes: state.dom.total,
+					heapUsedBytes: state.heap,
+					instrumented: state.on,
+					precise: state.precise,
+				},
+			};
+		}
+
+		/** 后摇到点:切片、计数、按策略留存。 */
+		function settleCapture() {
+			const watch = state.watch;
+			if (watch.pendingTimer !== 0) { natives.clearTimeout(watch.pendingTimer); watch.pendingTimer = 0; }
+			const pending = watch.pending;
+			watch.pending = null;
+			if (pending === null) return null;
+			const incident = assembleIncident(pending);
+			watch.captured += 1;
+			incident.kept = keepIncident(incident);
+			return incident;
+		}
+
+		/**
+		 * 手动标记"刚刚卡了一下":回退 WATCH_REACTION_MS(默认 3 秒,人的反应时间),
+		 * 立刻切片(不等后摇)。note 原样进事故包,方便事后知道当时在干什么。
+		 */
+		function captureNow(note) {
+			if (state.watch.on === false) return { ok: false, reason: 'not-recording(HUD 关闭时不记录)' };
+			const incident = triggerCapture('manual', performance.now() - WATCH_REACTION_MS, 0, note ?? null);
+			return incident === null ? { ok: false, reason: 'coalesced(已并进正在等的那一次)' } : { ok: true, incident };
+		}
+
+		/** 守夜层状态:装没装上、录了多少、抓到几次 —— 一律照实,不写"运行中"。 */
+		function watchStatus() {
+			const watch = state.watch;
+			const oldest = frameRing.size === 0 ? 0 : frameRing.at[(frameRing.head - frameRing.size + WATCH_FRAMES) % WATCH_FRAMES];
+			return {
+				recording: watch.on,
+				loaf: watch.loafState,
+				frameSamples: frameRing.size,
+				frameBudget: WATCH_FRAMES,
+				coveredMs: oldest === 0 ? 0 : round1(performance.now() - oldest),
+				loafEntries: watch.loaf.length,
+				pending: watch.pending === null ? null : { cause: watch.pending.cause, severity: watch.pending.severity },
+				captured: watch.captured,
+				coalesced: watch.coalesced,
+				dropped: watch.dropped,
+				kept: watch.incidents.map((row) => ({ id: row.id, severity: row.severity, cause: row.cause, at: row.at, note: row.note })),
+				triggers: {
+					frameMs: WATCH_TRIGGER_MS, gapMs: WATCH_GAP_MS,
+					preMs: WATCH_PRE_MS, postMs: WATCH_POST_MS, keep: WATCH_INCIDENT_MAX,
+					reactionMs: WATCH_REACTION_MS,
+				},
+			};
+		}
+
 		// ───────────────────────────── FPS:1 秒滚动窗口 ─────────────────────────────
 		function frame() {
 			if (state.on === false) return;
@@ -753,11 +1061,26 @@ window.__ModuleLoader__.load({
 			state.windowFrames += 1;
 			if (state.lastFrameAt !== 0) {
 				const delta = now - state.lastFrameAt;
-				if (delta > state.worstFrameMs) state.worstFrameMs = delta;
-				const idle = delta - busy;
-				if (idle > 0) state.unattrSum += idle;
-				state.unattrCount += 1;
-				if (idle > state.unattrWorst) state.unattrWorst = idle;
+				// rAF 被挂起(标签页隐藏/系统休眠)后回来的第一帧,delta 可能是几百秒。
+				// 那是间隙不是卡顿:以前它会直接顶成"最差帧",面板红一整秒(实测误导读数)。
+				// 现在间隙只进守夜层的帧环(标记 gap),并且重置这一秒的窗口 —— 间隙期间
+				// 我们本来就没在测量,不该拿它去算 FPS 与最差帧。
+				const isGap = delta >= WATCH_GAP_MS;
+				if (isGap) {
+					state.windowStart = now;
+					state.windowFrames = 0;
+					state.worstFrameMs = 0;
+					state.unattrSum = 0;
+					state.unattrCount = 0;
+					state.unattrWorst = 0;
+				} else {
+					if (delta > state.worstFrameMs) state.worstFrameMs = delta;
+					const idle = delta - busy;
+					if (idle > 0) state.unattrSum += idle;
+					state.unattrCount += 1;
+					if (idle > state.unattrWorst) state.unattrWorst = idle;
+				}
+				watchFrame(now, delta, isGap);
 			}
 			state.lastFrameAt = now;
 			const span = now - state.windowStart;
@@ -1939,6 +2262,8 @@ window.__ModuleLoader__.load({
 			state.domTimer = natives.setInterval(sampleDom, 2000);
 			state.flushTimer = natives.setInterval(() => flush(false), 5000);
 			state.ltObserver = startLongTask();
+			state.watch.on = true;
+			startLoaf();
 			startDomWatch();
 			sampleDom();
 			probeLink('rtt');
@@ -1968,6 +2293,16 @@ window.__ModuleLoader__.load({
 			natives.clearInterval(state.loadTimer);
 			stopDomWatch();
 			if (state.ltObserver !== null) { state.ltObserver.disconnect(); state.ltObserver = null; }
+			// 守夜层同样要能停下来:观察器 disconnect、等后摇的定时器清掉。
+			// 已经留存的事故**不清** —— 那是等了很久才抓到的东西,关一次 HUD 不该丢。
+			state.watch.on = false;
+			if (state.watch.pendingTimer !== 0) { natives.clearTimeout(state.watch.pendingTimer); state.watch.pendingTimer = 0; }
+			state.watch.pending = null;
+			if (state.watch.loafObserver !== null) {
+				state.watch.loafObserver.disconnect();
+				state.watch.loafObserver = null;
+				state.watch.loafState = 'stopped';
+			}
 			state.fps = 0;
 			flush(true);
 		}
@@ -1984,7 +2319,29 @@ window.__ModuleLoader__.load({
 			table: pluginTable,
 			ring,
 			longTasks: state.longTasks,
+			// 守夜层(见 §G):watch 给状态,incidents 给摘要(按严重度降序,索引 0 最差),
+			// incident(id 或索引)给完整事件包,capture 手动标记"刚刚卡了一下"。
+			watch: watchStatus,
+			incidents: () => state.watch.incidents.map((row) => ({
+				id: row.id, severity: row.severity, cause: row.cause, at: row.at, note: row.note, kept: row.kept, summary: row.summary,
+			})),
+			incident: (id) => {
+				const list = state.watch.incidents;
+				if (typeof id === 'number') return list[id] ?? null;
+				return list.find((row) => row.id === id) ?? null;
+			},
+			capture: captureNow,
+			/** 只清事故,不动别的读数 —— 与 clear() 分开,免得手滑丢掉等了很久的证据。 */
+			clearIncidents() {
+				state.watch.incidents.length = 0;
+				state.watch.captured = 0;
+				state.watch.coalesced = 0;
+				state.watch.dropped = 0;
+				return true;
+			},
 			clear() {
+				// 注意:守夜层留存的事故**不在这里清** —— 那是等了很久才抓到的东西,
+				// 清读数的手滑不该把它带走。要清用 clearIncidents()。
 				ring.length = 0;
 				state.longTasks.length = 0;
 				state.plugins.clear();

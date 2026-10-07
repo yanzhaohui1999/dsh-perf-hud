@@ -62,7 +62,7 @@
 
 ## 4. 已核验为"没问题"的(不用动)
 
-- **测试**:`node tests/{attribution,logic,host}.mjs` = **11 + 152 + 24 = 187 条,全绿**(README 声称的 187 与实际一致)。
+- **测试**:`node tests/{attribution,logic,host}.mjs` = **11 + 186 + 24 = 221 条,全绿**(README 声称的 221 与实际一致)。
 - **历史无密钥**:全历史 blob 扫 `sk-` / `apiKey` / `baseURL` / `Authorization` / `token=`,命中项只有 `.gitignore` 注释与文档里的操作步骤;**`dump-config-after.txt`(含 provider/baseURL 配置)、`backup-20261006/`、`add.log` 从未进过历史**。
 - **插件形态**:`dsh.bundle.patch` + `cordis.patch.yml` + `exports["./client"]` + `dsh.client.platform/inject` 均正确;`icon.svg` 有效;`locale/en.json`(只放 `meta.title`/`description`)保留、`locale/zh.json` 已去掉。⚠️ **`locale/` 目录本身不能删** —— 宿主读元信息时会 `scandir` 它,目录不存在就在 Plugins 页面报红(见 [AGENTS.md](AGENTS.md) §6.4)。
 - **零运行时依赖**:`client.js` 只 `require('react')`(走浏览器模块表),`index.js` 只用 node 内置模块。
@@ -78,7 +78,7 @@
 - [x] [README.md](README.md) 重写为发布形态(装法、读数口径、四条腿、隔离实验、**风险与边界**),新增英文版 [README_EN.md](README_EN.md)
 - [x] [AGENTS.md](AGENTS.md)(开发规则)/ [CONTRIBUTING.md](CONTRIBUTING.md)(贡献流程)/ [CHANGELOG.md](CHANGELOG.md)(从 30 条规范提交生成)
 - [x] [LICENSE](LICENSE)(MIT)
-- [x] CI:[.github/workflows/ci.yml](.github/workflows/ci.yml)(两个半边的语法检查 + 187 条离线断言 + **断言总数与文档一致性**)、[.github/workflows/release.yml](.github/workflows/release.yml)(npm Trusted Publishing / OIDC,含 tag 与版本号一致性校验、打包产物核对)
+- [x] CI:[.github/workflows/ci.yml](.github/workflows/ci.yml)(两个半边的语法检查 + 221 条离线断言 + **断言总数与文档一致性**)、[.github/workflows/release.yml](.github/workflows/release.yml)(npm Trusted Publishing / OIDC,含 tag 与版本号一致性校验、打包产物核对)
 - [x] 提交历史规范化为 Conventional Commits 并把正文中性化(见 [CHANGELOG.md](CHANGELOG.md))
 - [x] **代码必修三处**:`index.js` 的 `'../package.json'` → `'./package.json'`(+ 断言)、`DEFAULT_CANDIDATES` 改为按 `listBundles` 推导(+ 3 条断言)、`cordis.patch.yml` 与 `client.js` 头部的过期注释
 - [x] 断言总数 183 → **187**(attribution 11 / logic 152 / host 24),README / README_EN / AGENTS / CONTRIBUTING / CHANGELOG / REVIEW 与两个 workflow 里的数字全部同步

@@ -775,5 +775,143 @@ check('verification 段报出独立包名(不含合并包 key)与 longtask 命�
 	&& exported.verification.independentPackages.sample.every((id) => id.startsWith('bundle:') === false)
 	&& exported.verification.longTask.attributed === 5 && exported.verification.longTask.withComponent === 1, true);
 
+// ── G:守夜层(帧环 / 触发 / 留存 / 时间对齐 / 窗口切片)──────────────────
+// 抽的是 client.js 里的真函数与真常量(连阈值一起抽,免得测试自己抄一份默认值)。
+const watchSource = (() => {
+	const from = source.indexOf('const WATCH_FRAMES');
+	const to = source.indexOf('\n', source.indexOf('const WATCH_REACTION_MS'));
+	return source.slice(from, to);
+})();
+const watchPieces = [
+	watchSource,
+	`${extract(source, 'const frameRing = {')};`,
+	extract(source, 'function watchTrigger('),
+	extract(source, 'function loafScripts('),
+	extract(source, 'function wallClock('),
+	extract(source, 'function watchFrame('),
+	extract(source, 'function triggerCapture('),
+	extract(source, 'function settleCapture('),
+	extract(source, 'function keepIncident('),
+	extract(source, 'function assembleIncident('),
+	extract(source, 'function captureNow('),
+	extract(source, 'function watchStatus('),
+	extract(source, 'function round1('),
+].join('\n');
+const watchBox = new Function(`
+	${watchPieces}
+	let nowMs = 100000;
+	const timers = [];
+	const natives = {
+		setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+		clearTimeout: () => {},
+	};
+	const performance = { now: () => nowMs, timeOrigin: 1700000000000 };
+	const document = { visibilityState: 'visible' };
+	const state = {
+		samplesLength: 1,
+		on: true, precise: false, streaming: true, heap: 1048576, host: null, hostAt: 0,
+		dom: { total: 1234 },
+		longTasks: [],
+		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0 },
+	};
+	return {
+		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
+		keepIncident, assembleIncident, captureNow, watchStatus, timers,
+		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
+		setNow: (value) => { nowMs = value; },
+		runTimer: (index) => timers[index].fn(),
+	};
+`)();
+const watch = watchBox;
+
+// 触发判据:低于线不触发,返回严重度便于留存排序
+check('watchTrigger(99) 不触发', watch.watchTrigger(99), null);
+check('watchTrigger(100) 触发并回报 100', watch.watchTrigger(100), 100);
+check('watchTrigger(150.44) 四舍五入到 0.1', watch.watchTrigger(150.44), 150.4);
+check('watchTrigger 非数字不触发', [watch.watchTrigger(undefined), watch.watchTrigger('100')], [null, null]);
+
+// 帧环:区间截取 + gap 标记 + 升序
+watch.frameRing.push(5000, 16.66, false);
+watch.frameRing.push(9900, 150, false);
+watch.frameRing.push(10000, 20, false);
+watch.frameRing.push(10020, 8000, true);     // rAF 挂起:是间隙不是卡顿
+watch.frameRing.push(20000, 17, false);      // 窗口之外
+const ringSlice = watch.frameRing.slice(0, 13000);
+check('frameRing.slice 只取窗口内、按时间升序', ringSlice.map((row) => row.t), [5000, 9900, 10000, 10020]);
+check('frameRing.slice 保留 gap 标记', ringSlice.map((row) => row.gap), [false, false, false, true]);
+check('frameRing.slice 毫秒保留一位', ringSlice[0].ms, 16.7);
+
+// 帧环:满了覆盖最早的,size 不超上限
+for (let i = 0; i < watch.WATCH.frames + 5; i += 1) watch.frameRing.push(30000 + i, 16, false);
+check('帧环满了之后 size 保持上限', watch.frameRing.size, watch.WATCH.frames);
+check('帧环覆盖最老的:窗口起点是第 6 条', watch.frameRing.slice(30000, 40000)[0].t, 30005);
+
+// LoAF 脚本映射:字段取全、invoker 截断、条数封顶、脏数据不抛
+const manyScripts = Array.from({ length: 20 }, (_, i) => ({ sourceURL: `u${i}`, duration: i, forcedStyleAndLayoutDuration: 1, pauseDuration: 2, invoker: 'x'.repeat(200), invokerType: 'user-callback', sourceFunctionName: '', sourceCharPosition: i }));
+const mapped = watch.loafScripts({ scripts: manyScripts });
+check('loafScripts 封顶到 WATCH_SCRIPT_MAX', mapped.length, watch.WATCH.script);
+check('loafScripts invoker 截到 80 字符', mapped[0].invoker.length, 80);
+check('loafScripts 空函数名归一成 null', mapped[0].fn, null);
+check('loafScripts 容忍 scripts 缺失', watch.loafScripts({}), []);
+
+// 时间对齐:perf → 墙上时间
+check('wallClock 用 timeOrigin 对齐', watch.wallClock(10000), new Date(1700000000000 + 10000).toISOString());
+
+// 留存:满了以后"不够差"的丢掉、"更差"的顶掉最弱的一条
+for (const severity of [10, 20, 30, 40, 50]) watch.keepIncident({ id: `k${severity}`, severity });
+check('留存满了:按严重度降序、只留最差 N 次', watch.state.watch.incidents.map((row) => row.severity), [50, 40, 30, 20, 10]);
+check('比现有最弱的还弱 → 丢掉,不进列表', watch.keepIncident({ id: 'weak', severity: 5 }), 'dropped');
+check('丢掉之后列表不变', watch.state.watch.incidents.map((row) => row.severity), [50, 40, 30, 20, 10]);
+check('更差的顶掉最弱那条', watch.keepIncident({ id: 'strong', severity: 99 }), 'replaced');
+check('顶掉之后仍降序且最弱的已出局', watch.state.watch.incidents.map((row) => row.severity), [99, 50, 40, 30, 20]);
+watch.state.watch.incidents.length = 0;
+watch.state.watch.dropped = 0;
+watch.state.watch.coalesced = 0;
+
+// 自动捕获(整条链):一帧超线 → 切片 → 留存
+// 上面"满环覆盖"那条用例已经把环灌满了,这里按需要重建窗口内的帧。
+watch.frameRing.reset();
+watch.frameRing.push(5000, 16.66, false);
+watch.frameRing.push(9900, 150, false);
+watch.frameRing.push(10000, 20, false);
+watch.frameRing.push(10020, 8000, true);
+watch.frameRing.push(20000, 17, false);
+watch.state.longTasks.push({ t: Date.now(), at: 9900, ms: 150, owner: 'dsh-x', component: 'ChatRow', source: 'scheduler+render' });
+watch.setNow(100000);            // 远在 until 之后:立即结算
+watch.watchFrame(10000, 150, false);
+const firstIncident = watch.state.watch.incidents[0];
+check('超线的一帧自动抓成一次事故', watch.state.watch.incidents.length, 1);
+check('事故带上触发原因与严重度', [firstIncident.cause, firstIncident.severity, firstIncident.kept], ['frame', 150, 'kept']);
+check('事故窗口 = 前摇 + 后摇', [firstIncident.window.fromMs, firstIncident.window.toMs, firstIncident.window.preMs, firstIncident.window.postMs], [0, 13000, 10000, 3000]);
+check('窗口里最差帧与计数(gap 不算帧、不算最差)',
+	[firstIncident.summary.worstFrameMs, firstIncident.summary.frames, firstIncident.summary.framesOver50Ms, firstIncident.summary.framesOver100Ms, firstIncident.summary.hiddenGaps],
+	[150, 3, 1, 1, 1]);
+check('窗口带上了同时段的 longtask 明细', [firstIncident.summary.longTasksInWindow, firstIncident.longTasks[0].owner], [1, 'dsh-x']);
+check('事故带环境读数与墙上时间', [firstIncident.env.domNodes, firstIncident.at], [1234, new Date(1700000000000 + 10000).toISOString()]);
+
+// 归并:后摇没到就再来一次,算同一串(记 coalesced,不当成第二次事故)
+watch.setNow(1000);
+watch.watchFrame(900, 150, false);
+check('后摇未到:先挂起,不出事故', [watch.state.watch.pending.cause, watch.state.watch.incidents.length], ['frame', 1]);
+watch.watchFrame(950, 300, false);
+check('同一串里的第二次触发被归并', watch.state.watch.coalesced, 1);
+check('归并不新增事故', watch.state.watch.incidents.length, 1);
+watch.runTimer(watch.timers.length - 1);
+check('后摇到点才切片,严重度由触发那次决定', [watch.state.watch.captured, watch.state.watch.incidents.length], [2, 2]);
+
+// 手动标记:回退反应时间、立刻结算
+watch.setNow(50000);
+const manual = watch.captureNow('刚切了视图');
+check('手动标记立刻出事故', [manual.ok, manual.incident.cause, manual.incident.note], [true, 'manual', '刚切了视图']);
+check('手动标记回退' + watch.WATCH.reaction + 'ms', Math.round(manual.incident.atPerfMs), 47000);
+watch.state.watch.on = false;
+check('HUD 关着时手动标记如实说没在录', watch.captureNow().ok, false);
+
+// 状态:照实报
+watch.state.watch.on = true;
+const status = watch.watchStatus();
+check('watchStatus 报出录制状态与阈值', [status.recording, status.loaf, status.triggers.frameMs, status.triggers.keep], [true, 'on', 100, 5]);
+check('watchStatus 报出帧样本数与留存清单', [status.frameSamples > 0, Array.isArray(status.kept), status.kept.length], [true, true, 3]);
+
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;
