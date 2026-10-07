@@ -2080,6 +2080,9 @@ window.__ModuleLoader__.load({
 				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', est: '≈',
 				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', hit: '命中', times: ' 次',
 				maxBlame: '最多', topBlame: '归属 Top', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名',
+				blameHint: '本秒执行速率 / 峰值速率(EMA 平滑后的每秒执行次数)与合计耗时;悬停某一行看它的执行次数、同步耗时与累计',
+				cnExec: '该秒执行', cnCost: '该秒同步耗时',
+				cnScope: '口径:只含 setTimeout/setInterval/requestAnimationFrame 这三次调度的回调;事件处理器 / Promise / 微任务 / React 自身调度不计入,所以这是下界',
 				perSec: '/s', samples: '次采样', unblamed: '未归因',
 				domWritesHint: '前一项是精确总次数;下面按插件给出估算(每 10 次采样一次栈,命中按 10 折算)。',
 				precise: '精确归因', preciseHint: '开启后按合并 bundle 的 sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)',
@@ -2118,6 +2121,9 @@ window.__ModuleLoader__.load({
 				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', est: '≈',
 				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', hit: 'hit', times: '',
 				maxBlame: 'top', topBlame: 'attribution top', legFiber: 'fiber', legSubtree: 'subtree', legDom: 'DOM write', legOwner: 'package',
+				blameHint: 'Per-second execution rate / peak rate (EMA-smoothed) plus the summed synchronous time; hover a row for its execution count, cost and cumulative totals',
+				cnExec: 'executed this second', cnCost: 'sync time this second',
+				cnScope: 'Scope: only callbacks scheduled through setTimeout/setInterval/requestAnimationFrame; event handlers, Promises, microtasks and React\'s own scheduling are not counted, so this is a lower bound',
 				perSec: '/s', samples: ' samples', unblamed: 'unattributed',
 				domWritesHint: 'First number is the exact total; the rows below are estimates (stacks sampled every 10th write, hits scaled by 10).',
 				precise: 'precise', preciseHint: 'Resolve single package names from the merged bundle sourcemap sections (lazy; one map fetch per rev)',
@@ -2422,10 +2428,17 @@ window.__ModuleLoader__.load({
 				// ── 常显 3:回调归因 Top3(每插件一行,hover 补 msps 与累计)──
 				h('div', { style: S.sep },
 					h('div', { style: S.row },
-						h('span', { style: S.label }, t('blame')),
+						h('span', { style: S.label, title: t('blameHint') }, t('blame')),
 						h('span', { style: S.num }, msPerSecText(state.attributedPerSec))),
 					h('div', null, top.map((row, index) => h('div', { key: row.id, style: S.row },
-						h('span', { style: S.label, title: `${row.id} · ${row.msps}ms${t('perSec')} · ${t('cumulative')} ${row.count}× / ${row.ms.toFixed(0)}ms` }, `${index + 1}. ${short(row.id)}`),
+						h('span', {
+							style: S.label,
+							title: `${row.id}\n` +
+								`${t('cnExec')} ${row.cps}${t('perSec')}(${t('peak')} ${row.cpsPeak}${t('perSec')},EMA)\n` +
+								`${t('cnCost')} ${row.msps}ms${t('perSec')}\n` +
+								`${t('cumulative')} ${row.count}${t('times')} / ${row.ms.toFixed(0)}ms\n` +
+								t('cnScope'),
+						}, `${index + 1}. ${short(row.id)}`),
 						h('span', { style: S.num }, attrText(row))))),
 					rest.length === 0 ? null : h('div', { style: S.row },
 						h('span', { style: S.label }, `${t('rest')} (${rest.length})`),
