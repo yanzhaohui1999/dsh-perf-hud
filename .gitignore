@@ -1,0 +1,13 @@
+# 依赖:profile 用 link: 安装本包,仓库里不需要 node_modules
+node_modules/
+
+# 下面这些是"验证现场"的产物,不是插件源码:
+#   dump-config-after.txt 是 <code>dsh --profile web --dump-config</code> 的完整输出,
+#   里面带着使用者 profile 的 provider/模型配置(baseURL、apiKeyEnv 名、模型列表)。
+#   留在本地当证据,但不进 git —— 万一这个仓库以后加了远端,不该把它们带出去。
+dump-config-after.txt
+backup-20261006/
+add.log
+
+# 编辑器/系统
+.DS_Store

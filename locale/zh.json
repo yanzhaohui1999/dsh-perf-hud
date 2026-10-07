@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "性能 HUD (dsh-perf-hud)",
+    "description": "纯客户端性能面板:实时 FPS、Longtask、按插件归因的回调耗时与调用次数,以及会话列表/消息区的 DOM 增长速率;带环形缓冲持久化与一键导出 JSON。"
+  }
+}

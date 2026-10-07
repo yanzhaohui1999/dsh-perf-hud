@@ -1,0 +1,1895 @@
+/**
+ * dsh-perf-hud — 浏览器端性能 HUD(纯客户端)。
+ *
+ * 这一半就是全部实现:Host 侧只有一行空 apply()。仪表固定在右下角
+ * (实时 fps + 插桩状态药丸),展开后是完整面板。
+ *
+ * 四项测量:
+ *   1. FPS      —— 自己的 rAF 循环(走原生 rAF,不自我归因),1 秒滚动窗口
+ *   2. Longtask —— PerformanceObserver({ entryTypes: ['longtask'] }),近 60 秒最差一次
+ *   3. 归因     —— 包住 setTimeout / setInterval / requestAnimationFrame 三个调度点,
+ *                  在"调度时"抓 CallSite 栈,取最上层 /plugins/... 帧里的插件 id;
+ *                  累计每插件回调次数与回调同步耗时,面板给 Top3 + 其余
+ *   4. DOM      —— 节点总数(减掉 HUD 自身子树)+ 会话列表 / 消息区两个容器的新增速率
+ *
+ * 为什么归因要自己插桩:本版本(0.2.0-rc.2)的客户端不往 DOM 上打 data-dsh-plugin,
+ * 插件脚本是以懒加载 <script> 装载的,URL 形如
+ *   plugins/??<包名>/client.js&rev=<hash>       ← 一包一条 combo(正常情况)
+ *   /plugins/<包名>/<分片>.js?rev=<hash>         ← 包内分片
+ *   plugins/??a/client.js,b/client.js&rev=<h>    ← 启动批(本版本只 preload,不执行)
+ * 所以"当前代码属于哪个插件"只能从脚本 URL 反推,而 URL 只在栈帧里。
+ *
+ * 依赖:react(浏览器模块表提供)。除此之外零运行时依赖。
+ */
+window.__ModuleLoader__.load({
+	id: 'dsh-perf-hud',
+	factory: (require) => {
+		const React = require('react');
+		const h = React.createElement;
+
+		const PKG = 'dsh-perf-hud';
+		const NS = 'perf-hud';
+		const LS_RING = 'dsh-perf-hud:ring:v1';
+		const LS_ON = 'dsh-perf-hud:on';
+		const LS_UI = 'dsh-perf-hud:collapsed';
+		const RING_MAX = 500;        // 环形缓冲条数(1 条/秒 ≈ 8 分钟)
+		const TOP_N = 3;             // 面板展示的插件条数
+		const LT_WINDOW_MS = 60000;  // longtask 观察窗口
+		const RECENT_MAX = 256;      // 用于 longtask 归因的最近回调(含仍在执行的)
+		const MUT_SAMPLE = 10;       // DOM 写入归因:每 10 次抓一次栈
+		const MUT_TOP = 2;           // 面板展示的 DOM 写入者条数
+		const BUNDLE_PREFIX = 'bundle:';       // 多包合并 URL 的 key 前缀
+		const LS_PRECISE = 'dsh-perf-hud:precise';
+		const LS_MAP = 'dsh-perf-hud:map';     // 按 rev 缓存的 section 分段表
+		const LS_MARKS = 'dsh-perf-hud:marks';
+		const HOST_ROUTE = '/api/dsh-perf-hud/host';
+		const RTT_INTERVAL_MS = 10000;
+		const LOAD_INTERVAL_MS = 60000;
+		const LOAD_BYTES = 65536;
+		const MUT_WINDOW_MS = 2000;            // fiber 归因只看最近 2 秒被改动的节点
+		const BASELINE_MS = 60000;
+		const STEP_MS = 60000;
+		const IDLE_GAP_MS = 3000;
+		const DEFAULT_CANDIDATES = ['dsh-status-rotator', 'dsh-notify-me', 'dsh-better-sidebar', 'dsh-context'];
+		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
+		const REACT_INTERNAL = new Set(['Fragment', 'Suspense', 'StrictMode', 'Profiler', 'ForwardRef', 'Memo', 'Provider', 'Consumer', 'Root', 'Anonymous']);
+
+		const W = window;
+		// 原生调度器:插桩前后都从这里取,保证能恢复、且自身循环零开销。
+		const natives = {
+			setTimeout: W.setTimeout.bind(W),
+			clearTimeout: W.clearTimeout.bind(W),
+			setInterval: W.setInterval.bind(W),
+			clearInterval: W.clearInterval.bind(W),
+			requestAnimationFrame: W.requestAnimationFrame.bind(W),
+			cancelAnimationFrame: W.cancelAnimationFrame.bind(W),
+		};
+
+		// ───────────────────────── 归因:script URL → 插件 id ─────────────────────────
+		// 默认栈深 10 帧,插件把调度藏在几层包装后面时会丢归属;抬到 30 帧。
+		// 只影响错误对象的栈深度,不影响性能测量本身。
+		if (typeof Error.stackTraceLimit === 'number' && Error.stackTraceLimit < 30) Error.stackTraceLimit = 30;
+
+		const PLUGIN_URL = /(?:^|\/)plugins\/(?:\?\?([^&]+)|((?:@[^/?#]+\/)?[^/?#]+)\/[^?#]*)/;
+
+		function ownerOfUrl(url) {
+			const m = PLUGIN_URL.exec(url);
+			if (m === null) return null;
+			if (m[1] !== undefined) {
+				const ids = m[1].split(',').map((s) => s.replace(/\/[^/,]+\.js(\.map)?$/, '')).filter(Boolean);
+				if (ids.length === 0) return null;
+				if (ids.length === 1) return ids[0];
+				// 多包同 URL:包名只能由 section 分段表还原,不再拼成一串包名糊弄面板。
+				const key = BUNDLE_PREFIX + url;
+				state.bundleKeys.add(key);
+				if (state.bundleKeys.size > 50) state.bundleKeys.delete(state.bundleKeys.values().next().value);
+				return BUNDLE_PREFIX + url;
+			}
+			return m[2] ?? null;
+		}
+
+		// ─────────────── A. 精确归因:合并 bundle 的 indexed sourcemap 分段表 ───────────────
+		// 合并包里没有 sourceURL 边界标记,唯一可靠的边界是它自带的 indexed sourcemap:
+		// sections[i].offset.line 是该包源码在合并文件里的起始行(0-based),sources[0] 指向
+		// /plugins/<包>/…。V8 的 CallSite 行号是 1-based,换算时减一(单测钉住这一点)。
+		const bundleMaps = new Map();   // bundle key -> { state, offsets, names, count, reason, source }
+		const bundleMeta = new Map();   // bundle key -> { phase, count }
+
+		/** 把栈帧里可能出现的相对 URL 绝对化。 */
+		function absolutePluginUrl(url) {
+			if (/^[a-z][a-z\d+.-]*:\/\//i.test(url)) return url;
+			const at = url.indexOf('plugins/??');
+			return `${location.origin}/${at === -1 ? url.replace(/^\//, '') : url.slice(at)}`;
+		}
+
+		/** 合并脚本 URL → 它的 indexed sourcemap URL(给列表里每一项加 .map,按 loader 的 comboSearch 形态)。 */
+		function mapUrlOf(scriptUrl) {
+			const at = scriptUrl.indexOf('??');
+			if (at === -1) return null;
+			const revAt = scriptUrl.indexOf('&rev=');
+			const list = scriptUrl.slice(at + 2, revAt === -1 ? undefined : revAt);
+			if (list === '') return null;
+			const mapped = list.split(',').map((item) => `${item}.map`).join(',');
+			return `${scriptUrl.slice(0, at + 2)}${mapped}${revAt === -1 ? '' : scriptUrl.slice(revAt)}`;
+		}
+
+		/** 一个 section 属于哪个包:优先按 sources 里的 /plugins/<包>/ 取。 */
+		function sectionName(section) {
+			const sources = section?.map?.sources;
+			if (Array.isArray(sources) === false) return null;
+			for (const source of sources) {
+				if (typeof source !== 'string') continue;
+				const m = /\/plugins\/((?:@[^/]+\/)?[^/?#]+)\//.exec(source);
+				if (m !== null) return m[1];
+			}
+			return null;
+		}
+
+		/** 合并批次的名字与包数:优先读 boot payload,其次数 URL 里的逗号列表。 */
+		function bundleMetaOf(key) {
+			const cached = bundleMeta.get(key);
+			if (cached !== undefined) return cached;
+			const scriptUrl = absolutePluginUrl(key.slice(BUNDLE_PREFIX.length));
+			const list = /\/plugins\/\?\?([^&]+)/.exec(scriptUrl);
+			let meta = { phase: '', count: list === null ? 0 : list[1].split(',').length };
+			const boot = W.__DSH_BOOT__;
+			if (boot !== null && typeof boot === 'object' && Array.isArray(boot.batches)) {
+				const relative = scriptUrl.replace(`${location.origin}/`, '');
+				for (const batch of boot.batches) {
+					if (batch?.url !== relative && batch?.url !== scriptUrl) continue;
+					meta = { phase: typeof batch.phase === 'string' ? batch.phase : '', count: Array.isArray(batch.entries) ? batch.entries.length : meta.count };
+					break;
+				}
+			}
+			bundleMeta.set(key, meta);
+			return meta;
+		}
+
+		/** 面板/归因表里显示的一行:批次名 + 包数(+状态),绝不展开成 58 个名字。 */
+		function bundleLabel(key) {
+			const meta = bundleMetaOf(key);
+			const entry = bundleMaps.get(key);
+			const status = entry === undefined || entry.state === 'pending'
+				? '·解析中'
+				: entry.state === 'ready' ? '' : `·map失败(${entry.reason})`;
+			return `${meta.phase === '' ? '合并' : meta.phase}批次(${meta.count} 包)${status}`;
+		}
+
+		/**
+		 * 懒加载 + 按 rev 缓存。只有「精确归因」打开、并且真的遇到多包 URL 时才拉 map,
+		 * 而且同一 rev 只解析一次(12.8MB 只下这一次)。
+		 */
+		function bundleMap(key) {
+			const existing = bundleMaps.get(key);
+			if (existing !== undefined) return existing;
+			const scriptUrl = absolutePluginUrl(key.slice(BUNDLE_PREFIX.length));
+			const entry = { state: 'pending', offsets: null, names: null, count: 0, reason: '', source: '' };
+			bundleMaps.set(key, entry);
+			const revMatch = /[?&]rev=([^&#]*)/.exec(scriptUrl);
+			const signature = `v1:${revMatch === null ? 'norev' : revMatch[1]}:${scriptUrl.length}`;
+			const storageKey = `${LS_MAP}:${signature}`;
+			entry.storageKey = `${LS_MAP}:${signature}`;
+			try {
+				const saved = localStorage.getItem(storageKey);
+				const parsed = saved === null ? null : JSON.parse(saved);
+				if (parsed !== null && Array.isArray(parsed.offsets) && parsed.offsets.length > 1 && Array.isArray(parsed.names)) {
+					entry.offsets = parsed.offsets;
+					entry.names = parsed.names;
+					entry.count = parsed.offsets.length;
+					entry.state = 'ready';
+					entry.source = 'localStorage';
+					return entry;
+				}
+			} catch (error) { /* 缓存坏了就重取 */ }
+			loadBundleMap(entry, scriptUrl);
+			return entry;
+		}
+
+		async function loadBundleMap(entry, scriptUrl) {
+			const url = mapUrlOf(scriptUrl);
+			if (url === null) {
+				entry.state = 'failed';
+				entry.reason = 'URL 里没有 ?? 列表';
+				return;
+			}
+			try {
+				const response = await fetch(url, { credentials: 'same-origin' });
+				if (response.ok === false) throw new Error(`HTTP ${response.status}`);
+				const document = JSON.parse(await response.text());
+				const sections = Array.isArray(document?.sections) ? document.sections : null;
+				if (sections === null || sections.length === 0) throw new Error('没有 sections');
+				const offsets = [];
+				const names = [];
+				for (const section of sections) {
+					const line = section?.offset?.line;
+					const name = sectionName(section);
+					if (typeof line !== 'number' || name === null) continue;
+					offsets.push([line, name]);
+					names.push(name);
+				}
+				if (offsets.length === 0) throw new Error('sections 里没有可用边界');
+				offsets.sort((a, b) => a[0] - b[0]);
+				entry.offsets = offsets;
+				entry.names = names;
+				entry.count = offsets.length;
+				entry.state = 'ready';
+				entry.source = 'sourcemap';
+				try {
+					// 只留 offsets/names,原始 JSON 立刻丢掉。
+					localStorage.setItem(entry.storageKey, JSON.stringify({ v: 1, offsets, names }));
+				} catch (error) { /* 配额不够就只留内存 */ }
+			} catch (error) {
+				entry.reason = error instanceof Error ? error.message : String(error);
+				await loadBundleMapByProbe(entry, scriptUrl);
+			}
+		}
+
+		/** 兜底:map 拿不到时,用各单包响应的开头在合并文本里定位边界(代价高,只在失败后走一次)。 */
+		async function loadBundleMapByProbe(entry, scriptUrl) {
+			try {
+				const list = /\/plugins\/\?\?([^&]+)/.exec(scriptUrl);
+				if (list === null) throw new Error('URL 里没有 ?? 列表');
+				const ids = list[1].split(',').map((item) => item.replace(/\/[^/,]+\.js(\.map)?$/, '')).filter(Boolean);
+				const revMatch = /[?&]rev=([^&#]*)/.exec(scriptUrl);
+				const suffix = revMatch === null ? '' : `&rev=${revMatch[1]}`;
+				const [text, probes] = await Promise.all([
+					fetch(scriptUrl, { credentials: 'same-origin' }).then((response) => response.text()),
+					Promise.all(ids.map(async (id) => {
+						try {
+							const response = await fetch(`${location.origin}/plugins/??${id}/client.js${suffix}`, { credentials: 'same-origin' });
+							const body = await response.text();
+							return { id, head: body.slice(0, 200) };
+						} catch (error) {
+							return { id, head: '' };
+						}
+					})),
+				]);
+				const hits = [];
+				for (const probe of probes) {
+					if (probe.head === '') continue;
+					const offset = text.indexOf(probe.head);
+					if (offset === -1) continue;
+					hits.push({ offset, id: probe.id });
+				}
+				if (hits.length === 0) throw new Error(`${entry.reason} / 单包首字节也定位不到`);
+				hits.sort((a, b) => a.offset - b.offset);
+				const offsets = [];
+				let line = 0;
+				let cursor = 0;
+				for (const hit of hits) {
+					for (let i = cursor; i < hit.offset; i += 1) if (text.charCodeAt(i) === 10) line += 1;
+					cursor = hit.offset;
+					offsets.push([line, hit.id]);
+				}
+				entry.offsets = offsets;
+				entry.names = offsets.map((item) => item[1]);
+				entry.count = offsets.length;
+				entry.state = 'ready';
+				entry.source = 'probe';
+				try { localStorage.setItem(entry.storageKey, JSON.stringify({ v: 1, offsets, names: entry.names })); } catch (error) { /* 同上 */ }
+			} catch (error) {
+				entry.state = 'failed';
+				entry.reason = error instanceof Error ? error.message : String(error);
+			}
+		}
+
+		/** V8 行号(1-based)二分到 section(offset 0-based)。 */
+		function sectionOwner(entry, lineNumber) {
+			const offsets = entry.offsets;
+			const line0 = lineNumber - 1;
+			let lo = 0;
+			let hi = offsets.length - 1;
+			let found = -1;
+			while (lo <= hi) {
+				const mid = (lo + hi) >> 1;
+				if (offsets[mid][0] <= line0) {
+					found = mid;
+					lo = mid + 1;
+				} else hi = mid - 1;
+			}
+			return found === -1 ? null : offsets[found][1];
+		}
+
+		/** 把 ownerOfUrl 的结果落成"具体包名";多包 URL 未解析完成时给一行批次标签。 */
+		function resolveOwner(owner, line) {
+			if (owner.startsWith(BUNDLE_PREFIX) === false) return owner;
+			if (state.precise === false) return bundleLabel(owner);
+			const entry = bundleMap(owner);
+			if (entry.state !== 'ready') return bundleLabel(owner);
+			const name = sectionOwner(entry, line);
+			return name ?? `${bundleLabel(owner)}·越界`;
+		}
+
+		/** 打开精确归因时,把已经见过的多包 URL 一次性登记解析。 */
+		function primeBundleMaps() {
+			for (const key of state.bundleKeys) bundleMap(key);
+		}
+
+		/** @deepseek-ai/* 是 DSH 自带的核心包:React、scheduler、外壳 UI 都在这一层。 */
+		function isCore(id) {
+			return id.startsWith('@deepseek-ai/');
+		}
+
+		/**
+		 * V8 快路径:把 Error.prepareStackTrace 临时换成"返回 CallSite 数组",
+		 * 省掉每帧文本格式化 —— 每帧只取 getFileName(),比 Error.stack 字符串便宜得多。
+		 */
+		function callSites(skip) {
+			if (typeof Error.captureStackTrace !== 'function') return null;
+			const previous = Error.prepareStackTrace;
+			Error.prepareStackTrace = (error, sites) => sites;
+			const holder = {};
+			Error.captureStackTrace(holder, skip);
+			const sites = holder.stack;
+			Error.prepareStackTrace = previous;
+			return Array.isArray(sites) ? sites : null;
+		}
+
+		/** 最上层 /plugins/... 帧所属的插件 id;没有则 null(宿主内联脚本、React 内部等)。 */
+		/**
+		 * 栈里"最该负责的插件"。
+		 *
+		 * 关键取舍:React 自己的调度/提交栈帧属于核心包,而**发起这次重渲染的插件**
+		 * 的帧在更深处。只取最上层 /plugins/ 帧会把 React 干的事全记到核心包头上
+		 * (实测面板清一色 @deepseek-ai/...),所以这里优先返回最上层**非核心**包,
+		 * 一个非核心包都没有时才退回最上层的核心包。
+		 */
+		function ownerFromStack(skip) {
+			const sites = callSites(skip);
+			if (sites !== null) {
+				let fallback = null;
+				for (const site of sites) {
+					let file;
+					let line = 0;
+					try {
+						file = site.getFileName();
+						line = site.getLineNumber();
+					} catch (error) { continue; }
+					if (!file) continue;
+					const raw = ownerOfUrl(file);
+					if (raw === null) continue;
+					const owner = resolveOwner(raw, line);
+					if (!isCore(owner)) return owner;
+					// 精确归因还没解析完时,批次标签不是"核心包",会被上面的分支直接返回 —— 这是
+					// 有意的:宁可显示"application批次(58 包)",也不把归属错记到核心包头上。
+					if (fallback === null) fallback = owner;
+				}
+				return fallback;
+			}
+			// 字符串兜底(没有 CallSite):从 "…:行:列)" 里取行号,单包 URL 才解析得到。
+			const text = new Error().stack ?? '';
+			let fallback = null;
+			for (const frame of text.split('\n')) {
+				const matched = /((?:[a-z][a-z\d+.-]*:\/\/|\/)?[^\s()]*plugins\/\?\?[^\s()]*?):(\d+):(\d+)/.exec(frame);
+				const raw = ownerOfUrl(frame);
+				if (raw === null) continue;
+				const owner = matched === null ? raw : resolveOwner(raw, Number(matched[2]));
+				if (!isCore(owner)) return owner;
+				if (fallback === null) fallback = owner;
+			}
+			return fallback;
+		}
+
+		// ───────────── B. longtask 补 fiber:渲染型卡顿没有调度点可抓 ─────────────
+		// 只留最近 MUT_WINDOW_MS 内被改动过的节点引用(childList+subtree;属性变更太吵,
+		// 而且对"谁在渲染"没有额外信息)。longtask 到来时用这些节点当入口,顺着
+		// __reactFiber$ 往 return 方向走,取最近的具名函数组件。
+		const changedNodes = [];
+		let domWatch = null;
+
+		function trimChangedNodes(now) {
+			while (changedNodes.length > 0 && now - changedNodes[0].at > MUT_WINDOW_MS) changedNodes.shift();
+			if (changedNodes.length > 4000) changedNodes.splice(0, changedNodes.length - 4000);
+		}
+
+		function startDomWatch() {
+			if (domWatch !== null || typeof W.MutationObserver !== 'function') return;
+			const observer = new W.MutationObserver((records) => {
+				const now = performance.now();
+				for (const record of records) changedNodes.push({ node: record.target, at: now });
+				trimChangedNodes(now);
+			});
+			observer.observe(document.documentElement, { childList: true, subtree: true });
+			domWatch = observer;
+		}
+
+		function stopDomWatch() {
+			if (domWatch !== null) {
+				domWatch.disconnect();
+				domWatch = null;
+			}
+			changedNodes.length = 0;
+		}
+
+		/** 找一个节点上的 React fiber(键名带随机后缀,只能前缀匹配)。 */
+		function fiberOf(node) {
+			if (node === null || typeof node !== 'object') return null;
+			let keys;
+			try { keys = Object.keys(node); } catch (error) { return null; }
+			for (const key of keys) {
+				if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) return node[key];
+			}
+			return null;
+		}
+
+		/** 沿 fiber.return 上溯,取最近的具名函数组件(最深 = 离节点最近)。 */
+		function componentOf(node) {
+			let fiber;
+			try { fiber = fiberOf(node); } catch (error) { return null; }
+			let depth = 0;
+			for (let current = fiber; current !== null && current !== undefined && depth < 64; current = current.return, depth += 1) {
+				const type = current.type ?? current.elementType;
+				if (typeof type !== 'function') continue;
+				const name = type.displayName ?? type.name;
+				if (typeof name !== 'string' || name === '' || REACT_INTERNAL.has(name)) continue;
+				return name;
+			}
+			return null;
+		}
+
+		/** 最近 2 秒被改动过的节点里,能给出组件名的那个(相当于"这次渲染是谁"). */
+		const FIBER_SCAN_MAX = 64;   // 每次 longtask 最多试 64 个入口:够用,且不会变成新的长任务
+
+		function fiberOwner() {
+			const now = performance.now();
+			trimChangedNodes(now);
+			let scanned = 0;
+			for (let i = changedNodes.length - 1; i >= 0 && scanned < FIBER_SCAN_MAX; i -= 1, scanned += 1) {
+				const name = componentOf(changedNodes[i].node);
+				if (name !== null) return name;
+			}
+			return null;
+		}
+
+		// ───────────────────────────────── 状态 ─────────────────────────────────
+		const state = {
+			on: false,
+			want: true,
+			collapsed: false,
+			since: Date.now(),
+			root: null,              // HUD 根元素:DOM 统计里排除它
+			fps: 0,
+			windowStart: 0,
+			windowFrames: 0,
+			lastFrameAt: 0,
+			worstFrameMs: 0,
+			frameWorst: 0,
+			busyMs: 0,              // 当前帧间隔内,插桩回调花掉的时间
+			attributedMs: 0,        // 当前 1 秒窗口内,插桩回调总耗时
+			attributedPerSec: 0,
+			unattrSum: 0,           // 帧间隔里没被插桩解释掉的部分(样式/绘制/vsync 等待)
+			unattrCount: 0,
+			unattrWorst: 0,
+			unattrAvg: 0,
+			unattrPeak: 0,
+			fpsLoop: 0,
+			sampleTimer: 0,
+			domTimer: 0,
+			flushTimer: 0,
+			linkTimer: 0,
+			loadTimer: 0,
+			linkText: '',
+			stressNodes: 0,
+			ltObserver: null,
+			longTasks: [],           // { t, at, ms, owner }
+			ltTotal: 0,              // 观察到的 longtask 条数
+			ltBlamed: 0,             // 其中成功指认出"谁干的"的条数
+			ltThisSecond: 0,
+			ltPerSec: 0,             // 上一秒的 longtask 条数(写进每秒采样)
+			plugins: new Map(),      // id -> { count, ms, cps, msps, cpsPeak, ... }
+			stack: [],               // 正在执行的回调 { owner, from, to }
+			recent: [],              // 最近完成的回调,给 longtask 找元凶
+			dom: { total: 0, series: [] },
+			targets: new Map(),      // 容器 id -> { nodes, series }
+			domWrites: new Map(),    // 插件 id -> { count(采样估算), ops }
+			mutations: 0,            // DOM 写入总次数(精确)
+			mutSeq: 0,
+			heap: null,              // usedJSHeapSize,仅 Chrome 有
+			heapSeries: [],
+			lastTick: 0,
+			// A 精确归因
+			precise: false,
+			bundleKeys: new Set(),   // 见过的多包 URL
+			// B fiber
+			idleBaseline: null,
+			streaming: false,
+			idleSince: 0,
+			baselineAt: 0,
+			baselineRunning: false,
+			baselineMs: null,        // 覆盖空闲基线窗口长度(默认 BASELINE_MS),自测用
+			marks: [],
+			markDraft: '',
+			// D 宿主/链路
+			host: null,
+			hostAt: 0,
+			hostError: null,
+			hostEvents: null,        // 宿主 session/event 派发计时回执 {installed, reason, stats}
+			hostWatchAsked: false,
+			hostWatchOff: false,
+			link: [],                // { t, kind, rtt, kbps?, error? }
+			linkAt: 0,
+			loadAt: 0,
+		};
+		const ring = [];
+		let dirty = false;
+
+		// 容器:都用宿主自己的稳定钩子,不用哈希类名。
+		const TARGETS = [
+			{
+				id: 'sessions',
+				label: () => translate('sessions'),
+				find: () => { const row = document.querySelector('[data-row-key]'); return row === null ? null : row.parentElement; },
+			},
+			{
+				id: 'messages',
+				label: () => translate('messages'),
+				find: () => document.querySelector('[data-conversation-content]') ?? document.querySelector('[data-chat-flow]'),
+			},
+		];
+
+		// ───────────────────────── 插桩:调度点抓栈 + 回调计时 ─────────────────────────
+		/** 把回调包成"记归属 + 记同步耗时"的版本;arguments 原样透传(rAF 的时间戳等)。 */
+		function measure(owner, callback) {
+			return function measured() {
+				const from = performance.now();
+				// to 先等于 from(标记"仍在执行");收尾时补齐。执行中的回调是找元凶的第一手证据。
+				const frame = { owner, from, to: from };
+				state.stack.push(frame);
+				try {
+					return callback.apply(this, arguments);
+				} finally {
+					const to = performance.now();
+					frame.to = to;
+					const at = state.stack.lastIndexOf(frame);
+					if (at !== -1) state.stack.splice(at, 1);
+					let entry = state.plugins.get(owner);
+					if (entry === undefined) {
+						entry = { count: 0, ms: 0 };
+						state.plugins.set(owner, entry);
+					}
+					entry.count += 1;
+					entry.ms += to - from;
+					state.busyMs += to - from;
+					state.attributedMs += to - from;
+					state.recent.push(frame);
+					if (state.recent.length > RECENT_MAX) state.recent.shift();
+				}
+			};
+		}
+
+		/** 包一层调度函数:在调度点抓栈,归属到"发起调度"的那个插件。 */
+		function scheduleWrapper(native) {
+			function wrapped(...args) {
+				const callback = args[0];
+				if (state.on === false || typeof callback !== 'function') return native(...args);
+				const owner = ownerFromStack(wrapped);
+				// null = 宿主内联/其他运行时;PKG = 本 HUD 自己(不算进自己的面板)。
+				if (owner === null || owner === PKG) return native(...args);
+				args[0] = measure(owner, callback);
+				return native(...args);
+			}
+			return wrapped;
+		}
+
+		const wrappers = {
+			timeout: scheduleWrapper(natives.setTimeout),
+			interval: scheduleWrapper(natives.setInterval),
+			raf: scheduleWrapper(natives.requestAnimationFrame),
+		};
+
+		// ─────────────────── DOM 写入归因:谁在疯狂加节点 ───────────────────
+		// 只包三个真正的"写"入口:appendChild / insertBefore / setAttribute。
+		// 每一次都精确计数;每 MUT_SAMPLE(10)次抓一次栈定归属,命中者按采样步长
+		// 折算 —— 所以面板/JSON 里带 ≈ 的数字是统计估计,不是精确值。
+		const mutNatives = {
+			appendChild: Node.prototype.appendChild,
+			insertBefore: Node.prototype.insertBefore,
+			setAttribute: Element.prototype.setAttribute,
+		};
+
+		function mutationWrapper(native) {
+			function wrapped() {
+				if (state.on) {
+					state.mutations += 1;
+					state.mutSeq = (state.mutSeq + 1) % MUT_SAMPLE;
+					if (state.mutSeq === 0) {
+						const owner = ownerFromStack(wrapped);
+						// this = 接收新子节点的父节点,它的 fiber 上方最近的具名组件就是"谁在渲染"。
+						const component = componentOf(this);
+						if (owner !== null && owner !== PKG) {
+							let entry = state.domWrites.get(owner);
+							if (entry === undefined) {
+								entry = { count: 0, ops: 0, components: new Map() };
+								state.domWrites.set(owner, entry);
+							}
+							entry.count += MUT_SAMPLE;
+							entry.ops += 1;
+							if (component !== null) entry.components.set(component, (entry.components.get(component) ?? 0) + MUT_SAMPLE);
+						} else if (component !== null) {
+							// 拿不到插件(宿主内联脚本/React 自己的提交)时,组件名仍然是有效线索。
+							const key = `(${component})`;
+							let entry = state.domWrites.get(key);
+							if (entry === undefined) {
+								entry = { count: 0, ops: 0, components: new Map() };
+								state.domWrites.set(key, entry);
+							}
+							entry.count += MUT_SAMPLE;
+							entry.ops += 1;
+							entry.components.set(component, (entry.components.get(component) ?? 0) + MUT_SAMPLE);
+						}
+					}
+				}
+				return native.apply(this, arguments);
+			}
+			return wrapped;
+		}
+
+		const mutWrappers = {
+			appendChild: mutationWrapper(mutNatives.appendChild),
+			insertBefore: mutationWrapper(mutNatives.insertBefore),
+			setAttribute: mutationWrapper(mutNatives.setAttribute),
+		};
+
+		// ───────────────────────────── FPS:1 秒滚动窗口 ─────────────────────────────
+		function frame() {
+			if (state.on === false) return;
+			const now = performance.now();
+			const busy = state.busyMs;
+			state.busyMs = 0;
+			state.windowFrames += 1;
+			if (state.lastFrameAt !== 0) {
+				const delta = now - state.lastFrameAt;
+				if (delta > state.worstFrameMs) state.worstFrameMs = delta;
+				const idle = delta - busy;
+				if (idle > 0) state.unattrSum += idle;
+				state.unattrCount += 1;
+				if (idle > state.unattrWorst) state.unattrWorst = idle;
+			}
+			state.lastFrameAt = now;
+			const span = now - state.windowStart;
+			if (span >= 1000) {
+				state.fps = (state.windowFrames * 1000) / span;
+				state.frameWorst = state.worstFrameMs;
+				state.attributedPerSec = state.attributedMs;
+				state.ltPerSec = state.ltThisSecond;
+				state.ltThisSecond = 0;
+				state.unattrAvg = state.unattrCount === 0 ? 0 : state.unattrSum / state.unattrCount;
+				state.unattrPeak = state.unattrWorst;
+				state.windowFrames = 0;
+				state.worstFrameMs = 0;
+				state.attributedMs = 0;
+				state.unattrSum = 0;
+				state.unattrCount = 0;
+				state.unattrWorst = 0;
+				state.windowStart = now;
+			}
+			state.fpsLoop = natives.requestAnimationFrame(frame);
+		}
+
+		// ───────────────────────────── Longtask + 元凶 ─────────────────────────────
+		/** 哪段回调与这条 longtask 时间上重叠最多 —— 那就是最可能的元凶。 */
+		function blame(start, duration) {
+			const end = start + duration;
+			const now = performance.now();
+			let owner = null;
+			let best = 0;
+			const consider = (frame, to) => {
+				const overlap = Math.min(to, end) - Math.max(frame.from, start);
+				if (overlap > best) { best = overlap; owner = frame.owner; }
+			};
+			// 先看此刻仍在执行的回调:一口吃满 60ms 的那次,通常在 longtask 上报时还挂在栈上。
+			for (const frame of state.stack) consider(frame, now);
+			for (let i = state.recent.length - 1; i >= 0; i--) {
+				const frame = state.recent[i];
+				if (frame.to > start) consider(frame, frame.to);
+			}
+			return owner;
+		}
+
+		function addLongTask(entry) {
+			const owner = blame(entry.startTime, entry.duration);
+			const component = fiberOwner();
+			state.ltTotal += 1;
+			state.ltThisSecond += 1;
+			if (owner !== null || component !== null) state.ltBlamed += 1;
+			state.longTasks.push({
+				t: Date.now(),
+				at: round1(entry.startTime),
+				ms: round1(entry.duration),
+				owner,
+				component,
+				source: owner === null ? (component === null ? 'none' : 'render') : (component === null ? 'scheduler' : 'scheduler+render'),
+			});
+			if (state.longTasks.length > 200) state.longTasks.splice(0, state.longTasks.length - 200);
+		}
+
+		function startLongTask() {
+			if (typeof W.PerformanceObserver !== 'function') return null;
+			const supported = W.PerformanceObserver.supportedEntryTypes;
+			if (Array.isArray(supported) && supported.indexOf('longtask') === -1) return null;
+			try {
+				const observer = new W.PerformanceObserver((list) => {
+					for (const entry of list.getEntries()) addLongTask(entry);
+				});
+				observer.observe({ entryTypes: ['longtask'] });
+				return observer;
+			} catch (error) {
+				return null; // 不支持 longtask 观测:其余三项照常工作
+			}
+		}
+
+		function worstLongTask() {
+			const cutoff = performance.now() - LT_WINDOW_MS;
+			let worst = null;
+			for (const item of state.longTasks) if (item.at >= cutoff && (worst === null || item.ms > worst.ms)) worst = item;
+			return worst;
+		}
+
+		// ───────────────────────────────── DOM ─────────────────────────────────
+		function nodeCount(root) {
+			return root === null ? 0 : root.getElementsByTagName('*').length + 1;
+		}
+
+		function push(series, point) {
+			series.push(point);
+			if (series.length > 40) series.shift(); // 2 秒一点 ≈ 80 秒窗口
+		}
+
+		function sampleDom() {
+			state.dom.total = document.getElementsByTagName('*').length - nodeCount(state.root);
+			push(state.dom.series, { t: performance.now(), n: state.dom.total });
+			// 堆用量:非标准 API,只有 Chromium 系有;没有就不显示这一行。
+			const memory = W.performance === undefined ? undefined : W.performance.memory;
+			state.heap = memory === undefined ? null : memory.usedJSHeapSize;
+			if (state.heap !== null) push(state.heapSeries, { t: performance.now(), n: state.heap });
+			for (const target of TARGETS) {
+				let entry = state.targets.get(target.id);
+				if (entry === undefined) {
+					entry = { nodes: null, series: [] };
+					state.targets.set(target.id, entry);
+				}
+				const element = target.find() ?? null;
+				entry.nodes = element === null ? null : nodeCount(element);
+				if (entry.nodes !== null) push(entry.series, { t: performance.now(), n: entry.nodes });
+			}
+		}
+
+		/**
+		 * 增速(个/分钟,堆那一路是字节/分钟)。默认只取最近 6 个采样点(≈12 秒):
+		 * 用 80 秒窗口时页面早就停止增长了、读数还在慢慢衰减,看不出"空闲时是否还在涨"。
+		 */
+		function rate(series, points = 6) {
+			const slice = series.length > points ? series.slice(-points) : series;
+			if (slice.length < 2) return 0;
+			const first = slice[0];
+			const last = slice[slice.length - 1];
+			const span = last.t - first.t;
+			return span < 500 ? 0 : ((last.n - first.n) * 60000) / span;
+		}
+
+		// ───────────────────────── 归因表 / 采样 / 持久化 ─────────────────────────
+		/**
+		 * 每秒打一次"活桩":算每个插件这一秒的回调次数/耗时,再做 EMA 平滑。
+		 * 单次便宜但高频(每 1.5 秒一次那种)在总和上不显眼,在"次/秒"上很显眼。
+		 */
+		function updateRates(now) {
+			const seconds = state.lastTick === 0 ? 1 : Math.max((now - state.lastTick) / 1000, 0.2);
+			state.lastTick = now;
+			for (const entry of state.plugins.values()) {
+				// 第一次只建立基线:若把基线当成"这一秒 0 次",EMA 会被 0 拖低。
+				const first = entry.lastCount === undefined;
+				const count = first ? 0 : entry.count - entry.lastCount;
+				const ms = first ? 0 : entry.ms - entry.lastMs;
+				entry.lastCount = entry.count;
+				entry.lastMs = entry.ms;
+				if (first) continue;
+				const cps = count / seconds;
+				const msps = ms / seconds;
+				entry.cps = entry.cps === undefined ? cps : entry.cps * 0.6 + cps * 0.4;
+				entry.msps = entry.msps === undefined ? msps : entry.msps * 0.6 + msps * 0.4;
+				if (entry.cpsPeak === undefined || cps > entry.cpsPeak) entry.cpsPeak = cps;
+			}
+		}
+
+		function pluginTable() {
+			const rows = [];
+			for (const [id, value] of state.plugins) {
+				rows.push({
+					id,
+					count: value.count,
+					ms: round1(value.ms),
+					cps: round1(value.cps ?? 0),
+					msps: round1(value.msps ?? 0),
+					cpsPeak: round1(value.cpsPeak ?? 0),
+				});
+			}
+			rows.sort((a, b) => b.ms - a.ms || b.count - a.count);
+			return rows;
+		}
+
+		/** DOM 写入估算表(命中者按采样步长折算)。 */
+		function domWriteTable() {
+			const rows = [];
+			for (const [id, entry] of state.domWrites) {
+				const components = [...(entry.components ?? new Map()).entries()].sort((a, b) => b[1] - a[1]);
+				rows.push({
+					id,
+					estimatedCount: entry.count,
+					sampled: entry.ops,
+					component: components.length === 0 ? null : components[0][0],
+					components: components.slice(0, 2).map(([name, count]) => ({ name, count })),
+				});
+			}
+			rows.sort((a, b) => b.estimatedCount - a.estimatedCount);
+			return rows;
+		}
+
+		function sampleTick() {
+			updateRates(performance.now());
+			idleTick(performance.now());
+			const worst = worstLongTask();
+			ring.push({
+				t: Date.now(),
+				fps: round1(state.fps),
+				frameMs: round1(state.frameWorst),
+				ltCount: state.ltPerSec,
+				nodes: state.dom.total,
+				heap: state.heap,
+				streaming: state.streaming,
+				rtt: linkStats(10).p50,
+				hostP99: hostP99(),
+				attributedMsPerSec: round1(state.attributedPerSec),
+				unattrMsPerFrame: [round1(state.unattrAvg), round1(state.unattrPeak)],
+				lt: worst === null ? null : { at: new Date(worst.t).toISOString(), ms: round1(worst.ms), owner: worst.owner },
+				top: pluginTable().slice(0, TOP_N).map((row) => [row.id, row.count, row.ms, row.cps]),
+			});
+			if (ring.length > RING_MAX) ring.splice(0, ring.length - RING_MAX);
+			dirty = true;
+		}
+
+		function restore() {
+			try {
+				const raw = localStorage.getItem(LS_RING);
+				const parsed = raw === null ? null : JSON.parse(raw);
+				if (parsed !== null && Array.isArray(parsed.samples)) for (const sample of parsed.samples.slice(-RING_MAX)) ring.push(sample);
+			} catch (error) { /* 历史损坏:丢弃,不阻塞启动 */ }
+			try { state.want = localStorage.getItem(LS_ON) !== '0'; } catch (error) { state.want = true; }
+			try { state.collapsed = localStorage.getItem(LS_UI) === '1'; } catch (error) { state.collapsed = false; }
+			try { state.precise = localStorage.getItem(LS_PRECISE) === '1'; } catch (error) { state.precise = false; }
+			try {
+				const parsed = JSON.parse(localStorage.getItem(LS_MARKS) ?? 'null');
+				if (Array.isArray(parsed)) state.marks = parsed.slice(-100);
+			} catch (error) { /* 标记坏了就算了 */ }
+		}
+
+		function flush(force) {
+			if (dirty === false && force !== true) return;
+			dirty = false;
+			try {
+				localStorage.setItem(LS_RING, JSON.stringify({ v: 1, savedAt: Date.now(), samples: ring }));
+			} catch (error) { /* 配额满:持久化放弃,内存缓冲照常 */ }
+		}
+
+		// ───────────── D. 宿主事件循环 + 链路 RTT / 吞吐 ─────────────
+		const sleep = (ms) => new Promise((resolve) => natives.setTimeout(resolve, ms));
+
+		/**
+		 * bundle 读写的两条通道:
+		 *   1. 客户端 remote face(@deepseek-ai/dsh-api-remotes 提供的 ctx.remote.pluginManager)
+		 *      —— 与插件管理器面板同一条路,不需要宿主重启;
+		 *   2. 本插件的宿主路由 /api/dsh-perf-hud/host —— 宿主半加载后才有,兼作 D 的事件循环数据源。
+		 * 面板与导出里都记 via,不假装知道数据从哪来。
+		 */
+		let remoteFace = null;
+
+		async function bundleOp(op, args) {
+			const manager = remoteFace === null ? null : remoteFace.pluginManager;
+			if (manager !== null && manager !== undefined) {
+				if (op === 'listBundles' && typeof manager.listBundles === 'function') {
+					return { ok: true, via: 'remote', bundles: await manager.listBundles() };
+				}
+				if (op === 'setBundle' && typeof manager.setBundleEnabled === 'function') {
+					return { ok: true, via: 'remote', result: await manager.setBundleEnabled(args.name, args.enabled) };
+				}
+			}
+			const payload = await hostOp(args);
+			return { ...payload, via: 'route' };
+		}
+
+		/** 一次宿主请求:GET 兼作 RTT/吞吐探针,POST 走 op 分发。 */
+		async function hostOp(body) {
+			const response = await fetch(HOST_ROUTE, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(body),
+				credentials: 'same-origin',
+			});
+			const payload = await response.json();
+			return payload;
+		}
+
+		/** RTT 探针:请求带 1KB cache-buster(别缓存,也别让代理吞掉);吞吐探针多要 64KB。 */
+		async function probeLink(kind) {
+			const started = performance.now();
+			const query = kind === 'load'
+				? `?t=${Date.now()}&bytes=${LOAD_BYTES}`
+				: `?t=${Date.now()}&pad=${'x'.repeat(1024)}`;
+			try {
+				const response = await fetch(`${HOST_ROUTE}${query}`, { cache: 'no-store', credentials: 'same-origin' });
+				if (response.ok === false) throw new Error(`HTTP ${response.status}`);
+				const payload = await response.json();
+				const rtt = round1(performance.now() - started);
+				if (kind === 'load') {
+					const bytes = payload.pad === undefined ? 0 : payload.pad.length;
+					const kbps = rtt <= 0 ? 0 : round1(bytes / 1024 / (rtt / 1000));
+					state.link.push({ t: Date.now(), kind, rtt, kbps });
+					state.linkText = `${kbps}KB/s`;
+				} else {
+					state.link.push({ t: Date.now(), kind, rtt });
+				}
+				if (state.link.length > 300) state.link.shift();
+				state.host = payload.host ?? null;
+				state.hostAt = Date.now();
+				state.hostError = null;
+				if (payload.host?.eventWatch !== undefined) state.hostEvents = payload.host.eventWatch;
+				await requestHostEventWatch();
+			} catch (error) {
+				state.hostError = error instanceof Error ? error.message : String(error);
+				state.link.push({ t: Date.now(), kind, rtt: null, error: state.hostError });
+				if (state.link.length > 300) state.link.shift();
+			}
+		}
+
+		/** nearest-rank 分位:输入必须已升序。p50 不能用 values[floor(n*0.5)] 近似,那样 4 个样本会取到第 3 个。 */
+		function percentile(sorted, p) {
+			if (sorted.length === 0) return null;
+			const rank = Math.ceil((p / 100) * sorted.length) - 1;
+			return sorted[Math.min(Math.max(rank, 0), sorted.length - 1)];
+		}
+
+		/**
+		 * 让宿主装上 session/event 派发计时。每个页面会话只请求一次;
+		 * 装没装上以宿主回执为准,面板与导出都照实显示。
+		 */
+		async function requestHostEventWatch() {
+			if (state.hostWatchAsked || state.hostWatchOff) return;
+			state.hostWatchAsked = true;
+			try {
+				const payload = await hostOp({ op: 'watchEvents', enable: true });
+				state.hostEvents = payload.eventWatch ?? { installed: false, reason: '无回执', stats: {} };
+			} catch (error) {
+				state.hostEvents = { installed: false, reason: error instanceof Error ? error.message : String(error), stats: {} };
+			}
+			dirty = true;
+		}
+
+		function hostEventsText() {
+			const watch = state.hostEvents;
+			if (watch === null) return translate('notYet');
+			if (watch.installed !== true) return `${translate('notInstalled')}${watch.reason === undefined || watch.reason === '' ? '' : `: ${String(watch.reason).slice(0, 22)}`}`;
+			const rows = Object.entries(watch.stats ?? {}).sort((a, b) => b[1].ms - a[1].ms);
+			if (rows.length === 0) return translate('waiting');
+			return rows.slice(0, 2).map(([name, stat]) => `${name} ${stat.count}${translate('times')} · ${translate('cumulative')} ${stat.ms}ms · ${translate('peak')} ${stat.max}ms`).join(' / ');
+		}
+
+		/** 近 N 秒的 RTT 分位(只算成功的 RTT 探测,不含吞吐)。 */
+		function linkStats(seconds = 60) {
+			const cutoff = Date.now() - seconds * 1000;
+			const values = state.link
+				.filter((row) => row.kind === 'rtt' && row.t >= cutoff && typeof row.rtt === 'number')
+				.map((row) => row.rtt)
+				.sort((a, b) => a - b);
+			if (values.length === 0) return { count: 0, p50: null, p99: null, max: null };
+			return {
+				count: values.length,
+				p50: percentile(values, 50),
+				p99: percentile(values, 99),
+				max: percentile(values, 100),
+			};
+		}
+
+		function hostP99() {
+			return state.host?.eventLoop?.p99 ?? null;
+		}
+
+		/** RTT 尖峰而 FPS 正常 → 怀疑链路,而不是页面。 */
+		function suspectLink() {
+			const stats = linkStats();
+			return stats.p99 !== null && stats.p99 > 300 && state.fps >= 50;
+		}
+
+		// ───────────── E. 空闲基线 / 场景标记 / 验收自证 ─────────────
+		/** 流式判定:ui-chat 的稳定钩子,不依赖类名与第三方插件。 */
+		function isStreaming() {
+			try {
+				return document.querySelector('[data-chat-running]') !== null;
+			} catch (error) {
+				return false;
+			}
+		}
+
+		/** 一个固定时长的测量窗口:每秒取一次读数,出窗口后汇总。 */
+		async function measureWindow(label, ms) {
+			const started = performance.now();
+			const fps = [];
+			const lt0 = state.ltTotal;
+			const dom0 = state.dom.total;
+			let ltPeak = 0;
+			while (performance.now() - started < ms) {
+				await sleep(1000);
+				fps.push(state.fps);
+				ltPeak = Math.max(ltPeak, state.ltPerSec);
+				if (experiment.aborted === true && label !== 'idle') break;
+			}
+			const seconds = Math.max((performance.now() - started) / 1000, 0.001);
+			const domDelta = state.dom.total - dom0;
+			return {
+				label,
+				t: Date.now(),
+				seconds: Math.round(seconds * 10) / 10,
+				fps: fps.length === 0 ? round1(state.fps) : round1(fps.reduce((sum, value) => sum + value, 0) / fps.length),
+				fpsMin: fps.length === 0 ? round1(state.fps) : round1(Math.min.apply(null, fps)),
+				longTasks: state.ltTotal - lt0,
+				longTaskPeakPerSec: ltPeak,
+				domDelta,
+				domPerMin: round1((domDelta * 60000) / (seconds * 1000)),
+				top: pluginTable().slice(0, 3).map((row) => ({ id: row.id, cps: row.cps, ms: row.ms })),
+				domTop: domWriteTable().slice(0, 2),
+			};
+		}
+
+		/** 自动空闲基线:连续空闲 IDLE_GAP_MS 之后打一个 BASELINE_MS 的窗口,5 分钟内只打一次。 */
+		function idleTick(now) {
+			state.streaming = isStreaming();
+			if (state.streaming) {
+				state.idleSince = 0;
+				return;
+			}
+			if (state.idleSince === 0) state.idleSince = now;
+			if (state.baselineRunning || experiment.phase === 'running') return;
+			if (now - state.idleSince < IDLE_GAP_MS) return;
+			if (state.baselineAt !== 0 && now - state.baselineAt < 5 * 60000) return;
+			state.baselineRunning = true;
+			state.baselineAt = now;
+			measureWindow('idle', state.baselineMs === null ? BASELINE_MS : state.baselineMs).then((windowed) => {
+				state.idleBaseline = windowed;
+				state.baselineRunning = false;
+				dirty = true;
+			});
+		}
+
+		/** 场景标记:把"卡的那一下"和当时的读数绑在一起。 */
+		function addMark(note) {
+			const worst = worstLongTask();
+			const stats = linkStats();
+			state.marks.push({
+				t: Date.now(),
+				iso: new Date().toISOString(),
+				note: typeof note === 'string' ? note.slice(0, 200) : '',
+				fps: round1(state.fps),
+				frameMs: round1(state.frameWorst),
+				nodes: state.dom.total,
+				heap: state.heap,
+				longTask: worst === null ? null : { ms: worst.ms, owner: worst.owner, component: worst.component ?? null },
+				rttP99: stats.p99,
+				hostP99: hostP99(),
+				streaming: state.streaming,
+			});
+			if (state.marks.length > 100) state.marks.shift();
+			try { localStorage.setItem(LS_MARKS, JSON.stringify(state.marks.slice(-100))); } catch (error) { /* 记不住就只留内存 */ }
+			dirty = true;
+		}
+
+		/** 验收自证:把这次要交的几条判据直接算出来,面板与导出都能读到同一份。 */
+		function verification() {
+			const seen = new Set();
+			for (const id of state.plugins.keys()) seen.add(id);
+			for (const id of state.domWrites.keys()) seen.add(id);
+			const mapStates = { pending: 0, ready: 0, failed: 0 };
+			for (const entry of bundleMaps.values()) mapStates[entry.state] += 1;
+			const blamed = state.longTasks.filter((row) => row.owner !== null || row.component !== null);
+			const withComponent = state.longTasks.filter((row) => row.component !== null);
+			return {
+				precise: {
+					enabled: state.precise,
+					bundles: bundleMaps.size,
+					mapStates,
+					seconds: Object.fromEntries([...bundleMaps.entries()].map(([key, entry]) => [bundleLabel(key), entry.state])),
+				},
+				ownPackageNames: {
+					'dsh-status-rotator': seen.has('dsh-status-rotator'),
+					'dsh-notify-me': seen.has('dsh-notify-me'),
+				},
+				longTask: {
+					total: state.ltTotal,
+					attributed: state.ltBlamed,
+					withComponent: withComponent.length,
+					last: blamed.length === 0 ? null : blamed[blamed.length - 1],
+				},
+				idle: {
+					streaming: state.streaming,
+					baseline: state.idleBaseline,
+				},
+				hostEvents: {
+					installed: state.hostEvents === null ? null : state.hostEvents.installed === true,
+					reason: state.hostEvents === null ? null : state.hostEvents.reason ?? '',
+					eventNames: state.hostEvents === null ? [] : Object.keys(state.hostEvents.stats ?? {}),
+				},
+				exportSections: ['timeline', 'longTasks', 'isolation'],
+			};
+		}
+
+		// ───────────── C. 自动插件隔离实验(因果,不是相关) ─────────────
+		// 每一步都记宿主的真实回执(ChangeResult):没真的关掉就写 reason 跳过,不假装成功。
+		// setBundle 会临时改 profile 的 bundle 选择(不是 cordis.patch.yml),所以:
+		//   1) 必须先读原始列表; 2) 每步结束立刻恢复; 3) 全部结束后再读一次并逐项核验;
+		//   4) 任何时刻都能中止,中止也会走恢复流程。
+		const experiment = {
+			phase: 'idle',        // idle | running | done | aborted | failed
+			message: '',
+			candidates: DEFAULT_CANDIDATES.slice(),
+			results: [],
+			original: null,
+			candidateState: [],
+			restored: null,
+			baseline: null,
+			aborted: false,
+			startedAt: 0,
+			via: null,            // 'remote' | 'route' | null:数据实际从哪条通道来的
+		};
+
+		function experimentText() {
+			const parts = [experiment.phase];
+			if (experiment.message !== '') parts.push(experiment.message);
+			return parts.join(' · ');
+		}
+
+		function abortExperiment() {
+			if (experiment.phase !== 'running') return false;
+			experiment.aborted = true;
+			experiment.message = '中止中:正在恢复原状';
+			return true;
+		}
+
+		/** 把候选恢复成原始开关状态;返回每一项的真实回执。 */
+		async function restoreCandidates(stateBefore) {
+			const restores = [];
+			for (const [name, enabled] of stateBefore) {
+				if (enabled !== true) continue;
+				try {
+					const payload = await bundleOp('setBundle', { op: 'setBundle', name, enabled: true, confirm: true });
+					restores.push({
+						name,
+						ok: payload.ok === true && payload.result?.application === 'applied',
+						application: payload.result?.application ?? null,
+						error: payload.ok === true ? null : payload.error,
+					});
+				} catch (error) {
+					restores.push({ name, ok: false, application: null, error: error instanceof Error ? error.message : String(error) });
+				}
+			}
+			return restores;
+		}
+
+		/** Δ 只对照基线;没有窗口(宿主没真的关掉)就不写数字。 */
+		function applyDeltas(rows, baseline) {
+			if (baseline === null || baseline === undefined) return rows;
+			for (const row of rows) {
+				if (row.window === undefined || row.window === null) continue;
+				row.delta = {
+					fps: round1(row.window.fps - baseline.fps),
+					longTasks: row.window.longTasks - baseline.longTasks,
+					domPerMin: round1(row.window.domPerMin - baseline.domPerMin),
+				};
+			}
+			return rows;
+		}
+
+		async function runExperiment() {
+			if (experiment.phase === 'running') return false;
+			experiment.phase = 'running';
+			experiment.aborted = false;
+			experiment.results = [];
+			experiment.restored = null;
+			experiment.baseline = null;
+			experiment.startedAt = Date.now();
+			experiment.message = '读取原始 bundle 列表';
+			experiment.via = null;
+			let listed;
+			try {
+				listed = await bundleOp('listBundles', { op: 'listBundles' });
+			} catch (error) {
+				experiment.phase = 'failed';
+				experiment.message = `宿主不可达:${error instanceof Error ? error.message : String(error)}`;
+				return false;
+			}
+			if (listed.ok !== true) {
+				experiment.phase = 'failed';
+				experiment.message = `宿主不可用:${String(listed.error)}`;
+				return false;
+			}
+			experiment.original = listed.bundles;
+			experiment.via = listed.via ?? null;
+			const stateBefore = new Map();
+			for (const name of experiment.candidates) {
+				const found = listed.bundles.find((bundle) => bundle.name === name);
+				stateBefore.set(name, found === undefined ? null : found.enabled === true);
+			}
+			experiment.candidateState = [...stateBefore.entries()].map(([name, enabled]) => ({ name, enabledBefore: enabled }));
+
+			experiment.message = '基线窗口';
+			experiment.baseline = await measureWindow('baseline', STEP_MS);
+
+			try {
+				for (const name of experiment.candidates) {
+					if (experiment.aborted === true) break;
+					const before = stateBefore.get(name);
+					if (before === null) {
+						experiment.results.push({ name, applied: false, reason: '不在 bundle 列表里(未安装或不是 bundle)' });
+						continue;
+					}
+					if (before === false) {
+						experiment.results.push({ name, applied: false, reason: '本来就是关闭状态,无法对比' });
+						continue;
+					}
+					experiment.message = `${name}:关闭`;
+					const off = await bundleOp('setBundle', { op: 'setBundle', name, enabled: false, confirm: true });
+					const offApplied = off.ok === true && off.result?.application === 'applied';
+					const row = {
+						name,
+						applied: offApplied,
+						changeResult: off.result ?? null,
+						error: off.ok === true ? null : off.error,
+					};
+					if (offApplied === false) {
+						row.reason = `宿主没有真的关掉(${String(off.result?.application ?? off.error)})`;
+						experiment.results.push(row);
+						continue;
+					}
+					experiment.message = `${name}:测量窗口`;
+					row.window = await measureWindow(`off:${name}`, STEP_MS);
+					experiment.message = `${name}:恢复`;
+					const back = await bundleOp('setBundle', { op: 'setBundle', name, enabled: true, confirm: true });
+					row.restore = {
+						ok: back.ok === true && back.result?.application === 'applied',
+						application: back.result?.application ?? null,
+						error: back.ok === true ? null : back.error,
+					};
+					experiment.results.push(row);
+				}
+			} catch (error) {
+				experiment.message = `中断:${error instanceof Error ? error.message : String(error)}`;
+			}
+
+			experiment.message = experiment.aborted === true ? '中止:恢复原状' : '恢复原状并核验';
+			const restores = await restoreCandidates(stateBefore);
+			let after = null;
+			try {
+				after = await bundleOp('listBundles', { op: 'listBundles' });
+			} catch (error) {
+				after = null;
+			}
+			const diff = [];
+			if (after !== null && after.ok === true && Array.isArray(after.bundles) && Array.isArray(experiment.original)) {
+				for (const before of experiment.original) {
+					const now = after.bundles.find((bundle) => bundle.name === before.name);
+					if (now === undefined || now.enabled !== before.enabled) diff.push({ name: before.name, before: before.enabled, after: now === undefined ? null : now.enabled });
+				}
+			}
+			experiment.restored = { restores, after: after !== null && after.ok === true ? after.bundles : null, diff, ok: diff.length === 0 };
+			// Δ 一律对照基线;缺窗口的项不编数字,直接留空。
+			applyDeltas(experiment.results, experiment.baseline);
+			experiment.phase = experiment.aborted === true ? 'aborted' : 'done';
+			experiment.message = experiment.aborted === true ? '已中止并恢复' : `完成,恢复核验:${experiment.restored.ok ? '一致' : `有 ${experiment.restored.diff.length} 处不一致`}`;
+			dirty = true;
+			return true;
+		}
+
+		/** 最近 60 秒里最差的那一秒 —— 用来把"卡"对齐到具体时钟刻度。 */
+		function worstSecond(seconds = 60) {
+			const cutoff = Date.now() - seconds * 1000;
+			let worst = null;
+			for (const sample of ring) {
+				if (sample.t < cutoff) continue;
+				if (worst === null || (sample.frameMs ?? 0) > (worst.frameMs ?? 0)) worst = sample;
+			}
+			return worst;
+		}
+
+		const pad = (value) => String(value).padStart(2, '0');
+		const clock = (ms) => {
+			const date = new Date(ms);
+			return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+		};
+		const mb = (bytes) => (bytes / 1048576).toFixed(1);
+
+		function snapshot() {
+			const worst = worstLongTask();
+			return {
+				plugin: PKG,
+				exportedAt: new Date().toISOString(),
+				page: location.href,
+				userAgent: navigator.userAgent,
+				instrumented: state.on,
+				since: new Date(state.since > 0 ? state.since : Date.now()).toISOString(),
+				summary: {
+					fps: round1(state.fps),
+					worstFrameMs: round1(state.frameWorst),
+					attributedMsPerSec: round1(state.attributedPerSec),
+					unattributedMsPerFrame: { avg: round1(state.unattrAvg), peak: round1(state.unattrPeak) },
+					worstLongTask60s: worst === null ? null : {
+						at: new Date(worst.t).toISOString(),
+						ms: round1(worst.ms),
+						owner: worst.owner,
+						startTime: round1(worst.at),
+					},
+					domNodes: state.dom.total,
+					domGrowthPerMin: round1(rate(state.dom.series)),
+					heapUsedBytes: state.heap,
+					heapGrowthPerMin: state.heap === null ? null : Math.round(rate(state.heapSeries)),
+					domMutations: {
+						total: state.mutations,
+						sampledEvery: MUT_SAMPLE,
+						perPlugin: domWriteTable(),
+					},
+					longTaskStats: { total: state.ltTotal, attributed: state.ltBlamed },
+					worstSecondLast60s: worstSecond(),
+					containers: TARGETS.map((target) => {
+						const entry = state.targets.get(target.id);
+						return {
+							id: target.id,
+							nodes: entry === undefined ? null : entry.nodes,
+							growthPerMin: entry === undefined ? 0 : round1(rate(entry.series)),
+						};
+					}),
+					plugins: pluginTable(),
+				},
+				// ── 三段取证 ────────────────────────────────────────────────
+				// 1) 采样曲线:每秒一条 + 场景标记 + 空闲基线
+				timeline: {
+					note: '每秒一条(t 是 epoch ms):fps / 最差帧 / longtask 条数 / 节点 / 堆 / 归因 Top3;marks 是场景标记',
+					samples: ring,
+					last60s: ring.slice(-60),
+					marks: state.marks,
+					idleBaseline: state.idleBaseline,
+				},
+				// 2) longtask 明细:owner = 调度方包名,component = 渲染方组件名
+				longTasks: {
+					note: 'owner 来自调度点插桩,component 来自 fiber 上溯;source 标明这条靠哪边定的',
+					total: state.ltTotal,
+					attributed: state.ltBlamed,
+					records: state.longTasks,
+				},
+				// 3) 隔离实验:逐插件关/开的因果对照与恢复核验
+				isolation: {
+					note: '每步带宿主真实回执(changeResult);applied:false 表示宿主没真的关掉,该步不产出 Δ',
+					phase: experiment.phase,
+					message: experiment.message,
+					via: experiment.via,
+					startedAt: experiment.startedAt > 0 ? new Date(experiment.startedAt).toISOString() : null,
+					candidates: experiment.candidates,
+					candidateState: experiment.candidateState,
+					baseline: experiment.baseline,
+					results: experiment.results,
+					restored: experiment.restored,
+				},
+				host: {
+					at: state.hostAt > 0 ? new Date(state.hostAt).toISOString() : null,
+					error: state.hostError,
+					last: state.host,
+					eventWatch: state.hostEvents,
+				},
+				link: { stats60s: linkStats(), throughput: state.linkText, suspect: suspectLink(), samples: state.link.slice(-120) },
+				verification: verification(),
+			};
+		}
+
+		function exportJson() {
+			flush(true);
+			const url = URL.createObjectURL(new Blob([JSON.stringify(snapshot(), null, 2)], { type: 'application/json' }));
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = `perf-hud-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+			link.click();   // 不挂进 body:避免污染被统计的 DOM
+			natives.setTimeout(() => URL.revokeObjectURL(url), 2000);
+		}
+
+		function setEnabled(on) {
+			try { localStorage.setItem(LS_ON, on ? '1' : '0'); } catch (error) { /* 记住开关是尽力而为 */ }
+			if (on) start(); else stop();
+		}
+
+		function start() {
+			if (state.on) return;
+			state.on = true;
+			W.setTimeout = wrappers.timeout;
+			W.setInterval = wrappers.interval;
+			W.requestAnimationFrame = wrappers.raf;
+			Node.prototype.appendChild = mutWrappers.appendChild;
+			Node.prototype.insertBefore = mutWrappers.insertBefore;
+			Element.prototype.setAttribute = mutWrappers.setAttribute;
+			state.windowStart = performance.now();
+			state.windowFrames = 0;
+			state.lastFrameAt = 0;
+			state.worstFrameMs = 0;
+			state.fpsLoop = natives.requestAnimationFrame(frame);
+			state.sampleTimer = natives.setInterval(sampleTick, 1000);
+			state.domTimer = natives.setInterval(sampleDom, 2000);
+			state.flushTimer = natives.setInterval(() => flush(false), 5000);
+			state.ltObserver = startLongTask();
+			startDomWatch();
+			sampleDom();
+			probeLink('rtt');
+			state.linkTimer = natives.setInterval(() => probeLink('rtt'), RTT_INTERVAL_MS);
+			state.loadTimer = natives.setInterval(() => probeLink('load'), LOAD_INTERVAL_MS);
+		}
+
+		function stop() {
+			if (state.on === false) return;
+			state.on = false;
+			// 关掉 HUD 不能把插件留在"被隔离"的状态:正在跑的实验立刻走恢复流程。
+			if (experiment.phase === 'running') abortExperiment();
+			// 只在全局仍是我们自己那份包装时恢复:同页热更新出新实例时,别把新的踩掉。
+			if (W.setTimeout === wrappers.timeout) W.setTimeout = natives.setTimeout;
+			if (W.setInterval === wrappers.interval) W.setInterval = natives.setInterval;
+			if (W.requestAnimationFrame === wrappers.raf) W.requestAnimationFrame = natives.requestAnimationFrame;
+			if (Node.prototype.appendChild === mutWrappers.appendChild) Node.prototype.appendChild = mutNatives.appendChild;
+			if (Node.prototype.insertBefore === mutWrappers.insertBefore) Node.prototype.insertBefore = mutNatives.insertBefore;
+			if (Element.prototype.setAttribute === mutWrappers.setAttribute) Element.prototype.setAttribute = mutNatives.setAttribute;
+			natives.cancelAnimationFrame(state.fpsLoop);
+			natives.clearInterval(state.sampleTimer);
+			natives.clearInterval(state.domTimer);
+			natives.clearInterval(state.flushTimer);
+			natives.clearInterval(state.linkTimer);
+			natives.clearInterval(state.loadTimer);
+			stopDomWatch();
+			if (state.ltObserver !== null) { state.ltObserver.disconnect(); state.ltObserver = null; }
+			state.fps = 0;
+			flush(true);
+		}
+
+		function round1(value) {
+			return Math.round(value * 10) / 10;
+		}
+
+		// 挂到 window:便于控制台/自动化取数,导出的 JSON 与 __perfHud.snapshot() 同源。
+		W.__perfHud = {
+			get enabled() { return state.on; },
+			snapshot,
+			export: exportJson,
+			table: pluginTable,
+			ring,
+			longTasks: state.longTasks,
+			clear() {
+				ring.length = 0;
+				state.longTasks.length = 0;
+				state.plugins.clear();
+				state.domWrites.clear();
+				state.mutations = 0;
+				state.ltTotal = 0;
+				state.ltBlamed = 0;
+				state.lastTick = 0;
+				state.dom.series.length = 0;
+				state.heapSeries.length = 0;
+				for (const entry of state.targets.values()) entry.series.length = 0;
+				dirty = true;
+				flush(true);
+			},
+			enable() { setEnabled(true); },
+			disable() { setEnabled(false); },
+			get precise() { return state.precise; },
+			setPrecise(on) { setPrecise(on === true); },
+			mark: addMark,
+			experiment: runExperiment,
+			abortExperiment,
+			baselines: () => ({ idle: state.idleBaseline, experiment: experiment.baseline }),
+			/** 渲染型卡顿自测:一次提交里塞进 N 个节点,用来验收 fiber 归因。 */
+			stress(nodes) { state.stressNodes = typeof nodes === 'number' && nodes > 0 ? Math.min(nodes, 40000) : 6000; natives.setTimeout(() => { state.stressNodes = 0; }, 400); },
+			host: () => state.host,
+			hostEvents(on) {
+				if (on === false) {
+					state.hostWatchOff = true;
+					hostOp({ op: 'watchEvents', enable: false }).catch(() => {});
+					return;
+				}
+				state.hostWatchOff = false;
+				state.hostWatchAsked = false;
+				return requestHostEventWatch();
+			},
+			link: () => state.link,
+			verification,
+		};
+
+		/** 精确归因开关:开启时立刻把已经见过的多包 URL 排队解析。 */
+		function setPrecise(on) {
+			state.precise = on === true;
+			try { localStorage.setItem(LS_PRECISE, state.precise ? '1' : '0'); } catch (error) { /* 记不住就本次会话有效 */ }
+			if (state.precise) primeBundleMaps();
+			dirty = true;
+		}
+
+		// ───────────────────────────────── 文案 ─────────────────────────────────
+		const DICT = {
+			zh: {
+				title: '性能 HUD', off: '已关', turnOn: '开启', turnOff: '关闭',
+				fps: 'FPS', frameWorst: '最差帧', longtask: 'Longtask 60s', blame: '回调归因(耗时)',
+				rest: '其余', dom: 'DOM 节点', none: '无', exportJson: '导出 JSON', clear: '清空',
+				collapse: '折叠', expand: '展开', sessions: '会话列表', messages: '消息区', perMin: '/分',
+				unattr: '帧内未归因', peak: '峰',
+				unattrHint: '帧间隔里没被插桩回调解释掉的部分:样式重算、绘制、以及等待 vsync。CSS 动画的开销只在这里现形。',
+				rateWindow: '速率近12s', heap: 'JS 堆', domWrites: 'DOM 写入(按插件)', est: '≈',
+				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', times: ' 次',
+				perSec: '/s', samples: '次采样', unblamed: '未归因',
+				domWritesHint: '前一项是精确总次数;下面按插件给出估算(每 10 次采样一次栈,命中按 10 折算)。',
+				precise: '精确归因', preciseHint: '开启后按合并 bundle 的 sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)',
+				component: '组件', cumulative: '累计', maps: '批次分段',
+				stream: '状态', running: '流式', idle: '空闲', idleBase: '空闲基线(60s)', idleWriter: '空闲也在加节点的是',
+				notYet: '未采集', hostLoop: '宿主 event-loop', hostDown: '宿主不可用', link: '链路 RTT 近60s',
+				hostEvents: '宿主事件到达', hostEventsHint: '宿主半用公开接口 ctx.on(\'session/event\') 记每条事件「提交(event.time)→到达监听器」的延迟;第一版想包 Context.emit,线上实测根本抓不到(该事件走带作用域过滤的派发),故改口径且写明',
+				notInstalled: '未安装', waiting: '已装,等事件',
+				suspect: '疑似链路', isolation: '隔离实验', candidate: '候选', baseline: '基线',
+				startExp: '开始实验', abortExp: '中止并恢复', stress: '自测:渲染卡顿',
+				stressHint: '自测:一次提交塞 6000 个节点制造真实渲染型长任务,用来验收 fiber 归因',
+				expHint: '会临时关闭候选插件各 60 秒并逐项恢复;每步都记宿主回执,恢复后逐项核验。',
+				skipped: '跳过', restore: '恢复', marks: '场景标记', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
+				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
+			},
+			en: {
+				title: 'Perf HUD', off: 'off', turnOn: 'on', turnOff: 'off',
+				fps: 'FPS', frameWorst: 'worst frame', longtask: 'longtask 60s', blame: 'attribution (time)',
+				rest: 'rest', dom: 'DOM nodes', none: 'n/a', exportJson: 'Export JSON', clear: 'Clear',
+				collapse: 'Collapse', expand: 'Expand', sessions: 'Sessions', messages: 'Messages', perMin: '/min',
+				unattr: 'unattributed/frame', peak: 'peak',
+				unattrHint: 'Frame gap not explained by instrumented callbacks: style recalc, paint, and vsync wait. CSS-animation cost only shows up here.',
+				rateWindow: 'rate 12s', heap: 'JS heap', domWrites: 'DOM writes (by plugin)', est: '≈',
+				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', times: '',
+				perSec: '/s', samples: ' samples', unblamed: 'unattributed',
+				domWritesHint: 'First number is the exact total; the rows below are estimates (stacks sampled every 10th write, hits scaled by 10).',
+				precise: 'precise', preciseHint: 'Resolve single package names from the merged bundle sourcemap sections (lazy; one map fetch per rev)',
+				component: 'component', cumulative: 'total', maps: 'maps',
+				stream: 'state', running: 'streaming', idle: 'idle', idleBase: 'idle baseline (60s)', idleWriter: 'still adding nodes while idle',
+				notYet: 'n/a', hostLoop: 'host event-loop', hostDown: 'host n/a', link: 'link RTT 60s',
+				hostEvents: 'host event arrival', hostEventsHint: 'The host half uses the public ctx.on(\'session/event\') and records commit(event.time)→listener arrival lag; the earlier attempt to wrap Context.emit never fired (that event uses scope-filtered dispatch)',
+				notInstalled: 'not installed', waiting: 'installed, waiting for events',
+				suspect: 'link suspected', isolation: 'isolation', candidate: 'candidates', baseline: 'baseline',
+				startExp: 'Run experiment', abortExp: 'Abort and restore', stress: 'Self-test: render stall',
+				stressHint: 'Self-test: one commit of 6000 nodes to produce a real render long task for fiber attribution',
+				expHint: 'Temporarily disables each candidate for 60s and restores it; every step records the host receipt and the restore is verified.',
+				skipped: 'skipped', restore: 'restore', marks: 'marks', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
+				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
+			},
+		};
+		const fallback = (key) => DICT.zh[key] ?? key;
+		let translate = fallback;
+
+		// ─────────────────────────────── 面板(React) ───────────────────────────────
+		// 面板排版:文案走 UI 字体、数字走等宽字体;关键字加粗,数值一律 600+ 权重;
+		// 分割线用更实的 border-l2(原来的 l1 太淡);所有文字都允许换行,不做省略号截断。
+		const UI_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
+		const MONO_FONT = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+
+		const S = {
+			root: (open) => ({
+				position: 'fixed', right: 12, bottom: 12, zIndex: 60, pointerEvents: 'auto',
+				font: `13px/1.55 ${UI_FONT}`,
+				background: 'var(--dsw-alias-bg-overlay)', color: 'var(--dsw-alias-label-primary)',
+				border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 12,
+				boxShadow: '0 10px 30px rgba(0,0,0,.28)', boxSizing: 'border-box',
+				...(open
+					? { width: 396, maxHeight: '82vh', overflowY: 'auto', overflowX: 'hidden', padding: '10px 12px' }
+					: { padding: '6px 10px' }),
+			}),
+			head: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+			brand: { fontWeight: 700, fontSize: 13.5, letterSpacing: '.01em', color: 'var(--dsw-alias-label-primary)' },
+			row: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginTop: 5 },
+			label: { color: 'var(--dsw-alias-label-secondary)', fontWeight: 600, flex: '1 1 auto', minWidth: 0, whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.4 },
+			num: { fontFamily: MONO_FONT, fontWeight: 650, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', flex: '0 0 auto' },
+			strong: { fontWeight: 700, color: 'var(--dsw-alias-label-primary)' },
+			btn: {
+				font: 'inherit', color: 'var(--dsw-alias-label-primary)', background: 'transparent',
+				border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 7, padding: '2px 8px', cursor: 'pointer', flex: '0 0 auto',
+			},
+			sub: { color: 'var(--dsw-alias-label-secondary)', fontSize: 11.5, marginTop: 2, paddingLeft: 12, lineHeight: 1.45, whiteSpace: 'normal', overflowWrap: 'anywhere' },
+			sep: { marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--dsw-alias-border-l2)' },
+			buttons: { display: 'flex', gap: 8, marginTop: 7, flexWrap: 'wrap' },
+			input: { font: 'inherit', color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 7, padding: '2px 8px', flex: 1, minWidth: 0 },
+		};
+
+		/**
+		 * 阈值配色(越大越糟:帧耗时 / longtask):>= warn 变黄,>= bad 变红。
+		 */
+		function levelUp(value, warn, bad) {
+			if (value >= bad) return 'var(--dsw-alias-state-error-primary)';
+			if (value >= warn) return 'var(--dsw-alias-state-warn-primary)';
+			return 'var(--dsw-alias-state-success-primary)';
+		}
+
+		/** 阈值配色(越大越好:FPS):<= bad 变红,<= warn 变黄。 */
+		function levelDown(value, warn, bad) {
+			if (value <= bad) return 'var(--dsw-alias-state-error-primary)';
+			if (value <= warn) return 'var(--dsw-alias-state-warn-primary)';
+			return 'var(--dsw-alias-state-success-primary)';
+		}
+
+		/**
+		 * 只去掉 @scope/ 前缀,不截断 —— 截断过的包名根本认不出来("dsh-better-sideb…"),
+		 * 放不下就换行(面板宽度 + overflowWrap 已经接得住)。
+		 */
+		function short(id) {
+			return id.replace(/^@[^/]+\//, '');
+		}
+
+		const rateText = (series) => {
+			const value = rate(series);
+			return `${value >= 0 ? '+' : ''}${value.toFixed(0)}${translate('perMin')}`;
+		};
+
+		function worstSecondText() {
+			const sample = worstSecond();
+			if (sample === null) return translate('none');
+			return `${clock(sample.t)} · ${sample.fps}fps · ${sample.frameMs}ms · LT×${sample.ltCount ?? 0}`;
+		}
+
+		function heapRateText() {
+			const perMin = rate(state.heapSeries);
+			return `${perMin >= 0 ? '+' : ''}${mb(perMin)}MB${translate('perMin')}`;
+		}
+
+		/** DOM 写入者 Top N + 其余(数字带 ≈:采样估算)。 */
+		function writeRows() {
+			const rows = domWriteTable();
+			const top = rows.slice(0, MUT_TOP);
+			const rest = rows.slice(MUT_TOP);
+			const restCount = rest.reduce((sum, row) => sum + row.estimatedCount, 0);
+			return h('div', null,
+				top.map((row, index) => h('div', { key: row.id },
+					h('div', { style: S.row },
+						h('span', { style: S.label, title: `${row.id} · ${row.sampled}${translate('samples')}` }, `${index + 1}. ${short(row.id)}`),
+						h('span', { style: S.num }, `${translate('est')}${row.estimatedCount}`)),
+					row.component === null ? null : h('div', { style: S.sub }, `${translate('component')}: ${row.component}`))),
+				rest.length === 0 ? null : h('div', { style: S.row },
+					h('span', { style: S.label }, `${translate('rest')} (${rest.length})`),
+					h('span', { style: S.num }, `${translate('est')}${restCount}`)));
+		}
+
+		function PerfHud() {
+			const [, force] = React.useState(0);
+			const [open, setOpen] = React.useState(state.collapsed === false);
+			const [draft, setDraft] = React.useState('');
+			const setRoot = React.useCallback((element) => { state.root = element; }, []);
+			React.useEffect(() => {
+				const id = natives.setInterval(() => force((n) => (n + 1) % 1000000), 500);
+				return () => natives.clearInterval(id);
+			}, []);
+
+			const t = translate;
+			const toggle = () => {
+				const next = open === false;
+				setOpen(next);
+				state.collapsed = next === false;
+				try { localStorage.setItem(LS_UI, next ? '0' : '1'); } catch (error) { /* 折叠状态记不住无所谓 */ }
+			};
+
+			if (state.on === false) {
+				return h('div', { ref: setRoot, style: S.root(false) },
+					h('div', { style: S.head },
+						h('span', { style: S.label }, `${t('title')} · ${t('off')}`),
+						h('button', { type: 'button', style: S.btn, onClick: () => setEnabled(true) }, t('turnOn'))));
+			}
+
+			const worst = worstLongTask();
+			const loop = state.host === null ? null : state.host.eventLoop;
+			const link = linkStats();
+			const linkSuspect = suspectLink();
+			const idleBase = state.idleBaseline;
+			const v = verification();
+			const rows = pluginTable();
+			const top = rows.slice(0, TOP_N);
+			const rest = rows.slice(TOP_N);
+			const restMs = rest.reduce((sum, row) => sum + row.ms, 0);
+			const restCount = rest.reduce((sum, row) => sum + row.count, 0);
+
+			const head = h('div', { style: S.head },
+				h('span', { style: S.brand }, t('title')),
+				h('span', { style: { ...S.num, marginLeft: 'auto', color: levelDown(state.fps, 50, 30) } }, `${state.fps.toFixed(1)} fps`),
+				h('button', {
+					type: 'button',
+					style: { ...S.btn, color: state.precise ? 'var(--dsw-alias-brand-primary)' : undefined },
+					title: t('preciseHint'),
+					onClick: () => setPrecise(state.precise === false),
+				}, `${t('precise')}${state.precise ? '✓' : ''}`),
+				h('button', { type: 'button', style: S.btn, title: open ? t('collapse') : t('expand'), onClick: toggle }, open ? '–' : '+'),
+				h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff')));
+
+			if (open === false) {
+				// 折叠不是"看不见":至少留下 fps / 最差帧 / 最差 longtask 三个读数。
+				return h('div', { ref: setRoot, style: S.root(false) },
+					h('div', { style: S.head },
+						h('span', { style: S.brand }, t('title')),
+						h('span', { style: { ...S.num, marginLeft: 'auto', color: levelDown(state.fps, 50, 30) } }, `${state.fps.toFixed(0)} fps`),
+						h('span', { style: S.label }, `${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms`),
+						worst === null ? null : h('span', { style: S.label }, `LT ${worst.ms.toFixed(0)}ms`),
+						h('button', { type: 'button', style: S.btn, title: t('expand'), onClick: toggle }, '+'),
+						h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff'))));
+			}
+
+			const body = h('div', null,
+				h('div', { style: S.row },
+					h('span', { style: S.label }, t('frameWorst')),
+					h('span', { style: { ...S.num, color: levelUp(state.frameWorst, 60, 120) } }, `${state.frameWorst.toFixed(0)}ms`)),
+				h('div', { style: S.row },
+					h('span', { style: S.label }, t('longtask')),
+					h('span', { style: { ...S.num, color: worst === null ? undefined : levelUp(worst.ms, 120, 400) } },
+						worst === null ? t('none') : `${worst.ms.toFixed(0)}ms · ${worst.owner === null ? t('unblamed') : short(worst.owner)}`)),
+				h('div', { style: S.row },
+					h('span', { style: S.label }, t('ltCount')),
+					h('span', { style: S.num }, `${state.ltTotal}${t('times')} · ${t('hits')} ${state.ltBlamed}`)),
+				h('div', { style: S.row },
+					h('span', { style: S.label }, t('worstSecond')),
+					h('span', { style: S.num }, worstSecondText())),
+				h('div', { style: S.row },
+					h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),
+					h('span', { style: S.num }, `${state.unattrAvg.toFixed(1)}ms · ${t('peak')} ${state.unattrPeak.toFixed(0)}ms`)),
+				h('div', { style: S.sep },
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('blame')),
+						h('span', { style: S.num }, `${state.attributedPerSec.toFixed(0)}ms/s`)),
+					h('div', null, top.map((row, index) => h('div', { key: row.id },
+						h('div', { style: S.row },
+							h('span', { style: S.label, title: `${row.id} · ${t('cumulative')} ${row.count}× · ${row.ms}ms` }, `${index + 1}. ${short(row.id)}`),
+							h('span', { style: S.num }, `${row.cps}${t('perSec')} · ${t('peak')} ${row.cpsPeak}`)),
+						h('div', { style: S.sub }, `${row.msps}ms${t('perSec')} · ${t('cumulative')} ${row.count}× / ${row.ms.toFixed(0)}ms`)))),
+					rest.length === 0 ? null : h('div', { style: S.row },
+						h('span', { style: S.label }, `${t('rest')} (${rest.length})`),
+						h('span', { style: S.num }, `${restCount}× ${restMs.toFixed(0)}ms`))),
+				h('div', { style: S.sep },
+					h('div', { style: S.row },
+						h('span', { style: S.label }, `${t('dom')} · ${t('rateWindow')}`),
+						h('span', { style: S.num }, `${state.dom.total} · ${rateText(state.dom.series)}`)),
+					TARGETS.map((target) => {
+						const entry = state.targets.get(target.id);
+						return h('div', { key: target.id, style: S.row },
+							h('span', { style: S.label }, target.label()),
+							h('span', { style: S.num }, entry === undefined || entry.nodes === null ? t('none') : `${entry.nodes} · ${rateText(entry.series)}`));
+					}),
+					state.heap === null ? null : h('div', { style: S.row },
+						h('span', { style: S.label }, t('heap')),
+						h('span', { style: S.num }, `${mb(state.heap)}MB · ${heapRateText()}`))),
+				h('div', { style: S.sep },
+					h('div', { style: S.row },
+						h('span', { style: S.label, title: t('domWritesHint') }, t('domWrites')),
+						h('span', { style: S.num }, String(state.mutations))),
+					writeRows()),
+				// ── 状态 / 基线 / 宿主 / 链路 ──
+				h('div', { style: S.sep },
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('stream')),
+						h('span', { style: S.num }, `${state.streaming ? t('running') : t('idle')}${state.streaming || state.idleSince === 0 ? '' : ` ${Math.round((performance.now() - state.idleSince) / 1000)}s`}${state.baselineRunning ? ` · ${t('idleBase')}…` : ''}`)),
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('hostLoop')),
+						h('span', { style: { ...S.num, color: loop === null ? undefined : levelUp(loop.p99, 20, 60) } },
+							state.hostError !== null ? `${t('hostDown')}:${state.hostError.slice(0, 26)}`
+								: loop === null ? t('notYet') : `p50 ${loop.p50}ms · p99 ${loop.p99}ms`)),
+					h('div', { style: S.row },
+						h('span', { style: S.label, title: t('hostEventsHint') }, t('hostEvents')),
+						h('span', { style: S.num }, hostEventsText())),
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('link')),
+						h('span', { style: { ...S.num, color: linkSuspect ? 'var(--dsw-alias-state-warn-primary)' : undefined } },
+							link.count === 0 ? t('notYet')
+								: `p50 ${link.p50}ms · p99 ${link.p99}ms${state.linkText === '' ? '' : ` · ${state.linkText}`}${linkSuspect ? ` · ${t('suspect')}` : ''}`)),
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('idleBase')),
+						h('span', { style: S.num }, idleBase === null || idleBase === undefined
+							? t('notYet')
+							: `${idleBase.fps}fps · LT ${idleBase.longTasks} · ${idleBase.domPerMin}${t('perMin')}`)),
+					idleBase === null || idleBase === undefined || idleBase.domPerMin <= 0 ? null : h('div', { style: S.sub },
+						`${t('idleWriter')}: ${idleBase.domTop.map((row) => `${short(row.id)}${row.component === null ? '' : `(${row.component})`}`).join(' / ') || t('none')}`)),
+
+				// ── 隔离实验 ──
+				h('div', { style: S.sep },
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('isolation')),
+						h('span', { style: S.num }, experimentText())),
+					h('div', { style: S.sub }, `${t('candidate')}: ${experiment.candidates.join(' ')}${experiment.via === null ? '' : ` · via ${experiment.via}`}`),
+					experiment.baseline === null ? null : h('div', { style: S.sub }, `${t('baseline')}: ${experiment.baseline.fps}fps · LT ${experiment.baseline.longTasks} · ${experiment.baseline.domPerMin}${t('perMin')}`),
+					experiment.results.length === 0 ? null : h('div', null, experiment.results.map((row) => h('div', { key: row.name },
+						h('div', { style: S.row },
+							h('span', { style: S.label, title: JSON.stringify(row.changeResult ?? row.error ?? null) }, `${short(row.name)}${row.applied ? '' : ` ${t('skipped')}`}`),
+							h('span', { style: S.num }, row.delta === undefined ? (row.reason ?? '') : `Δfps ${signed(row.delta.fps)} · ΔLT ${signed(row.delta.longTasks)}`),
+						),
+						row.delta === undefined ? null : h('div', { style: S.sub }, `ΔDOM ${signed(row.delta.domPerMin)}${t('perMin')} · ${t('restore')} ${row.restore?.ok === true ? '✓' : '✗'}`)))),
+					experiment.restored === null ? null : h('div', { style: S.sub },
+						`${t('restore')}: ${experiment.restored.ok ? `✓ ${experiment.restored.restores.length}` : `✗ ${experiment.restored.diff.length} 处不一致`}`),
+					h('div', { style: S.buttons },
+						h('button', { type: 'button', style: S.btn, disabled: experiment.phase === 'running', onClick: () => runExperiment() }, t('startExp')),
+						h('button', { type: 'button', style: S.btn, onClick: () => abortExperiment() }, t('abortExp')),
+						h('button', { type: 'button', style: S.btn, title: t('stressHint'), onClick: () => W.__perfHud.stress() }, t('stress'))),
+					h('div', { style: S.sub }, t('expHint'))),
+
+				// ── 场景标记 ──
+				h('div', { style: S.sep },
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('marks')),
+						h('span', { style: S.num }, state.marks.length === 0 ? t('none') : `${state.marks.length} · ${clock(state.marks[state.marks.length - 1].t)}`)),
+					state.marks.length === 0 ? null : h('div', { style: S.sub }, `${state.marks[state.marks.length - 1].note === '' ? t('noNote') : state.marks[state.marks.length - 1].note} · ${state.marks[state.marks.length - 1].fps}fps · LT ${state.marks[state.marks.length - 1].longTask === null ? t('none') : `${state.marks[state.marks.length - 1].longTask.ms}ms`}`),
+					h('div', { style: S.buttons },
+						h('input', {
+							type: 'text',
+							value: draft,
+							placeholder: t('markPlaceholder'),
+							onChange: (event) => setDraft(event.target.value),
+							style: S.input,
+						}),
+						h('button', { type: 'button', style: S.btn, onClick: () => { addMark(draft); setDraft(''); } }, t('mark')))),
+
+				// ── 验收自证 ──
+				h('div', { style: S.sep },
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('verify')),
+						h('span', { style: S.num }, `${v.precise.mapStates.ready}/${v.precise.bundles} ${t('maps')}`)),
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('vPrecise')),
+						h('span', { style: S.num }, `${v.ownPackageNames['dsh-status-rotator'] ? '✓' : '✗'} rotator / ${v.ownPackageNames['dsh-notify-me'] ? '✓' : '✗'} notify-me`)),
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('vLt')),
+						h('span', { style: S.num }, `${v.longTask.attributed}/${v.longTask.total} · ${t('component')} ${v.longTask.withComponent}`)),
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('vIdle')),
+						h('span', { style: S.num }, v.idle.baseline === null ? t('notYet') : `${t('messages')} ${v.idle.baseline.domPerMin}${t('perMin')}`))),
+
+				h('div', { style: { ...S.sep, display: 'flex', gap: 6 } },
+					h('button', { type: 'button', style: S.btn, onClick: exportJson }, t('exportJson')),
+					h('button', { type: 'button', style: S.btn, onClick: () => W.__perfHud.clear() }, t('clear'))));
+
+			return h('div', { ref: setRoot, style: S.root(true) }, head, body, state.stressNodes > 0 ? h(PerfHudStress, { count: state.stressNodes }) : null);
+		}
+
+		// ───────────────────────────────── 装配 ─────────────────────────────────
+		function apply(ctx) {
+			state.since = Date.now();
+			restore();
+			// remote face 只用于 bundle 读写(插件管理器同一条路);拿不到就退宿主路由。
+			try {
+				remoteFace = ctx.remote ?? ctx.get('remote') ?? null;
+			} catch (error) {
+				remoteFace = null;
+			}
+
+			// 字典:服务不在(或接口变了)就退回内置中文,仪表照常工作。
+			const locale = ctx.get('locale');
+			if (locale !== undefined && typeof locale.register === 'function' && typeof locale.bind === 'function') {
+				try {
+					const disposers = [locale.register(NS, 'zh', DICT.zh), locale.register(NS, 'en', DICT.en)];
+					translate = locale.bind(NS);
+					ctx.effect(() => () => {
+						for (const dispose of disposers) dispose();
+						translate = fallback;
+					}, 'perf-hud: dictionaries');
+				} catch (error) {
+					translate = fallback;
+				}
+			}
+
+			// 页面隐藏/关闭前落盘,别丢最后 5 秒的样本。
+			const persist = () => flush(true);
+			const persistIfHidden = () => { if (document.visibilityState === 'hidden') flush(true); };
+			W.addEventListener('pagehide', persist);
+			W.addEventListener('visibilitychange', persistIfHidden);
+			ctx.effect(() => () => {
+				W.removeEventListener('pagehide', persist);
+				W.removeEventListener('visibilitychange', persistIfHidden);
+			}, 'perf-hud: persist on hide');
+
+			if (state.want) start();
+			ctx.effect(() => () => { stop(); }, 'perf-hud: instrumentation');
+			ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+				name: 'shell.overlay',
+				id: PKG,
+				order: 100,
+			}, PerfHud));
+		}
+
+		return { inject: ['slots'], apply };
+	},
+});

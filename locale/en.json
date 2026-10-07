@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Perf HUD (dsh-perf-hud)",
+    "description": "Client-side performance HUD: live FPS, long tasks, per-plugin callback attribution, and DOM growth for the session list and message area, with a ring buffer and one-click JSON export."
+  }
+}
