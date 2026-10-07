@@ -1,0 +1,58 @@
+name: CI
+
+# 门禁只跑离线三套件:本插件无构建步骤、零运行时依赖,测试不需要 DSH 在跑。
+# 线上套件(tests/live-*.mjs)需要真实宿主与 cookie,只能在开发者本机跑,不进 CI。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 取消被新提交取代的 PR 运行;push 运行不取消(它产出的就是合并后的信号)。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 宿主要求的 Node 线:^22.19 || >=24
+        node-version: [22, 24]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      # 两个「半边」先过语法:client.js 是浏览器脚本(靠模块表拿 react),
+      # index.js 是宿主插件。node --check 只看语法,不执行。
+      - name: Syntax check
+        run: |
+          node --check index.js
+          node --check client.js
+
+      # 183 条离线断言:attribution 11 / logic 149 / host 23。
+      # logic.mjs 会把 client.js 里的真函数抽进沙箱,所以它同时是客户端半的回归门。
+      - name: Offline suites (183 assertions)
+        run: |
+          node tests/attribution.mjs
+          node tests/logic.mjs
+          node tests/host.mjs
+
+      # 面板文案的长度预算与单位一致性断言在 logic.mjs 里;这里再核一次
+      # 「断言总数」与文档声称的一致(改数字忘了同步文档时,这条会红)。
+      - name: Assertion count matches the docs
+        run: |
+          total=0
+          for suite in attribution logic host; do
+            count=$(node "tests/$suite.mjs" | grep -c '^ok')
+            echo "$suite: $count"
+            total=$((total + count))
+          done
+          echo "total: $total"
+          test "$total" -eq 183
