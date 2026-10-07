@@ -143,6 +143,8 @@ const newPieces = [
 	'function round1(',
 	'function pluginTable(',
 	'function domWriteTable(',
+	'function domWriteSnapshot(',
+	'function domWriteDelta(',
 	'async function measureWindow(',
 	'const BUNDLE_PREFIX = ',
 	'const MUT_WINDOW_MS = ',
@@ -187,7 +189,7 @@ const newPieces = [
 
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, setStreaming: (value) => { streamingFlag = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, applyDeltas, idleTick, snapshot } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, applyDeltas, idleTick, snapshot, domWriteSnapshot, domWriteDelta } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -259,6 +261,21 @@ box.changedNodes.push({ node: { __reactFiber$old: hostFiber(fnFiber(rootFiber, '
 box.changedNodes.push({ node: { __reactFiber$new: hostFiber(fnFiber(rootFiber, 'NewComponent')) }, at: now });
 check('fiberOwner 只用 2 秒窗口内的节点', EX.fiberOwner(), 'NewComponent');
 check('窗口外的引用被释放', box.changedNodes.length, 1);
+
+// ── 空闲基线要能指名"谁在加节点":必须是窗口增量,不是累计表 ──────
+box.state.domWrites = new Map([
+	['early', { count: 100, ops: 10, components: new Map([['EarlyComp', 100]]) }],
+]);
+const writeSnap = EX.domWriteSnapshot();
+box.state.domWrites.get('early').count += 30;
+box.state.domWrites.get('early').components.set('EarlyComp', 130);
+box.state.domWrites.set('late', { count: 50, ops: 5, components: new Map([['LateComp', 50]]) });
+const writeDelta = EX.domWriteDelta(writeSnap);
+check('增量只列窗口内真的写过的 owner', writeDelta.map((row) => [row.id, row.estimatedCount]), [['late', 50], ['early', 30]]);
+check('组件名也取增量', writeDelta.map((row) => row.component), ['LateComp', 'EarlyComp']);
+box.state.domWrites.set('idleOne', { count: 999, ops: 9, components: new Map([['IdleComp', 999]]) });
+// 真实空闲窗口的样子:累计表里全是历史数字,窗口内一个都没写 → 增量必须为空
+check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWriteSnapshot()).length, 0);
 
 // ── D:链路分位与"疑似链路"判定 ─────────────────────────────────────
 box.state.link = [

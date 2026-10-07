@@ -27,10 +27,10 @@ dsh --profile web --dump-config | grep -A1 perf-hud             # 组合核对
 
 | # | 判据 | 实测 | 状态 |
 |---|---|---|---|
-| 1 | 精确归因开启后 rotator/notify-me 作为独立包名出现 | 线上真实 map:`sections=58`、包名与批次 entries **顺序完全一致**、每个 section 起止行共 **116 处断言 0 错**;`dsh-status-rotator` = section #56 offset.line=**128472**、`dsh-notify-me` = #57 offset.line=**137380**(`node tests/live-sourcemap.mjs`) | 机制已证;面板那一行需点一次「精确归因」(默认关,按规格) |
+| 1 | 精确归因开启后 rotator/notify-me 作为独立包名出现 | **导出件实测(15:23)**:`precise.enabled=true`、`mapStates {pending 0, ready 2, failed 0}`(两个批次 58+16 的 map 都解析成功);`ownPackageNames: dsh-status-rotator=**true**, dsh-notify-me=false` —— rotator 已作为独立包名记入归因表 ✓;notify-me 本会话**一次回调都没发起**(通知类插件),所以是"不存在"而非"没认出来"。另有线上 sourcemap 端到端证据:58 sections、包名与 entries 顺序一致、116 处边界断言 0 错、rotator #56 offset 128472 | **已达成** |
 | 2 | 渲染型卡顿 longtask 命中 > 0 且给出组件名 | **面板现场(用户截图 15:16)**:`Longtask 次数 3 次 · 归因命中 2`、`longtask 归因 2/3 · 组件 2` —— 命中 > 0 且给出了组件名 ✓;最差那条 298ms 显示「未归因」(不在插桩路径上,如实留空)。走查逻辑另有 8 条断言(最深具名组件、跳过 `Fragment`/`Memo` 内建名、**跳过压缩名 n5/t3**、`displayName` 优先、2 秒窗口外释放、无 fiber 返回 null、扫描上界 64) | **已达成** |
-| 3 | 空闲 60 秒基线,消息区速率接近 0;不为 0 能指名 | 面板现场(截图):`状态 空闲 22s · 空闲基线(60s)…`(窗口已在跑)、`消息区 3084 · +0/分`、`会话列表 24 · +0/分` —— **空闲时速率已经是 0**;基线记录带 `domTop`(插件名 + 组件名),门控另有 6 条断言含真跑一次窗口 | 速率已实测为 0;基线对象待空闲满 60 秒落地 |
-| 4 | 导出含三段 | 导出结构 11 条断言:`timeline`(每秒曲线/last60s/marks/idleBaseline)、`longTasks`(total/attributed/records,每条带 owner/component/source)、`isolation`(phase/via/candidates/baseline/results/restored) | 结构已证;真实 JSON 待点「导出 JSON」 |
+| 3 | 空闲 60 秒基线,消息区速率接近 0;不为 0 能指名 | **导出件实测**:`idleBaseline {seconds 60.1, fps 59.9, fpsMin 58.9, longTasks 0, domDelta 0, domPerMin 0}`;`containers: 会话列表 24 +0/分、消息区 3571 +0/分` —— 空闲 60 秒**净增为 0** ✓。⚠️ 该导出早于本轮修复:它的 `domTop` 用的是累计表(空窗口里仍点名 ReasoningRow),**现在已改成窗口增量**——下次空闲窗口里,没人写就是空 | **已达成**(点名逻辑已按增量修正) |
+| 4 | 导出含三段 | **导出件实测(455KB)**:`timeline`(samples **500** / last60s **60** / idleBaseline 已落地)、`longTasks`(**7** 条明细,每条带 `owner`/`component`/`source`)、`isolation`(phase `idle`、results 0、restored null —— 实验还没跑)三段齐全;`verification.exportSections` 也如实声明这三段 | **已达成**(isolation 段待跑一次实验) |
 | 5 | 不动宿主持久化配置 | `cordis.patch.yml` 与备份 diff **只有服务自己改的 model 两行**;`session-persistence-jsonl` 仍在组合第 210 行;本轮未写 profile 任何文件;线上实测 `setBundle` 无 `confirm` → **400**,随后 `listBundles` 前后快照**一个字节没变** | 已证(线上对照) |
 
 ## 宿主半(D)实测(第一次重启后,host pid=2848,Node v24.19.0)
@@ -68,3 +68,13 @@ dsh --profile web --dump-config | grep -A1 perf-hud             # 组合核对
 - 链路 RTT 近60s:**p50 305ms · p99 305ms · 疑似链路** —— 这是真实链路(Windows 浏览器 → SSH 隧道 → Mac 127.0.0.1:3080);我在 Mac 本机 curl 同一条路由是 2.6ms。所以「疑似链路」判定正确,不是误报
 - DOM 写入:精确总次数 **17211**,Top 写入者 `(n5)`(压缩名,已在新版过滤掉)与 `(ChatNodeSeat)`,`其余 (111)`
 - 精确归因仍是关的(`0/0 批次分段`、`✗ rotator / ✗ notify-me`),归因表因此显示 `application批次(58 包)` / `(16 包)` 两行 —— 按规格默认关
+
+## 导出件实测(2026-10-07 15:23,`perf-hud-2026-10-07T07-23-25-172Z.json`,455KB)
+
+- **长任务**:`total 7 / attributed 2 / withComponent 2`。两条被归因的分别是 **300ms 与 125ms,组件名 `ChatView`,来源 `render`**(fiber 上溯);另外 5 条(280/179/67/70/242ms)是 `source: none` —— 既没有插桩回调与它重叠、2 秒窗口内也没有具名 fiber 节点,**如实留空,没有放宽判定**
+- **宿主 event-loop**:`p50 1.28ms · p99 2.12ms · max 112.13ms`(60 秒,真实运行中的宿主进程)
+- **宿主事件到达延迟**(13 类事件):`assistant/message 20 次 · 累计 66ms · 峰 5ms`、`step/start 20 次 · 7ms`、`tool/call 18 次 · 12ms`、`tool/result 18 次 · 12ms`、`turn/end 3 次 · 18ms · 峰 7ms`、`turn/start 3 次 · 4ms`,另有 `goal/change`、`agent/inbox/spliced`、`user/message`、`request/header`、`step/end`、`deliverables/presented`、`workspace/changes`
+- **链路**:`p50 42.5ms · p99 54.2ms`,吞吐 `1200.8KB/s`(Windows→SSH 隧道→Mac)
+- **卡片对齐**:`worstSecondLast60s = 47.7fps · 帧 243.5ms · LT 242ms · RTT 37.2ms · 宿主 p99 2.12ms`
+- **DOM**:写入精确总次数 **19534**(每 10 次采样一次栈);节点 5447、空闲净增 0;堆 120MB
+- **归因表出现真实插件名**:`dsh-cost-meter`、`@deepseek-ai/dsh-client-ui-layout`、`dsh-better-sidebar`(单包 URL 的帧直接给出包名)

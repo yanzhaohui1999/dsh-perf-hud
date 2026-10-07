@@ -811,6 +811,42 @@ window.__ModuleLoader__.load({
 			return rows;
 		}
 
+		/** 窗口开始时的写入计数快照,用来算"这段时间谁真的写了节点"。 */
+		function domWriteSnapshot() {
+			const snapshot = new Map();
+			for (const [id, entry] of state.domWrites) {
+				snapshot.set(id, { count: entry.count, components: new Map(entry.components ?? new Map()) });
+			}
+			return snapshot;
+		}
+
+		/**
+		 * 窗口内的写入增量。必须用增量:累计表会在"这一分钟一个节点都没加"的空闲窗口里
+		 * 照样列出历史第一名(实测导出里就是这样冤枉了 ReasoningRow),那就等于没点名。
+		 */
+		function domWriteDelta(snapshot) {
+			const rows = [];
+			for (const [id, entry] of state.domWrites) {
+				const before = snapshot.get(id);
+				const gained = entry.count - (before === undefined ? 0 : before.count);
+				if (gained <= 0) continue;
+				const components = [];
+				for (const [name, count] of entry.components ?? new Map()) {
+					const base = before === undefined ? 0 : before.components.get(name) ?? 0;
+					if (count - base > 0) components.push({ name, count: count - base });
+				}
+				components.sort((a, b) => b.count - a.count);
+				rows.push({
+					id,
+					estimatedCount: gained,
+					component: components.length === 0 ? null : components[0].name,
+					components: components.slice(0, 2),
+				});
+			}
+			rows.sort((a, b) => b.estimatedCount - a.estimatedCount);
+			return rows;
+		}
+
 		/** DOM 写入估算表(命中者按采样步长折算)。 */
 		function domWriteTable() {
 			const rows = [];
@@ -1018,6 +1054,7 @@ window.__ModuleLoader__.load({
 			const fps = [];
 			const lt0 = state.ltTotal;
 			const dom0 = state.dom.total;
+			const writes0 = domWriteSnapshot();
 			let ltPeak = 0;
 			while (performance.now() - started < ms) {
 				await sleep(1000);
@@ -1038,7 +1075,8 @@ window.__ModuleLoader__.load({
 				domDelta,
 				domPerMin: round1((domDelta * 60000) / (seconds * 1000)),
 				top: pluginTable().slice(0, 3).map((row) => ({ id: row.id, cps: row.cps, ms: row.ms })),
-				domTop: domWriteTable().slice(0, 2),
+				// 只列这一段窗口里真的写过节点的插件/组件(累计表会冤枉空闲窗口)
+				domTop: domWriteDelta(writes0).slice(0, 2),
 			};
 		}
 
