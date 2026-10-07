@@ -1119,19 +1119,57 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * 长任务归属分布。
+		 *
+		 * 一个"命中 23/24"说明不了任何事:DOM 写入那条腿在流式渲染时几乎必然命中,
+		 * 命中率会被它抬得很高。真正要看的是**名字分布** —— 23 次里如果 20 次是同一个
+		 * 名字,那说明命中很廉价;如果分散在 8 个名字上,那才说明这段时间到处都在渲染。
+		 */
+		function longTaskTally() {
+			const tally = new Map();
+			let fiber = 0;
+			let dom = 0;
+			let owner = 0;
+			let none = 0;
+			for (const row of state.longTasks) {
+				const name = primaryBlame(row);
+				const fiberOk = (row.component ?? null) !== null && looksLikeInfrastructure(row.component) === false;
+				if (fiberOk) fiber += 1;
+				else if ((row.domComponent ?? null) !== null) dom += 1;
+				else if ((row.owner ?? null) !== null) owner += 1;
+				else none += 1;
+				if (name !== null) tally.set(name, (tally.get(name) ?? 0) + 1);
+			}
+			const top = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+			return { fiber, dom, owner, none, total: state.longTasks.length, top, topNames: top.slice(0, 3) };
+		}
+
+		/**
 		 * 一条长任务该怎么念。
 		 *
 		 * 两条腿:fiber 走查(component)与 DOM 写入(recentWriteComponent)。fiber 给到宿主
 		 * 外壳组件(如 SlotOutlet)时不算答案,退到写入那条腿;两条都有且不同就都念出来,
 		 * 让人自己判断 —— 不挑一个好看的报。
 		 */
+		/** 分布统计用的"主名字":fiber(非外壳)> DOM 写入 > 包名;都没有则 null。 */
+		function primaryBlame(row) {
+			if (row === null || row === undefined) return null;
+			const fiber = row.component ?? null;
+			if (fiber !== null && looksLikeInfrastructure(fiber) === false) return fiber;
+			const dom = row.domComponent ?? null;
+			if (dom !== null) return dom;
+			if (fiber !== null) return fiber;
+			if (row.owner !== null && row.owner !== undefined) return short(row.owner);
+			return null;
+		}
+
 		function blameText(row) {
 			if (row === null || row === undefined) return translate('none');
 			const fiber = row.component ?? null;
 			const dom = row.domComponent ?? null;
-			const fiberOk = fiber !== null && looksLikeInfrastructure(fiber) === false;
-			if (fiberOk && dom !== null && dom !== fiber) return `${fiber} / ${dom}(${translate('stressFromDom')})`;
-			if (fiberOk) return fiber;
+			if (fiber !== null && looksLikeInfrastructure(fiber) === false) {
+				return dom !== null && dom !== fiber ? `${fiber} / ${dom}(${translate('stressFromDom')})` : fiber;
+			}
 			if (dom !== null) return `${dom}(${translate('stressFromDom')})`;
 			if (fiber !== null) return fiber;
 			if (row.owner !== null && row.owner !== undefined) return short(row.owner);
@@ -1300,6 +1338,7 @@ window.__ModuleLoader__.load({
 				longTask: {
 					total: state.ltTotal,
 					attributed: state.ltBlamed,
+					legs: longTaskTally(),
 					withComponent: withComponent.length,
 					last: blamed.length === 0 ? null : blamed[blamed.length - 1],
 				},
@@ -1849,6 +1888,14 @@ window.__ModuleLoader__.load({
 			return value < 0.05 ? '<0.1ms/s' : `${round1(value)}ms/s`;
 		}
 
+		/** 概览的 hover:把口径(三条腿)与名字分布都摊开,免得只看到一个被抬高的命中率。 */
+		function overviewTitle() {
+			const tally = longTaskTally();
+			return `${translate('overviewHint')}\n` +
+				`${translate('hit')} = 三条腿任一命中:${translate('legFiber')} ${tally.fiber} · ${translate('legDom')} ${tally.dom} · ${translate('legOwner')} ${tally.owner} · ${translate('unblamed')} ${tally.none}` +
+				(tally.topNames.length === 0 ? '' : `\n${translate('topBlame')}: ${tally.topNames.map(([name, count]) => `${name} ${count}×`).join(' · ')}`);
+		}
+
 		/** 折叠摘要里的一句话节点数:取不到就如实说未采集。 */
 		function containerNodes(id) {
 			const entry = state.targets.get(id);
@@ -1898,6 +1945,7 @@ window.__ModuleLoader__.load({
 				unattrHint: '帧间隔里没被插桩回调解释掉的部分:样式重算、绘制、以及等待 vsync。CSS 动画的开销只在这里现形。',
 				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', est: '≈',
 				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', hit: '命中', times: ' 次',
+				maxBlame: '最多', topBlame: '归属 Top', legFiber: 'fiber', legDom: 'DOM写入', legOwner: '包名',
 				perSec: '/s', samples: '次采样', unblamed: '未归因',
 				domWritesHint: '前一项是精确总次数;下面按插件给出估算(每 10 次采样一次栈,命中按 10 折算)。',
 				precise: '精确归因', preciseHint: '开启后按合并 bundle 的 sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)',
@@ -1934,6 +1982,7 @@ window.__ModuleLoader__.load({
 				unattrHint: 'Frame gap not explained by instrumented callbacks: style recalc, paint, and vsync wait. CSS-animation cost only shows up here.',
 				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', est: '≈',
 				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', hit: 'hit', times: '',
+				maxBlame: 'top', topBlame: 'attribution top', legFiber: 'fiber', legDom: 'DOM write', legOwner: 'package',
 				perSec: '/s', samples: ' samples', unblamed: 'unattributed',
 				domWritesHint: 'First number is the exact total; the rows below are estimates (stacks sampled every 10th write, hits scaled by 10).',
 				precise: 'precise', preciseHint: 'Resolve single package names from the merged bundle sourcemap sections (lazy; one map fetch per rev)',
@@ -2188,6 +2237,7 @@ window.__ModuleLoader__.load({
 			const idleBase = state.idleBaseline;
 			const v = verification();
 			const writeTop = domWriteTable()[0] ?? null;
+			const tally = longTaskTally();
 			const rows = pluginTable();
 			const top = rows.slice(0, TOP_N);
 			const rest = rows.slice(TOP_N);
@@ -2221,11 +2271,12 @@ window.__ModuleLoader__.load({
 			const body = h('div', null,
 				// ── 常显 1:卡不卡 + 谁的锅(原来"最差帧/长任务/命中"三行合一行)──
 				h('div', { style: S.row },
-					h('span', { style: S.label, title: t('overviewHint') }, t('overview')),
+					h('span', { style: S.label, title: overviewTitle() }, t('overview')),
 					h('span', { style: { ...S.num, color: levelUp(state.frameWorst, 60, 120) } },
 						`${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms · ` +
 						`LT ${worst === null ? t('none') : `${worst.ms.toFixed(0)}ms ${blameText(worst)}`}` +
-						` · ${t('hit')} ${state.ltBlamed}/${state.ltTotal}`)),
+						` · ${t('hit')} ${state.ltBlamed}/${state.ltTotal}${tally.topNames.length === 0 ? '' : ` · ${t('maxBlame')} ${short(tally.topNames[0][0])} ${tally.topNames[0][1]}×`}`)),
+
 				// ── 常显 2:帧里"JS 之外"的残差(唯一能反映 CSS/绘制卡顿的数字)──
 				h('div', { style: S.row },
 					h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),
@@ -2245,6 +2296,14 @@ window.__ModuleLoader__.load({
 				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
 				group('detail', t('groupDetail'),
 					`${t('worstSecond')} ${worstSecondText()} · ${t('domWrites')} ${state.mutations}${writeTop === null ? '' : ` · ${short(writeTop.id)}`}`,
+					h('div', { style: S.row },
+						h('span', { style: S.label }, t('topBlame')),
+						h('span', { style: S.num }, tally.topNames.length === 0
+							? t('none')
+							: tally.topNames.map(([name, count]) => `${short(name)} ${count}×`).join(' · ') + (tally.top.length > 3 ? ` · ${t('rest')} ${tally.top.length - 3}` : ''))),
+					h('div', { style: S.row },
+						h('span', { style: S.label }, `${t('hit')} (${t('legFiber')}/${t('legDom')}/${t('legOwner')})`),
+						h('span', { style: S.num }, `${tally.fiber}/${tally.dom}/${tally.owner}${tally.none === 0 ? '' : ` · ${t('unblamed')} ${tally.none}`}`)),
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('domWritesHint') }, t('domWrites')),
 						h('span', { style: S.num }, String(state.mutations))),
