@@ -1882,6 +1882,14 @@ window.__ModuleLoader__.load({
 			verification,
 		};
 
+		/**
+		 * 归因行的主值:本秒速率 + 峰值速率。
+		 * 两个都要带 /s —— 实测 `0.5/s · 峰 17.8` 会被读成"峰值 17.8 毫秒",实际是 17.8 次/秒。
+		 */
+		function attrText(row) {
+			return `${row.cps}${translate('perSec')} · ${translate('peak')} ${row.cpsPeak}${translate('perSec')}`;
+		}
+
 		/** 合计耗时:小于 0.05ms/s 不写成 0 —— "0"读起来像"一点都没花",其实是四舍五入没了。 */
 		function msPerSecText(value) {
 			if (!(value > 0)) return '0ms/s';
@@ -2288,7 +2296,7 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.num }, msPerSecText(state.attributedPerSec))),
 					h('div', null, top.map((row, index) => h('div', { key: row.id, style: S.row },
 						h('span', { style: S.label, title: `${row.id} · ${row.msps}ms${t('perSec')} · ${t('cumulative')} ${row.count}× / ${row.ms.toFixed(0)}ms` }, `${index + 1}. ${short(row.id)}`),
-						h('span', { style: S.num }, `${row.cps}${t('perSec')} · ${t('peak')} ${row.cpsPeak}`)))),
+						h('span', { style: S.num }, attrText(row))))),
 					rest.length === 0 ? null : h('div', { style: S.row },
 						h('span', { style: S.label }, `${t('rest')} (${rest.length})`),
 						h('span', { style: S.num }, `${restCount}× ${restMs.toFixed(0)}ms`))),

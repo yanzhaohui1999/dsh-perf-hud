@@ -178,7 +178,7 @@ const sandbox = `
 		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 		stressBurn: '人为燃烧',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
-		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因',
+		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', perSec: '/s', peak: '峰',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -228,6 +228,7 @@ const newPieces = [
 	'const LS_GROUPS = ',
 	'function containerNodes(',
 	'function toggleGroup(',
+	'function attrText(',
 	'function msPerSecText(',
 	'function looksLikeInfrastructure(',
 	'function primaryBlame(',
@@ -255,7 +256,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, looksLikeInfrastructure, msPerSecText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, looksLikeInfrastructure, msPerSecText, attrText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -355,6 +356,9 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 	check('looksLikeInfrastructure 认外壳:ConfigProvider', EX.looksLikeInfrastructure('ConfigProvider'), true);
 	check('looksLikeInfrastructure 认外壳:CenterColumn(布局列)', EX.looksLikeInfrastructure('CenterColumn'), true);
 	check('合计耗时:极小值不写成 0', [EX.msPerSecText(0), EX.msPerSecText(0.02), EX.msPerSecText(1.25)], ['0ms/s', '<0.1ms/s', '1.3ms/s']);
+	// 峰值不带单位会被读成毫秒(实测截图里 "0.5/s · 峰 17.8" 就是这个歧义)
+	check('归因行:两个速率都带单位',
+		EX.attrText({ cps: 0.5, cpsPeak: 17.8 }), '0.5/s · 峰 17.8/s');
 	check('looksLikeInfrastructure 不误伤真组件',
 		[EX.looksLikeInfrastructure('ChatView'), EX.looksLikeInfrastructure('PerfHudStress'), EX.looksLikeInfrastructure('dsh-perf-hud')],
 		[false, false, false]);
