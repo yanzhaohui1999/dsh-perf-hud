@@ -243,6 +243,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献流程:报 bug、提 PR、提交前自检 |
 | [ACCEPTANCE.md](ACCEPTANCE.md) | 验收判据与实测数字(含评审响应记录) |
 | [REVIEW.md](REVIEW.md) | 发布就绪评审:缺口、证据、待办清单 |
+| [DIRECTION.md](DIRECTION.md) | 方向评审与设计讨论:为什么从"仪表盘"改成"行车记录仪 + 事故包"、官方会不会撞、理想形态 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更 |
 
 ---

@@ -37,5 +37,6 @@
 
 - `README.md` / `README_EN.md` / `AGENTS.md` / `CONTRIBUTING.md` / `REVIEW.md` / `CHANGELOG.md`
 - `ACCEPTANCE.md`(验收判据与实测数字);源码级机制、宿主 API 事实与已证伪的死路在 [AGENTS.md](AGENTS.md) §6 / §8
+- [DIRECTION.md](DIRECTION.md)(方向评审:为什么从"仪表盘"改成"行车记录仪 + 事故包"、官方会不会撞、理想形态与最小改造路径)
 
 [0.2.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.2.0
