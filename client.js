@@ -319,6 +319,20 @@ window.__ModuleLoader__.load({
 			for (const key of state.bundleKeys) bundleMap(key);
 		}
 
+		/**
+		 * 宿主外壳组件不算"谁在渲染"。
+		 *
+		 * 实测长任务命中报成 `SlotOutlet` —— 那是 DSH 把插件内容渲染进槽位的那个**座**:
+		 * 技术上算命中,却答不了"谁的锅",而且还很容易被误读成某个插件。这类名字跳过,
+		 * 继续往上找真正的组件;另一条 DOM 写入路径会做交叉验证。
+		 */
+		function looksLikeInfrastructure(name) {
+			if (typeof name !== 'string' || name === '') return false;
+			if (/Slot|Outlet/.test(name)) return true;
+			if (/(Boundary|Provider|Context)$/.test(name)) return true;
+			return false;
+		}
+
 		/** @deepseek-ai/* 是 DSH 自带的核心包:React、scheduler、外壳 UI 都在这一层。 */
 		function isCore(id) {
 			return id.startsWith('@deepseek-ai/');
@@ -390,6 +404,10 @@ window.__ModuleLoader__.load({
 		// __reactFiber$ 往 return 方向走,取最近的具名函数组件。
 		const changedNodes = [];
 		let domWatch = null;
+		// 最近 2 秒被采样到的写入者(owner + 组件):React 提交阶段栈里没有插件帧时,
+		// 组件名是唯一线索,长任务归属靠它做第二条腿。
+		const recentWrites = [];
+		const RECENT_WRITES_MAX = 96;
 
 		function trimChangedNodes(now) {
 			while (changedNodes.length > 0 && now - changedNodes[0].at > MUT_WINDOW_MS) changedNodes.shift();
@@ -439,7 +457,7 @@ window.__ModuleLoader__.load({
 				if (type.prototype !== undefined
 					&& (typeof type.prototype.componentDidCatch === 'function' || typeof type.getDerivedStateFromError === 'function')) continue;
 				const name = type.displayName ?? type.name;
-				if (typeof name !== 'string' || name === '' || REACT_INTERNAL.has(name)) continue;
+				if (typeof name !== 'string' || name === '' || REACT_INTERNAL.has(name) || looksLikeInfrastructure(name)) continue;
 				// 生产构建会把组件名压成 n5 / t3 / Bn 这种(大小写都有),对人毫无意义 ——
 				// 跳过它继续往上找。代价是极少数真的只有 1~2 个字母的组件名会被略过,
 				// 换来的是不再拿压缩名冒充"组件名"(线上导出里真出现过 `(n5)` 和 `(Bn)`)。
@@ -626,7 +644,13 @@ window.__ModuleLoader__.load({
 						const owner = ownerFromStack(wrapped);
 						// this = 接收新子节点的父节点,它的 fiber 上方最近的具名组件就是"谁在渲染"。
 						const component = componentOf(this);
-						if (owner !== null && owner !== PKG) {
+						const at = performance.now();
+						if (owner === PKG) {
+							// 本 HUD 自己的写入不记账:否则 PerfHud 会把自己顶成 DOM 写入第一名
+							// (实测真的发生过,面板摘要里出现了 (PerfHud))。
+						} else if (owner !== null) {
+							recentWrites.push({ at, owner, component });
+							if (recentWrites.length > RECENT_WRITES_MAX) recentWrites.shift();
 							let entry = state.domWrites.get(owner);
 							if (entry === undefined) {
 								entry = { count: 0, ops: 0, components: new Map() };
@@ -716,9 +740,23 @@ window.__ModuleLoader__.load({
 			return owner;
 		}
 
+		/** 这段时间里被采样到的 DOM 写入者组件(多数票)。fiber 那条只看到"容器变了"时,它才是线索。 */
+		function recentWriteComponent(start, duration) {
+			const end = start + duration + 200;
+			const tally = new Map();
+			for (const write of recentWrites) {
+				if (write.at < start - 200 || write.at > end || write.component === null) continue;
+				tally.set(write.component, (tally.get(write.component) ?? 0) + 1);
+			}
+			let top = null;
+			for (const [name, count] of tally) if (top === null || count > top[1]) top = [name, count];
+			return top === null ? null : top[0];
+		}
+
 		function addLongTask(entry) {
 			const owner = blame(entry.startTime, entry.duration);
 			const component = fiberOwner();
+			const domComponent = recentWriteComponent(entry.startTime, entry.duration);
 			state.ltTotal += 1;
 			state.ltThisSecond += 1;
 			if (owner !== null || component !== null) state.ltBlamed += 1;
@@ -728,6 +766,7 @@ window.__ModuleLoader__.load({
 				ms: round1(entry.duration),
 				owner,
 				component,
+				domComponent,
 				source: owner === null ? (component === null ? 'none' : 'render') : (component === null ? 'scheduler' : 'scheduler+render'),
 			});
 			if (state.longTasks.length > 200) state.longTasks.splice(0, state.longTasks.length - 200);
@@ -1076,6 +1115,26 @@ window.__ModuleLoader__.load({
 			return kbps >= 1024 ? `${Math.round(kbps / 1024 * 10) / 10}MB/s` : `${kbps}KB/s`;
 		}
 
+		/**
+		 * 一条长任务该怎么念。
+		 *
+		 * 两条腿:fiber 走查(component)与 DOM 写入(recentWriteComponent)。fiber 给到宿主
+		 * 外壳组件(如 SlotOutlet)时不算答案,退到写入那条腿;两条都有且不同就都念出来,
+		 * 让人自己判断 —— 不挑一个好看的报。
+		 */
+		function blameText(row) {
+			if (row === null || row === undefined) return translate('none');
+			const fiber = row.component ?? null;
+			const dom = row.domComponent ?? null;
+			const fiberOk = fiber !== null && looksLikeInfrastructure(fiber) === false;
+			if (fiberOk && dom !== null && dom !== fiber) return `${fiber} / ${dom}(${translate('stressFromDom')})`;
+			if (fiberOk) return fiber;
+			if (dom !== null) return `${dom}(${translate('stressFromDom')})`;
+			if (fiber !== null) return fiber;
+			if (row.owner !== null && row.owner !== undefined) return short(row.owner);
+			return translate('unblamed');
+		}
+
 		/** 自测状态:点了必须看得见进度与结果,否则"毫无反应"就是必然观感。 */
 		function stressText() {
 			const mark = state.stress;
@@ -1223,7 +1282,7 @@ window.__ModuleLoader__.load({
 			const mapStates = { pending: 0, ready: 0, failed: 0 };
 			for (const entry of bundleMaps.values()) mapStates[entry.state] += 1;
 			const blamed = state.longTasks.filter((row) => row.owner !== null || row.component !== null);
-			const withComponent = state.longTasks.filter((row) => row.component !== null);
+			const withComponent = state.longTasks.filter((row) => (row.component ?? null) !== null || (row.domComponent ?? null) !== null);
 			return {
 				precise: {
 					enabled: state.precise,
@@ -2156,7 +2215,7 @@ window.__ModuleLoader__.load({
 					h('span', { style: S.label, title: t('overviewHint') }, t('overview')),
 					h('span', { style: { ...S.num, color: levelUp(state.frameWorst, 60, 120) } },
 						`${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms · ` +
-						`LT ${worst === null ? t('none') : `${worst.ms.toFixed(0)}ms ${worst.component !== null && worst.component !== undefined ? worst.component : (worst.owner === null ? t('unblamed') : short(worst.owner))}`}` +
+						`LT ${worst === null ? t('none') : `${worst.ms.toFixed(0)}ms ${blameText(worst)}`}` +
 						` · ${t('hits')} ${state.ltBlamed}/${state.ltTotal}`)),
 				// ── 常显 2:帧里"JS 之外"的残差(唯一能反映 CSS/绘制卡顿的数字)──
 				h('div', { style: S.row },

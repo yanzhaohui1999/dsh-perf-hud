@@ -145,6 +145,10 @@ process.exitCode = failed === 0 ? 0 : 1;
 	check('面板渲染区的函数调用都有声明(signed 事故回归)',
 		bare.filter((name) => !declared.has(name) && !GLOBALS.has(name) && !CSS_FUNCS.has(name)), []);
 
+
+	// HUD 自己的 DOM 写入必须不记账(实测摘要里出现过 (PerfHud) 顶在第一名)
+	check('DOM 写入插桩排除本 HUD 自身', /if \(owner === PKG\)/.test(source), true);
+
 	// 导出里必须有错误账本(下次再抛错,导出件能带出原文)
 	check('client.js 带 errors 导出段', /errors:\s*state\.errors/.test(source), true);
 }
@@ -224,6 +228,8 @@ const newPieces = [
 	'const LS_GROUPS = ',
 	'function containerNodes(',
 	'function toggleGroup(',
+	'function looksLikeInfrastructure(',
+	'function blameText(',
 	'function beyondNoiseText(',
 	'function isStreaming(',
 	'function idleTick(',
@@ -246,7 +252,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, looksLikeInfrastructure, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -340,6 +346,24 @@ check('组件名也取增量', writeDelta.map((row) => row.component), ['LateCom
 box.state.domWrites.set('idleOne', { count: 999, ops: 9, components: new Map([['IdleComp', 999]]) });
 // 真实空闲窗口的样子:累计表里全是历史数字,窗口内一个都没写 → 增量必须为空
 check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWriteSnapshot()).length, 0);
+
+	// 宿主外壳组件不该被当成"谁在渲染"(实测命中报成 SlotOutlet)
+	check('looksLikeInfrastructure 认外壳:SlotOutlet', EX.looksLikeInfrastructure('SlotOutlet'), true);
+	check('looksLikeInfrastructure 认外壳:ConfigProvider', EX.looksLikeInfrastructure('ConfigProvider'), true);
+	check('looksLikeInfrastructure 不误伤真组件',
+		[EX.looksLikeInfrastructure('ChatView'), EX.looksLikeInfrastructure('PerfHudStress'), EX.looksLikeInfrastructure('dsh-perf-hud')],
+		[false, false, false]);
+	check('长任务:fiber 给到外壳 → 退到 DOM 写入那条腿',
+		EX.blameText({ component: 'SlotOutlet', domComponent: 'AssistantMarkdown', owner: null }), 'AssistantMarkdown(DOM 写入)');
+	check('长任务:两条腿不同就都念出来',
+		EX.blameText({ component: 'ChatView', domComponent: 'ChatNodeSeat', owner: null }), 'ChatView / ChatNodeSeat(DOM 写入)');
+	check('长任务:只有调度方归属时念包名',
+		EX.blameText({ component: null, domComponent: null, owner: '@deepseek-ai/dsh-client-ui-chat' }), 'dsh-client-ui-chat');
+	check('长任务:只剩外壳名时最后才用它',
+		EX.blameText({ component: 'SlotOutlet', domComponent: null, owner: null }), 'SlotOutlet');
+	check('长任务:什么都没有 → 未归因',
+		EX.blameText({ component: null, domComponent: null, owner: null }), '未归因');
+	// HUD 自己的 DOM 写入必须不记账(实测摘要里出现过 (PerfHud) 顶在第一名)
 
 // ── 面板分层:折叠状态与摘要 ───────────────────────────────────────
 check('默认全部收起(过程/取证/工具不占常显篇幅)',
