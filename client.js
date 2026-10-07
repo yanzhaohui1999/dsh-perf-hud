@@ -48,7 +48,8 @@ window.__ModuleLoader__.load({
 		const LOAD_BYTES = 65536;
 		const MUT_WINDOW_MS = 2000;            // fiber 归因只看最近 2 秒被改动的节点
 		const BASELINE_MS = 60000;
-		const STEP_MS = 60000;
+		const STEP_MS = 60000;         // 隔离实验:每个候选"关闭后"的测量窗口
+		const BRACKET_MS = 30000;      // 隔离实验:每个候选前后各打一次基线(对照 + 噪声采样)
 		const IDLE_GAP_MS = 3000;
 		const DEFAULT_CANDIDATES = ['dsh-status-rotator', 'dsh-notify-me', 'dsh-better-sidebar', 'dsh-context'];
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
@@ -1125,8 +1126,12 @@ window.__ModuleLoader__.load({
 			const dom0 = state.dom.total;
 			const writes0 = domWriteSnapshot();
 			let ltPeak = 0;
+			let samples = 0;
+			let streamingSamples = 0;
 			while (performance.now() - started < ms) {
 				await sleep(1000);
+				samples += 1;
+				if (state.streaming) streamingSamples += 1;
 				fps.push(state.fps);
 				ltPeak = Math.max(ltPeak, state.ltPerSec);
 				if (experiment.aborted === true && label !== 'idle') break;
@@ -1146,6 +1151,9 @@ window.__ModuleLoader__.load({
 				top: pluginTable().slice(0, 3).map((row) => ({ id: row.id, cps: row.cps, ms: row.ms })),
 				// 只列这一段窗口里真的写过节点的插件/组件(累计表会冤枉空闲窗口)
 				domTop: domWriteDelta(writes0).slice(0, 2),
+				samples,
+				streamingSeconds: streamingSamples,
+				streaming: streamingSamples > 0,
 			};
 		}
 
@@ -1244,6 +1252,9 @@ window.__ModuleLoader__.load({
 			candidateState: [],
 			restored: null,
 			baseline: null,
+			noise: null,          // 基线之间的漂移,当噪声底
+			drifts: [],
+			method: '基线 → (关闭 → 窗口 → 恢复 → 恢复后基线) × N,每个候选只跟紧邻的基线对照',
 			aborted: false,
 			startedAt: 0,
 			via: null,            // 'remote' | 'route' | null:数据实际从哪条通道来的
@@ -1289,18 +1300,46 @@ window.__ModuleLoader__.load({
 			return restores;
 		}
 
-		/** Δ 只对照基线;没有窗口(宿主没真的关掉)就不写数字。 */
-		function applyDeltas(rows, baseline) {
-			if (baseline === null || baseline === undefined) return rows;
-			for (const row of rows) {
-				if (row.window === undefined || row.window === null) continue;
-				row.delta = {
-					fps: round1(row.window.fps - baseline.fps),
-					longTasks: row.window.longTasks - baseline.longTasks,
-					domPerMin: round1(row.window.domPerMin - baseline.domPerMin),
-				};
-			}
-			return rows;
+		/** Δ 一律对照"紧邻的前一个基线窗口";缺任一侧就不写数字(宿主没真的关掉就不会走到这)。 */
+		function experimentDelta(base, off) {
+			if (base === null || base === undefined || off === null || off === undefined) return null;
+			return {
+				fps: round1(off.fps - base.fps),
+				longTasks: off.longTasks - base.longTasks,
+				domPerMin: round1(off.domPerMin - base.domPerMin),
+			};
+		}
+
+		/**
+		 * 噪声底 = 「基线 → 基线」漂移的最大绝对值。
+		 *
+		 * 为什么必须有它:第一版实验每个候选都跟"最初那个基线"比,结果四个 Δfps 全是负的 ——
+		 * 那是机器越跑越忙的系统性漂移,不是四个插件都有害。有了噪声底,任何小于它的 Δ
+		 * 都标成噪声内,不把漂移包装成结论。
+		 */
+		function noiseFloor(drifts) {
+			const pick = (key) => drifts.reduce((top, item) => Math.max(top, item === null || item === undefined ? 0 : Math.abs(item[key] ?? 0)), 0);
+			return { fps: round1(pick('fps')), longTasks: pick('longTasks'), domPerMin: round1(pick('domPerMin')) };
+		}
+
+		/** Δ 是否超出噪声底(逐指标判断)。 */
+		function significance(delta, noise) {
+			if (delta === null || noise === null) return null;
+			return {
+				fps: Math.abs(delta.fps) > noise.fps,
+				longTasks: Math.abs(delta.longTasks) > noise.longTasks,
+				domPerMin: Math.abs(delta.domPerMin) > noise.domPerMin,
+			};
+		}
+
+		/** 超出噪声的指标名单,给面板一行用。 */
+		function metricList(sig) {
+			if (sig === null || sig === undefined) return translate('notYet');
+			const hit = [];
+			if (sig.fps) hit.push('fps');
+			if (sig.longTasks) hit.push('LT');
+			if (sig.domPerMin) hit.push('DOM');
+			return hit.length === 0 ? translate('none') : hit.join('/');
 		}
 
 		async function runExperiment() {
@@ -1335,8 +1374,13 @@ window.__ModuleLoader__.load({
 			}
 			experiment.candidateState = [...stateBefore.entries()].map(([name, enabled]) => ({ name, enabledBefore: enabled }));
 
-			experiment.message = '基线窗口';
-			experiment.baseline = await measureWindow('baseline', STEP_MS);
+			experiment.message = `基线窗口 0(${Math.round(BRACKET_MS / 1000)}s)`;
+			// A/B/A:每个候选都跟"紧邻它前面的那个基线"对照,并在恢复后立刻再打一次基线 ——
+			// 后者既验证"恢复是否真的回到原状",又提供基线漂移样本(噪声底)。
+			let previousBase = await measureWindow('base', BRACKET_MS);
+			experiment.baseline = previousBase;
+			experiment.drifts = [];
+			experiment.noise = null;
 
 			try {
 				const total = experiment.candidates.length;
@@ -1367,7 +1411,7 @@ window.__ModuleLoader__.load({
 						experiment.results.push(row);
 						continue;
 					}
-					experiment.message = `${step} ${name}:测量窗口(60s)`;
+					experiment.message = `${step} ${name}:测量窗口(${Math.round(STEP_MS / 1000)}s)`;
 					row.window = await measureWindow(`off:${name}`, STEP_MS);
 					experiment.message = `${step} ${name}:恢复`;
 					const back = await bundleOp('setBundle', { op: 'setBundle', name, enabled: true, confirm: true });
@@ -1376,6 +1420,15 @@ window.__ModuleLoader__.load({
 						application: back.result?.application ?? null,
 						error: back.ok === true ? null : back.error,
 					};
+					experiment.message = `${step} ${name}:恢复后基线(${Math.round(BRACKET_MS / 1000)}s)`;
+					const base = await measureWindow('base', BRACKET_MS);
+					row.afterBase = base;
+					row.delta = experimentDelta(previousBase, row.window);
+					row.drift = experimentDelta(previousBase, base);
+					// 窗口里有流式渲染时,帧率与长任务都被别的东西主导,这种对照不可比。
+					row.confounded = row.window.streaming === true || previousBase.streaming === true;
+					experiment.drifts.push(row.drift);
+					previousBase = base;
 					experiment.results.push(row);
 				}
 			} catch (error) {
@@ -1398,8 +1451,12 @@ window.__ModuleLoader__.load({
 				}
 			}
 			experiment.restored = { restores, after: after !== null && after.ok === true ? after.bundles : null, diff, ok: diff.length === 0 };
-			// Δ 一律对照基线;缺窗口的项不编数字,直接留空。
-			applyDeltas(experiment.results, experiment.baseline);
+			// 噪声底先算出来,再逐条判断"这个 Δ 是不是超出噪声"。
+			experiment.noise = noiseFloor(experiment.drifts);
+			for (const row of experiment.results) {
+				if (row.delta === undefined || row.delta === null) continue;
+				row.significant = significance(row.delta, experiment.noise);
+			}
 			experiment.phase = experiment.aborted === true ? 'aborted' : 'done';
 			experiment.message = experiment.aborted === true ? '已中止并恢复' : `完成,恢复核验:${experiment.restored.ok ? '一致' : `有 ${experiment.restored.diff.length} 处不一致`}`;
 			dirty = true;
@@ -1486,8 +1543,11 @@ window.__ModuleLoader__.load({
 					note: '每步带宿主真实回执(changeResult);applied:false 表示宿主没真的关掉,该步不产出 Δ',
 					phase: experiment.phase,
 					message: experiment.message,
+					method: experiment.method,
 					via: experiment.via,
 					viaLabel: viaLabel(experiment.via),
+					noiseFloor: experiment.noise,
+					drifts: experiment.drifts,
 					startedAt: experiment.startedAt > 0 ? new Date(experiment.startedAt).toISOString() : null,
 					candidates: experiment.candidates,
 					candidateState: experiment.candidateState,
@@ -1696,7 +1756,8 @@ window.__ModuleLoader__.load({
 				stressHint: '自测:一次同步提交渲染 8000 个离屏节点 + 显式燃烧 80ms(节点数凑不稳,故明着燃烧),用来自检归因链路',
 				stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点',
 				stressNoTask: '未观察到长任务', stressCommit: '提交', stressBurn: '人为燃烧', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
-				expHint: '会临时关闭候选插件各 60 秒并逐项恢复;每步都记宿主回执,恢复后逐项核验。',
+				expHint: '会临时关闭候选插件各 60 秒并逐项恢复;每步都记宿主回执,恢复后逐项核验。每个候选只跟紧邻基线对照,并给出基线漂移当噪声底。',
+				method: '方法', noiseFloor: '噪声底', beyondNoise: '超出噪声', confounded: '窗口含流式,该对照不可比',
 				skipped: '跳过', restore: '恢复', marks: '场景标记',
 				via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
 				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
@@ -1727,7 +1788,8 @@ window.__ModuleLoader__.load({
 				stressHint: 'Self-test: one synchronous commit rendering 8000 offscreen nodes plus an explicit 80ms burn (node counts alone are not reliable), to self-check the attribution chain',
 				stressRunning: 'self-test running', stressDone: 'self-test result', nodes: 'nodes',
 				stressNoTask: 'no long task observed', stressCommit: 'commit', stressBurn: 'synthetic burn', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable', stressFromDom: 'DOM write',
-				expHint: 'Temporarily disables each candidate for 60s and restores it; every step records the host receipt and the restore is verified.',
+				expHint: 'Temporarily disables each candidate for 60s and restores it; every step records the host receipt and the restore is verified. Each candidate is compared with its nearest baseline, with baseline drift reported as the noise floor.',
+				method: 'method', noiseFloor: 'noise floor', beyondNoise: 'beyond noise', confounded: 'window had streaming; this comparison is not valid',
 				skipped: 'skipped', restore: 'restore', marks: 'marks',
 				via: 'channel', viaRemote: 'ctx.remote (client remote)', viaRoute: 'host route /api/dsh-perf-hud/host', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
 				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
@@ -2066,13 +2128,17 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.label }, t('isolation')),
 						h('span', { style: S.num }, experimentText())),
 					h('div', { style: S.sub }, `${t('candidate')}: ${experiment.candidates.join(' ')}${experiment.via === null ? '' : ` · ${viaLabel(experiment.via)}`}`),
+					h('div', { style: S.sub }, `${t('method')}: ${experiment.method}`),
 					experiment.baseline === null ? null : h('div', { style: S.sub }, `${t('baseline')}: ${experiment.baseline.fps}fps · LT ${experiment.baseline.longTasks} · ${experiment.baseline.domPerMin}${t('perMin')}`),
+					experiment.noise === null ? null : h('div', { style: S.sub }, `${t('noiseFloor')}: ±${experiment.noise.fps}fps · ±${experiment.noise.longTasks}LT · ±${experiment.noise.domPerMin}${t('perMin')}`),
 					experiment.results.length === 0 ? null : h('div', null, experiment.results.map((row) => h('div', { key: row.name },
 						h('div', { style: S.row },
 							h('span', { style: S.label, title: JSON.stringify(row.changeResult ?? row.error ?? null) }, `${short(row.name)}${row.applied ? '' : ` ${t('skipped')}`}`),
-							h('span', { style: S.num }, row.delta === undefined ? (row.reason ?? '') : `Δfps ${signed(row.delta.fps)} · ΔLT ${signed(row.delta.longTasks)}`),
-						),
-						row.delta === undefined ? null : h('div', { style: S.sub }, `ΔDOM ${signed(row.delta.domPerMin)}${t('perMin')} · ${t('restore')} ${row.restore?.ok === true ? '✓' : '✗'}`)))),
+							h('span', { style: S.num }, row.delta === undefined || row.delta === null ? (row.reason ?? '') : `Δfps ${signed(row.delta.fps)} · ΔLT ${signed(row.delta.longTasks)}`)),
+						row.delta === undefined || row.delta === null ? null : h('div', { style: S.sub },
+							`ΔDOM ${signed(row.delta.domPerMin)}${t('perMin')} · ${t('restore')} ${row.restore?.ok === true ? '✓' : '✗'}` +
+							` · ${t('beyondNoise')} ${metricList(row.significant)}` +
+							(row.confounded === true ? ` · ⚠️ ${t('confounded')}` : ''))))),
 					experiment.restored === null ? null : h('div', { style: S.sub },
 						`${t('restore')}: ${experiment.restored.ok === true ? `✓ ${experiment.restored.restores?.length ?? 0}` : `✗ ${experiment.restored.diff?.length ?? 0} 处不一致`}`),
 					h('div', { style: S.buttons },

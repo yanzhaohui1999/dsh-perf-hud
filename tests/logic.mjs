@@ -174,6 +174,7 @@ const sandbox = `
 		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 		stressBurn: '人为燃烧',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
+		none: '无',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -216,7 +217,10 @@ const newPieces = [
 	'function linkRowText(',
 	'function throughputText(',
 	'function suspectLink(',
-	'function applyDeltas(',
+	'function experimentDelta(',
+	'function noiseFloor(',
+	'function significance(',
+	'function metricList(',
 	'function isStreaming(',
 	'function idleTick(',
 	'function rate(',
@@ -238,7 +242,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, applyDeltas, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -429,16 +433,20 @@ check('n>=2 且 RTT 尖峰 + FPS 正常:追加疑似链路',
 check('linkStats 单样本 p50 = p99 = 自身', (() => { box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 7 }]; return [EX.linkStats().p50, EX.linkStats().p99]; })(), [7, 7]);
 box.state.link = [];
 
-// ── C:Δ 只对照基线 ────────────────────────────────────────────────
-const rows = EX.applyDeltas([
-	{ name: 'ok', window: { fps: 55, longTasks: 1, domPerMin: 10 }, applied: true },
-	{ name: 'skipped', applied: false, reason: '宿主没有真的关掉' },
-], { fps: 60, longTasks: 3, domPerMin: 40 });
-check('Δfps 对照基线', rows[0].delta.fps, -5);
-check('Δlongtask 对照基线', rows[0].delta.longTasks, -2);
-check('ΔDOM 对照基线', rows[0].delta.domPerMin, -30);
-check('没关成功的项不产出 Δ', rows[1].delta, undefined);
-check('没有基线时一个 Δ 都不编', EX.applyDeltas([{ name: 'x', window: { fps: 1, longTasks: 1, domPerMin: 1 } }], null)[0].delta, undefined);
+// ── C:Δ 对照"紧邻基线" + 噪声底(第一版把漂移当成了结论,这条是那次事故的回归) ──
+check('experimentDelta 对照紧邻基线',
+	EX.experimentDelta({ fps: 60, longTasks: 3, domPerMin: 40 }, { fps: 55, longTasks: 1, domPerMin: 10 }),
+	{ fps: -5, longTasks: -2, domPerMin: -30 });
+check('缺任一侧就不写 Δ', EX.experimentDelta(null, { fps: 1, longTasks: 0, domPerMin: 0 }), null);
+check('noiseFloor 取基线间漂移的最大绝对值',
+	EX.noiseFloor([{ fps: -1, longTasks: 2, domPerMin: -5 }, { fps: 3, longTasks: -1, domPerMin: 9 }]),
+	{ fps: 3, longTasks: 2, domPerMin: 9 });
+check('significance 逐指标判断是否超出噪声',
+	EX.significance({ fps: -1, longTasks: 14, domPerMin: 4219 }, { fps: 3, longTasks: 2, domPerMin: 9 }),
+	{ fps: false, longTasks: true, domPerMin: true });
+check('metricList 列出超标指标', EX.metricList({ fps: false, longTasks: true, domPerMin: true }), 'LT/DOM');
+check('全部落在噪声内:明确写「无」,不把漂移说成效果',
+	EX.metricList({ fps: false, longTasks: false, domPerMin: false }), '无');
 
 // ── E:空闲基线门控(含一次真的窗口采集) ─────────────────────────
 box.state.baselineMs = 100;    // 只跑一轮,省时间
