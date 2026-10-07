@@ -112,6 +112,7 @@ dsh plugin --profile web add "$PWD"
 5. **CSS 动画不经 JS**:鲸鱼摆动那类 `steps()` 关键帧只体现在 FPS / 最差帧 /「帧内未归因」,归因表里看不到它。
 6. **命中率会被 DOM 腿抬高**:流式时几乎必然命中,必须配合「归属 Top」分布读。
 7. 面板状态只进 `localStorage`;导出件在你本机生成,不发往任何地方。
+8. **浏览器在另一台机器上时,「链路 RTT」高是真实的**:如果经隧道访问 `127.0.0.1:3080`,隧道本身的 RTT p50 可以是数十到数百毫秒,而本机 curl 同一路由只要几毫秒。面板为此有「疑似链路」判据和「链路已排除(宿主与隧道均正常)」结论 —— 别把这个数字当 bug。
 
 ## 🧰 控制台 API 与存储键位
 
@@ -140,15 +141,15 @@ node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js
 # 合计 187 条断言,离线,无需 DSH 在跑
 ```
 
-线上验证(需要先换 cookie,步骤见 [HANDOVER.md](HANDOVER.md)):
+线上验证(需要先换 cookie,步骤见 [AGENTS.md](AGENTS.md) §2.2):
 
 ```sh
 DSH_COOKIE=… node tests/live-sourcemap.mjs   # 真实 indexed sourcemap 的分段与包名
 DSH_COOKIE=… node tests/live-host.mjs        # 真实路由;退出码 3 = 宿主半还未加载(需要重启)
 ```
 
-开发规则、提交规范、代码约定见 [AGENTS.md](AGENTS.md);贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md);
-环境事实与源码级机制(以及一堆已证伪的死路)见 [HANDOVER.md](HANDOVER.md)。
+开发规则、提交规范、代码约定、源码级归因机制与已证伪的死路见 [AGENTS.md](AGENTS.md)(§6 机制 / §8 坑);
+贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 🤝 参与贡献
 

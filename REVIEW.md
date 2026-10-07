@@ -4,7 +4,7 @@
 每条"已达成"都能在本文件给出的命令下复现。
 
 三份文档分工:[README.md](README.md) 讲装什么怎么用 · [ACCEPTANCE.md](ACCEPTANCE.md) 是验收数字 ·
-[HANDOVER.md](HANDOVER.md) 是环境与源码级机制 · 本文是**发布前的缺口清单**。
+[AGENTS.md](AGENTS.md) 是开发规则 + 源码级机制 + 已知坑 · 本文是**发布前的缺口清单**。
 
 ---
 
@@ -63,7 +63,7 @@
 ## 4. 已核验为"没问题"的(不用动)
 
 - **测试**:`node tests/{attribution,logic,host}.mjs` = **11 + 152 + 24 = 187 条,全绿**(README 声称的 187 与实际一致)。
-- **历史无密钥**:全历史 blob 扫 `sk-` / `apiKey` / `baseURL` / `Authorization` / `token=`,命中项只有 `.gitignore` 注释与 HANDOVER 里的操作步骤;**`dump-config-after.txt`(含 provider/baseURL 配置)、`backup-20261006/`、`add.log` 从未进过历史**。
+- **历史无密钥**:全历史 blob 扫 `sk-` / `apiKey` / `baseURL` / `Authorization` / `token=`,命中项只有 `.gitignore` 注释与文档里的操作步骤;**`dump-config-after.txt`(含 provider/baseURL 配置)、`backup-20261006/`、`add.log` 从未进过历史**。
 - **插件形态**:`dsh.bundle.patch` + `cordis.patch.yml` + `exports["./client"]` + `dsh.client.platform/inject` 均正确;`icon.svg` 有效;`locale/{zh,en}.json` 形态与 `dsh-context` 一致(只放 `meta.title/description`)。
 - **零运行时依赖**:`client.js` 只 `require('react')`(走浏览器模块表),`index.js` 只用 node 内置模块。
 - **提交历史已规范**:30 条全部 `type(scope): 描述` 格式,正文中性化(无"用户/我"),见 [CHANGELOG.md](CHANGELOG.md)。
@@ -81,10 +81,11 @@
 - [x] CI:[.github/workflows/ci.yml](.github/workflows/ci.yml)(两个半边的语法检查 + 187 条离线断言 + **断言总数与文档一致性**)、[.github/workflows/release.yml](.github/workflows/release.yml)(npm Trusted Publishing / OIDC,含 tag 与版本号一致性校验、打包产物核对)
 - [x] 提交历史规范化为 Conventional Commits 并把正文中性化(见 [CHANGELOG.md](CHANGELOG.md))
 - [x] **代码必修三处**:`index.js` 的 `'../package.json'` → `'./package.json'`(+ 断言)、`DEFAULT_CANDIDATES` 改为按 `listBundles` 推导(+ 3 条断言)、`cordis.patch.yml` 与 `client.js` 头部的过期注释
-- [x] 断言总数 183 → **187**(attribution 11 / logic 152 / host 24),README / README_EN / AGENTS / CONTRIBUTING / CHANGELOG / REVIEW / HANDOVER 与两个 workflow 里的数字全部同步
+- [x] 断言总数 183 → **187**(attribution 11 / logic 152 / host 24),README / README_EN / AGENTS / CONTRIBUTING / CHANGELOG / REVIEW 与两个 workflow 里的数字全部同步
 - [x] README 里把"默认开启 + 插桩全局原型 + 隔离实验会临时写 profile"写成显式警告
 - [x] **package.json 发布元数据**:去 `private`;补 `license` / `author` / `repository` / `homepage` / `bugs` / `keywords` / `main` / `engines`(node + dsh)/ `peerDependencies`(三个官方客户端包,范围按预检口径实测过)/ `dsh.compatibility` / `publishConfig`
-- [x] **打包面**:README 链接到的 9 份文档 + LICENSE 全部写进 `files`(`npm pack --dry-run` 9 → 16 个文件),死链问题一并消掉;`scripts.test` 接上三套件(`npm test`)
+- [x] **打包面**:README 链接到的文档 + LICENSE 全部写进 `files`(`npm pack --dry-run` 9 → 16 个文件),死链问题一并消掉;`scripts.test` 接上三套件(`npm test`)
+- [x] **`HANDOVER.md` 溶解进长期文档**:它是开发期的一次性交接稿,内容按性质分派 —— 环境与"改哪个文件怎么生效" → AGENTS §2、无浏览器验证手法 → AGENTS §2.2、源码级归因机制与宿主 API → AGENTS §6、读数口径 → AGENTS §7 + README、已证伪死路 → AGENTS §8、跨机隧道 RTT 的真实性 → README 风险与边界;文件本身已删除,引用全部改指 AGENTS 对应小节
 
 ### 仍待办(剩下都与"对外动作"有关)
 

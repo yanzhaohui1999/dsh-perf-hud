@@ -116,25 +116,28 @@ is expensive in some usage", so do not read it as a causal proof.
 6. **Hit ratio is inflated by the DOM leg** (streaming almost always produces writes), so always read it together
    with the attribution distribution.
 7. Panel state lives in `localStorage`; exports are generated locally and sent nowhere.
+8. **If your browser is on another machine, a high "link RTT" is real**: over a tunnel to `127.0.0.1:3080` the
+   tunnel's own RTT p50 can be tens to hundreds of milliseconds while `curl` on the host takes a few. That is why
+   the panel has a "link suspected" verdict and an explicit "link ruled out (host and tunnel both normal)" line —
+   the number is not a bug.
 
 ## Development
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
 node tests/logic.mjs         # 152 assertions: real functions extracted from client.js + static checks + length budgets
-node tests/host.mjs          #  23 assertions: real index.js driven by a fake ctx
+node tests/host.mjs          #  24 assertions: real index.js driven by a fake ctx
 # 187 offline assertions total, no running DSH required
 ```
 
-Live verification (exchange a cookie first, see [HANDOVER.md](HANDOVER.md)):
+Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
 
 ```sh
 DSH_COOKIE=… node tests/live-sourcemap.mjs   # real indexed sourcemap sections and package names
 DSH_COOKIE=… node tests/live-host.mjs        # real route; exit code 3 = host half not loaded yet (restart needed)
 ```
 
-Development rules and commit conventions: [AGENTS.md](AGENTS.md). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
-Host contract details and disproven dead ends: [HANDOVER.md](HANDOVER.md).
+Development rules, commit conventions, the source-level attribution mechanism and disproven dead ends: [AGENTS.md](AGENTS.md) (§6 mechanism / §8 traps). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

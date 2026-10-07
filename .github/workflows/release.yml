@@ -58,7 +58,7 @@ jobs:
           npm pack --dry-run 2>&1 | tee /tmp/pack.txt
           for f in index.js client.js cordis.patch.yml icon.svg locale/zh.json locale/en.json \
                    README.md README_EN.md LICENSE CHANGELOG.md CONTRIBUTING.md AGENTS.md \
-                   HANDOVER.md ACCEPTANCE.md REVIEW.md; do
+                   ACCEPTANCE.md REVIEW.md; do
             grep -q "$f" /tmp/pack.txt || { echo "打包产物缺 $f"; exit 1; }
           done
 

@@ -36,6 +36,6 @@
 ### 文档
 
 - `README.md` / `README_EN.md` / `AGENTS.md` / `CONTRIBUTING.md` / `REVIEW.md` / `CHANGELOG.md`
-- `ACCEPTANCE.md`(验收判据与实测数字)、`HANDOVER.md`(环境事实、源码级机制、已证伪死路 8 条、控制台 API 与存储键位)
+- `ACCEPTANCE.md`(验收判据与实测数字);源码级机制、宿主 API 事实与已证伪的死路在 [AGENTS.md](AGENTS.md) §6 / §8
 
-[0.2.0]: https://github.com/<owner>/dsh-perf-hud/releases/tag/v0.2.0
+[0.2.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.2.0

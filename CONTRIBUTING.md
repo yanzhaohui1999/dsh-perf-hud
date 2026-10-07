@@ -9,7 +9,7 @@ English summary follows the Chinese text below.
 ## 开始之前
 
 - 先读 [README.md](README.md) 了解面板能力与读数口径,再读 [AGENTS.md](AGENTS.md) —— 那里是**开发规则**(硬约束、门禁、提交规范、代码约定),本文不重复。
-- 想知道"为什么这么设计、哪些路已经试过并证伪" → [HANDOVER.md](HANDOVER.md);想核对实测数字 → [ACCEPTANCE.md](ACCEPTANCE.md);想知道发布还差什么 → [REVIEW.md](REVIEW.md)。
+- 想知道"为什么这么设计、哪些路已经试过并证伪" → [AGENTS.md](AGENTS.md) §6(源码级机制)与 §8(已证伪的死路);想核对实测数字 → [ACCEPTANCE.md](ACCEPTANCE.md);想知道发布还差什么 → [REVIEW.md](REVIEW.md)。
 
 ## 报告 Bug
 
