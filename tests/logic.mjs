@@ -170,6 +170,11 @@ const sandbox = `
 	const bundleMaps = new Map();
 	const bundleMeta = new Map();
 	const changedNodes = [];
+	// LoAF 脚本 → 包名那条路要吃脚本文本:给一个 3 行的假脚本(第 1 行 aaa、第 2 行 bbb、第 3 行 ccc)
+	// 用 fromCharCode 拼换行:这段桩写在模板字符串里,直接写反斜杠 n 会被模板先转义掉
+	const LF = String.fromCharCode(10);
+	const SCRIPT_TEXT = ['aaa', 'bbb', 'ccc', ''].join(LF);
+	const fetch = async () => ({ ok: true, status: 200, text: async () => SCRIPT_TEXT, json: async () => ({}) });
 	// 只给这几个键的真实中文:断言要检查"人看到的字",不是 key
 	let flushSync = null;   // 沙箱里的 react-dom flushSync(与真实一致:拿不到就是 null)
 	const translate = (key) => ({
@@ -205,7 +210,17 @@ const newPieces = [
 	'function sectionName(',
 	'function bundleMetaOf(',
 	'function bundleLabel(',
+	'const PLUGIN_URL = ',
+	'function ownerOfUrl(',
 	'function sectionOwner(',
+	'function bundleMap(',
+	'const LS_MAP = ',
+	'const scriptLines = ',
+	'const SCRIPT_LINES_MAX = ',
+	'async function loadScriptLines(',
+	'function ensureScriptLines(',
+	'function scriptLineOf(',
+	'function packageOfScript(',
 	'const FIBER_SCAN_MAX = ',
 	'const DESCEND_MAX = ',
 	'function usableComponentName(',
@@ -284,7 +299,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -314,6 +329,29 @@ check('sectionOwner(第 11 行) = b(0-based 10 起)', EX.sectionOwner(entry, 11)
 check('sectionOwner(第 25 行) = b', EX.sectionOwner(entry, 25), 'b');
 check('sectionOwner(第 26 行) = c', EX.sectionOwner(entry, 26), 'c');
 check('sectionOwner(第 0 行,非法) = null', EX.sectionOwner(entry, 0), null);
+
+// ── A2:LoAF 脚本 → 包名(charPos → 行号 → 分段表)────────────────────
+const comboUrl = 'http://h/plugins/??dsh-a/client.js,dsh-b/client.js&rev=9';
+await EX.loadScriptLines(comboUrl);          // 假脚本 3 行:aaa / bbb / ccc
+check('scriptLineOf:charPos 0 在第 1 行', EX.scriptLineOf(comboUrl, 0), 1);
+check('scriptLineOf:换行符本身算下一行起点', [EX.scriptLineOf(comboUrl, 3), EX.scriptLineOf(comboUrl, 4), EX.scriptLineOf(comboUrl, 8)], [1, 2, 3]);
+check('scriptLineOf:文本没到位就是 null(不猜)', EX.scriptLineOf('http://h/plugins/??x,y/client.js', 5), null);
+check('scriptLineOf:字符位置超出文本 → -1', EX.scriptLineOf(comboUrl, 999), -1);
+check('packageOfScript:非插件脚本 → not-plugin', EX.packageOfScript('http://h/assets/index.js', 10), { pkg: null, via: 'not-plugin' });
+check('packageOfScript:单包 URL 直接读出包名', EX.packageOfScript('http://h/plugins/??dsh-x/client.js&rev=1', 10), { pkg: 'dsh-x', via: 'url' });
+check('packageOfScript:没有 URL → no-url', EX.packageOfScript('', 10), { pkg: null, via: 'no-url' });
+box.state.precise = false;
+check('packageOfScript:精确归因关着 → 说清楚', EX.packageOfScript(comboUrl, 10), { pkg: null, via: 'precise-off' });
+box.state.precise = true;
+check('packageOfScript:脚本文本没备好 → text-pending', EX.packageOfScript('http://h/plugins/??p,q/client.js&rev=2', 10), { pkg: null, via: 'text-pending' });
+const comboKey = `bundle:${comboUrl}`;
+box.bundleMaps.set(comboKey, { state: 'pending' });
+check('packageOfScript:分段表还在解析 → map-pending', EX.packageOfScript(comboUrl, 10), { pkg: null, via: 'map-pending' });
+box.bundleMaps.set(comboKey, { state: 'ready', offsets: [[0, 'dsh-a'], [2, 'dsh-b']], names: ['dsh-a', 'dsh-b'], count: 2 });
+check('packageOfScript:charPos 落在第二段 → dsh-b', EX.packageOfScript(comboUrl, 9), { pkg: 'dsh-b', via: 'section' });
+check('packageOfScript:字符位置越界 → out-of-range', EX.packageOfScript(comboUrl, 999), { pkg: null, via: 'out-of-range' });
+check('packageOfScript:没有字符位置 → no-charpos', EX.packageOfScript(comboUrl, null), { pkg: null, via: 'no-charpos' });
+box.state.precise = false;   // 还原:后面的用例假设它是关着的
 check('sectionOwner(表为空) = null', EX.sectionOwner({ offsets: [] }, 5), null);
 
 // ── A:批次标签 —— 绝不展开成多个名字 ───────────────────────────────
@@ -820,6 +858,9 @@ const watchBox = new Function(`
 	const performance = { now: () => nowMs, timeOrigin: 1700000000000 };
 	const document = { visibilityState: 'visible' };
 	const PKG = 'dsh-perf-hud';
+	// assembleIncident 会调用 packageOfScript:这里用桩把它隔离掉(真函数在上一个盒子里
+	// 有 11 条断言),只验证"切片时确实记了 pkg / pkgVia 两个字段"这个契约。
+	const packageOfScript = () => ({ pkg: null, via: 'stub' });
 	const location = { href: 'http://127.0.0.1:3080/' };
 	const navigator = { userAgent: 'test-agent', hardwareConcurrency: 10 };
 	const W = { innerWidth: 1600, innerHeight: 900, devicePixelRatio: 2 };
@@ -1013,6 +1054,18 @@ check('会话基线:用"真的在跑的时间"算 fps,不被挂起拉低', (() =
 	const stats = watch.frameRing.stats();
 	return [stats.frames, stats.spanMs, stats.busyMs, stats.fps];
 })(), [3, 39016, 50.1, 59.9]);
+check('切片时给每条脚本记了 pkg 与 pkgVia(这里 packageOfScript 是桩)', (() => {
+	watch.state.watch.loaf.push({
+		t: 195000, dur: 20, blocking: 0, renderStart: 0, styleAndLayoutStart: 0,
+		scripts: [{ url: 'http://h/plugins/??a/client.js', fn: null, invoker: null, invokerType: 'user-callback', charPos: 1, ms: 5, forcedMs: 0, pauseMs: 0 }],
+	});
+	watch.setNow(250000);            // 让它立刻结算(不等后摇)
+	watch.state.watch.coveredUntil = 0;
+	const probe = watch.triggerCapture('frame', 195000, 150);
+	const script = probe.loaf.flatMap((row) => row.scripts)[0];
+	return [probe.summary.pkgCoverage, 'pkg' in script, script.pkgVia];
+})(), [{ resolved: 0, total: 1 }, true, 'stub']);
+watch.state.watch.coveredUntil = 0;
 check('事故包:URL 抽表后脚本里不再内联 url', watch.incidentReport(0).incident.loaf.every((row) => row.scripts.every((script) => script.url === undefined && typeof script.u === 'number')), true);
 check('事故包:topScripts 也只留下标', watch.incidentReport(0).incident.summary.topScripts.every((script) => script.url === undefined), true);
 // 身材回归:同一个长 URL 重复 20 次,抽表之后事故包不该被它撑大
@@ -1029,9 +1082,9 @@ check('事故:抽表后体积不到内联的一半', JSON.stringify(big).length 
 check('事故包:kind 与 incident 对得上', [report.kind, report.plugin, report.incident.id === watch.state.watch.incidents[0].id], ['perf-hud-incident', 'dsh-perf-hud', true]);
 check('事故包:带阈值与读取说明', [
 	report.context.thresholds.triggerMs,
-	report.context.howToRead.length,
+	report.context.howToRead.some((line) => line.includes('pkgVia')) && report.context.howToRead.length >= 9,
 	report.context.page,
-], [100, 9, 'http://127.0.0.1:3080/']);
+], [100, true, 'http://127.0.0.1:3080/']);
 check('事故包:如实列出没拿到的东西',
 	['precise:', 'devtools-trace:'].map((prefix) => report.context.missing.some((line) => line.startsWith(prefix))),
 	[true, true]);

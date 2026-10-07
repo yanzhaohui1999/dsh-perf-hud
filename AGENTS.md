@@ -106,7 +106,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 233 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 247 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -178,6 +178,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 | `plugins/<包名>/<分片>.js?rev=<hash>` | 包内分片 |
 | `plugins/??a/client.js,b/client.js&rev=<hash>` | 启动批;本版本**只 preload 不执行** |
 
+- **LoAF 的 `scripts[]` 也能定到包名**(2026-10-07):它给的是 `sourceURL` + `sourceCharPosition`,单包 URL 直接从 URL 读出包名;多包 URL 要把字符位置换算成行号,再走同一张分段表。换算需要那段脚本文本(同源 `fetch`,浏览器内存缓存命中),所以按 URL 后台预取、只留行起始偏移(`Int32Array` 级别的开销)。**逐 UTF-16 code unit 数换行**,不能用 code point。实测:一次事故 37/37 条脚本全部定名,归到 `@deepseek-ai/dsh-api-gateway`
 - **合并包里没有 `sourceURL` 边界标记**,所以包名只能靠它自带的 **indexed sourcemap**:`plugins/??a/client.js.map,b/client.js.map&rev=…` → `sections[i].offset.line`(0-based)+ `map.sources[0]` → `/plugins/<包>/…`;V8 的 `CallSite.getLineNumber()` 是 1-based,**换算要减一**。线上实测:58 sections、包名与批次 entries 顺序完全一致、116 处边界断言 0 错。按 `rev` 缓存分段表(`localStorage` 的 `dsh-perf-hud:map:<rev>:<len>`),同一个 rev 只拉一次那份 12MB 的 map。
 - `window.__DSH_BOOT__ = { rev, entries, batches }`(首页内联);批次名取自 `batches[i].phase`(`application` / `bootstrap`),包数 = `batches[i].entries.length`。
 - **`data-dsh-plugin` 在本版本不存在**,不能靠它归因;可用的稳定 DOM 钩子只有:`[data-chat-running]`(流式判定)、`[data-conversation-content]` / `[data-chat-flow]`(消息区)、`[data-row-key]`(会话行的 `parentElement` 当列表容器)、`[data-shell-overlay]`。

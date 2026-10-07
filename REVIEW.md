@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ⬜ 仓库已建(私有),待转公开、加 topic |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,漏一份就失败 |
-| 6 | 门禁全绿 | ✅ 268 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ 282 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
 | 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
 
@@ -33,7 +33,7 @@
 
 | 判据 | 怎么验 | 最新实测 |
 |---|---|---|
-| 离线断言全绿 | `npm test` | **268** 条(attribution 11 / logic 233 / host 24) |
+| 离线断言全绿 | `npm test` | **282** 条(attribution 11 / logic 247 / host 24) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 事故落盘且活过刷新 | 抓一次 → 刷新 → `watch().restored` | restored **10**;读回条目带 `restored:true`、`env.perfOrigin` 保留,`report()` 跨会话可渲染(184 帧) |
@@ -42,6 +42,7 @@
 | 事故包不虚胖 | 身材回归断言 + 实测 | 同一份内容 URL 抽表前 **116.6KB** → 抽表后 **29.6KB**(导出缩进 138.6 → 51.5KB) |
 | 长任务四条腿归因 | `verification()` / 面板 | 真实会话 命中 **35/49** · 组件 35 · 独立包名 **90** |
 | 精确归因(单包名) | 打开「精确」后归因表出现单包名 | 2/2 批次分段 ready;线上 sourcemap 58 sections、116 处边界 **0 错** |
+| **LoAF 脚本 → 包名** | `incident.packages` / `summary.pkgCoverage` | 实测一次事故 **37/37** 条脚本全部定名(全部 `via: section`),归到 **`@deepseek-ai/dsh-api-gateway`** —— 同一份数据在这条路之前只能显示"58 个包的合并批 URL" |
 | 假象能被识别 | `incident.summary.suspectedThrottle` | 真实那次 983.7ms 帧:`worstFrameJs: none` + 前后帧中位 16.7ms → 标成**疑似 rAF 节流**,不冒充真卡顿 |
 | 基线可比 | `incident.baseline`(排除本窗口)+ `busyMs` | 真实会话 basline 5156 帧 / 在跑 86s → **60fps**(旧口径会被 22.7s 挂起拉成 43fps) |
 | 宿主半可用 | `/api/dsh-perf-hud/host` | 无 cookie **401**;宿主半未加载 **404**;真实会话宿主 p99 **5.72ms** |
@@ -56,16 +57,23 @@
 
 ## 3. 仍未做
 
-**代码侧**
+### 3.1 与方向一致,该做(影响"事后能不能回看、能不能说清是谁")
 
-- **LoAF 脚本 → 包名**:现在「是谁」最多到合并批 URL + `charPos`,没有换算成行号、也就查不了 sourcemap 分段表。
-  真实会话里那条 188.5ms 的 `DOMWebSocket.onmessage → received` 至今无名 —— 这是唯一还没兑现的「是谁」。
-- **记录器自己被当成元凶**:真实会话出现「整窗最多:PerfHud 11×」。自身 DOM 写入已经不记账,但 fiber / LoAF 两条腿仍会指到它。
-- **压缩名过滤没收干净**:样本里出现过 `($c)` `($w)`(现有过滤只挡「1–2 个字母 + 数字」)。
-- **i18n 只做了一半**:兜底是中文(`fallback = DICT.zh`)、隔离实验约 20 条进度串与 `isolation.method` 硬编码中文、面板有一处漏进字典的「处不一致」。
-- **桌面端主进程取证**(`contentTracing` 环形 + `webContents.debugger`)—— 需要 Desktop 环境才能验,见 [AGENTS.md](AGENTS.md) §12 末尾那条硬事实。
+- **记录器自己被当成元凶**:真实会话出现「整窗最多:PerfHud 11×」。HUD 自身的 DOM 写入已经不记账,
+  但 fiber / LoAF 两条腿仍会指到它 —— 这直接污染"是谁"这一栏,该剔掉或至少标注。
+- **压缩名漏过过滤**:样本里出现过 `($c)` `($w)`(现有过滤只挡「1–2 个字母 + 数字」,没挡 `$` 开头)。
+- **事故包的落盘一致性**:现在按 `at|cause` 去重 + 2MB 上限,但两个计数(`trimmedByBytes` / `deduped`)
+  只在面板那一行显示,导出的包里没有 —— 复盘时看不到"这份证据是不是被裁过"。
 
-**对外动作**(与 §1 一一对应)
+### 3.2 先放着(要特定环境,或者根本不在方向上)
+
+- **桌面端主进程取证**(`contentTracing` 环形 + `webContents.debugger`):需要 Desktop 环境才能验;
+  而且 `dsh-app://` 上 LoAF 的 `scripts` 恒为空(见 [AGENTS.md](AGENTS.md) §12 末尾),这条路只在
+  http(s) 源上有意义。
+- **i18n 的英文兜底**:词典齐全,但兜底是中文(`fallback = DICT.zh`),隔离实验约 20 条进度串与
+  `isolation.method` 硬编码中文。只影响英文用户读起来中英混杂,与"记录器"这个方向无关。
+
+### 3.3 对外动作(与 §1 一一对应)
 
 - [ ] 仓库转公开 → 加 `dsh-plugin` topic
 - [ ] npm 首发(先确认名字仍空闲;`release.yml` 用 Trusted Publishing / OIDC,不配 `NPM_TOKEN`)

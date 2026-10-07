@@ -337,6 +337,85 @@ window.__ModuleLoader__.load({
 			for (const key of state.bundleKeys) bundleMap(key);
 		}
 
+		// ──────── A2. LoAF 脚本 → 包名:字符位置 → 行号 → 分段表 ────────
+		// LoAF 的 scripts[] 给的是「合并批 URL + 字符位置」,而包名藏在合并批里(见 §6.1)。
+		// 单包 URL 直接从 URL 读得出包名;多包 URL 必须把字符位置换算成行号,再查分段表。
+		// 换算要那段脚本文本(同源 fetch,浏览器内存缓存命中),所以后台预取一次、按 URL 缓存。
+		const scriptLines = new Map();   // url -> { state, starts, reason }
+		const SCRIPT_LINES_MAX = 8;      // 有界:实测一个会话里真正出现的合并批只有一两个
+
+		/** 取一段脚本文本的「每行起始偏移」,用于 charPos → 1-based 行号。 */
+		async function loadScriptLines(url) {
+			const entry = { state: 'pending', starts: null, reason: '' };
+			scriptLines.set(url, entry);
+			try {
+				const response = await fetch(url, { credentials: 'same-origin' });
+				if (response.ok === false) throw new Error(`HTTP ${response.status}`);
+				const text = await response.text();
+				// 逐 UTF-16 code unit 扫 —— 与 V8 给的 sourceCharPosition 同一套计数,
+				// 不能用 code point(遇到 emoji 一类会整体错位)
+				const starts = [0];
+				for (let i = 0; i < text.length; i += 1) if (text.charCodeAt(i) === 10) starts.push(i + 1);
+				entry.starts = starts;
+				entry.length = text.length;
+				entry.state = 'ready';
+			} catch (error) {
+				entry.state = 'failed';
+				entry.reason = error instanceof Error ? error.message : String(error);
+			}
+			if (scriptLines.size > SCRIPT_LINES_MAX) {
+				const oldest = scriptLines.keys().next().value;
+				if (oldest !== url) scriptLines.delete(oldest);
+			}
+			return entry;
+		}
+
+		/** 幂等预取(后台跑,不挡切片)。 */
+		function ensureScriptLines(url) {
+			if (scriptLines.has(url)) return;
+			loadScriptLines(url);
+		}
+
+		/** charPos → 1-based 行号;文本还没到位返回 null,落在文本之外返回 -1(都不猜)。 */
+		function scriptLineOf(url, charPos) {
+			const entry = scriptLines.get(url);
+			if (entry === undefined || entry.state !== 'ready') return null;
+			if (typeof charPos !== 'number' || charPos < 0) return null;
+			if (typeof entry.length === 'number' && charPos >= entry.length) return -1;
+			const starts = entry.starts;
+			let lo = 0;
+			let hi = starts.length - 1;
+			let found = 0;
+			while (lo <= hi) {
+				const mid = (lo + hi) >> 1;
+				if (starts[mid] <= charPos) { found = mid; lo = mid + 1; } else hi = mid - 1;
+			}
+			return found + 1;
+		}
+
+		/**
+		 * 一条 LoAF 脚本 → 包名。`via` 说明这个名字是怎么来的,拿不到就写清为什么 ——
+		 * 面板与导出件都要能回答"为什么这一条没名字"。
+		 */
+		function packageOfScript(url, charPos) {
+			if (typeof url !== 'string' || url === '') return { pkg: null, via: 'no-url' };
+			const owner = ownerOfUrl(url);
+			if (owner === null) return { pkg: null, via: 'not-plugin' };
+			if (owner.startsWith(BUNDLE_PREFIX) === false) return { pkg: owner, via: 'url' };
+			if (state.precise === false) return { pkg: null, via: 'precise-off' };
+			const lines = scriptLines.get(url);
+			if (lines === undefined) { ensureScriptLines(url); return { pkg: null, via: 'text-pending' }; }
+			if (lines.state === 'failed') return { pkg: null, via: `text-failed(${lines.reason})` };
+			if (lines.state !== 'ready') return { pkg: null, via: 'text-pending' };
+			const line = scriptLineOf(url, charPos);
+			if (line === null) return { pkg: null, via: 'no-charpos' };
+			if (line < 1) return { pkg: null, via: 'out-of-range' };   // 字符位置超出了这段脚本
+			const entry = bundleMap(owner);
+			if (entry.state !== 'ready') return { pkg: null, via: `map-${entry.state}` };
+			const name = sectionOwner(entry, line);
+			return name === null ? { pkg: null, via: 'out-of-range' } : { pkg: name, via: 'section' };
+		}
+
 		/**
 		 * 宿主外壳组件不算"谁在渲染"。
 		 *
@@ -886,8 +965,16 @@ window.__ModuleLoader__.load({
 				const scripts = Array.isArray(entry.scripts) ? entry.scripts : [];
 				for (const script of scripts) {
 					if (out.length >= WATCH_SCRIPT_MAX) break;
+					const scriptUrl = typeof script.sourceURL === 'string' ? script.sourceURL : null;
+					if (scriptUrl !== null && state.precise === true && scriptUrl.indexOf(',') !== -1) {
+						// 多包:后台把脚本文本与分段表准备好。这两个请求都是浏览器内存缓存命中,
+						// 但走的是异步,所以只预取、不在这里等。
+						ensureScriptLines(scriptUrl);
+						const owner = ownerOfUrl(scriptUrl);
+						if (owner !== null && owner.startsWith(BUNDLE_PREFIX)) bundleMap(owner);
+					}
 					out.push({
-						url: typeof script.sourceURL === 'string' ? script.sourceURL : null,
+						url: scriptUrl,
 						fn: typeof script.sourceFunctionName === 'string' && script.sourceFunctionName !== '' ? script.sourceFunctionName : null,
 						invoker: typeof script.invoker === 'string' ? script.invoker.slice(0, 80) : null,
 						invokerType: script.invokerType ?? null,
@@ -1056,9 +1143,28 @@ window.__ModuleLoader__.load({
 			const pick50 = quantile(0.5);
 			const pick90 = quantile(0.9);
 			const pick99 = quantile(0.99);
+			// 每条脚本尽力定包名(拿不到就写清 via),再按包汇总一次 ——
+			// 「是谁」在合并批里原来只能给到那个 58 包的 URL,等于没有答案。
+			for (const row of loaf) {
+				for (const script of row.scripts) {
+					const resolved = packageOfScript(script.u >= 0 ? urls[script.u] : '', script.charPos);
+					script.pkg = resolved.pkg;
+					script.pkgVia = resolved.via;
+				}
+			}
 			const scripts = [];
 			for (const row of loaf) for (const script of row.scripts) scripts.push({ at: row.t, ...script });
 			scripts.sort((a, b) => b.ms - a.ms);
+			const byPkg = new Map();
+			let pkgResolved = 0;
+			for (const script of scripts) {
+				if (script.pkg === null) continue;
+				pkgResolved += 1;
+				const row = byPkg.get(script.pkg);
+				if (row === undefined) byPkg.set(script.pkg, { pkg: script.pkg, ms: script.ms, count: 1 });
+				else { row.ms = round1(row.ms + script.ms); row.count += 1; }
+			}
+			const packages = [...byPkg.values()].sort((a, b) => b.ms - a.ms);
 			let blocking = 0;
 			for (const row of loaf) blocking += row.blocking;
 			// 最差那一帧有没有 JS 解释?用 longtask / LoAF 与它的区间是否重叠判。
@@ -1102,9 +1208,11 @@ window.__ModuleLoader__.load({
 					hiddenGaps: gaps,
 					loafEntries: loaf.length,
 					blockingMs: round1(blocking),
+					pkgCoverage: { resolved: pkgResolved, total: scripts.length },   // 有名字的脚本占比
 					longTasksInWindow: longTasks.length,
 					topScripts: scripts.slice(0, 5).map((script) => ({
 						at: script.at, u: script.u, ms: script.ms, fn: script.fn, invokerType: script.invokerType, charPos: script.charPos,
+						pkg: script.pkg, pkgVia: script.pkgVia,
 					})),
 					// 窗口自己的分位:没有它,howToRead 里那句"拿 summary 和 baseline 比"在
 					// 文件内根本没法执行(实测一位只读文件的读者就卡在这)
@@ -1118,6 +1226,7 @@ window.__ModuleLoader__.load({
 					visibility: document.visibilityState,
 				},
 				urls,                          // 脚本 URL 表(scripts[].u 是它的下标)
+				packages,                      // 按包汇总的脚本耗时(降序):「是谁」在这一层才有答案
 				frames,
 				loaf,
 				longTasks,
@@ -2492,13 +2601,17 @@ window.__ModuleLoader__.load({
 				howToAdd.push('LoAF 要 Chrome 123+ 且非 dsh-app:// 源;不满足时只能靠既有 longtask 明细与人工 trace');
 			} else if (incident.summary.topScripts.length === 0) {
 				missing.push('loaf-scripts:这一帧没有脚本(<5ms 的脚本不上报;Mac/Windows 桌面端 dsh-app:// 上恒为空)');
+			} else if (incident.summary.pkgCoverage !== undefined && incident.summary.pkgCoverage.resolved < incident.summary.pkgCoverage.total) {
+				const via = {};
+				for (const script of incident.summary.topScripts) if (script.pkg === null) via[script.pkgVia] = (via[script.pkgVia] ?? 0) + 1;
+				missing.push(`loaf-pkg:${incident.summary.pkgCoverage.total - incident.summary.pkgCoverage.resolved}/${incident.summary.pkgCoverage.total} 条脚本没定到包名(${Object.entries(via).map(([k, v]) => `${k}×${v}`).join(' · ') || '不在 topScripts 里'})`);
 			}
 			if (state.on === false) {
 				missing.push('instrumentation:四条腿的归因(没插桩就没有 DOM 写入与调度点包名)');
 				howToAdd.push('打开 HUD(面板「开启」或 __perfHud.enable())');
 			}
 			if (incident.env.precise === false) {
-				missing.push('precise:合并批次里的单包名(需要精确归因,会拉那份 12MB 的 map)');
+				missing.push('precise:合并批次里的单包名 —— 也包含 LoAF 脚本的 scripts[].pkg(需要精确归因,会拉那份 12MB 的 map)');
 				howToAdd.push('面板「精确」或 __perfHud.setPrecise(true) —— 只能改善之后抓到的事故,这一条不会重放');
 			}
 			missing.push('devtools-trace:完整的 Chrome trace(页面内录不了)');
@@ -2537,6 +2650,8 @@ window.__ModuleLoader__.load({
 						'incident.baseline 是**除这一段之外**整个帧环的分布(故意排除本窗口,否则"比会话最差还差"永远不成立)—— 拿它和 summary 比,才知道这一段是真的比平时差还是这台机器一直这样',
 						'summary.worstFrameJs / suspectedThrottle:最差那一帧有没有 longtask / LoAF 与它重叠;若 none 且前后帧都健康(worstFrameNeighboursMs < 100),更像浏览器把 rAF 节流或挂起了一次,不是页面真忙了那么久',
 						'脚本的 URL 不在脚本里:incident.urls 是字符串表,scripts[].u 是它的下标(u=-1 表示没有 URL)—— 抽表是因为同一个 combo URL 会重复几十遍',
+						'scripts[].pkg 是这条脚本归属的包名(合并批里靠"字符位置 → 行号 → sourcemap 分段表"还原);pkg 为 null 时看 scripts[].pkgVia:url(单包 URL 直接读出来)/ section(分段表算出来)/ precise-off(精确归因没开)/ text-pending(脚本文本还在拉)/ not-plugin(宿主自己的 bundle)…',
+						'incident.packages 是按包汇总的脚本耗时(降序),summary.pkgCoverage 是有名字的脚本占比 —— 覆盖率不到 100% 时别把第一行当成全部',
 						'incident.summary 是上面几块的汇总(含窗口自己的 p50/p90/p99),方便直接和 incident.baseline 比;这一层不做推断,结论请自己下',
 						'context.watch.kept 按**严重度降序**,不是时间序;带 restored 的条目来自上一次会话(时间靠 env.perfOrigin 对齐),所以 id 与时间看起来会跳',
 					],

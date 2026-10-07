@@ -176,13 +176,28 @@ for (const row of worstLoaf) {
 }
 if (loaf.length > worstLoaf.length) console.log(`  …共 ${loaf.length} 条,上面按 blocking 取前 ${worstLoaf.length} 条`);
 
+console.log(rule('按包汇总(脚本耗时归到包名)—— 这一层才是"是谁"'));
+const packages = Array.isArray(incident.packages) ? incident.packages : [];
+if (packages.length === 0) {
+	console.log('(一条都没定到包名:看下面的 pkgVia 与缺失声明)');
+} else {
+	const coverage = summary.pkgCoverage;
+	for (const row of packages.slice(0, 8)) {
+		console.log(`  ${pad(`${num(row.ms)}ms`, 9, 'right')}  ${pad(`×${row.count}`, 5, 'right')}  ${row.pkg}`);
+	}
+	if (packages.length > 8) console.log(`  …共 ${packages.length} 个包`);
+	if (coverage !== undefined) console.log(`  覆盖率 ${coverage.resolved}/${coverage.total} 条脚本有包名${coverage.resolved === coverage.total ? '' : ' —— 没定到的那几条见脚本表'}`);
+}
+
 console.log(rule('脚本(按耗时排序,取前 10)—— 这是"谁"'));
 const scripts = [];
 for (const row of loaf) for (const script of row.scripts) scripts.push({ at: row.t, ...script });
 scripts.sort((a, b) => b.ms - a.ms);
 if (scripts.length === 0) console.log('(没有脚本级归因:见下面的缺失声明)');
 for (const script of scripts.slice(0, 10)) {
-	console.log(`  ${pad(`${num(script.ms)}ms`, 8, 'right')}  ${pad(script.invokerType ?? '—', 16)}  ${shortUrl(scriptUrl(script))}`);
+	const pkg = typeof script.pkg === 'string' && script.pkg !== '' ? script.pkg : null;
+	const why = script.pkg === undefined || script.pkg === null ? (script.pkgVia === undefined ? '' : `[${script.pkgVia}]`) : '';
+	console.log(`  ${pad(`${num(script.ms)}ms`, 8, 'right')}  ${pad(script.invokerType ?? '—', 16)}  ${pkg === null ? `${why} ${shortUrl(scriptUrl(script))}` : pkg}`);
 	console.log(`            invoker ${script.invoker ?? '—'}${script.fn === null || script.fn === undefined ? '' : `  ·  fn ${script.fn}`}${script.charPos === null || script.charPos === undefined ? '' : `  ·  charPos ${script.charPos}`}${script.forcedMs > 0 ? `  ·  强制样式布局 ${num(script.forcedMs)}ms` : ''}`);
 }
 
