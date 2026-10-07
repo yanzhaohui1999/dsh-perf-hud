@@ -6,13 +6,14 @@ node_modules/
 # 每个克隆它的人都要重新加一遍。
 .worktrees/
 
-# 下面这些是"验证现场"的产物,不是插件源码:
-#   dump-config-after.txt 是 <code>dsh --profile web --dump-config</code> 的完整输出,
-#   里面带着使用者 profile 的 provider/模型配置(baseURL、apiKeyEnv 名、模型列表)。
-#   留在本地当证据,但不进 git —— 万一这个仓库以后加了远端,不该把它们带出去。
+# 「验证现场」的产物(不是插件源码,已在 2026-10-07 移到
+# ~/workspace/archive/dsh-perf-hud-20261007/ 留档)。这几行保留着当护栏:
+# 它们会带着使用者 profile 的 provider/模型配置(baseURL、apiKeyEnv 名、模型列表),
+# 万一以后又在本地生成,不该被顺手提交出去。
 dump-config-after.txt
-backup-20261006/
+backup-*/
 add.log
+live-verification.txt
 
 # 编辑器/系统
 .DS_Store

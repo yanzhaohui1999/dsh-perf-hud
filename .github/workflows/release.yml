@@ -51,12 +51,12 @@ jobs:
           node tests/logic.mjs
           node tests/host.mjs
 
-      # 发布产物核对:两个半边、patch、图标、词典、许可证,以及 README 链接到的
+      # 发布产物核对:两个半边、patch、图标、许可证,以及 README 链接到的
       # 全部文档都必须在包里 —— 漏一份,npm 页面上就是一个死链。
       - name: Pack and inspect
         run: |
           npm pack --dry-run 2>&1 | tee /tmp/pack.txt
-          for f in index.js client.js cordis.patch.yml icon.svg locale/zh.json locale/en.json \
+          for f in index.js client.js cordis.patch.yml icon.svg locale/en.json \
                    README.md README_EN.md LICENSE CHANGELOG.md CONTRIBUTING.md AGENTS.md \
                    ACCEPTANCE.md REVIEW.md; do
             grep -q "$f" /tmp/pack.txt || { echo "打包产物缺 $f"; exit 1; }

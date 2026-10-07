@@ -51,10 +51,10 @@
 
 | # | 问题 | 说明 |
 |---|---|---|
-| 12 | 验证脚本绑死本机 | [tests/verify-after-restart.sh](tests/verify-after-restart.sh) 写死 `/Users/y/...` 的 node 与仓库路径、launchd 服务名、个人日志路径 | 公开仓库里跑不了;应改为环境变量 + 自动探测 |
+| 12 | 验证脚本绑死本机 | `tests/verify-after-restart.sh` 写死 `/Users/y/...` 的 node 与仓库路径、launchd 服务名、个人日志路径 | ✅ 已处理:脚本直接删掉(`setsid` 那个教训移进 [AGENTS.md](AGENTS.md) §2.2),不改成可移植版本 |
 | 13 | 没有测试入口与 CI | 没有 `npm test` 脚本、没有 `.github/workflows/` | ✅ 两个都补了:CI 跑两个半边的语法检查 + 三套件 + 断言总数门禁,`npm test` 一条命令跑同样三套件 |
 | 14 | 没有版本兼容声明 | `engines.dsh` / `dsh.compatibility.dshReleases` 都缺 | ✅ 已补:顶层 `engines.dsh`(市场按它或 lockstep peer 判)+ `dsh.compatibility.dshReleases: {"0.2.0-rc.2": "compatible"}` |
-| 15 | 个人运行日志进了 git | [live-verification.txt](live-verification.txt) 已跟踪(内容是 pid / 耗时 / 包名,无 cookie 值) | 公开前删除或 gitignore |
+| 15 | 个人运行日志进了 git | `live-verification.txt` 已跟踪(内容是 pid / 耗时 / 包名,无 cookie 值) | ✅ 已删(连同写它的那个脚本) |
 | 16 | 缺 `main` 字段 | 只有 `exports["."]`(实测 `require.resolve` 正常) | ✅ 已补 `"main": "index.js"` |
 | 17 | 缺开源仓标配 | 无 LICENSE / CONTRIBUTING / CHANGELOG / issue 模板 | ✅ LICENSE / README_EN / CONTRIBUTING / CHANGELOG / AGENTS / CI 已补,issue 模板待补 |
 
@@ -64,7 +64,7 @@
 
 - **测试**:`node tests/{attribution,logic,host}.mjs` = **11 + 152 + 24 = 187 条,全绿**(README 声称的 187 与实际一致)。
 - **历史无密钥**:全历史 blob 扫 `sk-` / `apiKey` / `baseURL` / `Authorization` / `token=`,命中项只有 `.gitignore` 注释与文档里的操作步骤;**`dump-config-after.txt`(含 provider/baseURL 配置)、`backup-20261006/`、`add.log` 从未进过历史**。
-- **插件形态**:`dsh.bundle.patch` + `cordis.patch.yml` + `exports["./client"]` + `dsh.client.platform/inject` 均正确;`icon.svg` 有效;`locale/{zh,en}.json` 形态与 `dsh-context` 一致(只放 `meta.title/description`)。
+- **插件形态**:`dsh.bundle.patch` + `cordis.patch.yml` + `exports["./client"]` + `dsh.client.platform/inject` 均正确;`icon.svg` 有效;`locale/en.json`(只放 `meta.title`/`description`)保留、`locale/zh.json` 已去掉。⚠️ **`locale/` 目录本身不能删** —— 宿主读元信息时会 `scandir` 它,目录不存在就在 Plugins 页面报红(见 [AGENTS.md](AGENTS.md) §6.4)。
 - **零运行时依赖**:`client.js` 只 `require('react')`(走浏览器模块表),`index.js` 只用 node 内置模块。
 - **提交历史已规范**:30 条全部 `type(scope): 描述` 格式,正文中性化(无"用户/我"),见 [CHANGELOG.md](CHANGELOG.md)。
 - **作者归属**:提交邮箱 `707337118@qq.com` 是 GitHub 账号 `yanzhaohui1999` 的 **Primary + Verified** 邮箱,推上去会正确挂到账号。
@@ -90,7 +90,7 @@
 ### 仍待办(剩下都与"对外动作"有关)
 
 - [ ] i18n:兜底改英文、实验进度串进字典、`isolation.method` 出词条
-- [ ] [tests/verify-after-restart.sh](tests/verify-after-restart.sh) 去个人路径(改成环境变量 + 自动探测)
-- [ ] 删除 [live-verification.txt](live-verification.txt)(个人运行日志)
+- [x] ~~`tests/verify-after-restart.sh` 去个人路径(改成环境变量 + 自动探测)~~ → 改为**直接删除**,教训移进 [AGENTS.md](AGENTS.md) §2.2
+- [x] ~~删除 `live-verification.txt`(个人运行日志)~~ → 已删(连同写它的脚本);三个"验证现场产物"(`dump-config-after.txt` / `backup-20261006/` / `add.log`)已移出仓库到 `~/workspace/archive/dsh-perf-hud-20261007/`
 - [ ] 建公开仓库 → 加 `dsh-plugin` topic → npm 首发 → 提收录 PR(见 §1 的硬门槛)
 - [ ] 发布后把 README 顶部那句「npm 包尚未发布」去掉,并按需补 badge(需要仓库地址)

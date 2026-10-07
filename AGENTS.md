@@ -78,7 +78,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 3. **Cordis inspect**(不需要 cookie,走已连接的页面):
    - Client `Slots` → `listSubTree(root: 'shell.overlay')`:能看到本插件条目,**`active: false` 就是"渲染抛错被外壳停用"的硬证据**;
    - Client `Builtin.listBuiltins`:动态客户端半能用的符号(`ctx` / `React` / `host` / `styles` / `console`)。
-4. **`tests/verify-after-restart.sh` 必须起在独立进程组**:它会被重启的 launchd 进程组一起带走,所以用 `setsid`(`python3 -c "os.fork(); os.setsid(); os.execv(...)"`)启动。
+4. **重启后要跑的验证器必须起在独立进程组**:它会被重启的 launchd 进程组一起带走,所以用 `setsid`(`python3 -c "os.fork(); os.setsid(); os.execv(...)"`)启动。原来那个封装脚本(`tests/verify-after-restart.sh`)写死了本机 node 与仓库路径,已删 —— 教训留在这一条里,要用时照上面重写几行即可。
 5. **查工作区别走 `workspace/list`**(该端点 404):读 `~/.dsh/storages/workspace.json` 的 `tables.workspaces` + `global.workspaceIds`;细节见 `~/.dsh/dsh-api.md`。
 
 ---
@@ -190,6 +190,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - `perf_hooks.monitorEventLoopDelay({ resolution })` 的 **`resolution` 默认 10ms**,会把 p50 顶到 ~10ms 的地板,看不出真实抖动;本项目用 `1`。单位是**纳秒**。
 - 客户端拿宿主数据有两条通道:客户端 `ctx.remote`(本 profile 未接通)与宿主路由 `/api/dsh-perf-hud/host`(已验证)。面板与导出都记 `via`,**不猜通道**。
 - `ctx.on('session/event', (session, event) => …)` 是**公开且可用**的监听方式(与 `dsh-session-persistence-jsonl` 同一个事件);`event.time` 是提交时间戳。我们记的是「提交 → 到达监听器」的延迟,**不是**监听器的 CPU 耗时 —— 面板文案与导出字段(`mode: 'listener'`)都照这个口径写。
+- **插件展示元信息**(Plugins 页那一行)由 `package.json#icon` + `locale/<lang>.json` 的 `meta.title` / `description` 提供。⚠️ 实测(`@deepseek-ai/dsh-app-boot` 的 `readPluginMeta`):宿主先解析 `<包>/locale/en.json`,**然后 `scandir` 它所在目录** —— 所以 **`locale/` 目录不能整个删掉**,目录不存在会让 Plugins 页面直接显示一条红色诊断:`Plugin metadata for <包>: Error: ENOENT: no such file or directory, scandir '<绝对路径>/locale'`(错误发生在读 icon 之前,连图标都救不了它)。`locale/en.json` 是发现基线(缺它整个目录都不读),`exports` 必须暴露 `./locale/*.json` 与 `./package.json`。**失败是静默降级 + 一条诊断**,不会拦住插件加载。
 
 ---
 
@@ -252,7 +253,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 2. 打 tag `vX.Y.Z`(**tag 必须与 `version` 一致**),在 GitHub 建 Release。
 3. `.github/workflows/release.yml` 在该 Release 发布时自动 `npm publish`(用 **npm Trusted Publishing / OIDC**,不配 `NPM_TOKEN`)。
 4. 首次需要在 npmjs.com 手动建包并配 Trusted Publisher(Provider: GitHub Actions;填 owner / repo / `release.yml`)。
-5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/*.json` / `LICENSE`,以及 README 链接到的全部文档(`README_EN` / `CONTRIBUTING` / `CHANGELOG` / `AGENTS` / `ACCEPTANCE` / `REVIEW`)—— 漏一份,npm 页面上就是一个死链。`release.yml` 的 Pack and inspect 步骤逐份 grep,漏了就失败。
+5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/en.json` / `LICENSE`,以及 README 链接到的全部文档(`README_EN` / `CONTRIBUTING` / `CHANGELOG` / `AGENTS` / `ACCEPTANCE` / `REVIEW`)—— 漏一份,npm 页面上就是一个死链。`release.yml` 的 Pack and inspect 步骤逐份 grep,漏了就失败。
 
 ---
 
