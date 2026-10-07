@@ -88,6 +88,11 @@ compared only against its **nearest baseline** (A/B/A), baseline drift becomes t
 below it is reported as "within noise". A window containing streaming is marked "not comparable" and gets **no
 conclusion**.
 
+Candidates are **derived from your own bundle list**, never hard-coded: community bundles that are enabled,
+removable and not part of the official core — excluding this HUD itself — sorted by name, capped at 4 (each one
+costs 90 seconds). If that list comes out empty the experiment says "no third-party plugin to compare against"
+instead of running against names that are not installed.
+
 All windows receive the same **synthetic load** (an 8ms burn every 250ms through the uninstrumented native
 `setInterval` — CPU only, no DOM, so attribution tables stay clean); comparing idle windows means nothing.
 What it measures is **fixed cost** (runaway timers, always-on animation, polling, observers) — not "this plugin
@@ -116,9 +121,9 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 149 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 152 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          #  23 assertions: real index.js driven by a fake ctx
-# 183 offline assertions total, no running DSH required
+# 187 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [HANDOVER.md](HANDOVER.md)):

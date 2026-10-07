@@ -50,8 +50,8 @@
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 149 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
-node tests/host.mjs          # 23 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
+node tests/logic.mjs         # 152 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
 线上(需要从宿主日志换 cookie,见 [HANDOVER.md](HANDOVER.md) §2):

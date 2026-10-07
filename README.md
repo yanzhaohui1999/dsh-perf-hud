@@ -97,6 +97,8 @@ dsh plugin --profile web add "$PWD"
 
 逐个关闭候选插件 60 秒 → 测量 → 恢复并逐项核验,每个候选只跟**紧邻基线**对照(A/B/A),基线漂移作为**噪声底**,Δ 小于噪声一律标「噪声内」;窗口含流式则标「不可比」且**不给结论**。
 
+候选**从你当前的 bundle 列表里推导**,不写死任何插件名:取「已启用 + 可移除 + 非官方内核 + 不是本 HUD 自己」的社区包,按名字排序最多取 4 个(每个候选 90 秒)。列表为空时实验直接说"没有可对照的第三方插件",不拿不存在的名字空跑。
+
 所有窗口注入同一份**合成负载**(每 250ms 燃烧 8ms,走未插桩的 `setInterval`,只烧 CPU 不动 DOM,避免污染归因表)—— 空闲下的比较本身没有意义。看「超出噪声」列才是证据。
 
 ⚠️ 它测的是**固定开销**(跑飞的时间器、常驻动画、轮询、observer),**不是**"该插件在某种用法下才贵",别当因果证明。
@@ -133,9 +135,9 @@ dsh plugin --profile web add "$PWD"
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 149 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
-node tests/host.mjs          # 23 条:用假 ctx 驱动真实 index.js
-# 合计 183 条断言,离线,无需 DSH 在跑
+node tests/logic.mjs         # 152 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js
+# 合计 187 条断言,离线,无需 DSH 在跑
 ```
 
 线上验证(需要先换 cookie,步骤见 [HANDOVER.md](HANDOVER.md)):

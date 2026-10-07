@@ -180,7 +180,7 @@
 - **`setsid` 验证器**:`tests/verify-after-restart.sh` 必须在新进程组里启动
   (`python3 -c "os.fork(); os.setsid(); os.execv('/bin/bash', …)"`),否则会被 launchd 的
   进程组击杀一起带走。
-- 跑法:`node tests/attribution.mjs`、`node tests/logic.mjs`、`node tests/host.mjs`(离线,共 183 条断言);
+- 跑法:`node tests/attribution.mjs`、`node tests/logic.mjs`、`node tests/host.mjs`(离线,共 187 条断言);
   `DSH_COOKIE=… node tests/live-sourcemap.mjs`、`… node tests/live-host.mjs`(线上)。
 
 ## 8. 已知缺口 / 未做 / 观察到的线索
