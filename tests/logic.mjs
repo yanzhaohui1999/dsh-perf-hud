@@ -221,6 +221,9 @@ const newPieces = [
 	'function noiseFloor(',
 	'function significance(',
 	'function metricList(',
+	'const LS_GROUPS = ',
+	'function containerNodes(',
+	'function toggleGroup(',
 	'function beyondNoiseText(',
 	'function isStreaming(',
 	'function idleTick(',
@@ -241,9 +244,9 @@ const newPieces = [
 }).join('\n');
 
 const box = new Function(`${sandbox}\n${newPieces}
-	return { state, changedNodes, bundleMaps, ring, setStreaming: (value) => { streamingFlag = value; },
+	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -337,6 +340,21 @@ check('组件名也取增量', writeDelta.map((row) => row.component), ['LateCom
 box.state.domWrites.set('idleOne', { count: 999, ops: 9, components: new Map([['IdleComp', 999]]) });
 // 真实空闲窗口的样子:累计表里全是历史数字,窗口内一个都没写 → 增量必须为空
 check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWriteSnapshot()).length, 0);
+
+// ── 面板分层:折叠状态与摘要 ───────────────────────────────────────
+check('默认全部收起(过程/取证/工具不占常显篇幅)',
+	JSON.stringify(box.state.groups), JSON.stringify({ detail: false, dom: false, host: false, tools: false }));
+EX.toggleGroup('dom');
+check('toggle 展开', box.state.groups.dom, true);
+check('折叠选择被记住', JSON.parse(box.storage.getItem('dsh-perf-hud:groups')).dom, true);
+EX.toggleGroup('dom');
+check('再 toggle 收起', box.state.groups.dom, false);
+EX.toggleGroup('不存在的分组');
+check('未知分组名不产生新键', Object.hasOwn(box.state.groups, '不存在的分组'), false);
+box.state.targets = new Map();
+check('摘要取不到容器:如实写未采集', EX.containerNodes('messages'), '未采集');
+box.state.targets.set('messages', { nodes: 3571, series: [] });
+check('摘要给出一句话节点数', EX.containerNodes('messages'), '3571');
 
 // ── D:链路分位与"疑似链路"判定 ─────────────────────────────────────
 box.state.link = [

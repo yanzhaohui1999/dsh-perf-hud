@@ -42,6 +42,7 @@ window.__ModuleLoader__.load({
 		const LS_PRECISE = 'dsh-perf-hud:precise';
 		const LS_MAP = 'dsh-perf-hud:map';     // 按 rev 缓存的 section 分段表
 		const LS_MARKS = 'dsh-perf-hud:marks';
+		const LS_GROUPS = 'dsh-perf-hud:groups';
 		const HOST_ROUTE = '/api/dsh-perf-hud/host';
 		const RTT_INTERVAL_MS = 10000;
 		const LOAD_INTERVAL_MS = 60000;
@@ -519,6 +520,8 @@ window.__ModuleLoader__.load({
 			baselineRunning: false,
 			baselineMs: null,        // 覆盖空闲基线窗口长度(默认 BASELINE_MS),自测用
 			errors: [],              // 面板自己捕获的渲染错误(导出件里能读到)
+			// 分组折叠:常显只有"现在顺不顺 + 谁的锅",过程/取证/工具默认收起(头部带摘要)
+			groups: { detail: false, dom: false, host: false, tools: false },
 			stress: null,            // 最近一次自测 { at, nodes, burnMs, sync, commitMs }
 			stressBurn: 0,           // 自测渲染时显式燃烧的毫秒数
 			requestRender: null,     // 面板挂载时注册:自测要立刻重渲染,不能等 0.5 秒的定时器
@@ -919,6 +922,12 @@ window.__ModuleLoader__.load({
 			try { state.want = localStorage.getItem(LS_ON) !== '0'; } catch (error) { state.want = true; }
 			try { state.collapsed = localStorage.getItem(LS_UI) === '1'; } catch (error) { state.collapsed = false; }
 			try { state.precise = localStorage.getItem(LS_PRECISE) === '1'; } catch (error) { state.precise = false; }
+			try {
+				const saved = JSON.parse(localStorage.getItem(LS_GROUPS) ?? 'null');
+				if (saved !== null && typeof saved === 'object') {
+					for (const key of Object.keys(state.groups)) if (typeof saved[key] === 'boolean') state.groups[key] = saved[key];
+				}
+			} catch (error) { /* 折叠状态记不住就用默认 */ }
 			try {
 				const parsed = JSON.parse(localStorage.getItem(LS_MARKS) ?? 'null');
 				if (Array.isArray(parsed)) state.marks = parsed.slice(-100);
@@ -1772,6 +1781,36 @@ window.__ModuleLoader__.load({
 			verification,
 		};
 
+		/** 折叠摘要里的一句话节点数:取不到就如实说未采集。 */
+		function containerNodes(id) {
+			const entry = state.targets.get(id);
+			return entry === undefined || entry.nodes === null ? translate('notYet') : String(entry.nodes);
+		}
+
+		/** 折叠/展开一个分组,并把选择记住。 */
+		function toggleGroup(key) {
+			if (Object.hasOwn(state.groups, key) === false) return;
+			state.groups[key] = state.groups[key] !== true;
+			try { localStorage.setItem(LS_GROUPS, JSON.stringify(state.groups)); } catch (error) { /* 记不住就本次会话有效 */ }
+		}
+
+		/**
+		 * 一个可折叠分组:收起时头部**必须**带一句话摘要 —— 收起不等于丢信息,
+		 * 而是把"过程/取证"这类不常看的行换成一行结论。
+		 */
+		function group(key, label, summary, ...children) {
+			const isOpen = state.groups[key] === true;
+			return h('div', { style: S.sep },
+				h('div', {
+					style: { ...S.row, cursor: 'pointer' },
+					title: isOpen ? translate('collapse') : translate('expand'),
+					onClick: () => toggleGroup(key),
+				},
+					h('span', { style: S.label }, `${isOpen ? '▾' : '▸'} ${label}`),
+					h('span', { style: S.num }, summary)),
+				isOpen ? h('div', null, children) : null);
+		}
+
 		/** 精确归因开关:开启时立刻把已经见过的多包 URL 排队解析。 */
 		function setPrecise(on) {
 			state.precise = on === true;
@@ -1795,6 +1834,8 @@ window.__ModuleLoader__.load({
 				domWritesHint: '前一项是精确总次数;下面按插件给出估算(每 10 次采样一次栈,命中按 10 折算)。',
 				precise: '精确归因', preciseHint: '开启后按合并 bundle 的 sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)',
 				component: '组件', cumulative: '累计', maps: '批次分段',
+				overview: '概览', overviewHint: '三秒判断:最差帧 + 最差 longtask 及其归属 + 归因命中数',
+				groupDetail: '取证明细', groupDom: 'DOM 与堆', groupHost: '宿主与链路', groupTools: '工具箱', nodesSuffix: ' 节点',
 				stream: '状态', running: '流式', idle: '空闲', idleBase: '空闲基线(60s)', idleWriter: '空闲也在加节点的是',
 				notYet: '未采集', hostLoop: '宿主 event-loop',
 				notApplicable: '不适用(窗口含流式)', hostDown: '宿主不可用', link: '链路 RTT',
@@ -1829,6 +1870,8 @@ window.__ModuleLoader__.load({
 				domWritesHint: 'First number is the exact total; the rows below are estimates (stacks sampled every 10th write, hits scaled by 10).',
 				precise: 'precise', preciseHint: 'Resolve single package names from the merged bundle sourcemap sections (lazy; one map fetch per rev)',
 				component: 'component', cumulative: 'total', maps: 'maps',
+				overview: 'overview', overviewHint: 'Three-second read: worst frame + worst longtask and its owner + attribution hit ratio',
+				groupDetail: 'forensics', groupDom: 'DOM & heap', groupHost: 'host & link', groupTools: 'toolbox', nodesSuffix: ' nodes',
 				stream: 'state', running: 'streaming', idle: 'idle', idleBase: 'idle baseline (60s)', idleWriter: 'still adding nodes while idle',
 				notYet: 'n/a', hostLoop: 'host event-loop',
 				notApplicable: 'n/a (window had streaming)', hostDown: 'host n/a', link: 'link RTT',
@@ -2076,6 +2119,7 @@ window.__ModuleLoader__.load({
 			const linkSuspect = suspectLink();
 			const idleBase = state.idleBaseline;
 			const v = verification();
+			const writeTop = domWriteTable()[0] ?? null;
 			const rows = pluginTable();
 			const top = rows.slice(0, TOP_N);
 			const rest = rows.slice(TOP_N);
@@ -2107,35 +2151,40 @@ window.__ModuleLoader__.load({
 			}
 
 			const body = h('div', null,
+				// ── 常显 1:卡不卡 + 谁的锅(原来"最差帧/长任务/命中"三行合一行)──
 				h('div', { style: S.row },
-					h('span', { style: S.label }, t('frameWorst')),
-					h('span', { style: { ...S.num, color: levelUp(state.frameWorst, 60, 120) } }, `${state.frameWorst.toFixed(0)}ms`)),
-				h('div', { style: S.row },
-					h('span', { style: S.label }, t('longtask')),
-					h('span', { style: { ...S.num, color: worst === null ? undefined : levelUp(worst.ms, 120, 400) } },
-						worst === null ? t('none') : `${worst.ms.toFixed(0)}ms · ${worst.owner === null ? t('unblamed') : short(worst.owner)}`)),
-				h('div', { style: S.row },
-					h('span', { style: S.label }, t('ltCount')),
-					h('span', { style: S.num }, `${state.ltTotal}${t('times')} · ${t('hits')} ${state.ltBlamed}`)),
-				h('div', { style: S.row },
-					h('span', { style: S.label }, t('worstSecond')),
-					h('span', { style: S.num }, worstSecondText())),
+					h('span', { style: S.label, title: t('overviewHint') }, t('overview')),
+					h('span', { style: { ...S.num, color: levelUp(state.frameWorst, 60, 120) } },
+						`${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms · ` +
+						`LT ${worst === null ? t('none') : `${worst.ms.toFixed(0)}ms ${worst.component !== null && worst.component !== undefined ? worst.component : (worst.owner === null ? t('unblamed') : short(worst.owner))}`}` +
+						` · ${t('hits')} ${state.ltBlamed}/${state.ltTotal}`)),
+				// ── 常显 2:帧里"JS 之外"的残差(唯一能反映 CSS/绘制卡顿的数字)──
 				h('div', { style: S.row },
 					h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),
 					h('span', { style: S.num }, `${state.unattrAvg.toFixed(1)}ms · ${t('peak')} ${state.unattrPeak.toFixed(0)}ms`)),
+				// ── 常显 3:回调归因 Top3(每插件一行,hover 补 msps 与累计)──
 				h('div', { style: S.sep },
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('blame')),
 						h('span', { style: S.num }, `${state.attributedPerSec.toFixed(0)}ms/s`)),
-					h('div', null, top.map((row, index) => h('div', { key: row.id },
-						h('div', { style: S.row },
-							h('span', { style: S.label, title: `${row.id} · ${t('cumulative')} ${row.count}× · ${row.ms}ms` }, `${index + 1}. ${short(row.id)}`),
-							h('span', { style: S.num }, `${row.cps}${t('perSec')} · ${t('peak')} ${row.cpsPeak}`)),
-						h('div', { style: S.sub }, `${row.msps}ms${t('perSec')} · ${t('cumulative')} ${row.count}× / ${row.ms.toFixed(0)}ms`)))),
+					h('div', null, top.map((row, index) => h('div', { key: row.id, style: S.row },
+						h('span', { style: S.label, title: `${row.id} · ${row.msps}ms${t('perSec')} · ${t('cumulative')} ${row.count}× / ${row.ms.toFixed(0)}ms` }, `${index + 1}. ${short(row.id)}`),
+						h('span', { style: S.num }, `${row.cps}${t('perSec')} · ${t('peak')} ${row.cpsPeak}`)))),
 					rest.length === 0 ? null : h('div', { style: S.row },
 						h('span', { style: S.label }, `${t('rest')} (${rest.length})`),
 						h('span', { style: S.num }, `${restCount}× ${restMs.toFixed(0)}ms`))),
-				h('div', { style: S.sep },
+
+				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
+				group('detail', t('groupDetail'),
+					`${t('worstSecond')} ${worstSecondText()} · ${t('domWrites')} ${state.mutations}${writeTop === null ? '' : ` · ${short(writeTop.id)}`}`,
+					h('div', { style: S.row },
+						h('span', { style: S.label, title: t('domWritesHint') }, t('domWrites')),
+						h('span', { style: S.num }, String(state.mutations))),
+					writeRows()),
+
+				// ── 折叠 2:DOM 与堆 ──
+				group('dom', t('groupDom'),
+					`${state.dom.total}${t('nodesSuffix')} ${rateText(state.dom.series)} · ${t('messages')} ${containerNodes('messages')}${state.heap === null ? '' : ` · ${t('heap')} ${mb(state.heap)}MB`}`,
 					h('div', { style: S.row },
 						h('span', { style: S.label }, `${t('dom')} · ${t('rateWindow')}`),
 						h('span', { style: S.num }, `${state.dom.total} · ${rateText(state.dom.series)}`)),
@@ -2148,13 +2197,10 @@ window.__ModuleLoader__.load({
 					state.heap === null ? null : h('div', { style: S.row },
 						h('span', { style: S.label }, t('heap')),
 						h('span', { style: S.num }, `${mb(state.heap)}MB · ${heapRateText()}`))),
-				h('div', { style: S.sep },
-					h('div', { style: S.row },
-						h('span', { style: S.label, title: t('domWritesHint') }, t('domWrites')),
-						h('span', { style: S.num }, String(state.mutations))),
-					writeRows()),
-				// ── 状态 / 基线 / 宿主 / 链路 ──
-				h('div', { style: S.sep },
+
+				// ── 折叠 3:宿主与链路(排查"是页面卡还是链路卡"才看)──
+				group('host', t('groupHost'),
+					`${t('hostLoop')} ${loop === null ? (state.hostError === null ? t('notYet') : t('hostDown')) : `p50 ${loop.p50}ms · p99 ${loop.p99}ms`} · ${t('link')} ${link.count === 0 ? t('notYet') : `p50 ${link.p50}ms`}`,
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('stream')),
 						h('span', { style: S.num }, `${state.streaming ? t('running') : t('idle')}${state.streaming || state.idleSince === 0 ? '' : ` ${Math.round((performance.now() - state.idleSince) / 1000)}s`}${state.baselineRunning ? ` · ${t('idleBase')}…` : ''}`)),
@@ -2177,8 +2223,9 @@ window.__ModuleLoader__.load({
 					idleBase === null || idleBase === undefined || idleBase.domPerMin <= 0 ? null : h('div', { style: S.sub },
 						`${t('idleWriter')}: ${(idleBase.domTop ?? []).map((row) => `${short(row?.id ?? '?')}${row?.component === null || row?.component === undefined ? '' : `(${row.component})`}`).join(' / ') || t('none')}`)),
 
-				// ── 隔离实验 ──
-				h('div', { style: S.sep },
+				// ── 折叠 4:工具箱(隔离实验 / 场景标记 / 验收)──
+				group('tools', t('groupTools'),
+					`${t('isolation')} ${experiment.phase}${experiment.phase === 'running' ? ` ${experiment.message}` : ''} · ${t('marks')} ${state.marks.length}`,
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: `${t('expHint')}\n${t('method')}: ${experiment.method}` }, t('isolation')),
 						h('span', { style: S.num }, experimentText())),
@@ -2199,10 +2246,7 @@ window.__ModuleLoader__.load({
 						h('button', { type: 'button', style: S.btn, disabled: experiment.phase === 'running', onClick: () => runExperiment() }, t('startExp')),
 						h('button', { type: 'button', style: S.btn, onClick: () => abortExperiment() }, t('abortExp')),
 						h('button', { type: 'button', style: S.btn, title: t('stressHint'), onClick: () => W.__perfHud.stress() }, t('stress'))),
-					h('div', { style: S.sub }, stressText())),
-
-				// ── 场景标记 ──
-				h('div', { style: S.sep },
+					h('div', { style: S.sub }, stressText()),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('marks')),
 						h('span', { style: S.num }, state.marks.length === 0 ? t('none') : `${state.marks.length} · ${clock(state.marks[state.marks.length - 1]?.t ?? Date.now())}`)),
@@ -2216,10 +2260,7 @@ window.__ModuleLoader__.load({
 							onChange: (event) => setDraft(event.target.value),
 							style: S.input,
 						}),
-						h('button', { type: 'button', style: S.btn, onClick: () => { addMark(draft); setDraft(''); } }, t('mark')))),
-
-				// ── 验收自证 ──
-				h('div', { style: S.sep },
+						h('button', { type: 'button', style: S.btn, onClick: () => { addMark(draft); setDraft(''); } }, t('mark'))),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('verify')),
 						h('span', { style: S.num }, `${v.precise.mapStates?.ready ?? 0}/${v.precise.bundles} ${t('maps')}`)),
