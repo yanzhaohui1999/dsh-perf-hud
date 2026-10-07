@@ -171,7 +171,7 @@ const sandbox = `
 	const translate = (key) => ({
 		sampling: '吞吐采样中', failed: '吞吐失败', suspect: '疑似链路', notYet: '未采集',
 		stressHint: 'stressHint', stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点', unblamed: '未归因',
-		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用',
+		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -295,6 +295,11 @@ check('没有 fiber 的节点 → null', EX.componentOf({ className: 'x' }), nul
 check('跳过 React 容器型内建名',
 	EX.componentOf({ __reactFiber$x: hostFiber(fnFiber(fnFiber(rootFiber, 'AppShell'), 'Fragment')) }), 'AppShell');
 check('没有具名函数组件 → null', EX.componentOf({ __reactFiber$x: hostFiber(rootFiber) }), null);
+// 错误边界是基础设施:它常常套在真正的渲染组件外面,不该被报成"谁在渲染"
+const boundaryClass = function HudBoundaryLike() {};
+boundaryClass.prototype.componentDidCatch = function () {};
+check('跳过错误边界,继续往上找真组件',
+	EX.componentOf({ __reactFiber$bd: hostFiber({ type: boundaryClass, return: fnFiber(rootFiber, 'RealThing') }) }), 'RealThing');
 check('跳过压缩名 n5,继续往上找真名',
 	EX.componentOf({ __reactFiber$m: hostFiber(fnFiber(fnFiber(rootFiber, 'AppShell'), 'n5')) }), 'AppShell');
 check('压缩名在整条链上都没有 → null',
@@ -362,6 +367,21 @@ box.state.longTasks = [];
 box.state.stress = { at: Date.now(), nodes: 12000, sync: false, commitMs: 420 };
 check('切片提交没有长任务:如实说明并给提交耗时',
 	EX.stressText(), '自测结果: 未观察到长任务 · 提交 420ms(切片) · flushSync 不可用');
+// React 一次 appendChild 把整棵新子树挂上去 → 观察器只看到容器,长任务归属只能到容器;
+// DOM 写入插桩看到了每一个节点,于是能把 PerfHudStress 点名。两个来源都写出来。
+box.setFlushSync(() => {});   // sync:true 的场景里 flushSync 必然可用
+box.state.domWrites = new Map();
+const stressWrites = EX.domWriteSnapshot();
+box.state.domWrites.set('(PerfHudStress)', { count: 1200, ops: 120, components: new Map([['PerfHudStress', 1200]]) });
+box.state.longTasks = [];
+box.state.stress = { at: Date.now(), nodes: 12000, sync: true, commitMs: 11.2, writes0: stressWrites };
+check('没有长任务但有 DOM 写入:指名写入组件',
+	EX.stressText(), '自测结果: 未观察到长任务 · DOM 写入 PerfHudStress · 提交 11.2ms(同步)');
+box.state.longTasks = [{ t: Date.now(), ms: 56, owner: null, component: 'PerfHud' }];
+check('长任务归属与 DOM 写入不一致:两个都写出来',
+	EX.stressText(), '自测结果: 56ms · PerfHud / PerfHudStress(DOM 写入) · 提交 11.2ms(同步)');
+
+box.setFlushSync(null);
 box.state.stress = { at: Date.now() - 9000, nodes: 12000, sync: false };
 check('8 秒还没有任何结果:超时收敛,不再卡在"进行中"',
 	EX.stressText(), '自测结果: 未观察到长任务(8s) · flushSync 不可用');

@@ -431,6 +431,10 @@ window.__ModuleLoader__.load({
 			for (let current = fiber; current !== null && current !== undefined && depth < 64; current = current.return, depth += 1) {
 				const type = current.type ?? current.elementType;
 				if (typeof type !== 'function') continue;
+				// 错误边界不是"谁在渲染":它有 componentDidCatch / getDerivedStateFromError,
+				// 而且常常就套在真正的渲染组件外面(实测自测结果报成 HudBoundary 就是它挡的)。
+				if (type.prototype !== undefined
+					&& (typeof type.prototype.componentDidCatch === 'function' || typeof type.getDerivedStateFromError === 'function')) continue;
 				const name = type.displayName ?? type.name;
 				if (typeof name !== 'string' || name === '' || REACT_INTERNAL.has(name)) continue;
 				// 生产构建会把组件名压成 n5 / t3 / Bn 这种(大小写都有),对人毫无意义 ——
@@ -1070,10 +1074,17 @@ window.__ModuleLoader__.load({
 			const mode = mark.sync === true ? translate('stressSync') : translate('stressSliced');
 			const flush = flushSync === null ? ` · ${translate('stressNoFlush')}` : '';
 			const commit = mark.commitMs === undefined ? '' : ` · ${translate('stressCommit')} ${mark.commitMs}ms(${mode})${flush}`;
+			// 第二个来源:这段时间 DOM 写入最多的组件。React 把整棵新子树一次 appendChild 挂上去,
+			// 观察器只看到"容器变了",fiber 走查因此只能给到容器所属组件;写入插桩则看到了每一个
+			// 节点(含未挂载的),所以能把 PerfHudStress 精确点名。
+			const wrote = mark.writes0 === undefined ? [] : domWriteDelta(mark.writes0);
+			const writeWho = wrote.length === 0 ? null : wrote[0].component ?? null;
 			if (hit !== null) {
 				const who = hit.component === null ? translate('unblamed') : hit.component;
-				return `${translate('stressDone')}: ${Math.round(hit.ms)}ms · ${who}${hit.owner === null ? '' : ` (${short(hit.owner)})`}${commit}`;
+				const both = writeWho !== null && writeWho !== hit.component ? ` / ${writeWho}(${translate('stressFromDom')})` : '';
+				return `${translate('stressDone')}: ${Math.round(hit.ms)}ms · ${who}${both}${hit.owner === null ? '' : ` (${short(hit.owner)})`}${commit}`;
 			}
+			if (writeWho !== null) return `${translate('stressDone')}: ${translate('stressNoTask')} · ${translate('stressFromDom')} ${writeWho}${commit}`;
 			if (mark.commitMs !== undefined) return `${translate('stressDone')}: ${translate('stressNoTask')}${commit}`;
 			// 状态必须能收敛:以前没有超时出口,一旦没长任务就永远停在"进行中"。
 			if (Date.now() - mark.at > 8000) return `${translate('stressDone')}: ${translate('stressNoTask')}(8s)${flush}`;
@@ -1594,7 +1605,13 @@ window.__ModuleLoader__.load({
 			stress(nodes) {
 				const count = typeof nodes === 'number' && nodes > 0 ? Math.min(nodes, 40000) : 12000;
 				state.stressNodes = count;
-				state.stress = { at: Date.now(), nodes: count, sync: flushSync !== null, commitMs: undefined };
+				state.stress = {
+					at: Date.now(),
+					nodes: count,
+					sync: flushSync !== null,
+					commitMs: undefined,
+					writes0: domWriteSnapshot(),
+				};
 				natives.setTimeout(() => { state.stressNodes = 0; }, 5000);
 				const render = state.requestRender;
 				if (typeof render !== 'function') return;
@@ -1659,7 +1676,7 @@ window.__ModuleLoader__.load({
 				startExp: '开始实验', abortExp: '中止并恢复', stress: '自测:渲染卡顿',
 				stressHint: '自测:一次提交塞 12000 个节点制造真实渲染型长任务(节点在屏幕外,结果看上面这行的读数)',
 				stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点',
-				stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用',
+				stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 				expHint: '会临时关闭候选插件各 60 秒并逐项恢复;每步都记宿主回执,恢复后逐项核验。',
 				skipped: '跳过', restore: '恢复', marks: '场景标记', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
 				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
@@ -1689,7 +1706,7 @@ window.__ModuleLoader__.load({
 				startExp: 'Run experiment', abortExp: 'Abort and restore', stress: 'Self-test: render stall',
 				stressHint: 'Self-test: one commit of 12000 offscreen nodes to produce a real render long task (read the line above for the result)',
 				stressRunning: 'self-test running', stressDone: 'self-test result', nodes: 'nodes',
-				stressNoTask: 'no long task observed', stressCommit: 'commit', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable',
+				stressNoTask: 'no long task observed', stressCommit: 'commit', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable', stressFromDom: 'DOM write',
 				expHint: 'Temporarily disables each candidate for 60s and restores it; every step records the host receipt and the restore is verified.',
 				skipped: 'skipped', restore: 'restore', marks: 'marks', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
 				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
