@@ -7,6 +7,7 @@
  * 直接以 Request/Response 驱动它,断言:GET 探针、事件循环读数、bundle 读写代理、
  * 以及"没有 confirm 绝不写配置"这条安全线。顺带打印真实测到的事件循环延迟。
  */
+import { readFileSync } from 'node:fs';
 import { apply } from '../index.js';
 
 let failed = 0;
@@ -118,6 +119,12 @@ check('按事件类型分别计数',
 	eventStats['assistant/message']?.count === 2 && eventStats['tool/call']?.count === 1, JSON.stringify(eventStats));
 check('记的是提交→到达延迟(两次 ≥18ms 累计)', eventStats['assistant/message']?.ms >= 18, `ms=${eventStats['assistant/message']?.ms}`);
 check('单次最大延迟有记录', eventStats['assistant/message']?.max >= 11, `max=${eventStats['assistant/message']?.max}`);
+
+// 版本号必须真的读到**本包**的 package.json:曾经写成 '../package.json',解析到包外
+// (实测 ENOENT)→ 回执里恒为 null,而且当时没有任何断言看得见。
+const ownVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+check('宿主回执里的 pluginVersion = 本包版本', watched.host?.pluginVersion === ownVersion,
+	`got ${JSON.stringify(watched.host?.pluginVersion)} want ${JSON.stringify(ownVersion)}`);
 
 const watchOff = await (await post({ op: 'watchEvents', enable: false })).json();
 check('能卸载监听器', watchOff.eventWatch?.installed === false && listeners.has('session/event') === false,

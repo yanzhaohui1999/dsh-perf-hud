@@ -1,9 +1,12 @@
 # dsh-perf-hud bundle patch.
 #
-# 一行 Host 占位:index.js 的 apply() 是空实现 —— 本插件纯客户端,
-# 不提供服务、不读写持久化、不碰任何既有配置行(尤其是
-# session-persistence-jsonl)。真正的实现全在 ./client.js,由
-# package.json 的 dsh.client 声明为浏览器半边。
+# 一行 Host 行声明:index.js 的 apply() 注册 /api/dsh-perf-hud/host 路由
+# (事件循环 p50/p99/max、session/event 到达延迟、bundle 读写代理),面板的
+# 主体实现在 ./client.js,由 package.json 的 dsh.client 声明为浏览器半边。
+#
+# 本文件只负责"把包挂进组合":不提供服务、不读写任何插件自己的持久化状态,
+# 也不碰既有配置行(尤其是 session-persistence-jsonl)。内容变化会触发组合
+# reconcile,所以不要把它当配置面用 —— 插件行为靠代码里的开关与 localStorage。
 - insert:
     - id: perf-hud
       name: dsh-perf-hud

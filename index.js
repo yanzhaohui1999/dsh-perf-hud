@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs';
 /** 本插件自己的版本(导出件要自描述;不要去猜,直接读自己的 package.json)。 */
 const PLUGIN_VERSION = (() => {
 	try {
-		return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? null;
+		return JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version ?? null;
 	} catch (error) {
 		return null;
 	}
