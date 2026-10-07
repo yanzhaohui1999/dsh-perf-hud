@@ -1,10 +1,10 @@
 {
   "name": "dsh-perf-hud",
   "version": "0.2.0",
-  "private": true,
-  "description": "纯客户端性能 HUD:FPS、Longtask、按插件归因的回调耗时、DOM 增长速率;环形缓冲持久化 + 一键导出 JSON。",
+  "description": "纯客户端性能 HUD:帧与最差帧、Longtask(四条腿归因)、每插件回调速率与同步耗时、DOM 增长与写入者、JS 堆、宿主 event-loop 与链路 RTT,带隔离实验与一键导出 JSON。 Client-side performance HUD for DeepSeek Harness: FPS and worst frame, long tasks with four-leg attribution (fiber / subtree / DOM write / scheduler), per-plugin callback rate and sync time, DOM growth and writers, JS heap, host event loop and link RTT, plus an isolation experiment and one-click JSON export.",
   "type": "module",
   "icon": "./icon.svg",
+  "main": "index.js",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -31,6 +31,61 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-slots"
       ]
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.0-rc.2": "compatible"
+      }
+    }
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "plugin",
+    "performance",
+    "profiler",
+    "fps",
+    "longtask",
+    "long-task",
+    "attribution",
+    "observability",
+    "hud",
+    "devtools",
+    "web"
+  ],
+  "author": {
+    "name": "yanzhaohui1999",
+    "url": "https://github.com/yanzhaohui1999"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yanzhaohui1999/dsh-perf-hud.git"
+  },
+  "homepage": "https://github.com/yanzhaohui1999/dsh-perf-hud#readme",
+  "bugs": {
+    "url": "https://github.com/yanzhaohui1999/dsh-perf-hud/issues"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.0-rc.2 <0.3.0-0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-api-remotes": ">=0.2.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-client-locale": ">=0.2.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.2.0-rc.2 <0.3.0-0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
     }
   }
 }
