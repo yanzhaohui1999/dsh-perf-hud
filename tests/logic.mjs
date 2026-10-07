@@ -204,6 +204,7 @@ const newPieces = [
 	'function percentile(',
 	'function linkStats(',
 	'function linkRowText(',
+	'function throughputText(',
 	'function suspectLink(',
 	'function applyDeltas(',
 	'function isStreaming(',
@@ -226,7 +227,7 @@ const newPieces = [
 
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, setStreaming: (value) => { streamingFlag = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, applyDeltas, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, applyDeltas, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -342,13 +343,22 @@ box.state.loadState = 'pending';
 check('吞吐还没跑:写"吞吐采样中"而不是留空', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 吞吐采样中');
 box.state.loadState = 'ok';
 box.state.linkText = '1200.8KB/s';
-check('吞吐就绪:接上数值', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 1200.8KB/s');
+box.state.loadKbps = 1200.8;
+check('吞吐就绪:>=1024KB/s 折成 MB/s', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 1.2MB/s');
+box.state.loadKbps = 880;
+check('低于 1024 仍用 KB/s', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 880KB/s');
+box.state.loadKbps = 1344.5;
+check('吞吐 >=1024KB/s 折成 MB/s(省一行宽度)', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 1.3MB/s');
 box.state.loadState = 'failed';
 check('吞吐失败:如实写失败', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 吞吐失败');
 box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 400 }];
 box.state.loadState = 'ok';
-check('RTT 尖峰 + FPS 正常:追加疑似链路',
-	EX.linkRowText(), 'p50 400ms · p99 400ms (n=1) · 1200.8KB/s · 疑似链路');
+box.state.loadKbps = 1344.5;
+check('只有 1 个样本时不下结论(n=1 分不清抖动与常态)',
+	EX.linkRowText(), 'p50 400ms · p99 400ms (n=1) · 1.3MB/s');
+box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 12 }, { t: Date.now(), kind: 'rtt', rtt: 400 }];
+check('n>=2 且 RTT 尖峰 + FPS 正常:追加疑似链路',
+	EX.linkRowText(), 'p50 12ms · p99 400ms (n=2) · 1.3MB/s · 疑似链路');
 
 // 单样本:分位退化成它自己(顺带把这一组放在最后,避免污染上面的样本)
 check('linkStats 单样本 p50 = p99 = 自身', (() => { box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 7 }]; return [EX.linkStats().p50, EX.linkStats().p99]; })(), [7, 7]);

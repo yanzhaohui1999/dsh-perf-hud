@@ -514,6 +514,7 @@ window.__ModuleLoader__.load({
 			hostWatchOff: false,
 			link: [],                // { t, kind, rtt, kbps?, error? }
 			loadState: 'pending',    // pending | ok | failed:吞吐那一格现在是哪种状态
+			loadKbps: null,          // 吞吐数值(KB/s),显示时 >=1024 折成 MB/s
 			linkAt: 0,
 			loadAt: 0,
 		};
@@ -967,6 +968,7 @@ window.__ModuleLoader__.load({
 					const kbps = rtt <= 0 ? 0 : round1(bytes / 1024 / (rtt / 1000));
 					state.link.push({ t: Date.now(), kind, rtt, kbps });
 					state.linkText = `${kbps}KB/s`;
+					state.loadKbps = kbps;
 					state.loadState = 'ok';
 				} else {
 					state.link.push({ t: Date.now(), kind, rtt });
@@ -1037,18 +1039,27 @@ window.__ModuleLoader__.load({
 			return state.host?.eventLoop?.p99 ?? null;
 		}
 
+		/** 吞吐显示:>=1024KB/s 折成 MB/s(这一行还要放 RTT 与判定,省宽度)。 */
+		function throughputText() {
+			if (state.loadState === 'pending') return translate('sampling');
+			if (state.loadState === 'failed') return translate('failed');
+			const kbps = state.loadKbps;
+			if (typeof kbps !== 'number') return state.linkText;
+			return kbps >= 1024 ? `${Math.round(kbps / 1024 * 10) / 10}MB/s` : `${kbps}KB/s`;
+		}
+
 		/** 链路那一行的整句:样本数必须露出来 —— n=1 时 p50 会等于 p99,看着像 bug。 */
 		function linkRowText() {
 			const stats = linkStats();
 			if (stats.count === 0) return translate('notYet');
-			const throughput = state.loadState === 'pending' ? translate('sampling') : state.loadState === 'failed' ? translate('failed') : state.linkText;
-			return `p50 ${stats.p50}ms · p99 ${stats.p99}ms (n=${stats.count}) · ${throughput}${suspectLink() ? ` · ${translate('suspect')}` : ''}`;
+			return `p50 ${stats.p50}ms · p99 ${stats.p99}ms (n=${stats.count}) · ${throughputText()}${suspectLink() ? ` · ${translate('suspect')}` : ''}`;
 		}
 
 		/** RTT 尖峰而 FPS 正常 → 怀疑链路,而不是页面。 */
 		function suspectLink() {
 			const stats = linkStats();
-			return stats.p99 !== null && stats.p99 > 300 && state.fps >= 50;
+			// 至少两个样本才表态:n=1 时"p50=p99=尖峰"分不清是抖动还是常态。
+			return stats.p99 !== null && stats.count >= 2 && stats.p99 > 300 && state.fps >= 50;
 		}
 
 		// ───────────── E. 空闲基线 / 场景标记 / 验收自证 ─────────────
@@ -1582,13 +1593,13 @@ window.__ModuleLoader__.load({
 				precise: '精确归因', preciseHint: '开启后按合并 bundle 的 sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)',
 				component: '组件', cumulative: '累计', maps: '批次分段',
 				stream: '状态', running: '流式', idle: '空闲', idleBase: '空闲基线(60s)', idleWriter: '空闲也在加节点的是',
-				notYet: '未采集', hostLoop: '宿主 event-loop', hostDown: '宿主不可用', link: '链路 RTT 近60s',
+				notYet: '未采集', hostLoop: '宿主 event-loop', hostDown: '宿主不可用', link: '链路 RTT',
 				hostEvents: '宿主事件到达', hostEventsHint: '宿主半用公开接口 ctx.on(\'session/event\') 记每条事件「提交(event.time)→到达监听器」的延迟;第一版想包 Context.emit,线上实测根本抓不到(该事件走带作用域过滤的派发),故改口径且写明',
 				notInstalled: '未安装', waiting: '已装,等事件',
 				sampling: '吞吐采样中', failed: '吞吐失败',
 				renderError: '面板渲染出错', retry: '重试',
 				renderErrorHint: '采集没停:上面是错误原文;点「重试」恢复面板,或直接导出(errors 段里也有)',
-				linkHint: '每 10 秒一次 1KB 同源探测(带 cache-buster)算 RTT,n 是最近 60 秒的样本数;吞吐每 60 秒一次 64KB(启动后 3 秒先补一次)。RTT 尖峰而 FPS 正常 → 疑似链路',
+				linkHint: '每 10 秒一次 1KB 同源探测(带 cache-buster)算 RTT,n 是最近 60 秒的样本数;吞吐每 60 秒一次 64KB(启动后 3 秒先补一次)。p99 > 300ms 且 FPS 正常且 n≥2 才判「疑似链路」',
 				suspect: '疑似链路', isolation: '隔离实验', candidate: '候选', baseline: '基线',
 				startExp: '开始实验', abortExp: '中止并恢复', stress: '自测:渲染卡顿',
 				stressHint: '自测:一次提交塞 6000 个节点制造真实渲染型长任务,用来验收 fiber 归因',
@@ -1610,13 +1621,13 @@ window.__ModuleLoader__.load({
 				precise: 'precise', preciseHint: 'Resolve single package names from the merged bundle sourcemap sections (lazy; one map fetch per rev)',
 				component: 'component', cumulative: 'total', maps: 'maps',
 				stream: 'state', running: 'streaming', idle: 'idle', idleBase: 'idle baseline (60s)', idleWriter: 'still adding nodes while idle',
-				notYet: 'n/a', hostLoop: 'host event-loop', hostDown: 'host n/a', link: 'link RTT 60s',
+				notYet: 'n/a', hostLoop: 'host event-loop', hostDown: 'host n/a', link: 'link RTT',
 				hostEvents: 'host event arrival', hostEventsHint: 'The host half uses the public ctx.on(\'session/event\') and records commit(event.time)→listener arrival lag; the earlier attempt to wrap Context.emit never fired (that event uses scope-filtered dispatch)',
 				notInstalled: 'not installed', waiting: 'installed, waiting for events',
 				sampling: 'throughput sampling', failed: 'throughput failed',
 				renderError: 'panel render error', retry: 'Retry',
 				renderErrorHint: 'Collection keeps running: the raw error is above. Retry to restore, or export (also in the errors section)',
-				linkHint: 'A 1KB same-origin probe (cache-busted) every 10s gives RTT; n is the sample count over the last 60s. Throughput is a 64KB fetch every 60s (one extra 3s after start). RTT spikes with normal FPS -> link suspected',
+				linkHint: 'A 1KB same-origin probe (cache-busted) every 10s gives RTT; n is the sample count over the last 60s. Throughput is a 64KB fetch every 60s (one extra 3s after start). \"Link suspected\" needs p99 > 300ms, normal FPS, and n >= 2',
 				suspect: 'link suspected', isolation: 'isolation', candidate: 'candidates', baseline: 'baseline',
 				startExp: 'Run experiment', abortExp: 'Abort and restore', stress: 'Self-test: render stall',
 				stressHint: 'Self-test: one commit of 6000 nodes to produce a real render long task for fiber attribution',
