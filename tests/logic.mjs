@@ -172,6 +172,7 @@ const sandbox = `
 		sampling: '吞吐采样中', failed: '吞吐失败', suspect: '疑似链路', notYet: '未采集',
 		stressHint: 'stressHint', stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点', unblamed: '未归因',
 		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
+		stressBurn: '人为燃烧',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -380,6 +381,15 @@ check('没有长任务但有 DOM 写入:指名写入组件',
 box.state.longTasks = [{ t: Date.now(), ms: 56, owner: null, component: 'PerfHud' }];
 check('长任务归属与 DOM 写入不一致:两个都写出来',
 	EX.stressText(), '自测结果: 56ms · PerfHud / PerfHudStress(DOM 写入) · 提交 11.2ms(同步)');
+
+// 仪器自检:节点数凑不稳 >50ms,所以明着烧一段,并且必须把"人为燃烧"写在面板上
+box.state.longTasks = [];
+box.state.stress = { at: Date.now(), nodes: 8000, burnMs: 80, sync: true, commitMs: 94 };
+check('没长任务时也要写明人为燃烧', EX.stressText(),
+	'自测结果: 未观察到长任务 · 提交 94ms(同步 · 人为燃烧 80ms)');
+box.state.longTasks = [{ t: Date.now(), ms: 92, owner: null, component: 'PerfHud' }];
+check('有长任务时同样标注人为燃烧', EX.stressText(),
+	'自测结果: 92ms · PerfHud · 提交 94ms(同步 · 人为燃烧 80ms)');
 
 box.setFlushSync(null);
 box.state.stress = { at: Date.now() - 9000, nodes: 12000, sync: false };

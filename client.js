@@ -517,7 +517,8 @@ window.__ModuleLoader__.load({
 			baselineRunning: false,
 			baselineMs: null,        // 覆盖空闲基线窗口长度(默认 BASELINE_MS),自测用
 			errors: [],              // 面板自己捕获的渲染错误(导出件里能读到)
-			stress: null,            // 最近一次自测 { at, nodes }
+			stress: null,            // 最近一次自测 { at, nodes, burnMs, sync, commitMs }
+			stressBurn: 0,           // 自测渲染时显式燃烧的毫秒数
 			requestRender: null,     // 面板挂载时注册:自测要立刻重渲染,不能等 0.5 秒的定时器
 			marks: [],
 			markDraft: '',
@@ -1073,7 +1074,8 @@ window.__ModuleLoader__.load({
 				.reduce((top, row) => (top === null || row.ms > top.ms ? row : top), null);
 			const mode = mark.sync === true ? translate('stressSync') : translate('stressSliced');
 			const flush = flushSync === null ? ` · ${translate('stressNoFlush')}` : '';
-			const commit = mark.commitMs === undefined ? '' : ` · ${translate('stressCommit')} ${mark.commitMs}ms(${mode})${flush}`;
+			const burn = typeof mark.burnMs === 'number' && mark.burnMs > 0 ? ` · ${translate('stressBurn')} ${mark.burnMs}ms` : '';
+			const commit = mark.commitMs === undefined ? '' : ` · ${translate('stressCommit')} ${mark.commitMs}ms(${mode}${burn})${flush}`;
 			// 第二个来源:这段时间 DOM 写入最多的组件。React 把整棵新子树一次 appendChild 挂上去,
 			// 观察器只看到"容器变了",fiber 走查因此只能给到容器所属组件;写入插桩则看到了每一个
 			// 节点(含未挂载的),所以能把 PerfHudStress 精确点名。
@@ -1602,12 +1604,18 @@ window.__ModuleLoader__.load({
 			 * 就被清了 —— 表现是"点了毫无反应";② 节点在屏幕外,即使生效也没有任何可见反馈。
 			 * 现在:立即触发一次重渲染,渲染完由子组件自己清空,并在面板上写明进度与结果。
 			 */
-			stress(nodes) {
-				const count = typeof nodes === 'number' && nodes > 0 ? Math.min(nodes, 40000) : 20000;
+			stress(nodes, burnMs) {
+				const count = typeof nodes === 'number' && nodes > 0 ? Math.min(nodes, 80000) : 8000;
+				// 实测:两万个节点连渲染带布局只要 ~28ms,靠节点数凑不出稳定的 >50ms 长任务。
+				// 所以保留节点(给 DOM 写入归因用)再显式燃烧一段 —— 面板上会写明"含人为燃烧",
+				// 这是仪器自检,不冒充自然卡顿。
+				const burn = typeof burnMs === 'number' && burnMs >= 0 ? Math.min(burnMs, 500) : 80;
 				state.stressNodes = count;
+				state.stressBurn = burn;
 				state.stress = {
 					at: Date.now(),
 					nodes: count,
+					burnMs: burn,
 					sync: flushSync !== null,
 					commitMs: undefined,
 					writes0: domWriteSnapshot(),
@@ -1674,9 +1682,9 @@ window.__ModuleLoader__.load({
 				linkHint: '每 10 秒一次 1KB 同源探测(带 cache-buster)算 RTT,n 是最近 60 秒的样本数;吞吐每 60 秒一次 64KB(启动后 3 秒先补一次)。p99 > 300ms 且 FPS 正常且 n≥2 才判「疑似链路」',
 				suspect: '疑似链路', isolation: '隔离实验', candidate: '候选', baseline: '基线',
 				startExp: '开始实验', abortExp: '中止并恢复', stress: '自测:渲染卡顿',
-				stressHint: '自测:一次同步提交渲染 20000 个离屏节点并强制布局,制造真实渲染型长任务;结果看上面这行的读数',
+				stressHint: '自测:一次同步提交渲染 8000 个离屏节点 + 显式燃烧 80ms(节点数凑不稳,故明着燃烧),用来自检归因链路',
 				stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点',
-				stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
+				stressNoTask: '未观察到长任务', stressCommit: '提交', stressBurn: '人为燃烧', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 				expHint: '会临时关闭候选插件各 60 秒并逐项恢复;每步都记宿主回执,恢复后逐项核验。',
 				skipped: '跳过', restore: '恢复', marks: '场景标记', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
 				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
@@ -1704,9 +1712,9 @@ window.__ModuleLoader__.load({
 				linkHint: 'A 1KB same-origin probe (cache-busted) every 10s gives RTT; n is the sample count over the last 60s. Throughput is a 64KB fetch every 60s (one extra 3s after start). \"Link suspected\" needs p99 > 300ms, normal FPS, and n >= 2',
 				suspect: 'link suspected', isolation: 'isolation', candidate: 'candidates', baseline: 'baseline',
 				startExp: 'Run experiment', abortExp: 'Abort and restore', stress: 'Self-test: render stall',
-				stressHint: 'Self-test: one synchronous commit rendering 20000 offscreen nodes with forced layout, to produce a real render long task (read the line above)',
+				stressHint: 'Self-test: one synchronous commit rendering 8000 offscreen nodes plus an explicit 80ms burn (node counts alone are not reliable), to self-check the attribution chain',
 				stressRunning: 'self-test running', stressDone: 'self-test result', nodes: 'nodes',
-				stressNoTask: 'no long task observed', stressCommit: 'commit', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable', stressFromDom: 'DOM write',
+				stressNoTask: 'no long task observed', stressCommit: 'commit', stressBurn: 'synthetic burn', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable', stressFromDom: 'DOM write',
 				expHint: 'Temporarily disables each candidate for 60s and restores it; every step records the host receipt and the restore is verified.',
 				skipped: 'skipped', restore: 'restore', marks: 'marks', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
 				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
@@ -1763,6 +1771,10 @@ window.__ModuleLoader__.load({
 		 */
 		function PerfHudStress(props) {
 			const started = performance.now();
+			// 显式燃烧:自测要的是"确定地让这次渲染超过 50ms",好自检归因链路;
+			// 真实卡顿不需要它(自然卡顿由流式渲染/布局产生)。面板上标注"含人为燃烧"。
+			const burnUntil = performance.now() + (typeof state.stressBurn === 'number' ? state.stressBurn : 0);
+			while (performance.now() < burnUntil) { /* 自测专用同步燃烧 */ }
 			const items = [];
 			for (let i = 0; i < props.count; i += 1) items.push(h('span', { key: i }, '.'));
 			// 这次提交一结束就:① 清空标记(否则面板每 0.5 秒重渲染都会再造两万个节点)
