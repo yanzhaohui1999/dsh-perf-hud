@@ -628,6 +628,7 @@ window.__ModuleLoader__.load({
 				coalesced: 0,            // 被并进 pending 的触发次数(同一串卡顿算一次)
 				dropped: 0,              // 抓到了、但没比已留存的更差,于是丢掉的次数
 				trimmedByBytes: 0,       // 因为超过 WATCH_PERSIST_MAX_BYTES 被裁掉的条数(内存与落盘保持一致)
+				deduped: 0,              // 同一个 id 被存过多次时,读回时去掉的条数
 				restored: 0,             // 这次启动从落盘里读回了几条
 				persistError: null,      // 落盘失败的原因(失败就照实说,不假装存下来了)
 				coveredUntil: 0,         // 最近一份事故窗口的结束时刻(perf ms):这段不再另立事故
@@ -841,10 +842,15 @@ window.__ModuleLoader__.load({
 					if (this.at[index] > newest) newest = this.at[index];
 				}
 				const span = round1(newest - oldest);
+				// fps 的分母必须是"真的在跑的时间"(Σ 帧间隔),不能用首尾跨度:中间夹一次
+				// 22.7s 的挂起会把 60fps 算成 43fps(实测踩过,读的人会以为一直在掉帧)。
+				let busy = 0;
+				for (const value of live) busy += value;
 				return {
 					frames: live.length,
 					spanMs: span,
-					fps: span <= 0 ? null : round1((live.length * 1000) / span),
+					busyMs: round1(busy),
+					fps: busy <= 0 ? null : round1((live.length * 1000) / busy),
 					p50: pick(0.5),
 					p90: pick(0.9),
 					p99: pick(0.99),
@@ -1033,13 +1039,20 @@ window.__ModuleLoader__.load({
 			let over50 = 0;
 			let over100 = 0;
 			let gaps = 0;
+			const durations = [];
 			for (const row of frames) {
 				if (row.gap) { gaps += 1; continue; }
 				live += 1;
+				durations.push(row.ms);
 				if (row.ms >= 50) over50 += 1;
 				if (row.ms >= 100) over100 += 1;
 				if (worst === null || row.ms > worst.ms) worst = row;
 			}
+			durations.sort((a, b) => a - b);
+			const quantile = (p) => (durations.length === 0 ? null : round1(durations[Math.min(durations.length - 1, Math.floor(p * durations.length))]));
+			const pick50 = quantile(0.5);
+			const pick90 = quantile(0.9);
+			const pick99 = quantile(0.99);
 			const scripts = [];
 			for (const row of loaf) for (const script of row.scripts) scripts.push({ at: row.t, ...script });
 			scripts.sort((a, b) => b.ms - a.ms);
@@ -1090,6 +1103,11 @@ window.__ModuleLoader__.load({
 					topScripts: scripts.slice(0, 5).map((script) => ({
 						at: script.at, u: script.u, ms: script.ms, fn: script.fn, invokerType: script.invokerType, charPos: script.charPos,
 					})),
+					// 窗口自己的分位:没有它,howToRead 里那句"拿 summary 和 baseline 比"在
+					// 文件内根本没法执行(实测一位只读文件的读者就卡在这)
+					p50: pick50,
+					p90: pick90,
+					p99: pick99,
 					worstFrameJs: worstJs,                  // js = 有 longtask/LoAF 重叠;none = 没有任何 JS 解释
 					worstFrameNeighboursMs: neighboursMs,   // 最差帧前后各 5 帧的中位(健康帧 ≈ 16.7ms)
 					suspectedThrottle,                      // true = 更像 rAF 被节流/挂起,而不是页面真忙
@@ -1195,8 +1213,22 @@ window.__ModuleLoader__.load({
 				rows.push(row);
 			}
 			rows.sort((a, b) => b.severity - a.severity);
-			watch.incidents = rows.slice(0, WATCH_INCIDENT_MAX);
+			// 同一个 id 只留一条:实测落盘里出现过同一条事故被存了三遍(占掉 3 个留存位),
+			// 原因没复现出来(disable→enable 不会重复),所以这里按 id 兜住 —— 有牙齿的是断言。
+			const seen = new Set();
+			const unique = [];
+			for (const row of rows) {
+				if (seen.has(row.id)) { watch.deduped += 1; continue; }
+				seen.add(row.id);
+				unique.push(row);
+			}
+			watch.incidents = unique.slice(0, WATCH_INCIDENT_MAX);
 			watch.restored = watch.incidents.length;
+			// 新事故的序号从读回来的最大 id 之后继续,否则新 id 会和旧的撞(旧包里的 i2 撞了三次)
+			for (const row of watch.incidents) {
+				const n = /^i(\d+)$/.exec(row.id);
+				if (n !== null) watch.seq = Math.max(watch.seq, Number(n[1]));
+			}
 		}
 
 		/**
@@ -1226,6 +1258,7 @@ window.__ModuleLoader__.load({
 				dropped: watch.dropped,
 				restored: watch.restored,
 				trimmedByBytes: watch.trimmedByBytes,
+				deduped: watch.deduped,
 				persistError: watch.persistError,
 				kept: watch.incidents.map((row) => ({ id: row.id, severity: row.severity, cause: row.cause, at: row.at, note: row.note })),
 				triggers: {
@@ -2453,9 +2486,11 @@ window.__ModuleLoader__.load({
 			missing.push('compositor:帧时间到底花在合成 / 光栅 / GPU 的哪一段(这一层只看得到主线程侧)');
 			missing.push('recorder-cost:本记录器自身的开销没有独立测量(它每帧跑一次 rAF 采样)');
 			missing.push('baseline:同环境 / 跨会话的对照基线(这份包里只有本次会话的分布)');
-			missing.push('host-cpuprofile:宿主进程的 CPU 火焰图(只有当宿主 event-loop 也高时才值得做)');
+			missing.push(incident.host === null
+				? 'host:没有任何宿主快照(宿主半未加载或路由不可达)'
+				: `host-cpuprofile:宿主进程的 CPU 火焰图 —— 而这份宿主快照是事故前 ${incident.host.snapshotAgeMs}ms 采的(每 10 秒一次),未必覆盖卡顿瞬间;别把它当"宿主没问题"的证据`);
 			howToAdd.push('零成本、当场可做:chrome://gpu 看是不是落到了软件渲染;DevTools → Rendering 打开 Frame Rendering Stats(FPS 表)与 Paint flashing —— 页面完全静止时帧率是否也上不去');
-			howToAdd.push('判定"主线程之外":Performance 面板录 5 秒,看 Main 轨道的忙碌时间是否远小于墙钟(与 blocking=0 / scripts 为空互相印证)');
+			howToAdd.push('判定"主线程之外":Performance 面板录 5 秒,看 Main 轨道自身的忙碌时间是否远小于墙钟 —— 注意 blocking=0 / scripts 为空**不能**当证据(见上面的读取说明),要看 Main 轨道本身');
 			howToAdd.push('宿主火焰图:kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record;.cpuprofile 可用 speedscope 打开');
 			return {
 				plugin: PKG,
@@ -2475,14 +2510,15 @@ window.__ModuleLoader__.load({
 					missing,
 					howToAdd,
 					howToRead: [
-						'incident.frames:窗口内每一帧(t 是 perf 毫秒,要靠 incident.env.perfOrigin 换成墙钟;ms 是帧间隔;gap:true 表示 rAF 被挂起,不是卡顿)。首帧可能晚于 window.fromMs —— 窗口边界与采样边界不重合是正常的',
+						'incident.frames:窗口内每一帧(t 是 perf 毫秒,要靠 incident.env.perfOrigin 换成墙钟;ms 是帧间隔;gap:true 表示 rAF 被挂起,不是卡顿)。首帧晚于 window.fromMs 是正常的,但**差得多就说明这一段被挂起过**(实测有一份晚了 6.3 秒,因为中间有一次 22.7 秒的 rAF 挂起)—— 去看 frames[].gap',
 						'incident.loaf 与 incident.frames 是**同一信号的两个视图**(LoAF 的 t+dur 就落在某一帧上),不是两份独立证据:别相加,也别当互相印证',
 						'incident.loaf[].blocking(blockingDuration)只累计"被归因到的 >50ms 长任务"的超出部分 —— **它可以是 0,而这一帧仍然有几百毫秒**。判严重度看帧间隔,blocking=0 不等于没卡',
 						'incident.longTasks 是既有四条腿落在窗口内的明细(at=任务开始的 perf 毫秒,t=上报时刻的墙钟毫秒),**它不是慢帧清单**:条数通常远少于超线帧',
 						'incident.baseline 是**除这一段之外**整个帧环的分布(故意排除本窗口,否则"比会话最差还差"永远不成立)—— 拿它和 summary 比,才知道这一段是真的比平时差还是这台机器一直这样',
 						'summary.worstFrameJs / suspectedThrottle:最差那一帧有没有 longtask / LoAF 与它重叠;若 none 且前后帧都健康(worstFrameNeighboursMs < 100),更像浏览器把 rAF 节流或挂起了一次,不是页面真忙了那么久',
 						'脚本的 URL 不在脚本里:incident.urls 是字符串表,scripts[].u 是它的下标(u=-1 表示没有 URL)—— 抽表是因为同一个 combo URL 会重复几十遍',
-						'incident.summary 只是上面几块的汇总;这一层不做推断,结论请自己下',
+						'incident.summary 是上面几块的汇总(含窗口自己的 p50/p90/p99),方便直接和 incident.baseline 比;这一层不做推断,结论请自己下',
+						'context.watch.kept 按**严重度降序**,不是时间序;带 restored 的条目来自上一次会话(时间靠 env.perfOrigin 对齐),所以 id 与时间看起来会跳',
 					],
 				},
 				incident,
@@ -2606,6 +2642,7 @@ window.__ModuleLoader__.load({
 				state.watch.dropped = 0;
 				state.watch.restored = 0;
 				state.watch.trimmedByBytes = 0;
+				state.watch.deduped = 0;
 				saveIncidents();   // 落盘的那份也要清掉,否则刷新又"复活"
 				return true;
 			},

@@ -837,7 +837,7 @@ const watchBox = new Function(`
 		on: true, precise: false, streaming: true, heap: 1048576, host: null, hostAt: 0,
 		dom: { total: 1234 },
 		longTasks: [],
-		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, coveredUntil: 0, persistError: null },
+		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null },
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
@@ -999,6 +999,16 @@ check('守夜行:没抓到也照实说,并把阈值写出来', (() => {
 // 事故包:自描述头 + 缺失声明(缺什么、怎么补)
 check('事故包:不存在的 id 返回 null(不静默成功)', watch.incidentReport('nope'), null);
 const report = watch.incidentReport(0);
+check('summary 带窗口自己的分位(否则"和 baseline 比"在文件内做不了)', [typeof report.incident.summary.p50, report.incident.summary.p50 <= report.incident.summary.worstFrameMs, report.incident.summary.p99 === report.incident.summary.worstFrameMs], ['number', true, true]);
+check('会话基线:用"真的在跑的时间"算 fps,不被挂起拉低', (() => {
+	watch.frameRing.reset();
+	watch.frameRing.push(1000, 16.7, false);
+	watch.frameRing.push(2000, 16.7, false);
+	watch.frameRing.push(40000, 38000, true);      // 一次 38 秒的挂起
+	watch.frameRing.push(40016, 16.7, false);
+	const stats = watch.frameRing.stats();
+	return [stats.frames, stats.spanMs, stats.busyMs, stats.fps];
+})(), [3, 39016, 50.1, 59.9]);
 check('事故包:URL 抽表后脚本里不再内联 url', watch.incidentReport(0).incident.loaf.every((row) => row.scripts.every((script) => script.url === undefined && typeof script.u === 'number')), true);
 check('事故包:topScripts 也只留下标', watch.incidentReport(0).incident.summary.topScripts.every((script) => script.url === undefined), true);
 // 身材回归:同一个长 URL 重复 20 次,抽表之后事故包不该被它撑大
@@ -1017,10 +1027,27 @@ check('事故包:带阈值与读取说明', [
 	report.context.thresholds.triggerMs,
 	report.context.howToRead.length,
 	report.context.page,
-], [100, 8, 'http://127.0.0.1:3080/']);
+], [100, 9, 'http://127.0.0.1:3080/']);
 check('事故包:如实列出没拿到的东西',
-	['precise:', 'devtools-trace:', 'host-cpuprofile:'].map((prefix) => report.context.missing.some((line) => line.startsWith(prefix))),
-	[true, true, true]);
+	['precise:', 'devtools-trace:'].map((prefix) => report.context.missing.some((line) => line.startsWith(prefix))),
+	[true, true]);
+check('事故包:宿主只有陈旧快照时说清楚"别当宿主没问题的证据"', (() => {
+	// 快照年龄 = perfOrigin + at - hostAt,所以把 hostAt 反推成"事故前 6224ms"
+	watch.state.host = { eventLoop: { p99: 1.28 } };
+	watch.state.hostAt = 1700000000000 + 110000 - 6224;
+	watch.state.watch.coveredUntil = 0;
+	watch.setNow(120000);
+	const probe = watch.triggerCapture('frame', 110000, 200);
+	const line = watch.incidentReport(probe.id).context.missing.find((text) => text.startsWith('host-cpuprofile:'));
+	// 清掉这条探针,别影响后面的断言
+	const index = watch.state.watch.incidents.findIndex((row) => row.id === probe.id);
+	if (index !== -1) watch.state.watch.incidents.splice(index, 1);
+	watch.state.watch.captured -= 1;
+	watch.state.watch.coveredUntil = 0;
+	watch.state.host = null;
+	watch.state.hostAt = 0;
+	return line !== undefined && line.includes('6224ms') && line.includes('未必覆盖');
+})(), true);
 check('事故包:LoAF 装着但这帧没有脚本时,点明 scripts 为空', report.context.missing.some((line) => line.startsWith('loaf-scripts:')), true);
 watch.state.watch.loafState = 'unsupported:no-long-animation-frame';
 check('事故包:LoAF 没装时改成报 loaf 本身', watch.incidentReport(0).context.missing.some((line) => line.startsWith('loaf:')), true);

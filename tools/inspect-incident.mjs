@@ -137,7 +137,7 @@ let windowP50 = null;
 if (live.length > 0) {
 	const pick = (p) => live[Math.min(live.length - 1, Math.floor(p * live.length))];
 	windowP50 = pick(0.5);
-	console.log(`分位: p50 ${num(pick(0.5))}ms · p90 ${num(pick(0.9))}ms · p99 ${num(pick(0.99))}ms · max ${num(live[live.length - 1])}ms`);
+	console.log(`分位: p50 ${num(pick(0.5))}ms · p90 ${num(pick(0.9))}ms · p99 ${num(pick(0.99))}ms · max ${num(live[live.length - 1])}ms${summary.p50 === undefined ? '' : `  (包内 summary: p50 ${num(summary.p50)} / p90 ${num(summary.p90)} / p99 ${num(summary.p99)})`}`);
 }
 // 会话基线:没有它,"最差帧 325ms" 判不出是这一段真的变坏了,还是这台机器一直这样
 {
@@ -155,7 +155,7 @@ if (live.length > 0) {
 				: p50Ratio !== null && p50Ratio >= 1.5 ? `整段慢性劣化(p50 ×${p50Ratio.toFixed(2)})`
 					: p50Ratio !== null && p50Ratio >= 1.15 ? `略差于平时(p50 ×${p50Ratio.toFixed(2)})`
 						: '与本会话其余部分基本一致';
-		console.log(`会话基线   其余 ${num(baseline.frames, 0)} 帧 / ${num((baseline.spanMs ?? 0) / 1000)}s / ${num(baseline.fps)}fps · p50 ${num(baseline.p50)}ms · p90 ${num(baseline.p90)}ms · 最差 ${num(baseline.worstMs)}ms`);
+		console.log(`会话基线   其余 ${num(baseline.frames, 0)} 帧 · 跨度 ${num((baseline.spanMs ?? 0) / 1000)}s(真的在跑 ${num((baseline.busyMs ?? baseline.spanMs ?? 0) / 1000)}s → ${num(baseline.fps)}fps)· p50 ${num(baseline.p50)}ms · p90 ${num(baseline.p90)}ms · 最差 ${num(baseline.worstMs)}ms`);
 		console.log(`对比       ${verdict}`);
 	}
 }

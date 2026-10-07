@@ -146,7 +146,7 @@ is expensive in some usage", so do not read it as a causal proof.
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
 node tests/logic.mjs         # 152 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          #  24 assertions: real index.js driven by a fake ctx
-# 263 offline assertions total, no running DSH required
+# 266 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
