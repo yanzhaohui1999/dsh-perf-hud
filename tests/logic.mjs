@@ -232,6 +232,8 @@ const newPieces = [
 	'function msPerSecText(',
 	'function looksLikeInfrastructure(',
 	'function primaryBlame(',
+	'function legOf(',
+	'function applyLongTaskStats(',
 	'function longTaskTally(',
 	'function blameText(',
 	'function beyondNoiseText(',
@@ -256,7 +258,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, looksLikeInfrastructure, msPerSecText, attrText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, looksLikeInfrastructure, msPerSecText, attrText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -372,19 +374,27 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 		EX.blameText({ component: 'SlotOutlet', domComponent: null, owner: null }), 'SlotOutlet');
 	check('长任务:什么都没有 → 未归因',
 		EX.blameText({ component: null, domComponent: null, owner: null }), '未归因');
-	// 命中率说明不了问题(DOM 腿在流式时几乎必然命中)——要看名字分布
-	box.state.longTasks = [
+	// 命中率说明不了问题(DOM 腿在流式时几乎必然命中)——要看名字分布。
+	// 并且钉住"命中"与"分布"是同一套判定(旧版 ltBlamed 漏了 dom 腿,两者对不上)。
+	box.state.ltNames.clear();
+	box.state.ltLegs = { fiber: 0, dom: 0, owner: 0, none: 0 };
+	box.state.ltTotal = 5;
+	const longRows = [
 		{ t: 1, component: 'ChatView', domComponent: 'X', owner: null },
 		{ t: 2, component: 'SlotOutlet', domComponent: 'StartedBashRow', owner: null },
 		{ t: 3, component: null, domComponent: null, owner: '@deepseek-ai/dsh-x' },
 		{ t: 4, component: null, domComponent: null, owner: null },
 		{ t: 5, component: 'ChatView', domComponent: 'ChatView', owner: null },
 	];
+	check('腿判定:fiber(非外壳)/dom/owner/none',
+		longRows.map((row) => EX.legOf(row)), ['fiber', 'dom', 'owner', 'none', 'fiber']);
+	for (const row of longRows) EX.applyLongTaskStats(row);
 	const tally = EX.longTaskTally();
-	check('归属分布:三条腿分开计数', [tally.fiber, tally.dom, tally.owner, tally.none], [2, 1, 1, 1]);
+	check('归属分布:三条腿累计计数', [tally.fiber, tally.dom, tally.owner, tally.none], [2, 1, 1, 1]);
+	check('归属分布:总数取自累计计数器(不受 200 条明细上限影响)', tally.total, 5);
 	check('归属分布:按主名字聚合(展示串不拆散统计)',
 		tally.topNames.map((row) => [row[0], row[1]]), [['ChatView', 2], ['StartedBashRow', 1], ['dsh-x', 1]]);
-	check('归属分布:总数与 Top 截断', [tally.total, tally.top.length, tally.topNames.length], [5, 3, 3]);
+	check('归属分布:Top 截断到 3', [tally.top.length, tally.topNames.length], [3, 3]);
 	// HUD 自己的 DOM 写入必须不记账(实测摘要里出现过 (PerfHud) 顶在第一名)
 
 // ── 面板分层:折叠状态与摘要 ───────────────────────────────────────

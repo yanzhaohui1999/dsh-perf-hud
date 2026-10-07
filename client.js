@@ -516,6 +516,8 @@ window.__ModuleLoader__.load({
 			ltObserver: null,
 			longTasks: [],           // { t, at, ms, owner }
 			ltTotal: 0,              // 观察到的 longtask 条数
+			ltNames: new Map(),      // 归属名字的累计计数(与 ltTotal 同窗口,不受 200 条明细上限影响)
+			ltLegs: { fiber: 0, dom: 0, owner: 0, none: 0 },   // 三条腿的累计命中数
 			ltBlamed: 0,             // 其中成功指认出"谁干的"的条数
 			ltThisSecond: 0,
 			ltPerSec: 0,             // 上一秒的 longtask 条数(写进每秒采样)
@@ -762,7 +764,6 @@ window.__ModuleLoader__.load({
 			const domComponent = recentWriteComponent(entry.startTime, entry.duration);
 			state.ltTotal += 1;
 			state.ltThisSecond += 1;
-			if (owner !== null || component !== null) state.ltBlamed += 1;
 			state.longTasks.push({
 				t: Date.now(),
 				at: round1(entry.startTime),
@@ -772,6 +773,11 @@ window.__ModuleLoader__.load({
 				domComponent,
 				source: owner === null ? (component === null ? 'none' : 'render') : (component === null ? 'scheduler' : 'scheduler+render'),
 			});
+			const record = state.longTasks[state.longTasks.length - 1];
+			// 命中口径 = 三条腿任一非 none,与面板上的分布完全同一套判定
+			// (旧版这里漏了 dom 腿:只有 DOM 写入归因的长任务进了分布、却没进命中数)
+			if (legOf(record) !== 'none') state.ltBlamed += 1;
+			applyLongTaskStats(record);
 			if (state.longTasks.length > 200) state.longTasks.splice(0, state.longTasks.length - 200);
 		}
 
@@ -1119,6 +1125,35 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * 一条长任务算哪条腿。
+		 * 注意:fiber 腿要求"非外壳组件",被 looksLikeInfrastructure 挡掉的名字不算 fiber 腿,
+		 * 会落到 dom 腿 —— 统计口径必须和展示口径一致,否则"命中"会和分布对不上。
+		 */
+		function legOf(row) {
+			if ((row.component ?? null) !== null && looksLikeInfrastructure(row.component) === false) return 'fiber';
+			if ((row.domComponent ?? null) !== null) return 'dom';
+			if ((row.owner ?? null) !== null) return 'owner';
+			return 'none';
+		}
+
+		/**
+		 * 累计统计。刻意用独立的累计计数器,而不是回头去数 state.longTasks ——
+		 * 后者有 200 条上限,会让"最多 X N×"与"命中 15/18"分属两个窗口(实测就是这么不一致的)。
+		 */
+		function applyLongTaskStats(row) {
+			state.ltLegs[legOf(row)] += 1;
+			const name = primaryBlame(row);
+			if (name === null) return;
+			state.ltNames.set(name, (state.ltNames.get(name) ?? 0) + 1);
+			if (state.ltNames.size > 60) {
+				// 名字种类过多时丢掉最少的那个,避免无限增长(明细仍有 200 条上限兜底)
+				let least = null;
+				for (const [key, count] of state.ltNames) if (least === null || count < least[1]) least = [key, count];
+				if (least !== null) state.ltNames.delete(least[0]);
+			}
+		}
+
+		/**
 		 * 长任务归属分布。
 		 *
 		 * 一个"命中 23/24"说明不了任何事:DOM 写入那条腿在流式渲染时几乎必然命中,
@@ -1126,22 +1161,9 @@ window.__ModuleLoader__.load({
 		 * 名字,那说明命中很廉价;如果分散在 8 个名字上,那才说明这段时间到处都在渲染。
 		 */
 		function longTaskTally() {
-			const tally = new Map();
-			let fiber = 0;
-			let dom = 0;
-			let owner = 0;
-			let none = 0;
-			for (const row of state.longTasks) {
-				const name = primaryBlame(row);
-				const fiberOk = (row.component ?? null) !== null && looksLikeInfrastructure(row.component) === false;
-				if (fiberOk) fiber += 1;
-				else if ((row.domComponent ?? null) !== null) dom += 1;
-				else if ((row.owner ?? null) !== null) owner += 1;
-				else none += 1;
-				if (name !== null) tally.set(name, (tally.get(name) ?? 0) + 1);
-			}
-			const top = [...tally.entries()].sort((a, b) => b[1] - a[1]);
-			return { fiber, dom, owner, none, total: state.longTasks.length, top, topNames: top.slice(0, 3) };
+			const legs = state.ltLegs;
+			const top = [...state.ltNames.entries()].sort((a, b) => b[1] - a[1]);
+			return { fiber: legs.fiber, dom: legs.dom, owner: legs.owner, none: legs.none, total: state.ltTotal, top, topNames: top.slice(0, 3) };
 		}
 
 		/**
@@ -1815,6 +1837,10 @@ window.__ModuleLoader__.load({
 				state.mutations = 0;
 				state.ltTotal = 0;
 				state.ltBlamed = 0;
+				state.ltNames.clear();
+				state.ltLegs = { fiber: 0, dom: 0, owner: 0, none: 0 };
+				state.recent.length = 0;
+				recentWrites.length = 0;
 				state.lastTick = 0;
 				state.dom.series.length = 0;
 				state.heapSeries.length = 0;
