@@ -234,6 +234,8 @@ const newPieces = [
 	'const TOP_N = ',
 	'const EXPERIMENT_LOAD_BURN_MS = ',
 	'const EXPERIMENT_LOAD_PERIOD_MS = ',
+	'const EXPERIMENT_MAX_CANDIDATES = ',
+	'function pickExperimentCandidates(',
 	'function containerNodes(',
 	'function toggleGroup(',
 	'function attrText(',
@@ -281,7 +283,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -645,6 +647,28 @@ check('linkStats 单样本 p50 = p99 = 自身', (() => { box.state.link = [{ t: 
 box.state.link = [];
 
 // ── C:Δ 对照"紧邻基线" + 噪声底(第一版把漂移当成了结论,这条是那次事故的回归) ──
+// 候选必须来自宿主真实列表,不能写死插件名 —— 否则换台机器/换个 profile,实验默认测
+// 的全是"没装的东西"。这里用一份混着内核包、未启用包、不可移除包与本插件自己的列表钉住判据。
+const liveBundles = [
+	{ name: '@deepseek-ai/dsh-base', enabled: true, installed: false, removable: false },
+	{ name: '@deepseek-ai/dsh-web-app', enabled: true, installed: false, removable: false },
+	{ name: 'dsh-perf-hud', enabled: true, installed: true, removable: true },
+	{ name: 'dsh-zzz', enabled: false, installed: true, removable: true },
+	{ name: 'dsh-bbb', enabled: true, installed: true, removable: true },
+	{ name: 'dsh-aaa', enabled: true, installed: true, removable: true },
+	{ name: 'dsh-yyy', enabled: true, installed: true, removable: false },
+	{ name: 'dsh-ccc', enabled: true, installed: true, removable: true },
+];
+check('候选只取已启用且可移除的社区包(排掉内核 / 未启用 / 不可移除 / 自己)',
+	EX.pickExperimentCandidates(liveBundles, 'dsh-perf-hud'), ['dsh-aaa', 'dsh-bbb', 'dsh-ccc']);
+check('候选按名字排序并截到上限(每个候选 90 秒,不能无上限)',
+	EX.pickExperimentCandidates([
+		{ name: 'p5', enabled: true, removable: true }, { name: 'p3', enabled: true, removable: true },
+		{ name: 'p1', enabled: true, removable: true }, { name: 'p4', enabled: true, removable: true },
+		{ name: 'p2', enabled: true, removable: true },
+	], 'self'), ['p1', 'p2', 'p3', 'p4']);
+check('列表为空/形状不对时返回空数组(实验据此报"没有可对照的插件")',
+	EX.pickExperimentCandidates([], 'self'), []);
 // off - base:关掉插件后每帧残差从 16ms 掉到 12ms → -4(这正是我们要的方向)
 check('experimentDelta 对照紧邻基线(含每帧未归因残差)',
 	EX.experimentDelta({ fps: 60, longTasks: 3, domPerMin: 40, unattrAvg: 16 }, { fps: 55, longTasks: 1, domPerMin: 10, unattrAvg: 12 }),
@@ -721,6 +745,9 @@ box.state.hostError = null;
 box.state.precise = true;
 box.bundleMaps.clear();
 box.state.hostEvents = { installed: true, reason: '', stats: { 'session/event': { count: 3, ms: 1.2, max: 0.9 } } };
+// 独立包名 vs 合并包 key:精确归因要能给出前者。两种键都塞进去,断言只看前者。
+box.state.plugins.set('dsh-x', { count: 3, ms: 1.5 });
+box.state.plugins.set('bundle:http://h/plugins/??a/client.js,b/client.js', { count: 5, ms: 2 });
 const exported = box.EX.snapshot();
 
 
@@ -743,8 +770,9 @@ check('导出带宿主事件计时回执',
 	exported.host.eventWatch.installed === true && exported.verification.hostEvents.eventNames[0] === 'session/event', true);
 check('verification 段声明了三段导出',
 	JSON.stringify(exported.verification.exportSections), JSON.stringify(['timeline', 'longTasks', 'isolation']));
-check('verification 段报出独立包名与 longtask 命中',
-	exported.verification.ownPackageNames['dsh-status-rotator'] === false
+check('verification 段报出独立包名(不含合并包 key)与 longtask 命中',
+	exported.verification.independentPackages.sample.includes('dsh-x')
+	&& exported.verification.independentPackages.sample.every((id) => id.startsWith('bundle:') === false)
 	&& exported.verification.longTask.attributed === 5 && exported.verification.longTask.withComponent === 1, true);
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);

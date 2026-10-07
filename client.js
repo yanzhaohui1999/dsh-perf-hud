@@ -1,7 +1,10 @@
 /**
  * dsh-perf-hud — 浏览器端性能 HUD(纯客户端)。
  *
- * 这一半就是全部实现:Host 侧只有一行空 apply()。仪表固定在右下角
+ * 浏览器半的全部实现在这个文件里;Host 侧(index.js)是可选的:它只提供
+ * perf_hooks 事件循环采样与一个 /api/dsh-perf-hud/host 路由(事件循环读数、
+ * session/event 到达延迟、bundle 读写代理)。宿主半没加载时面板照常工作,
+ * 只是那三处显示不可用并写明原因。仪表固定在右下角
  * (实时 fps + 插桩状态药丸),展开后是完整面板。
  *
  * 四项测量:
@@ -55,7 +58,7 @@ window.__ModuleLoader__.load({
 		const EXPERIMENT_LOAD_BURN_MS = 8;        // 合成负载:每拍燃烧的毫秒数
 		const EXPERIMENT_LOAD_PERIOD_MS = 250;    // 合成负载:两拍之间的间隔
 		const IDLE_GAP_MS = 3000;
-		const DEFAULT_CANDIDATES = ['dsh-status-rotator', 'dsh-notify-me', 'dsh-better-sidebar', 'dsh-context'];
+		const EXPERIMENT_MAX_CANDIDATES = 4;   // 隔离实验最多测几个候选(每个 ≈90 秒:60s 窗口 + 前后基线)
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
 		const REACT_INTERNAL = new Set(['Fragment', 'Suspense', 'StrictMode', 'Profiler', 'ForwardRef', 'Memo', 'Provider', 'Consumer', 'Root', 'Anonymous']);
 
@@ -1423,10 +1426,12 @@ window.__ModuleLoader__.load({
 					mapStates,
 					seconds: Object.fromEntries([...bundleMaps.entries()].map(([key, entry]) => [bundleLabel(key), entry.state])),
 				},
-				ownPackageNames: {
-					'dsh-status-rotator': seen.has('dsh-status-rotator'),
-					'dsh-notify-me': seen.has('dsh-notify-me'),
-				},
+				// 精确归因是否真的还原出了**独立包名**(而不是只给合并包的 key):
+				// 统计口径是"归因表与 DOM 写入表里出现过的、非合并键的 id"。
+				independentPackages: (() => {
+					const names = [...seen].filter((id) => id.startsWith(BUNDLE_PREFIX) === false).sort();
+					return { count: names.length, sample: names.slice(0, 3) };
+				})(),
 				longTask: {
 					total: state.ltTotal,
 					attributed: state.ltBlamed,
@@ -1452,10 +1457,28 @@ window.__ModuleLoader__.load({
 		// setBundle 会临时改 profile 的 bundle 选择(不是 cordis.patch.yml),所以:
 		//   1) 必须先读原始列表; 2) 每步结束立刻恢复; 3) 全部结束后再读一次并逐项核验;
 		//   4) 任何时刻都能中止,中止也会走恢复流程。
+		/**
+		 * 隔离实验的候选:从宿主真实的 bundle 列表里挑,**不写死任何插件名**。
+		 * 判据:已启用 + 可移除 —— 宿主 listBundles 的 installed/removable 只对社区包为真
+		 * (官方内核 bundle 两者都是 false),所以这一条天然把内核排掉;再排掉本插件自己。
+		 * 按名字排序取前 EXPERIMENT_MAX_CANDIDATES 个:每个候选要 90 秒,列全了没人等。
+		 */
+		function pickExperimentCandidates(bundles, selfName) {
+			if (Array.isArray(bundles) === false) return [];
+			return bundles
+				.filter((bundle) => bundle !== null && typeof bundle === 'object')
+				.filter((bundle) => bundle.enabled === true && bundle.removable === true)
+				.filter((bundle) => typeof bundle.name === 'string' && bundle.name !== '' && bundle.name !== selfName)
+				.filter((bundle) => bundle.name.startsWith('@deepseek-ai/') === false)
+				.map((bundle) => bundle.name)
+				.sort()
+				.slice(0, EXPERIMENT_MAX_CANDIDATES);
+		}
+
 		const experiment = {
 			phase: 'idle',        // idle | running | done | aborted | failed
 			message: '',
-			candidates: DEFAULT_CANDIDATES.slice(),
+			candidates: [],
 			results: [],
 			original: null,
 			candidateState: [],
@@ -1635,6 +1658,13 @@ window.__ModuleLoader__.load({
 			}
 			experiment.original = listed.bundles;
 			experiment.via = listed.via ?? null;
+			// 候选来自宿主刚给的列表本身,不是写死的名字 —— 换台机器换个 profile 都成立。
+			experiment.candidates = pickExperimentCandidates(listed.bundles, PKG);
+			if (experiment.candidates.length === 0) {
+				experiment.phase = 'failed';
+				experiment.message = 'bundle 列表里没有可对照的第三方插件(需要已启用且可移除的非官方包)';
+				return false;
+			}
 			const stateBefore = new Map();
 			for (const name of experiment.candidates) {
 				const found = listed.bundles.find((bundle) => bundle.name === name);
@@ -2712,7 +2742,7 @@ window.__ModuleLoader__.load({
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: `${t('expHint')}\n${t('method')}: ${experiment.method}` }, t('isolation')),
 						h('span', { style: S.num }, experimentText())),
-					h('div', { style: S.sub }, `${t('candidate')}: ${experiment.candidates.join(' ')}${experiment.via === null ? '' : ` · ${viaLabel(experiment.via)}`}`),
+					h('div', { style: S.sub }, `${t('candidate')}: ${experiment.candidates.length === 0 ? t('notYet') : experiment.candidates.join(' ')}${experiment.via === null ? '' : ` · ${viaLabel(experiment.via)}`}`),
 					experiment.baseline === null ? null : h('div', { style: S.sub }, `${t('baseline')}: ${experiment.baseline.fps}fps · LT ${experiment.baseline.longTasks} · ${experiment.baseline.domPerMin}${t('perMin')}`),
 					experiment.noise === null ? null : h('div', { style: S.sub }, `${t('noiseFloor')}: ±${experiment.noise.fps}fps · ±${experiment.noise.unattrAvg}ms${t('unattrSuffix')} · ±${experiment.noise.longTasks}LT · ±${experiment.noise.domPerMin}${t('perMin')}`),
 					experiment.results.length === 0 ? null : h('div', null, experiment.results.map((row) => h('div', { key: row.name },
@@ -2749,7 +2779,9 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.num }, `${v.precise.mapStates?.ready ?? 0}/${v.precise.bundles} ${t('maps')}`)),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('vPrecise')),
-						h('span', { style: S.num }, `${v.ownPackageNames['dsh-status-rotator'] ? '✓' : '✗'} rotator / ${v.ownPackageNames['dsh-notify-me'] ? '✓' : '✗'} notify-me`)),
+						h('span', { style: S.num }, v.independentPackages.count === 0
+							? t('notYet')
+							: `${v.independentPackages.count} · ${v.independentPackages.sample.join(' ')}`)),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('vLt')),
 						h('span', { style: S.num }, `${v.longTask.attributed}/${v.longTask.total} · ${t('component')} ${v.longTask.withComponent}`)),
