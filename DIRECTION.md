@@ -222,7 +222,7 @@
 - **LoAF 的浏览器覆盖是 Chrome 侧**:Firefox / Safari 未实现(MDN 标 not Baseline)。非 Chrome 需要保留旧腿 —— 因此"默认不插桩"只在 Chrome 成立,要有特征检测与降级路径。
 - **Perfetto 直接导入 `.cpuprofile`** 未确认(其文档列出的外部格式不含 `.cpuprofile`);speedscope 与 Chrome DevTools 的 Load profile 是已确认路径。
 - **combo URL(`??a.js,b.js`)在 DevTools 火焰图里的标注方式**未确认;本仓的 sourcemap 分段方案不受影响。
-- **桌面端的四条推论全部未实测**(见 §8):插件能否安装、`connection.fetch.register` 在 Desktop 的 Host 子进程里是否同样可达、`webContents.debugger`(CDP)挂到应用窗口是否与私有 IPC/`dsh-app://` 协议冲突、hide 期间是否继续记录。
+- **桌面端的四条推论全部未实测**(见 §8;其中 Electron 侧的 API 形状已按 `electron.d.ts` 核对,运行时行为未测):插件能否安装、`connection.fetch.register` 在 Desktop 的 Host 子进程里是否同样可达、`webContents.debugger`(CDP)挂到应用窗口是否与私有 IPC/`dsh-app://` 协议冲突、hide 期间是否继续记录。
 - 本文 §2.1 的帧率/长任务数字来自 **headless、无 GPU** 环境,不可当作真实体验;RTT 与 LoAF 结论与该环境无关。
 - 面板截图留在 `/tmp/hud-panel.png`(冷启动)与 `/tmp/hud-panel-warm.png`(55s),是临时文件;重取方法见 §7。
 
@@ -253,14 +253,23 @@
 - 官方**没有使用任何 Electron 级性能面**:`contentTracing` / `app.getAppMetrics` / `webContents.debugger` / `getProcessMemoryInfo` 在全仓 **0 命中**。
 - Desktop 的分析字节沿用产品采集策略,**Web usage is excluded**;更新安装会等本地分析 intake(1 秒上限)。
 
+**Electron 侧的 API 已按类型定义核对**(`apps/desktop/node_modules/electron/electron.d.ts`,Electron `^44.0.0`;运行时行为仍未测):
+
+- `webContents.debugger: Debugger`(`attach()` / `detach()` / `sendCommand(method, params, sessionId)`)→ 对真实应用窗口的**完整 CDP**。
+- `contentTracing.startRecording(options)` 的 `TraceConfig` 有 `recording_mode`(`record-until-full` / `record-continuously` / **`record-as-much-as-possible`** / `trace-to-console`)、`trace_buffer_size_in_kb`、`trace_buffer_size_in_events`、`included_categories`;`stopRecording(resultFilePath?)` 返回落盘路径;`getTraceBufferUsage()` 给出缓冲区占用(`value` / `percentage`);`getCategories()` 列 category,Electron 另加一个 `electron` category。
+- `app.getAppMetrics(): ProcessMetric[]`,每项带 `cpu: CPUUsage` 与 `memory: MemoryInfo`。
+
+**桌面端把"一次抓全"从近似变成真的(这是本次讨论最大的结论翻转)**
+
+- `record-as-much-as-possible` + 固定 `trace_buffer_size_in_kb` **就是 Chromium 级的环形记录器**:一直在录、满了覆盖最早的,触发时 `stopRecording()` 拿到的 trace 正好**结束在触发那一刻**。这正是 §4.1 想要的"前摇",只不过粒度是引擎级的。
+- 于是桌面端的事故包能装下 Web 端根本拿不到的东西:一份**真实的 Chrome trace**(Perfetto / DevTools 直接可开)+ 渲染进程 CPU profile(`webContents.debugger` + `Profiler` domain)+ 宿主进程 profile(Host 是 Electron 的子进程)+ **按进程的 CPU/内存**(`getAppMetrics`)。§4.2 那张表里所有"只存在于当时"的证据,在桌面端都有对应的引擎级来源。
+- 代价与边界:这几样都是**主进程**能力,所以"守夜"在桌面端要由一个 Electron 侧的组件承担(现有插件形态是 `dsh.bundle.patch` 的 Node 半边 + 浏览器半边,能不能拿到主进程句柄需要另做设计);缓冲占用与采样的常驻开销、category 清单、以及打包版里的可用性都要实测。
+
 **推论:为什么"有意义"**
 
 1. **守夜形态与桌面生命周期天然吻合**:用户整天开着、关窗不停 —— 偶发卡顿本来就发生在这样的使用里;常驻记录器的边际成本更低、命中率更高。
-2. **取证能力升一级(桌面独有)**:
-   - Electron 主进程的 `webContents.debugger` **就是 CDP**,可对真实应用窗口录 trace / 采 CPU profile —— 这是页面内做不到的事(§3.5);
-   - Host 是 Electron 自己 `spawn` 的子进程,抓宿主 `.cpuprofile` 不必再 `kill -USR1`;
-   - `app.getAppMetrics()` 给**按进程的 CPU / 内存**(renderer 与 host 分开)—— Web 端面板拿不到这个维度,而它能一句话回答"卡的是页面进程还是宿主进程"。这三样官方都还没用。
-3. **撞车风险同步变大**:官方已内置 F12 DevTools(含打包版)→"随手看一眼"这个需求已经被满足了。本工具该占的是 DevTools 抓不到的那部分:偶发、无人值守、跨进程、一次抓全、产出交给 agent 读。
+2. **取证能力升一级**:CDP、`contentTracing`、`getAppMetrics` 都是桌面独有的,展开在上面那一段;其中"按进程的 CPU/内存"还能回答另一个 Web 端答不出的问题 —— **卡的是页面进程还是宿主进程**。
+3. **撞车风险同步变大**:官方已内置 F12 DevTools(含打包版)→"随手看一眼"这个需求已经被满足了。DevTools 与守夜记录器的区别是**前者必须先开始录、后者事后能回看**。本工具该占的是 DevTools 抓不到的那部分:偶发、无人值守、跨进程、一次抓全、产出交给 agent 读。
 
 **必须先想清楚的后果与未知**
 
