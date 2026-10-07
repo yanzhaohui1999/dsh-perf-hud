@@ -1070,7 +1070,7 @@ window.__ModuleLoader__.load({
 		/** 自测状态:点了必须看得见进度与结果,否则"毫无反应"就是必然观感。 */
 		function stressText() {
 			const mark = state.stress;
-			if (mark === null) return translate('stressHint');
+			if (mark === null) return `${translate('stressDone')}: ${translate('notYet')}`;
 			const hit = state.longTasks
 				.filter((row) => row.t >= mark.at - 500 && row.t <= mark.at + 8000)
 				.reduce((top, row) => (top === null || row.ms > top.ms ? row : top), null);
@@ -1129,11 +1129,13 @@ window.__ModuleLoader__.load({
 			let ltPeak = 0;
 			let samples = 0;
 			let streamingSamples = 0;
+			const unattr = [];
 			while (performance.now() - started < ms) {
 				await sleep(1000);
 				samples += 1;
 				if (state.streaming) streamingSamples += 1;
 				fps.push(state.fps);
+				unattr.push(state.unattrAvg);
 				ltPeak = Math.max(ltPeak, state.ltPerSec);
 				if (experiment.aborted === true && label !== 'idle') break;
 			}
@@ -1152,6 +1154,10 @@ window.__ModuleLoader__.load({
 				top: pluginTable().slice(0, 3).map((row) => ({ id: row.id, cps: row.cps, ms: row.ms })),
 				// 只列这一段窗口里真的写过节点的插件/组件(累计表会冤枉空闲窗口)
 				domTop: domWriteDelta(writes0).slice(0, 2),
+				// 每帧"没被 JS 回调解释掉"的残差(样式/绘制/vsync)。负载不同时绝对 fps 没法比,
+				// 但"同一帧里 JS 之外还要花多少"相对可比 —— 常驻动画/轮询那类固定开销在这里现形。
+				unattrAvg: unattr.length === 0 ? 0 : round1(unattr.reduce((sum, value) => sum + value, 0) / unattr.length),
+				unattrPeak: unattr.length === 0 ? 0 : round1(Math.max.apply(null, unattr)),
 				samples,
 				streamingSeconds: streamingSamples,
 				streaming: streamingSamples > 0,
@@ -1255,7 +1261,7 @@ window.__ModuleLoader__.load({
 			baseline: null,
 			noise: null,          // 基线之间的漂移,当噪声底
 			drifts: [],
-			method: '基线 → (关闭 → 窗口 → 恢复 → 恢复后基线) × N,每个候选只跟紧邻的基线对照',
+			method: '空闲筛查:基线 → (关闭 → 窗口 → 恢复 → 恢复后基线) × N,每个候选只跟紧邻基线对照;只看空闲负载下的固定开销,不是"这插件拖慢了多少"的因果证明',
 			aborted: false,
 			startedAt: 0,
 			via: null,            // 'remote' | 'route' | null:数据实际从哪条通道来的
@@ -1330,6 +1336,7 @@ window.__ModuleLoader__.load({
 				fps: round1(off.fps - base.fps),
 				longTasks: off.longTasks - base.longTasks,
 				domPerMin: round1(off.domPerMin - base.domPerMin),
+				unattrAvg: round1((off.unattrAvg ?? 0) - (base.unattrAvg ?? 0)),
 			};
 		}
 
@@ -1342,7 +1349,7 @@ window.__ModuleLoader__.load({
 		 */
 		function noiseFloor(drifts) {
 			const pick = (key) => drifts.reduce((top, item) => Math.max(top, item === null || item === undefined ? 0 : Math.abs(item[key] ?? 0)), 0);
-			return { fps: round1(pick('fps')), longTasks: pick('longTasks'), domPerMin: round1(pick('domPerMin')) };
+			return { fps: round1(pick('fps')), longTasks: pick('longTasks'), domPerMin: round1(pick('domPerMin')), unattrAvg: round1(pick('unattrAvg')) };
 		}
 
 		/** Δ 是否超出噪声底(逐指标判断)。 */
@@ -1352,6 +1359,7 @@ window.__ModuleLoader__.load({
 				fps: Math.abs(delta.fps) > noise.fps,
 				longTasks: Math.abs(delta.longTasks) > noise.longTasks,
 				domPerMin: Math.abs(delta.domPerMin) > noise.domPerMin,
+				unattrAvg: Math.abs(delta.unattrAvg ?? 0) > noise.unattrAvg,
 			};
 		}
 
@@ -1371,6 +1379,7 @@ window.__ModuleLoader__.load({
 			if (sig === null || sig === undefined) return translate('notYet');
 			const hit = [];
 			if (sig.fps) hit.push('fps');
+			if (sig.unattrAvg) hit.push(translate('unattrShort'));
 			if (sig.longTasks) hit.push('LT');
 			if (sig.domPerMin) hit.push('DOM');
 			return hit.length === 0 ? translate('none') : hit.join('/');
@@ -1803,7 +1812,8 @@ window.__ModuleLoader__.load({
 				expHint: '开跑前会等会话空闲(最多 5 分钟;流式窗口的对照不可比)。随后逐候选关闭 60 秒并恢复,每步记宿主回执、恢复后逐项核验;每个候选只跟紧邻基线对照,基线漂移作为噪声底。',
 				method: '方法', noiseFloor: '噪声底', beyondNoise: '超出噪声', confounded: '窗口含流式,该对照不可比',
 				skipped: '跳过', restore: '恢复', marks: '场景标记',
-				via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
+				via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
+				unattrShort: '未归因', unattrSuffix: '/帧', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
 				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
 			},
 			en: {
@@ -1836,7 +1846,8 @@ window.__ModuleLoader__.load({
 				expHint: 'Waits for an idle session first (up to 5 min; streaming windows are not comparable). Then disables each candidate for 60s and restores it, recording the host receipt and verifying the restore. Each candidate is compared with its nearest baseline, with baseline drift as the noise floor.',
 				method: 'method', noiseFloor: 'noise floor', beyondNoise: 'beyond noise', confounded: 'window had streaming; this comparison is not valid',
 				skipped: 'skipped', restore: 'restore', marks: 'marks',
-				via: 'channel', viaRemote: 'ctx.remote (client remote)', viaRoute: 'host route /api/dsh-perf-hud/host', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
+				via: 'channel', viaRemote: 'ctx.remote (client remote)', viaRoute: 'host route /api/dsh-perf-hud/host',
+				unattrShort: 'unattr', unattrSuffix: '/frame', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
 				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
 			},
 		};
@@ -1964,9 +1975,8 @@ window.__ModuleLoader__.load({
 			},
 				h('div', { style: S.head },
 					h('span', { style: S.brand }, translate('title')),
-					h('span', { style: { ...S.label, color: 'var(--dsw-alias-state-error-primary)' } }, translate('renderError'))),
+					h('span', { style: { ...S.label, color: 'var(--dsw-alias-state-error-primary)' }, title: translate('renderErrorHint') }, translate('renderError'))),
 				h('div', { style: { ...S.sub, color: 'var(--dsw-alias-label-primary)' } }, `${error instanceof Error ? error.name : 'Error'}: ${message}`.slice(0, 500)),
-				h('div', { style: S.sub }, translate('renderErrorHint')),
 				h('div', { style: S.buttons },
 					h('button', { type: 'button', style: S.btn, onClick: retry }, translate('retry')),
 					h('button', { type: 'button', style: S.btn, onClick: exportJson }, translate('exportJson'))));
@@ -2170,18 +2180,17 @@ window.__ModuleLoader__.load({
 				// ── 隔离实验 ──
 				h('div', { style: S.sep },
 					h('div', { style: S.row },
-						h('span', { style: S.label }, t('isolation')),
+						h('span', { style: S.label, title: `${t('expHint')}\n${t('method')}: ${experiment.method}` }, t('isolation')),
 						h('span', { style: S.num }, experimentText())),
 					h('div', { style: S.sub }, `${t('candidate')}: ${experiment.candidates.join(' ')}${experiment.via === null ? '' : ` · ${viaLabel(experiment.via)}`}`),
-					h('div', { style: S.sub }, `${t('method')}: ${experiment.method}`),
 					experiment.baseline === null ? null : h('div', { style: S.sub }, `${t('baseline')}: ${experiment.baseline.fps}fps · LT ${experiment.baseline.longTasks} · ${experiment.baseline.domPerMin}${t('perMin')}`),
-					experiment.noise === null ? null : h('div', { style: S.sub }, `${t('noiseFloor')}: ±${experiment.noise.fps}fps · ±${experiment.noise.longTasks}LT · ±${experiment.noise.domPerMin}${t('perMin')}`),
+					experiment.noise === null ? null : h('div', { style: S.sub }, `${t('noiseFloor')}: ±${experiment.noise.fps}fps · ±${experiment.noise.unattrAvg}ms${t('unattrSuffix')} · ±${experiment.noise.longTasks}LT · ±${experiment.noise.domPerMin}${t('perMin')}`),
 					experiment.results.length === 0 ? null : h('div', null, experiment.results.map((row) => h('div', { key: row.name },
 						h('div', { style: S.row },
 							h('span', { style: S.label, title: JSON.stringify(row.changeResult ?? row.error ?? null) }, `${short(row.name)}${row.applied ? '' : ` ${t('skipped')}`}`),
 							h('span', { style: S.num }, row.delta === undefined || row.delta === null ? (row.reason ?? '') : `Δfps ${signed(row.delta.fps)} · ΔLT ${signed(row.delta.longTasks)}`)),
 						row.delta === undefined || row.delta === null ? null : h('div', { style: S.sub },
-							`ΔDOM ${signed(row.delta.domPerMin)}${t('perMin')} · ${t('restore')} ${row.restore?.ok === true ? '✓' : '✗'}` +
+							`Δ${t('unattrShort')} ${signed(row.delta.unattrAvg)}ms · ΔDOM ${signed(row.delta.domPerMin)}${t('perMin')} · ${t('restore')} ${row.restore?.ok === true ? '✓' : '✗'}` +
 							` · ${t('beyondNoise')} ${beyondNoiseText(row)}` +
 							(row.confounded === true ? ` · ⚠️ ${t('confounded')}` : ''))))),
 					experiment.restored === null ? null : h('div', { style: S.sub },
@@ -2190,8 +2199,7 @@ window.__ModuleLoader__.load({
 						h('button', { type: 'button', style: S.btn, disabled: experiment.phase === 'running', onClick: () => runExperiment() }, t('startExp')),
 						h('button', { type: 'button', style: S.btn, onClick: () => abortExperiment() }, t('abortExp')),
 						h('button', { type: 'button', style: S.btn, title: t('stressHint'), onClick: () => W.__perfHud.stress() }, t('stress'))),
-					h('div', { style: S.sub }, stressText()),
-					h('div', { style: S.sub }, t('expHint'))),
+					h('div', { style: S.sub }, stressText())),
 
 				// ── 场景标记 ──
 				h('div', { style: S.sep },

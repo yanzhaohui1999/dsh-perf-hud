@@ -174,7 +174,7 @@ const sandbox = `
 		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 		stressBurn: '人为燃烧',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
-		none: '无', notApplicable: '不适用(窗口含流式)',
+		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -359,7 +359,7 @@ check('没有样本时不误报', EX.suspectLink(), false);
 
 // 自测必须"点了看得见":三种状态都要有明确文案(曾因清理定时器比渲染间隔短而毫无反应)
 box.state.stress = null;
-check('自测没跑过:显示按钮提示', EX.stressText(), 'stressHint');
+check('自测没跑过:只写未采集,不铺说明(说明在按钮 title 里)', EX.stressText(), '自测结果: 未采集');
 box.state.longTasks = [];
 box.state.stress = { at: Date.now(), nodes: 12000 };
 check('已点、长任务还没到:显示进行中', EX.stressText(), '自测进行中: 12000 节点 …');
@@ -435,17 +435,19 @@ check('linkStats 单样本 p50 = p99 = 自身', (() => { box.state.link = [{ t: 
 box.state.link = [];
 
 // ── C:Δ 对照"紧邻基线" + 噪声底(第一版把漂移当成了结论,这条是那次事故的回归) ──
-check('experimentDelta 对照紧邻基线',
-	EX.experimentDelta({ fps: 60, longTasks: 3, domPerMin: 40 }, { fps: 55, longTasks: 1, domPerMin: 10 }),
-	{ fps: -5, longTasks: -2, domPerMin: -30 });
+// off - base:关掉插件后每帧残差从 16ms 掉到 12ms → -4(这正是我们要的方向)
+check('experimentDelta 对照紧邻基线(含每帧未归因残差)',
+	EX.experimentDelta({ fps: 60, longTasks: 3, domPerMin: 40, unattrAvg: 16 }, { fps: 55, longTasks: 1, domPerMin: 10, unattrAvg: 12 }),
+	{ fps: -5, longTasks: -2, domPerMin: -30, unattrAvg: -4 });
 check('缺任一侧就不写 Δ', EX.experimentDelta(null, { fps: 1, longTasks: 0, domPerMin: 0 }), null);
 check('noiseFloor 取基线间漂移的最大绝对值',
-	EX.noiseFloor([{ fps: -1, longTasks: 2, domPerMin: -5 }, { fps: 3, longTasks: -1, domPerMin: 9 }]),
-	{ fps: 3, longTasks: 2, domPerMin: 9 });
+	EX.noiseFloor([{ fps: -1, longTasks: 2, domPerMin: -5, unattrAvg: -1.5 }, { fps: 3, longTasks: -1, domPerMin: 9, unattrAvg: 0.4 }]),
+	{ fps: 3, longTasks: 2, domPerMin: 9, unattrAvg: 1.5 });
 check('significance 逐指标判断是否超出噪声',
-	EX.significance({ fps: -1, longTasks: 14, domPerMin: 4219 }, { fps: 3, longTasks: 2, domPerMin: 9 }),
-	{ fps: false, longTasks: true, domPerMin: true });
-check('metricList 列出超标指标', EX.metricList({ fps: false, longTasks: true, domPerMin: true }), 'LT/DOM');
+	EX.significance({ fps: -1, longTasks: 14, domPerMin: 4219, unattrAvg: 8 }, { fps: 3, longTasks: 2, domPerMin: 9, unattrAvg: 2 }),
+	{ fps: false, longTasks: true, domPerMin: true, unattrAvg: true });
+check('metricList 列出超标指标(未归因残差优先,fps 之后)',
+	EX.metricList({ fps: false, longTasks: true, domPerMin: true, unattrAvg: true }), '未归因/LT/DOM');
 check('全部落在噪声内:明确写「无」,不把漂移说成效果',
 	EX.metricList({ fps: false, longTasks: false, domPerMin: false }), '无');
 // 自己声明"该对照不可比"却又列「超出噪声 fps」,等于引诱读者挑数字当结论
