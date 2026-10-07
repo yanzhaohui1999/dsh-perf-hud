@@ -78,3 +78,19 @@ dsh --profile web --dump-config | grep -A1 perf-hud             # 组合核对
 - **卡片对齐**:`worstSecondLast60s = 47.7fps · 帧 243.5ms · LT 242ms · RTT 37.2ms · 宿主 p99 2.12ms`
 - **DOM**:写入精确总次数 **19534**(每 10 次采样一次栈);节点 5447、空闲净增 0;堆 120MB
 - **归因表出现真实插件名**:`dsh-cost-meter`、`@deepseek-ai/dsh-client-ui-layout`、`dsh-better-sidebar`(单包 URL 的帧直接给出包名)
+
+## 自测(仪器自检)最终形态
+
+面板原文:`自测结果: 115ms · PerfHud / PerfHudStress(DOM 写入) · 提交 110.6ms(同步 · 人为燃烧 80ms)`
+
+- `PerformanceObserver` 稳定抓到 **115ms** 长任务(曾因"清理定时器比渲染间隔短""React 时间切片""布局被推迟到下一帧""节点数凑不稳 50ms 线"四次失手,逐条修掉)
+- 两条归因路径并列给出结果,各自标明能力边界:
+  - **fiber 走查 → `PerfHud`**:React 把整棵新子树一次 `appendChild` 挂上,观察器只看到"容器变了"
+  - **DOM 写入插桩 → `PerfHudStress`**:写入点看到了每个(含未挂载的)节点,精确点名真正的渲染组件
+- 提交耗时直接由组件量出(渲染开始 → 提交完成),**不依赖长任务**;`flushSync` 强制同步提交;
+  为了稳定越过 50ms 线而显式燃烧 80ms,**并在面板上标注"含人为燃烧"** —— 仪器自检不冒充自然卡顿
+- 真实卡顿的证据仍是自然发生的那两条:`300ms` / `125ms`,组件 `ChatView`,来源 `render`
+
+## 仍未跑到的一项
+
+`isolation` 段(导出里唯一为空的一段):需要点一次「开始实验」——逐候选关闭 60 秒、每步记宿主真实回执、结束恢复并逐项核验,约 5~6 分钟,浏览器需保持打开。
