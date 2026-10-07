@@ -627,6 +627,7 @@ window.__ModuleLoader__.load({
 				captured: 0,             // 一共捕获过几次
 				coalesced: 0,            // 被并进 pending 的触发次数(同一串卡顿算一次)
 				dropped: 0,              // 抓到了、但没比已留存的更差,于是丢掉的次数
+				trimmedByBytes: 0,       // 因为超过 WATCH_PERSIST_MAX_BYTES 被裁掉的条数(内存与落盘保持一致)
 				restored: 0,             // 这次启动从落盘里读回了几条
 				persistError: null,      // 落盘失败的原因(失败就照实说,不假装存下来了)
 				coveredUntil: 0,         // 最近一份事故窗口的结束时刻(perf ms):这段不再另立事故
@@ -1128,6 +1129,14 @@ window.__ModuleLoader__.load({
 				try {
 					localStorage.setItem(LS_INCIDENTS, payload);
 					watch.persistError = null;
+					// 内存里也按同一份裁掉:"看到的"必须等于"刷新后还在的"。
+					// 以前这里只裁落盘的那份,面板说"抓到 10 次"、刷新后只回来 7 条,对不上。
+					const trimmed = watch.incidents.length - list.length;
+					if (trimmed > 0) {
+						watch.incidents.length = 0;
+						for (const row of list) watch.incidents.push(row);
+						watch.trimmedByBytes += trimmed;
+					}
 					return true;
 				} catch (error) {
 					watch.persistError = error instanceof Error ? error.message : String(error);
@@ -1183,6 +1192,7 @@ window.__ModuleLoader__.load({
 				coalesced: watch.coalesced,
 				dropped: watch.dropped,
 				restored: watch.restored,
+				trimmedByBytes: watch.trimmedByBytes,
 				persistError: watch.persistError,
 				kept: watch.incidents.map((row) => ({ id: row.id, severity: row.severity, cause: row.cause, at: row.at, note: row.note })),
 				triggers: {
@@ -2561,6 +2571,7 @@ window.__ModuleLoader__.load({
 				state.watch.coalesced = 0;
 				state.watch.dropped = 0;
 				state.watch.restored = 0;
+				state.watch.trimmedByBytes = 0;
 				saveIncidents();   // 落盘的那份也要清掉,否则刷新又"复活"
 				return true;
 			},
@@ -2747,7 +2758,8 @@ window.__ModuleLoader__.load({
 		/** 折叠组的一句话摘要:刻意短 —— 摘要自己换行会比正文更难看(实测)。 */
 		function detailSummary() {
 			const second = worstSecond();
-			return `${translate('worstSecondShort')} ${second === null ? translate('none') : `${second.frameMs.toFixed(0)}ms`} · ${translate('domWrites')} ${state.mutations}`;
+			// 帧内未归因搬进这一组之后,它的数字要留在摘要上 —— 否则常显就更"瞎"了
+			return `${translate('worstSecondShort')} ${second === null ? translate('none') : `${second.frameMs.toFixed(0)}ms`} · ${translate('unattrShort')} ${state.unattrAvg.toFixed(0)}ms · ${translate('domWritesShort')} ${state.mutations}`;
 		}
 
 		function domSummary() {
@@ -2776,6 +2788,7 @@ window.__ModuleLoader__.load({
 			const worst = watch.incidents[0];
 			return `${translate('watchCaught')} ${watch.incidents.length}${translate('times')} · ${translate('watchWorst')} ${Math.round(worst.severity)}ms` +
 				(watch.restored === 0 ? '' : ` · ${translate('watchRestored')} ${watch.restored}`) +
+				(watch.trimmedByBytes === 0 ? '' : ` · ${translate('watchTrimmed')} ${watch.trimmedByBytes}`) +
 				(watch.persistError === null ? '' : ` · ⚠️ ${translate('watchPersistFailed')}`);
 		}
 
@@ -2887,7 +2900,7 @@ window.__ModuleLoader__.load({
 				collapse: '折叠', expand: '展开', sessions: '会话列表', messages: '消息区', perMin: '/分',
 				unattr: '帧内未归因', peak: '峰',
 				unattrHint: '帧间隔里没被插桩回调解释掉的部分:样式重算、绘制、以及等待 vsync。CSS 动画的开销只在这里现形。',
-				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', est: '≈',
+				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', domWritesShort: 'DOM 写入', est: '≈',
 				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', hit: '命中', times: ' 次',
 				maxBlame: '整窗最多', topBlame: '归属 Top', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名',
 				blameHint: '本秒执行速率 / 峰值速率(EMA 平滑后的每秒执行次数)与合计耗时;悬停某一行看它的执行次数、同步耗时与累计',
@@ -2926,8 +2939,8 @@ window.__ModuleLoader__.load({
 				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
 				// 守夜层(默认常开、不插桩):面板上只露一行状态 + 工具箱里的清单与两个按钮
 				watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOnDisk: '落盘',
-				watchNone: '还没抓到', watchOff: '未开录', watchPersistFailed: '落盘失败',
-				watchHint: '默认常开、不插桩:一个 rAF 循环 + 一个 LoAF 观察器。帧间隔(或 LoAF 的 blockingDuration)超过 100ms 就自动抓「前 10 秒 + 后 3 秒」原样切片,只留最差 10 次并落盘(刷新后还在)。要抓偶发卡顿就让它一直开着 —— 出事后用「导出最近一次」把证据包交给分析者。',
+				watchNone: '还没抓到', watchOff: '未开录', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉',
+				watchHint: '默认常开、不插桩:一个 rAF 循环 + 一个 LoAF 观察器。帧间隔(或 LoAF 的 blockingDuration)超过 100ms 就自动抓「前 10 秒 + 后 3 秒」原样切片,只留最差 10 次并落盘(刷新后还在;落盘另有 512KB 上限,超了就裁掉最弱的并在这一行标出「裁掉 N」)要抓偶发卡顿就让它一直开着 —— 出事后用「导出最近一次」把证据包交给分析者。',
 				watchMark: '标记刚才', watchMarkHint: '手动记一次「刚刚卡了一下」:自动回退 3 秒(人的反应时间),立刻切片,并把上面输入框的备注原样写进证据包',
 				watchExport: '导出最近一次', watchExportHint: '下载一份自包含的证据包(帧序列 + LoAF + 窗口内 longtask + 环境与缺失声明);也可以用 __perfHud.exportIncident(id) 指定某一条',
 				watchManualNote: '手动标记',
@@ -2939,7 +2952,7 @@ window.__ModuleLoader__.load({
 				collapse: 'Collapse', expand: 'Expand', sessions: 'Sessions', messages: 'Messages', perMin: '/min',
 				unattr: 'unattributed/frame', peak: 'peak',
 				unattrHint: 'Frame gap not explained by instrumented callbacks: style recalc, paint, and vsync wait. CSS-animation cost only shows up here.',
-				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', est: '≈',
+				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', domWritesShort: 'DOM writes', est: '≈',
 				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', hit: 'hit', times: '',
 				maxBlame: 'window top', topBlame: 'attribution top', legFiber: 'fiber', legSubtree: 'subtree', legDom: 'DOM write', legOwner: 'package',
 				blameHint: 'Per-second execution rate / peak rate (EMA-smoothed) plus the summed synchronous time; hover a row for its execution count, cost and cumulative totals',
@@ -2977,7 +2990,7 @@ window.__ModuleLoader__.load({
 				unattrShort: 'unattr', unattrSuffix: '/frame', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
 				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
 				watch: 'Night watch', watchCaught: 'caught', watchWorst: 'worst', watchRestored: 'restored', watchOnDisk: 'on disk',
-				watchNone: 'nothing caught yet', watchOff: 'not recording', watchPersistFailed: 'persist failed',
+				watchNone: 'nothing caught yet', watchOff: 'not recording', watchPersistFailed: 'persist failed', watchTrimmed: 'trimmed',
 				watchHint: 'On by default and it patches nothing: one rAF loop plus one LoAF observer. When a frame interval (or LoAF blockingDuration) crosses 100ms it captures the 10s before and 3s after verbatim, keeps the worst 10, and persists them (they survive a reload). Leave it running to catch intermittent stalls; after one, hand the evidence pack to an analyst with "Export latest".',
 				watchMark: 'Mark just now', watchMarkHint: 'Manually record "it just stuttered": rewinds 3s (human reaction time), slices immediately, and copies the note from the input above into the pack',
 				watchExport: 'Export latest', watchExportHint: 'Download one self-contained evidence pack (frames + LoAF + long tasks in the window + environment and missing-data notes); __perfHud.exportIncident(id) picks a specific one',
@@ -3280,14 +3293,9 @@ window.__ModuleLoader__.load({
 					h('div', { style: S.blockLabel }, t('overview')),
 					h('div', { style: { ...S.blockValue, color: levelFrame(state.fps, state.frameWorst) } }, `${overviewLine1()}\n${overviewLine2()}`)),
 
-				// ── 常显 2:帧里"JS 之外"的残差(唯一能反映 CSS/绘制卡顿的数字)──
-				h('div', { style: S.row },
-					h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),
-					h('span', { style: { ...S.num, color: unexplained === null ? undefined : 'var(--dsw-alias-state-warn-primary)' } },
-						`${state.unattrAvg.toFixed(1)}ms · ${t('peak')} ${state.unattrPeak.toFixed(0)}ms`)),
-				unexplained === null ? null : h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } },
-					`${t('unexplained')}:${unexplained.ms}ms(${unexplained.percent}%)→ ${t('unexplainedHint')}`),
-				// ── 常显 3:回调归因 Top3(每插件一行,hover 补 msps 与累计)──
+				// ── 常显 2:回调归因 Top3(每插件一行,hover 补 msps 与累计)──
+				// (帧内未归因从常显挪进了「取证明细」:它是"解释",不是"现在卡不卡 / 谁的锅"
+				//  这两个常显问题本身;它的数字挂在那一组的摘要上,展开也看得到。)
 				h('div', { style: S.sep },
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('blameHint') }, t('blame')),
@@ -3315,6 +3323,13 @@ window.__ModuleLoader__.load({
 
 				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
 				group('detail', t('groupDetail'), detailSummary(),
+					// 帧里"JS 之外"的残差:唯一能反映 CSS/绘制卡顿的数字,从常显挪进来
+					h('div', { style: S.row },
+						h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),
+						h('span', { style: { ...S.num, color: unexplained === null ? undefined : 'var(--dsw-alias-state-warn-primary)' } },
+							`${state.unattrAvg.toFixed(1)}ms · ${t('peak')} ${state.unattrPeak.toFixed(0)}ms`)),
+					unexplained === null ? null : h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } },
+						`${t('unexplained')}:${unexplained.ms}ms(${unexplained.percent}%)→ ${t('unexplainedHint')}`),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('worstSecond')),
 						h('span', { style: S.num }, worstSecondText())),

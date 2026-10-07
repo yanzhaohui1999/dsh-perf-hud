@@ -178,7 +178,7 @@ const sandbox = `
 		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 		stressBurn: '人为燃烧',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
-		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchManualNote: '手动标记',
+		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchManualNote: '手动标记', domWritesShort: 'DOM 写入',
 		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
@@ -532,8 +532,8 @@ check('最多与主名字不同时才追加一行(主动断行,不靠宽度)',
 		const text = EX.overviewLine2();
 		return text.split('\n').length === 2 && text.split('\n')[1].includes('ChatView 22×');
 	})(), true);
-check('四个折叠组摘要的长度预算(单行)',
-	[EX.detailSummary().length <= 30, EX.domSummary().length <= 30, EX.hostSummary().length <= 34, EX.toolsSummary().length <= 24],
+check('四个折叠组摘要的长度预算(单行;取证明细多带一个「未归因」数字,放到 34)',
+	[EX.detailSummary().length <= 34, EX.domSummary().length <= 30, EX.hostSummary().length <= 34, EX.toolsSummary().length <= 24],
 	[true, true, true, true]);
 
 // ── 面板分层:折叠状态与摘要 ───────────────────────────────────────
@@ -821,7 +821,7 @@ const watchBox = new Function(`
 	const W = { innerWidth: 1600, innerHeight: 900, devicePixelRatio: 2 };
 	// 面板文案用的两个桩:断言只检查"人看到的字",key 兜底返回 key 本身
 	const translate = (key) => ({
-		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', times: ' 次',
+		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉', times: ' 次',
 	})[key] ?? key;
 	const clock = (ms) => { const d = new Date(ms); const pad = (n) => (String(n).length < 2 ? '0' + n : String(n)); return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()); };
 	const LS_INCIDENTS = 'test:incidents';
@@ -837,7 +837,7 @@ const watchBox = new Function(`
 		on: true, precise: false, streaming: true, heap: 1048576, host: null, hostAt: 0,
 		dom: { total: 1234 },
 		longTasks: [],
-		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0 },
+		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, coveredUntil: 0, persistError: null },
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
@@ -1036,6 +1036,10 @@ watch.state.watch.incidents = [
 	{ id: 'huge', severity: 50, frames: new Array(30000).fill({ t: 0, ms: 16, gap: false }), loaf: [] },
 ];
 check('落盘:超过字节上限时丢掉最弱的再写', [watch.saveIncidents(), JSON.parse(watch.store.get('test:incidents')).incidents.map((row) => row.id)], [true, ['small']]);
+check('落盘:内存里也按同一份裁掉(看到的 = 刷新后还在的)', watch.state.watch.incidents.map((row) => row.id), ['small']);
+check('落盘:裁掉几条单独计数,不混进 dropped', [watch.state.watch.trimmedByBytes, watch.state.watch.dropped], [1, 0]);
+check('守夜行:裁过就写出来', watch.watchPanelText().includes('裁掉 1'), true);
+watch.state.watch.trimmedByBytes = 0;
 watch.state.watch.incidents.length = 0;
 check('落盘:清空后落盘的那份也是空的', [watch.saveIncidents(), JSON.parse(watch.store.get('test:incidents')).incidents.length], [true, 0]);
 
