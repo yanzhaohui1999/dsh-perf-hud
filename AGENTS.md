@@ -119,6 +119,11 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 6. **命中率会被 DOM 腿抬高**:流式时写入窗口内几乎必然有写入,必须配合「归属 Top」分布读,不能单看命中率。
 7. **隔离实验的合成负载是"恒定的额外工作"**,不是"该插件的真实负载" —— 能测固定开销,测不出"某种用法下才贵",不要当因果证明。
 8. **`git push` 不会带走 `refs/original/`**,但本机改写历史后旧提交仍在 `.git` 里,要清理得显式 `reflog expire + gc`。
+9. **改 `engines.dsh` / `peerDependencies` 前必须用真实 semver 验一遍**:宿主启动预检(`plugin-compatibility`)对 `@deepseek-ai/dsh` 与所有 `@deepseek-ai/dsh-*` peer 跑 `semver.satisfies(宿主版本, range, { includePrerelease: true })`,不满足就把**整行静默禁用**(只在 stderr 留一行 `disabling profile plugin …`)。两条实测结论(宿主 `0.2.0-rc.2`):
+   - `>=0.2.0-rc.2 <0.3.0-0` → PASS;`^0.2.0-rc.1` → PASS;`>=0.1.5-rc.1` → PASS
+   - `^0.1.5-rc.1` → **FAIL**(caret 的上界落在下一个 minor 上,且范围里没有与宿主同 `[major,minor,patch]` 元组、自带预发布标签的比较子 → 预发布版本被静默排除)。生态里 `dsh-context` 用 `>=0.1.5-rc.1` 这种**开区间**写法能过,换成 caret 就会踩这个坑。
+   - 验法:`node -e "console.log(require('<dsh>/node_modules/semver').satisfies('0.2.0-rc.2', RANGE, {includePrerelease:true}))"`。
+   - `peerDependenciesMeta.optional` **不豁免**这条检查;`engines.dsh` 只是声明(市场卡片按它或 lockstep peer 判),不参与预检。
 
 ---
 
@@ -142,10 +147,10 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 2. 打 tag `vX.Y.Z`(**tag 必须与 `version` 一致**),在 GitHub 建 Release。
 3. `.github/workflows/release.yml` 在该 Release 发布时自动 `npm publish`(用 **npm Trusted Publishing / OIDC**,不配 `NPM_TOKEN`)。
 4. 首次需要在 npmjs.com 手动建包并配 Trusted Publisher(Provider: GitHub Actions;填 owner / repo / `release.yml`)。
-5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/`,以及 README / LICENSE。
+5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/*.json` / `LICENSE`,以及 README 与它链接到的全部文档(`README_EN` / `CONTRIBUTING` / `CHANGELOG` / `AGENTS` / `HANDOVER` / `ACCEPTANCE` / `REVIEW`)—— 漏一份,npm 页面上就是一个死链。`release.yml` 的 Pack and inspect 步骤逐份 grep,漏了就失败。
 
 ---
 
 ## 9. 当前状态
 
-尚未发布。发布前的缺口、优先级与勾选清单见 [REVIEW.md](REVIEW.md) §5。
+尚未发布。代码与打包面都已就绪(`npm test` 全绿、`npm pack --dry-run` 产物完整),剩下的是对外动作:建公开仓库 → 加 `dsh-plugin` topic → npm 首发 → 提收录 PR。逐项清单与门槛见 [REVIEW.md](REVIEW.md) §5 与 §1。

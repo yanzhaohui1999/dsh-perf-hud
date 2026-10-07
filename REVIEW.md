@@ -18,11 +18,11 @@
 
 | # | 缺口 | 现状证据 | 待办 |
 |---|---|---|---|
-| 1 | npm 发不出去 | `package.json` 是 `"private": true`,且没有 `license` / `repository` / `homepage` / `keywords` / `engines` / `peerDependencies` | 去掉 `private`;补上述字段;把 3 个客户端 inject 的 `@deepseek-ai/*` 写进 `peerDependencies`(范围必须带**显式预发布分支**,否则静默排除 `0.2.0-rc.2`) |
+| 1 | npm 发不出去 | `package.json` 是 `"private": true`,且没有 `license` / `repository` / `homepage` / `keywords` / `engines` / `peerDependencies` | ✅ **已修**:去 `private`,补齐上述字段 + `main` / `author` / `bugs` / `dsh.compatibility`;三个客户端 inject 包与 `engines.dsh` 统一声明 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrerelease:true})` 实测 PASS) |
 | 2 | 没有公开仓库 | `git remote -v` 为空 | 建 GitHub 仓库、加 `dsh-plugin` topic、仓库需存在满 1 天 |
-| 3 | README 装不了 | [README.md](README.md) 的安装行写死 `/Users/y/workspace/dsh-perf-hud` | 改成 npm 包名;本地路径作为开发装法单列 |
-| 4 | npm 页面会出死链 | README 链接 `HANDOVER.md` / `ACCEPTANCE.md`,两者都不在 `files` 里(npm 只强制带 README/LICENSE/package.json) | 把这两份加进 `files`,或改为指向 GitHub 的绝对链接 |
-| 5 | 包名尚未注册 | `npm view dsh-perf-hud` → 404(未被占用) | 首次发布前先占名;确认 `publishConfig.access`(非作用域包默认 public) |
+| 3 | README 装不了 | [README.md](README.md) 的安装行写死 `/Users/y/workspace/dsh-perf-hud` | ✅ **已修**:主路径改成 `dsh plugin --profile web add dsh-perf-hud`,本地目录作为开发装法单列 |
+| 4 | npm 页面会出死链 | README 链接 `HANDOVER.md` / `ACCEPTANCE.md`,两者都不在 `files` 里(npm 只强制带 README/LICENSE/package.json) | ✅ **已修**:README 链接到的 9 份文档全部写进 `files`(产物实测 9 → 16 个文件),同时补上 `repository` 字段 |
+| 5 | 包名尚未注册 | `npm view dsh-perf-hud` → 404(未被占用) | 首次发布前先占名;`publishConfig.access` 已写成 `public` |
 
 ### 市场收录的硬门槛(来自 awesome-dsh-plugin 的 contributing.md,均已核对)
 
@@ -52,10 +52,10 @@
 | # | 问题 | 说明 |
 |---|---|---|
 | 12 | 验证脚本绑死本机 | [tests/verify-after-restart.sh](tests/verify-after-restart.sh) 写死 `/Users/y/...` 的 node 与仓库路径、launchd 服务名、个人日志路径 | 公开仓库里跑不了;应改为环境变量 + 自动探测 |
-| 13 | 没有测试入口与 CI | 没有 `npm test` 脚本、没有 `.github/workflows/` | 三个离线套件本身很好,只差一个可移植入口 —— **CI 已补(见 §5),`npm test` 待补** |
-| 14 | 没有版本兼容声明 | `engines.dsh` / `dsh.compatibility.dshReleases` 都缺 | 市场卡片只能显示"宿主要求未声明"(它按 `engines.dsh` 或 lockstep peer 判) |
+| 13 | 没有测试入口与 CI | 没有 `npm test` 脚本、没有 `.github/workflows/` | ✅ 两个都补了:CI 跑两个半边的语法检查 + 三套件 + 断言总数门禁,`npm test` 一条命令跑同样三套件 |
+| 14 | 没有版本兼容声明 | `engines.dsh` / `dsh.compatibility.dshReleases` 都缺 | ✅ 已补:顶层 `engines.dsh`(市场按它或 lockstep peer 判)+ `dsh.compatibility.dshReleases: {"0.2.0-rc.2": "compatible"}` |
 | 15 | 个人运行日志进了 git | [live-verification.txt](live-verification.txt) 已跟踪(内容是 pid / 耗时 / 包名,无 cookie 值) | 公开前删除或 gitignore |
-| 16 | 缺 `main` 字段 | 只有 `exports["."]`(实测 `require.resolve` 正常) | 与同类已发布插件不一致,补上更稳 |
+| 16 | 缺 `main` 字段 | 只有 `exports["."]`(实测 `require.resolve` 正常) | ✅ 已补 `"main": "index.js"` |
 | 17 | 缺开源仓标配 | 无 LICENSE / CONTRIBUTING / CHANGELOG / issue 模板 | ✅ LICENSE / README_EN / CONTRIBUTING / CHANGELOG / AGENTS / CI 已补,issue 模板待补 |
 
 ---
@@ -73,7 +73,7 @@
 
 ## 5. 待办清单
 
-### 已随本批补掉(2026-10-07:文档、CI,以及 §2 里那三处代码必修)
+### 已随本批补掉(2026-10-07:文档、CI、package.json 与 §2 里那三处代码必修)
 
 - [x] [README.md](README.md) 重写为发布形态(装法、读数口径、四条腿、隔离实验、**风险与边界**),新增英文版 [README_EN.md](README_EN.md)
 - [x] [AGENTS.md](AGENTS.md)(开发规则)/ [CONTRIBUTING.md](CONTRIBUTING.md)(贡献流程)/ [CHANGELOG.md](CHANGELOG.md)(从 30 条规范提交生成)
@@ -83,12 +83,13 @@
 - [x] **代码必修三处**:`index.js` 的 `'../package.json'` → `'./package.json'`(+ 断言)、`DEFAULT_CANDIDATES` 改为按 `listBundles` 推导(+ 3 条断言)、`cordis.patch.yml` 与 `client.js` 头部的过期注释
 - [x] 断言总数 183 → **187**(attribution 11 / logic 152 / host 24),README / README_EN / AGENTS / CONTRIBUTING / CHANGELOG / REVIEW / HANDOVER 与两个 workflow 里的数字全部同步
 - [x] README 里把"默认开启 + 插桩全局原型 + 隔离实验会临时写 profile"写成显式警告
+- [x] **package.json 发布元数据**:去 `private`;补 `license` / `author` / `repository` / `homepage` / `bugs` / `keywords` / `main` / `engines`(node + dsh)/ `peerDependencies`(三个官方客户端包,范围按预检口径实测过)/ `dsh.compatibility` / `publishConfig`
+- [x] **打包面**:README 链接到的 9 份文档 + LICENSE 全部写进 `files`(`npm pack --dry-run` 9 → 16 个文件),死链问题一并消掉;`scripts.test` 接上三套件(`npm test`)
 
-### 仍待办(属于打包/发布侧,本批刻意没动)
+### 仍待办(剩下都与"对外动作"有关)
 
-- [ ] `package.json`:去 `private`、补 `license` / `repository` / `homepage` / `bugs` / `keywords` / `engines` / `peerDependencies` / `main`,并加 `scripts.test`(CI 现在是直接列三条命令)
 - [ ] i18n:兜底改英文、实验进度串进字典、`isolation.method` 出词条
-- [ ] **README 引用的文档不在 npm 包里**:实测 `npm pack --dry-run` 只含 `package.json` / `README.md` / `LICENSE` / `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/*.json`。npm 页面上的相对链接需要 `repository` 字段才可能被重写,最稳的做法是二选一:① 把 README 链接到的文档(`README_EN.md` / `CONTRIBUTING.md` / `CHANGELOG.md` / `AGENTS.md` / `HANDOVER.md` / `ACCEPTANCE.md` / `REVIEW.md`)加进 `files`;② 改成 GitHub 绝对链接。参考 `dsh-better-sidebar` 的做法:把 README / README_EN / LICENSE / icon / locale / patch 放进 `files`,`AGENTS.md` 与 `docs/` 留给 GitHub。
 - [ ] [tests/verify-after-restart.sh](tests/verify-after-restart.sh) 去个人路径(改成环境变量 + 自动探测)
 - [ ] 删除 [live-verification.txt](live-verification.txt)(个人运行日志)
 - [ ] 建公开仓库 → 加 `dsh-plugin` topic → npm 首发 → 提收录 PR(见 §1 的硬门槛)
+- [ ] 发布后把 README 顶部那句「npm 包尚未发布」去掉,并按需补 badge(需要仓库地址)
