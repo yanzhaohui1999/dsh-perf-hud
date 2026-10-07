@@ -2007,13 +2007,24 @@ window.__ModuleLoader__.load({
 			return `${translate('overviewFrame')} ${state.frameWorst.toFixed(0)}ms · LT ${worst === null ? translate('none') : `${worst.ms.toFixed(0)}ms`} · ${translate('hit')} ${state.ltBlamed}/${state.ltTotal}`;
 		}
 
-		/** 概览第二行:归属 + 最多(名字可能长,允许它自己换行,左对齐就不会参差)。 */
+		/**
+		 * 概览第二/三行:归属,以及(**只有提供信息时**才出现的)最多。
+		 *
+		 * 断行由我自己给(值节点是 white-space: pre-line):交给浏览器按宽度断,会断在
+		 * `最多` 后面、把 `ChatView 22×` 甩到下一行 —— 实测被吐槽过一次。
+		 * 另外:若"最多"与上面那个主名字相同,它只是把同一句话说两遍,直接不显示。
+		 */
 		function overviewLine2() {
 			const worst = worstLongTask();
 			const tally = longTaskTally();
 			const blame = worst === null ? translate('none') : blameText(worst);
-			const top = tally.topNames.length === 0 ? '' : ` · ${translate('maxBlame')} ${short(tally.topNames[0][0])} ${tally.topNames[0][1]}×`;
-			return `${translate('overviewBlame')} ${blame}${top}`;
+			const primary = worst === null ? null : primaryBlame(worst);
+			const lines = [`${translate('overviewBlame')} ${blame}`];
+			const leader = tally.topNames.length === 0 ? null : tally.topNames[0];
+			if (leader !== null && leader[0] !== primary) {
+				lines.push(`${translate('maxBlame')} ${short(leader[0])} ${leader[1]}×`);
+			}
+			return lines.join('\n');
 		}
 
 		/** 折叠组的一句话摘要:刻意短 —— 摘要自己换行会比正文更难看(实测)。 */

@@ -469,8 +469,24 @@ EX.applyLongTaskStats(box.state.longTasks[0]);
 box.state.ltNames.set('ChatView', 5);
 check('概览第一行的长度预算', EX.overviewLine1().length <= 36, true);
 check('概览第二行的长度预算(允许左对齐换行一次)', EX.overviewLine2().length <= 60, true);
-check('概览第二行带上归属与最多',
-	EX.overviewLine2().includes('ConfirmDialog') && EX.overviewLine2().includes('ChatView 5×'), true);
+check('概览第二行给出归属(含子树那条腿)',
+	EX.overviewLine2().includes('ConfirmDialog') && EX.overviewLine2().includes('子树'), true);
+check('最多与主名字相同时不重复显示(避免为一行废话再换一行)',
+	(() => {
+		box.state.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: 'ChatView', subtreeComponent: null, domComponent: null }];
+		box.state.ltNames.clear();
+		box.state.ltNames.set('ChatView', 22);
+		return EX.overviewLine2().includes('最差');
+	})(), false);
+check('最多与主名字不同时才追加一行(主动断行,不靠宽度)',
+	(() => {
+		box.state.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: 'ConfirmDialog', subtreeComponent: null, domComponent: null }];
+		box.state.ltNames.clear();
+		box.state.ltNames.set('ChatView', 22);
+		box.state.ltNames.set('ConfirmDialog', 1);
+		const text = EX.overviewLine2();
+		return text.split('\n').length === 2 && text.split('\n')[1].includes('ChatView 22×');
+	})(), true);
 check('四个折叠组摘要的长度预算(单行)',
 	[EX.detailSummary().length <= 30, EX.domSummary().length <= 30, EX.hostSummary().length <= 34, EX.toolsSummary().length <= 24],
 	[true, true, true, true]);
