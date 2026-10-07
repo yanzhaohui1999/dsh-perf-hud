@@ -13,6 +13,16 @@
  * 特别注意:本文件不碰 cordis.patch.yml,也不碰 profile 的持久化配置行。
  */
 import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { readFileSync } from 'node:fs';
+
+/** 本插件自己的版本(导出件要自描述;不要去猜,直接读自己的 package.json)。 */
+const PLUGIN_VERSION = (() => {
+	try {
+		return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? null;
+	} catch (error) {
+		return null;
+	}
+})();
 
 const ROUTE = '/api/dsh-perf-hud/host';
 const WINDOW = 300;          // 每秒一个采样,保留 300 秒
@@ -179,6 +189,8 @@ export function apply(ctx) {
 			const payload = {
 				ok: true,
 				host: {
+					pluginVersion: PLUGIN_VERSION,
+					profile: process.env.DSH_PROFILE ?? null,
 					pid: process.pid,
 					uptimeMs: Math.round(process.uptime() * 1000),
 					nodeVersion: process.version,

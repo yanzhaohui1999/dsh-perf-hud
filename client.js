@@ -52,6 +52,8 @@ window.__ModuleLoader__.load({
 		const STEP_MS = 60000;         // 隔离实验:每个候选"关闭后"的测量窗口
 		const BRACKET_MS = 30000;      // 隔离实验:每个候选前后各打一次基线(对照 + 噪声采样)
 		const EXPERIMENT_IDLE_WAIT_MS = 300000;   // 开跑前最多等 5 分钟,等会话空闲(流式窗口不可比)
+		const EXPERIMENT_LOAD_BURN_MS = 8;        // 合成负载:每拍燃烧的毫秒数
+		const EXPERIMENT_LOAD_PERIOD_MS = 250;    // 合成负载:两拍之间的间隔
 		const IDLE_GAP_MS = 3000;
 		const DEFAULT_CANDIDATES = ['dsh-status-rotator', 'dsh-notify-me', 'dsh-better-sidebar', 'dsh-context'];
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
@@ -596,7 +598,8 @@ window.__ModuleLoader__.load({
 			groups: { detail: false, dom: false, host: false, tools: false },
 			stress: null,            // 最近一次自测 { at, nodes, burnMs, sync, commitMs }
 			stressBurn: 0,           // 自测渲染时显式燃烧的毫秒数
-			requestRender: null,     // 面板挂载时注册:自测要立刻重渲染,不能等 0.5 秒的定时器
+			requestRender: null,     // 面板挂载时注册:用户动作要立刻重渲染,不能等 0.5 秒的定时器
+			displayKey: '',          // 面板显示值的指纹:没变就跳过这次 tick 的渲染
 			marks: [],
 			markDraft: '',
 			// D 宿主/链路
@@ -830,6 +833,7 @@ window.__ModuleLoader__.load({
 			if (legOf(record) !== 'none') state.ltBlamed += 1;
 			applyLongTaskStats(record);
 			if (state.longTasks.length > 200) state.longTasks.splice(0, state.longTasks.length - 200);
+			state.displayKey = displayKey();
 		}
 
 		function startLongTask() {
@@ -1009,6 +1013,7 @@ window.__ModuleLoader__.load({
 				top: pluginTable().slice(0, TOP_N).map((row) => [row.id, row.count, row.ms, row.cps]),
 			});
 			if (ring.length > RING_MAX) ring.splice(0, ring.length - RING_MAX);
+			state.displayKey = displayKey();
 			dirty = true;
 		}
 
@@ -1399,6 +1404,7 @@ window.__ModuleLoader__.load({
 			if (state.marks.length > 100) state.marks.shift();
 			try { localStorage.setItem(LS_MARKS, JSON.stringify(state.marks.slice(-100))); } catch (error) { /* 记不住就只留内存 */ }
 			dirty = true;
+			bump();
 		}
 
 		/** 验收自证:把这次要交的几条判据直接算出来,面板与导出都能读到同一份。 */
@@ -1457,7 +1463,8 @@ window.__ModuleLoader__.load({
 			baseline: null,
 			noise: null,          // 基线之间的漂移,当噪声底
 			drifts: [],
-			method: '空闲筛查:基线 → (关闭 → 窗口 → 恢复 → 恢复后基线) × N,每个候选只跟紧邻基线对照;只看空闲负载下的固定开销,不是"这插件拖慢了多少"的因果证明',
+			loadTimer: 0,
+			method: '所有窗口注入同一份合成负载(每 250ms 燃烧 8ms),再按 基线 → (关闭 → 窗口 → 恢复 → 恢复后基线) × N 对照;没有负载时比较毫无意义(Δ 必然≈0)',
 			aborted: false,
 			startedAt: 0,
 			via: null,            // 'remote' | 'route' | null:数据实际从哪条通道来的
@@ -1480,7 +1487,29 @@ window.__ModuleLoader__.load({
 			if (experiment.phase !== 'running') return false;
 			experiment.aborted = true;
 			experiment.message = '中止中:正在恢复原状';
+			stopExperimentLoad();
 			return true;
+		}
+
+		/**
+		 * 实验用的合成负载:每个窗口注入**同一份**工作。
+		 *
+		 * 为什么必须有:空闲下比较毫无意义(所有窗口都没活干,Δ 必然≈0),而流式又不稳定
+		 * (各窗口负载不同)。所以自己造一份恒定负载,让所有窗口的对比基准一致。
+		 * 用 natives.setInterval(不经过我的插桩)、只烧 CPU 不动 DOM,以免污染归因表。
+		 */
+		function startExperimentLoad() {
+			if (experiment.loadTimer !== 0) return;
+			experiment.loadTimer = natives.setInterval(() => {
+				const until = performance.now() + EXPERIMENT_LOAD_BURN_MS;
+				while (performance.now() < until) { /* 合成负载 */ }
+			}, EXPERIMENT_LOAD_PERIOD_MS);
+		}
+
+		function stopExperimentLoad() {
+			if (experiment.loadTimer === 0) return;
+			natives.clearInterval(experiment.loadTimer);
+			experiment.loadTimer = 0;
 		}
 
 		/**
@@ -1621,6 +1650,7 @@ window.__ModuleLoader__.load({
 				// 等不到也照跑,但把"这次对照会被标注不可比"说在前面,不偷偷给数字。
 				experiment.message = '一直有回合在跑,继续测量(各行会被标"不可比")';
 			}
+			startExperimentLoad();
 
 			experiment.message = `基线窗口 0(${Math.round(BRACKET_MS / 1000)}s)`;
 			// A/B/A:每个候选都跟"紧邻它前面的那个基线"对照,并在恢复后立刻再打一次基线 ——
@@ -1683,6 +1713,7 @@ window.__ModuleLoader__.load({
 				experiment.message = `中断:${error instanceof Error ? error.message : String(error)}`;
 			}
 
+			stopExperimentLoad();
 			experiment.message = experiment.aborted === true ? '中止:恢复原状' : '恢复原状并核验';
 			const restores = await restoreCandidates(stateBefore);
 			let after = null;
@@ -1734,6 +1765,35 @@ window.__ModuleLoader__.load({
 			return {
 				plugin: PKG,
 				exportedAt: new Date().toISOString(),
+				// 自描述头:文件离开现场后仍能自证口径
+				context: {
+					scenario: state.streaming ? 'streaming' : 'idle',
+					idleSeconds: state.idleSince === 0 ? 0 : Math.round((performance.now() - state.idleSince) / 1000),
+					instrumented: state.on,
+					precise: {
+						enabled: state.precise,
+						bundles: [...bundleMaps.entries()].map(([key, entry]) => ({
+							label: bundleLabel(key), state: entry.state, source: entry.source, sections: entry.count,
+						})),
+					},
+					host: {
+						route: HOST_ROUTE,
+						reachable: state.hostError === null,
+						error: state.hostError,
+						profile: state.host === null || state.host === undefined ? null : state.host.profile ?? null,
+						nodeVersion: state.host === null || state.host === undefined ? null : state.host.nodeVersion ?? null,
+						pluginVersion: state.host === null || state.host === undefined ? null : state.host.pluginVersion ?? null,
+					},
+					isolation: { candidates: experiment.candidates, method: experiment.method, loadBurnMs: EXPERIMENT_LOAD_BURN_MS, loadPeriodMs: EXPERIMENT_LOAD_PERIOD_MS },
+					// 判色阈值也写进文件:别人拿到 JSON 能按同一套口径重新解读
+					thresholds: {
+						fps: { warnBelow: 50, errorBelow: 30 },
+						frameMs: { warnAbove: 120, errorAbove: 200 },
+						unattrPeakForUnexplainedFrame: 100,
+						hostP99Ms: { warnAbove: 50, errorAbove: 200 },
+						rttP99Ms: { warnAbove: 100, errorAbove: 300 },
+					},
+				},
 				page: location.href,
 				userAgent: navigator.userAgent,
 				instrumented: state.on,
@@ -1828,6 +1888,7 @@ window.__ModuleLoader__.load({
 		function setEnabled(on) {
 			try { localStorage.setItem(LS_ON, on ? '1' : '0'); } catch (error) { /* 记住开关是尽力而为 */ }
 			if (on) start(); else stop();
+			bump();
 		}
 
 		function start() {
@@ -1911,6 +1972,7 @@ window.__ModuleLoader__.load({
 				for (const entry of state.targets.values()) entry.series.length = 0;
 				dirty = true;
 				flush(true);
+				bump();
 			},
 			enable() { setEnabled(true); },
 			disable() { setEnabled(false); },
@@ -2001,10 +2063,53 @@ window.__ModuleLoader__.load({
 			return value < 0.05 ? '<0.1ms/s' : `${round1(value)}ms/s`;
 		}
 
+		/**
+		 * 标题栏的场景标签。
+		 * "流式还是空闲"是解读所有数字的前提 —— 之前它只藏在工具箱的「空闲基线」里,
+		 * 误判正是这么来的。所以它必须常显在标题栏。
+		 */
+		function sceneChip() {
+			if (state.streaming) return { text: translate('running'), color: 'var(--dsw-alias-state-warn-primary)' };
+			if (state.idleSince === 0) return { text: translate('idle'), color: 'var(--dsw-alias-label-secondary)' };
+			return { text: `${translate('idle')} ${Math.round((performance.now() - state.idleSince) / 1000)}s`, color: 'var(--dsw-alias-label-secondary)' };
+		}
+
+		/**
+		 * 未解释帧的自动结论。
+		 * 触发条件:最差帧够长(≥100ms)且"帧内未归因"的峰值几乎等于它 —— 说明那一帧
+		 * 完全没有 JS 回调能为它负责,开销在样式/布局/绘制/vsync 一侧。
+		 */
+		function unexplainedFrame() {
+			const worst = state.frameWorst;
+			if (!(worst >= 100) || worst <= 0) return null;
+			const share = state.unattrPeak / worst;
+			if (share < 0.95) return null;
+			return { ms: round1(worst), percent: Math.round(share * 100) };
+		}
+
+		/** 宿主与链路的**判定**(不是只摆数字):两者都正常时直接说"链路已排除"。 */
+		function infraVerdict() {
+			const eventLoop = state.host === null || state.host === undefined ? null : state.host.eventLoop;
+			const link = linkStats();
+			if (state.hostError !== null) return { text: translate('hostDown'), color: 'var(--dsw-alias-state-warn-primary)', bad: true };
+			const hostBad = eventLoop !== null && eventLoop.p99 > 50;
+			const linkBad = link.count > 0 && link.p99 > 100;
+			if (hostBad || linkBad) {
+				const parts = [];
+				if (hostBad) parts.push(translate('hostShort'));
+				if (linkBad) parts.push(translate('linkShort'));
+				return { text: `${parts.join(' / ')}${translate('suspectSuffix')}`, color: 'var(--dsw-alias-state-warn-primary)', bad: true };
+			}
+			return { text: translate('cleared'), color: 'var(--dsw-alias-state-success-primary)', bad: false };
+		}
+
 		/** 概览第一行:帧 + 长任务 + 命中(短,必须一行放得下)。 */
 		function overviewLine1() {
 			const worst = worstLongTask();
-			return `${translate('overviewFrame')} ${state.frameWorst.toFixed(0)}ms · LT ${worst === null ? translate('none') : `${worst.ms.toFixed(0)}ms`} · ${translate('hit')} ${state.ltBlamed}/${state.ltTotal}`;
+			// 命中率与"最差那条有没有归属"是两个口径:并列时必须当场说清,否则读者会拿
+			// "命中 4/7"去解释"最差那条未归因",而这两件事互不相干(实测被这么读过)。
+			const unblamed = worst !== null && primaryBlame(worst) === null ? `(${translate('worstOne')}:${translate('unblamed')})` : '';
+			return `${translate('overviewFrame')} ${state.frameWorst.toFixed(0)}ms · LT ${worst === null ? translate('none') : `${worst.ms.toFixed(0)}ms`} · ${translate('hit')} ${state.ltBlamed}/${state.ltTotal}${unblamed}`;
 		}
 
 		/**
@@ -2019,10 +2124,10 @@ window.__ModuleLoader__.load({
 			const tally = longTaskTally();
 			const blame = worst === null ? translate('none') : blameText(worst);
 			const primary = worst === null ? null : primaryBlame(worst);
-			const lines = [`${translate('overviewBlame')} ${blame}`];
+			const lines = [`${translate('overviewBlame')}:${blame}`];
 			const leader = tally.topNames.length === 0 ? null : tally.topNames[0];
 			if (leader !== null && leader[0] !== primary) {
-				lines.push(`${translate('maxBlame')} ${short(leader[0])} ${leader[1]}×`);
+				lines.push(`${translate('maxBlame')}:${short(leader[0])} ${leader[1]}×`);
 			}
 			return lines.join('\n');
 		}
@@ -2040,8 +2145,8 @@ window.__ModuleLoader__.load({
 		function hostSummary() {
 			const eventLoop = state.host === null || state.host === undefined ? null : state.host.eventLoop;
 			const link = linkStats();
-			const host = state.hostError !== null ? translate('hostDown') : eventLoop === null ? translate('notYet') : `p50 ${eventLoop.p50} / p99 ${eventLoop.p99}ms`;
-			return `${translate('hostShort')} ${host} · RTT ${link.count === 0 ? translate('notYet') : `${link.p50}ms`}`;
+			const host = state.hostError !== null ? translate('hostDown') : eventLoop === null ? translate('notYet') : `${eventLoop.p99}ms`;
+			return `${translate('hostShort')} ${host} · ${translate('linkShort')} ${link.count === 0 ? translate('notYet') : `${link.p99}ms`} · ${infraVerdict().text}`;
 		}
 
 		function toolsSummary() {
@@ -2062,11 +2167,44 @@ window.__ModuleLoader__.load({
 			return entry === undefined || entry.nodes === null ? translate('notYet') : String(entry.nodes);
 		}
 
+		/**
+		 * 面板"需要重渲染"的指纹:只包含面板真正显示的数值。
+		 * 没变就跳过 500ms 的强制渲染 —— 全部折叠、数值不动时,HUD 自身开销应当接近零。
+		 * (500ms 定时器本身不贵,贵的是一次 React 渲染 + 上万次 DOM 读。)
+		 */
+		function displayKey() {
+			const tally = longTaskTally();
+			const rows = pluginTable();
+			return [
+				state.on ? 1 : 0, state.precise ? 1 : 0, state.collapsed ? 1 : 0,
+				state.fps.toFixed(1), state.frameWorst.toFixed(0), state.unattrAvg.toFixed(1), state.unattrPeak.toFixed(0),
+				state.ltTotal, state.ltBlamed, state.longTasks.length,
+				state.dom.total, state.mutations, state.heap ?? 'x',
+				state.streaming ? 1 : 0, state.idleSince === 0 ? 0 : Math.round((performance.now() - state.idleSince) / 1000),
+				rows.slice(0, TOP_N).map((row) => `${row.id}:${row.cps}:${row.cpsPeak}`).join(','),
+				`${tally.fiber}/${tally.subtree}/${tally.dom}/${tally.owner}/${tally.none}`,
+				tally.topNames.map((row) => `${row[0]}:${row[1]}`).join(','),
+				state.host === null || state.host === undefined ? 'x' : `${state.host.eventLoop?.p50}/${state.host.eventLoop?.p99}/${state.hostError}`,
+				linkRowText(), state.loadState, state.linkText,
+				experiment.phase, experiment.message, experiment.results.length, experiment.restored === null ? 0 : 1,
+				state.marks.length, state.errors.length, state.stressNodes > 0 ? 1 : 0, state.baselineRunning ? 1 : 0,
+				unexplainedFrame() === null ? 0 : 1, infraVerdict().text,
+				Object.values(state.groups).map((value) => (value ? 1 : 0)).join(''),
+			].join('|');
+		}
+
+		/** 用户动作 → 立刻重渲染并刷新指纹(动作必须即时反馈,不能等 0.5 秒)。 */
+		function bump() {
+			state.displayKey = displayKey();
+			if (typeof state.requestRender === 'function') state.requestRender();
+		}
+
 		/** 折叠/展开一个分组,并把选择记住。 */
 		function toggleGroup(key) {
 			if (Object.hasOwn(state.groups, key) === false) return;
 			state.groups[key] = state.groups[key] !== true;
 			try { localStorage.setItem(LS_GROUPS, JSON.stringify(state.groups)); } catch (error) { /* 记不住就本次会话有效 */ }
+			bump();
 		}
 
 		/**
@@ -2092,6 +2230,7 @@ window.__ModuleLoader__.load({
 			try { localStorage.setItem(LS_PRECISE, state.precise ? '1' : '0'); } catch (error) { /* 记不住就本次会话有效 */ }
 			if (state.precise) primeBundleMaps();
 			dirty = true;
+			bump();
 		}
 
 		// ───────────────────────────────── 文案 ─────────────────────────────────
@@ -2105,7 +2244,7 @@ window.__ModuleLoader__.load({
 				unattrHint: '帧间隔里没被插桩回调解释掉的部分:样式重算、绘制、以及等待 vsync。CSS 动画的开销只在这里现形。',
 				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', est: '≈',
 				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', hit: '命中', times: ' 次',
-				maxBlame: '最多', topBlame: '归属 Top', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名',
+				maxBlame: '整窗最多', topBlame: '归属 Top', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名',
 				blameHint: '本秒执行速率 / 峰值速率(EMA 平滑后的每秒执行次数)与合计耗时;悬停某一行看它的执行次数、同步耗时与累计',
 				restHint: '其余 = 除 Top3 之外还有几个归属方(名字各不相同,按累计耗时排在后面);这一行给的是它们的合计速率',
 				cnExec: '该秒执行', cnCost: '该秒同步耗时',
@@ -2115,7 +2254,10 @@ window.__ModuleLoader__.load({
 				precise: '精确归因', preciseHint: '开启后按合并 bundle 的 sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)',
 				component: '组件', cumulative: '累计', maps: '批次分段',
 				overview: '概览', overviewHint: '三秒判断:最差帧 + 最差 longtask 及其归属 + 归因命中数',
-				overviewFrame: '帧', overviewBlame: '归属', worstSecondShort: '最差秒', hostShort: '宿主',
+				overviewFrame: '帧', overviewBlame: '最差那条', worstSecondShort: '最差秒', hostShort: '宿主',
+				preciseShort: '精确', worstOne: '最差那条',
+				unexplained: '该帧几乎无 JS 解释', unexplainedHint: '样式/布局/绘制/vsync;可用 Rendering 面板的 Paint flashing 交叉验证',
+				verdict: '判定', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)',
 				groupDetail: '取证明细', groupDom: 'DOM 与堆', groupHost: '宿主与链路', groupTools: '工具箱', nodesSuffix: ' 节点',
 				stream: '状态', running: '流式', idle: '空闲', idleBase: '空闲基线(60s)', idleWriter: '空闲也在加节点的是',
 				notYet: '未采集', hostLoop: '宿主 event-loop',
@@ -2131,7 +2273,7 @@ window.__ModuleLoader__.load({
 				stressHint: '自测:一次同步提交渲染 8000 个离屏节点 + 显式燃烧 80ms(节点数凑不稳,故明着燃烧),用来自检归因链路',
 				stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点',
 				stressNoTask: '未观察到长任务', stressCommit: '提交', stressBurn: '人为燃烧', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
-				expHint: '开跑前会等会话空闲(最多 5 分钟;流式窗口的对照不可比)。随后逐候选关闭 60 秒并恢复,每步记宿主回执、恢复后逐项核验;每个候选只跟紧邻基线对照,基线漂移作为噪声底。',
+				expHint: '开跑前会等会话空闲(最多 5 分钟;流式窗口的对照不可比),然后每个窗口注入同一份合成负载(每 250ms 燃烧 8ms)—— 空闲下比较本身没有意义。随后逐候选关闭 60 秒并恢复,每步记宿主回执、恢复后逐项核验;每个候选只跟紧邻基线对照,基线漂移作为噪声底。',
 				method: '方法', noiseFloor: '噪声底', beyondNoise: '超出噪声', confounded: '窗口含流式,该对照不可比',
 				skipped: '跳过', restore: '恢复', marks: '场景标记',
 				via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
@@ -2147,7 +2289,7 @@ window.__ModuleLoader__.load({
 				unattrHint: 'Frame gap not explained by instrumented callbacks: style recalc, paint, and vsync wait. CSS-animation cost only shows up here.',
 				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', est: '≈',
 				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', hit: 'hit', times: '',
-				maxBlame: 'top', topBlame: 'attribution top', legFiber: 'fiber', legSubtree: 'subtree', legDom: 'DOM write', legOwner: 'package',
+				maxBlame: 'window top', topBlame: 'attribution top', legFiber: 'fiber', legSubtree: 'subtree', legDom: 'DOM write', legOwner: 'package',
 				blameHint: 'Per-second execution rate / peak rate (EMA-smoothed) plus the summed synchronous time; hover a row for its execution count, cost and cumulative totals',
 				restHint: 'rest = how many further owners fall outside the top 3 (distinct names, ranked by cumulative time); this row shows their combined rate',
 				cnExec: 'executed this second', cnCost: 'sync time this second',
@@ -2157,7 +2299,10 @@ window.__ModuleLoader__.load({
 				precise: 'precise', preciseHint: 'Resolve single package names from the merged bundle sourcemap sections (lazy; one map fetch per rev)',
 				component: 'component', cumulative: 'total', maps: 'maps',
 				overview: 'overview', overviewHint: 'Three-second read: worst frame + worst longtask and its owner + attribution hit ratio',
-				overviewFrame: 'frame', overviewBlame: 'blame', worstSecondShort: 'worst sec', hostShort: 'host',
+				overviewFrame: 'frame', overviewBlame: 'worst one', worstSecondShort: 'worst sec', hostShort: 'host',
+				preciseShort: 'precise', worstOne: 'worst one',
+				unexplained: 'no JS explanation for that frame', unexplainedHint: 'style/layout/paint/vsync; cross-check with Paint flashing in the Rendering panel',
+				verdict: 'verdict', linkShort: 'RTT', suspectSuffix: ' suspect', cleared: 'link cleared (host and tunnel both normal)',
 				groupDetail: 'forensics', groupDom: 'DOM & heap', groupHost: 'host & link', groupTools: 'toolbox', nodesSuffix: ' nodes',
 				stream: 'state', running: 'streaming', idle: 'idle', idleBase: 'idle baseline (60s)', idleWriter: 'still adding nodes while idle',
 				notYet: 'n/a', hostLoop: 'host event-loop',
@@ -2173,7 +2318,7 @@ window.__ModuleLoader__.load({
 				stressHint: 'Self-test: one synchronous commit rendering 8000 offscreen nodes plus an explicit 80ms burn (node counts alone are not reliable), to self-check the attribution chain',
 				stressRunning: 'self-test running', stressDone: 'self-test result', nodes: 'nodes',
 				stressNoTask: 'no long task observed', stressCommit: 'commit', stressBurn: 'synthetic burn', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable', stressFromDom: 'DOM write',
-				expHint: 'Waits for an idle session first (up to 5 min; streaming windows are not comparable). Then disables each candidate for 60s and restores it, recording the host receipt and verifying the restore. Each candidate is compared with its nearest baseline, with baseline drift as the noise floor.',
+				expHint: 'Waits for an idle session first (up to 5 min; streaming windows are not comparable), then injects the same synthetic load into every window (8ms burn every 250ms) - comparing idle windows alone means nothing. Each candidate is then disabled for 60s and restored, recording the host receipt and verifying the restore; each candidate is compared with its nearest baseline, with baseline drift as the noise floor.',
 				method: 'method', noiseFloor: 'noise floor', beyondNoise: 'beyond noise', confounded: 'window had streaming; this comparison is not valid',
 				skipped: 'skipped', restore: 'restore', marks: 'marks',
 				via: 'channel', viaRemote: 'ctx.remote (client remote)', viaRoute: 'host route /api/dsh-perf-hud/host',
@@ -2326,6 +2471,16 @@ window.__ModuleLoader__.load({
 			return 'var(--dsw-alias-state-success-primary)';
 		}
 
+		/**
+		 * 合并判色:FPS 与最差帧**任一触发即降色**。
+		 * 原来只看 fps(levelDown),于是 54.2fps 是绿的、而同期最差帧 130ms —— 绿点掩盖了卡顿。
+		 */
+		function levelFrame(fps, frameWorst) {
+			if (fps <= 30 || frameWorst >= 200) return 'var(--dsw-alias-state-error-primary)';
+			if (fps <= 50 || frameWorst >= 120) return 'var(--dsw-alias-state-warn-primary)';
+			return 'var(--dsw-alias-state-success-primary)';
+		}
+
 		/** 阈值配色(越大越好:FPS):<= bad 变红,<= warn 变黄。 */
 		function levelDown(value, warn, bad) {
 			if (value <= bad) return 'var(--dsw-alias-state-error-primary)';
@@ -2381,9 +2536,23 @@ window.__ModuleLoader__.load({
 			const [draft, setDraft] = React.useState('');
 			const setRoot = React.useCallback((element) => { state.root = element; }, []);
 			React.useEffect(() => {
-				const id = natives.setInterval(() => force((n) => (n + 1) % 1000000), 500);
-				// 自测需要"点了立刻渲染":把它暴露给模块级,而不是等下一次 0.5 秒 tick。
-				state.requestRender = () => force((n) => (n + 1) % 1000000);
+				// 只在"显示值变了"时渲染(兜底至少 2 秒一次):折叠着不动时 HUD 自身开销接近零。
+				let lastKey = state.displayKey;
+				let lastForced = performance.now();
+				const id = natives.setInterval(() => {
+					const changed = state.displayKey !== lastKey;
+					const stale = performance.now() - lastForced >= 2000;
+					if (changed === false && stale === false) return;
+					lastKey = state.displayKey;
+					lastForced = performance.now();
+					force((n) => (n + 1) % 1000000);
+				}, 500);
+				// 用户动作 / 自测需要"点了立刻渲染":暴露到模块级,不等下一次 tick。
+				state.requestRender = () => {
+					lastKey = state.displayKey;
+					lastForced = performance.now();
+					force((n) => (n + 1) % 1000000);
+				};
 				return () => {
 					natives.clearInterval(id);
 					state.requestRender = null;
@@ -2411,20 +2580,24 @@ window.__ModuleLoader__.load({
 			const linkSuspect = suspectLink();
 			const idleBase = state.idleBaseline;
 			const v = verification();
+			const unexplained = unexplainedFrame();
+			const infra = infraVerdict();
 			const tally = longTaskTally();
 			const rows = pluginTable();
 			const top = rows.slice(0, TOP_N);
 			const rest = rows.slice(TOP_N);
 
+			const scene = sceneChip();
 			const head = h('div', { style: S.head },
 				h('span', { style: S.brand }, t('title')),
-				h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelDown(state.fps, 50, 30) } }, `${state.fps.toFixed(1)} fps`),
+				h('span', { style: { ...S.label, color: scene.color } }, scene.text),
+				h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(1)} fps`),
 				h('button', {
 					type: 'button',
 					style: { ...S.btn, color: state.precise ? 'var(--dsw-alias-brand-primary)' : undefined },
 					title: t('preciseHint'),
 					onClick: () => setPrecise(state.precise === false),
-				}, `${t('precise')}${state.precise ? '✓' : ''}`),
+				}, `${t('preciseShort')}${state.precise ? '✓' : ''}`),
 				h('button', { type: 'button', style: S.btn, title: open ? t('collapse') : t('expand'), onClick: toggle }, open ? '–' : '+'),
 				h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff')));
 
@@ -2433,7 +2606,8 @@ window.__ModuleLoader__.load({
 				return h('div', { ref: setRoot, style: S.root(false) },
 					h('div', { style: S.head },
 						h('span', { style: S.brand }, t('title')),
-						h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelDown(state.fps, 50, 30) } }, `${state.fps.toFixed(0)} fps`),
+						h('span', { style: { ...S.label, color: sceneChip().color } }, sceneChip().text),
+						h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(0)} fps`),
 						h('span', { style: S.label }, `${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms`),
 						worst === null ? null : h('span', { style: S.label }, `LT ${worst.ms.toFixed(0)}ms`),
 						h('button', { type: 'button', style: S.btn, title: t('expand'), onClick: toggle }, '+'),
@@ -2445,12 +2619,15 @@ window.__ModuleLoader__.load({
 				// 块式而不是 flex 行:这一行长文本换行在右对齐下会参差得像段落(实测被吐槽)。
 				h('div', { style: S.block, title: overviewTitle() },
 					h('div', { style: S.blockLabel }, t('overview')),
-					h('div', { style: { ...S.blockValue, color: levelUp(state.frameWorst, 60, 120) } }, `${overviewLine1()}\n${overviewLine2()}`)),
+					h('div', { style: { ...S.blockValue, color: levelFrame(state.fps, state.frameWorst) } }, `${overviewLine1()}\n${overviewLine2()}`)),
 
 				// ── 常显 2:帧里"JS 之外"的残差(唯一能反映 CSS/绘制卡顿的数字)──
 				h('div', { style: S.row },
 					h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),
-					h('span', { style: S.num }, `${state.unattrAvg.toFixed(1)}ms · ${t('peak')} ${state.unattrPeak.toFixed(0)}ms`)),
+					h('span', { style: { ...S.num, color: unexplained === null ? undefined : 'var(--dsw-alias-state-warn-primary)' } },
+						`${state.unattrAvg.toFixed(1)}ms · ${t('peak')} ${state.unattrPeak.toFixed(0)}ms`)),
+				unexplained === null ? null : h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } },
+					`${t('unexplained')}:${unexplained.ms}ms(${unexplained.percent}%)→ ${t('unexplainedHint')}`),
 				// ── 常显 3:回调归因 Top3(每插件一行,hover 补 msps 与累计)──
 				h('div', { style: S.sep },
 					h('div', { style: S.row },
@@ -2509,8 +2686,11 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.label }, t('stream')),
 						h('span', { style: S.num }, `${state.streaming ? t('running') : t('idle')}${state.streaming || state.idleSince === 0 ? '' : ` ${Math.round((performance.now() - state.idleSince) / 1000)}s`}${state.baselineRunning ? ` · ${t('idleBase')}…` : ''}`)),
 					h('div', { style: S.row },
+						h('span', { style: S.label }, `${t('hostLoop')} · ${t('verdict')}`),
+						h('span', { style: { ...S.num, color: infra.color } }, infra.text)),
+					h('div', { style: S.row },
 						h('span', { style: S.label }, t('hostLoop')),
-						h('span', { style: { ...S.num, color: loop === null ? undefined : levelUp(loop.p99, 20, 60) } },
+						h('span', { style: { ...S.num, color: loop === null ? undefined : levelUp(loop.p99, 50, 200) } },
 							state.hostError !== null ? `${t('hostDown')}:${state.hostError.slice(0, 26)}`
 								: loop === null ? t('notYet') : `p50 ${loop.p50}ms · p99 ${loop.p99}ms`)),
 					h('div', { style: S.row },
@@ -2518,7 +2698,7 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.num }, hostEventsText())),
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('linkHint') }, t('link')),
-						h('span', { style: { ...S.num, color: linkSuspect ? 'var(--dsw-alias-state-warn-primary)' : undefined } }, linkRowText())),
+						h('span', { style: { ...S.num, color: linkSuspect ? 'var(--dsw-alias-state-warn-primary)' : (link.count > 0 ? levelUp(link.p99, 100, 300) : undefined) } }, linkRowText())),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('idleBase')),
 						h('span', { style: S.num }, idleBase === null || idleBase === undefined

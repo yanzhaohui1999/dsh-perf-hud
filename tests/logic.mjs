@@ -178,7 +178,7 @@ const sandbox = `
 		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 		stressBurn: '人为燃烧',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
-		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计',
+		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -230,6 +230,10 @@ const newPieces = [
 	'function significance(',
 	'function metricList(',
 	'const LS_GROUPS = ',
+	'const HOST_ROUTE = ',
+	'const TOP_N = ',
+	'const EXPERIMENT_LOAD_BURN_MS = ',
+	'const EXPERIMENT_LOAD_PERIOD_MS = ',
 	'function containerNodes(',
 	'function toggleGroup(',
 	'function attrText(',
@@ -246,6 +250,12 @@ const newPieces = [
 	'function overviewLine2(',
 	'function detailSummary(',
 	'function domSummary(',
+	'function displayKey(',
+	'function bump(',
+	'function infraVerdict(',
+	'function sceneChip(',
+	'function unexplainedFrame(',
+	'function levelFrame(',
 	'function hostSummary(',
 	'function toolsSummary(',
 	'const rateText = (series) => {',
@@ -271,7 +281,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -406,6 +416,38 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 	check('looksLikeInfrastructure 认外壳:ConfigProvider', EX.looksLikeInfrastructure('ConfigProvider'), true);
 	check('looksLikeInfrastructure 认外壳:CenterColumn(布局列)', EX.looksLikeInfrastructure('CenterColumn'), true);
 	check('合计耗时:极小值不写成 0', [EX.msPerSecText(0), EX.msPerSecText(0.02), EX.msPerSecText(1.25)], ['0ms/s', '<0.1ms/s', '1.3ms/s']);
+	// 渲染预算:显示值没变就不重渲染(折叠不动时 HUD 自身开销应接近零)
+	box.state.idleSince = 0;
+	box.state.errors = [];
+	box.state.stressNodes = 0;
+	const stableKey = EX.displayKey();
+	check('指纹:同一状态两次一致', EX.displayKey() === stableKey, true);
+	box.state.fps += 5;
+	check('指纹:显示的数值变了就变', EX.displayKey() !== stableKey, true);
+	box.state.groups.detail = true;
+	check('指纹:折叠状态变化也算变', EX.displayKey() !== stableKey, true);
+	box.state.groups.detail = false;
+
+	// 判定而不是只摆数字:两者都正常时必须给出结论
+	box.state.hostError = null;
+	box.state.host = { eventLoop: { p50: 1.2, p99: 4.3 }, nodeVersion: 'v24' };
+	box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 13 }];
+	check('宿主与链路都正常 → 直接说链路已排除', EX.infraVerdict().text, '链路已排除(宿主与隧道均正常)');
+	box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 400 }, { t: Date.now(), kind: 'rtt', rtt: 400 }];
+	check('RTT p99 超阈值 → 判为链路存疑', EX.infraVerdict().bad, true);
+	box.state.host = { eventLoop: { p50: 1.2, p99: 120 } };
+	box.state.link = [];
+	check('宿主 p99 超阈值 → 判为宿主存疑', EX.infraVerdict().bad, true);
+	// 未解释帧:最差帧 130ms 而帧内未归因峰值也是 130ms → 那一帧完全没有 JS 解释
+	box.state.frameWorst = 130;
+	box.state.unattrPeak = 130;
+	check('未解释帧自动触发(峰值≈最差帧)', EX.unexplainedFrame().percent, 100);
+	box.state.unattrPeak = 30;
+	check('有 JS 解释时不该触发', EX.unexplainedFrame(), null);
+	// 合并判色:FPS 绿不能掩盖最差帧
+	check('FPS 好但最差帧 130ms → 至少黄', EX.levelFrame(54.2, 130).includes('warn'), true);
+	check('FPS 54 且最差帧 18ms → 绿', EX.levelFrame(54.2, 18).includes('success'), true);
+
 	// 「其余」行原来给累计值、上面几行给每秒速率 —— 同一张表两套单位,必须统一
 	const restRows = [
 		{ cps: 0.5, msps: 0.1, count: 60, ms: 3 },
