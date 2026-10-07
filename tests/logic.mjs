@@ -1116,7 +1116,22 @@ check('事故包:宿主只有陈旧快照时说清楚"别当宿主没问题的�
 	watch.state.watch.coveredUntil = 0;
 	watch.state.host = null;
 	watch.state.hostAt = 0;
-	return line !== undefined && line.includes('6224ms') && line.includes('未必覆盖');
+	return line !== undefined && line.includes('事故前 6224ms') && line.includes('未必覆盖');
+})(), true);
+check('事故包:宿主快照比事故更晚(负年龄)时说"事故后",不冒充"事故前"', (() => {
+	watch.state.host = { eventLoop: { p99: 1 } };
+	watch.state.hostAt = 1700000000000 + 110000 + 362;   // 事故之后 362ms 才采的快照
+	watch.state.watch.coveredUntil = 0;
+	watch.setNow(120000);
+	const probe = watch.triggerCapture('frame', 110000, 200);
+	const line = watch.incidentReport(probe.id).context.missing.find((text) => text.startsWith('host-cpuprofile:'));
+	const index = watch.state.watch.incidents.findIndex((row) => row.id === probe.id);
+	if (index !== -1) watch.state.watch.incidents.splice(index, 1);
+	watch.state.watch.captured -= 1;
+	watch.state.watch.coveredUntil = 0;
+	watch.state.host = null;
+	watch.state.hostAt = 0;
+	return line.includes('事故**后** 362ms');
 })(), true);
 check('事故包:LoAF 装着但这帧没有脚本时,点明 scripts 为空', report.context.missing.some((line) => line.startsWith('loaf-scripts:')), true);
 watch.state.watch.loafState = 'unsupported:no-long-animation-frame';

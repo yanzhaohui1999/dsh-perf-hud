@@ -180,7 +180,9 @@ if (live.length > 0) {
 					: p50Ratio !== null && p50Ratio >= 1.15 ? `略差于平时(p50 ×${p50Ratio.toFixed(2)})`
 						: '与本会话其余部分基本一致';
 		console.log(`会话基线   其余 ${num(baseline.frames, 0)} 帧 · 跨度 ${num((baseline.spanMs ?? 0) / 1000)}s(真的在跑 ${num((baseline.busyMs ?? baseline.spanMs ?? 0) / 1000)}s → ${num(baseline.fps)}fps)· p50 ${num(baseline.p50)}ms · p90 ${num(baseline.p90)}ms · 最差 ${num(baseline.worstMs)}ms`);
-		console.log(`对比       ${verdict}`);
+		// 基线太薄时(刚刷新不久)那个倍数没有意义 —— 明确说出来,别让人拿着 ×19 去改代码
+		const thin = typeof baseline.frames === 'number' && baseline.frames < 200;
+		console.log(`对比       ${verdict}${thin ? `\n⚠️ 基线只有 ${num(baseline.frames, 0)} 帧(刚刷新不久),这个倍数不可信 —— 隔几分钟再看这一段的绝对值` : ''}`);
 	}
 }
 

@@ -1165,6 +1165,11 @@ window.__ModuleLoader__.load({
 				else { row.ms = round1(row.ms + script.ms); row.count += 1; }
 			}
 			const packages = [...byPkg.values()].sort((a, b) => b.ms - a.ms);
+			const pkgVia = {};
+			for (const script of scripts) {
+				const key = script.pkgVia === null || script.pkgVia === undefined ? 'unknown' : script.pkgVia;
+				pkgVia[key] = (pkgVia[key] ?? 0) + 1;
+			}
 			let blocking = 0;
 			for (const row of loaf) blocking += row.blocking;
 			// 最差那一帧有没有 JS 解释?用 longtask / LoAF 与它的区间是否重叠判。
@@ -1209,6 +1214,7 @@ window.__ModuleLoader__.load({
 					loafEntries: loaf.length,
 					blockingMs: round1(blocking),
 					pkgCoverage: { resolved: pkgResolved, total: scripts.length },   // 有名字的脚本占比
+					pkgVia,                       // 每一条脚本"是怎么定名的"(url / section / not-plugin / …)
 					longTasksInWindow: longTasks.length,
 					topScripts: scripts.slice(0, 5).map((script) => ({
 						at: script.at, u: script.u, ms: script.ms, fn: script.fn, invokerType: script.invokerType, charPos: script.charPos,
@@ -2617,9 +2623,10 @@ window.__ModuleLoader__.load({
 			} else if (incident.summary.topScripts.length === 0) {
 				missing.push('loaf-scripts:这一帧没有脚本(<5ms 的脚本不上报;Mac/Windows 桌面端 dsh-app:// 上恒为空)');
 			} else if (incident.summary.pkgCoverage !== undefined && incident.summary.pkgCoverage.resolved < incident.summary.pkgCoverage.total) {
-				const via = {};
-				for (const script of incident.summary.topScripts) if (script.pkg === null) via[script.pkgVia] = (via[script.pkgVia] ?? 0) + 1;
-				missing.push(`loaf-pkg:${incident.summary.pkgCoverage.total - incident.summary.pkgCoverage.resolved}/${incident.summary.pkgCoverage.total} 条脚本没定到包名(${Object.entries(via).map(([k, v]) => `${k}×${v}`).join(' · ') || '不在 topScripts 里'})`);
+				// 用完整分布(summary.pkgVia),不要只数 topScripts —— 否则会写出"2/11 没定到(not-plugin×1)"这种自相矛盾的话
+				const all = incident.summary.pkgVia ?? {};
+				const unresolved = Object.entries(all).filter(([key]) => key !== 'url' && key !== 'section');
+				missing.push(`loaf-pkg:${incident.summary.pkgCoverage.total - incident.summary.pkgCoverage.resolved}/${incident.summary.pkgCoverage.total} 条脚本没定到包名(${unresolved.map(([k, v]) => `${k}×${v}`).join(' · ') || '原因见 summary.pkgVia'})`);
 			}
 			if (state.on === false) {
 				missing.push('instrumentation:四条腿的归因(没插桩就没有 DOM 写入与调度点包名)');
@@ -2636,7 +2643,7 @@ window.__ModuleLoader__.load({
 			missing.push('baseline:同环境 / 跨会话的对照基线(这份包里只有本次会话的分布)');
 			missing.push(incident.host === null
 				? 'host:没有任何宿主快照(宿主半未加载或路由不可达)'
-				: `host-cpuprofile:宿主进程的 CPU 火焰图 —— 而这份宿主快照是事故前 ${incident.host.snapshotAgeMs}ms 采的(每 10 秒一次),未必覆盖卡顿瞬间;别把它当"宿主没问题"的证据`);
+				: `host-cpuprofile:宿主进程的 CPU 火焰图 —— 而这份宿主快照是${incident.host.snapshotAgeMs >= 0 ? `事故前 ${incident.host.snapshotAgeMs}ms` : `事故**后** ${-incident.host.snapshotAgeMs}ms`}采的(每 10 秒一次),未必覆盖卡顿瞬间;别把它当"宿主没问题"的证据`);
 			howToAdd.push('零成本、当场可做:chrome://gpu 看是不是落到了软件渲染;DevTools → Rendering 打开 Frame Rendering Stats(FPS 表)与 Paint flashing —— 页面完全静止时帧率是否也上不去');
 			howToAdd.push('判定"主线程之外":Performance 面板录 5 秒,看 Main 轨道自身的忙碌时间是否远小于墙钟 —— 注意 blocking=0 / scripts 为空**不能**当证据(见上面的读取说明),要看 Main 轨道本身');
 			howToAdd.push('宿主火焰图:kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record;.cpuprofile 可用 speedscope 打开');
