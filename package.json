@@ -16,8 +16,23 @@
     "client.js",
     "cordis.patch.yml",
     "icon.svg",
-    "locale"
+    "locale",
+    "README.md",
+    "README_EN.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "AGENTS.md",
+    "HANDOVER.md",
+    "ACCEPTANCE.md",
+    "REVIEW.md",
+    "LICENSE"
   ],
+  "scripts": {
+    "test": "node tests/attribution.mjs && node tests/logic.mjs && node tests/host.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dsh": {
     "manifestVersion": 1,
     "bundle": {
