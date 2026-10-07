@@ -1,6 +1,11 @@
 # 依赖:profile 用 link: 安装本包,仓库里不需要 node_modules
 node_modules/
 
+# 并行开发用的 git worktree(见 AGENTS.md §2.1)。
+# 用 .gitignore 而不是 .git/info/exclude:后者不会被 clone 带走,
+# 每个克隆它的人都要重新加一遍。
+.worktrees/
+
 # 下面这些是"验证现场"的产物,不是插件源码:
 #   dump-config-after.txt 是 <code>dsh --profile web --dump-config</code> 的完整输出,
 #   里面带着使用者 profile 的 provider/模型配置(baseURL、apiKeyEnv 名、模型列表)。
