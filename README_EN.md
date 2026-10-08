@@ -133,7 +133,10 @@ is expensive in some usage", so do not read it as a causal proof.
    state of its own.
 5. **CSS animations are invisible to attribution** — they only appear in FPS / worst frame / unattributed-per-frame.
 6. **Hit ratio is inflated by the DOM leg** (streaming almost always produces writes), so always read it together
-   with the attribution distribution.
+   with the attribution distribution. The recorder itself is inside the legs' reach too: long tasks attributed to
+   this HUD (`PerfHud` / `PerfHudStress` / the package name) are tagged "recorder itself" and listed
+   **separately** from the attribution top — it only becomes the culprit when no other candidate explains the task
+   (silently dropping it would read as "nothing was working", which is worse than tagging).
 7. Panel state lives in `localStorage`; exports are generated locally and sent nowhere.
 8. **If your browser is on another machine, a high "link RTT" is real**: over a tunnel to `127.0.0.1:3080` the
    tunnel's own RTT p50 can be tens to hundreds of milliseconds while `curl` on the host takes a few. That is why
@@ -144,9 +147,9 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 258 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 261 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          #  24 assertions: real index.js driven by a fake ctx
-# 293 offline assertions total, no running DSH required
+# 296 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):

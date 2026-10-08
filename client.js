@@ -434,6 +434,19 @@ window.__ModuleLoader__.load({
 			return false;
 		}
 
+		/**
+		 * B1:本记录器自己的名字。
+		 *
+		 * 它必须被**标注**,不能静默剔除 —— 记录器每帧都在自己的 rAF 回调里跑,归因腿命中它
+		 * 是必然的;静默丢掉会让人以为"这段时间没人干活",而如实标出来才答得了"是我自己在花时间,
+		 * 还是页面在卡"。所以:命名上打标、汇总里单列,只有"别的候选都说不通"时才让它当元凶。
+		 * PerfHudStress 是自测夹具(显式燃烧那一段),同一个包,一样算自己。
+		 */
+		const SELF_NAMES = new Set(['PerfHud', 'PerfHudStress', PKG]);
+		function isRecorderName(name) {
+			return typeof name === 'string' && SELF_NAMES.has(name);
+		}
+
 		/** @deepseek-ai/* 是 DSH 自带的核心包:React、scheduler、外壳 UI 都在这一层。 */
 		function isCore(id) {
 			return id.startsWith('@deepseek-ai/');
@@ -1944,9 +1957,14 @@ window.__ModuleLoader__.load({
 		function longTaskTally() {
 			const legs = state.ltLegs;
 			const top = [...state.ltNames.entries()].sort((a, b) => b[1] - a[1]);
+			// B1:记录器自己从"谁的锅"里分出来单列 —— 它和插件混排会让人以为本 HUD 在拖慢页面,
+			// 而它每帧都在跑、必然出现在这张表里。
+			const self = top.filter(([name]) => isRecorderName(name));
+			const others = top.filter(([name]) => isRecorderName(name) === false);
 			return {
 				fiber: legs.fiber, subtree: legs.subtree, dom: legs.dom, owner: legs.owner, none: legs.none,
-				total: state.ltTotal, top, topNames: top.slice(0, 3),
+				total: state.ltTotal, top: others, topNames: others.slice(0, 3),
+				self, selfTotal: self.reduce((sum, row) => sum + row[1], 0),
 			};
 		}
 
@@ -1961,14 +1979,24 @@ window.__ModuleLoader__.load({
 		function primaryBlame(row) {
 			if (row === null || row === undefined) return null;
 			const fiber = row.component ?? null;
-			if (fiber !== null && looksLikeInfrastructure(fiber) === false) return fiber;
+			// B1:候选按原来的优先级排一遍,然后**优先取非记录器**的那个 —— 记录器自己命中时,
+			// 只要还有别的候选(子树 / DOM 写入 / 包名),元凶就不是它;一个别的候选都没有时
+			// 照实返回它(标注由 blameText 做),不假装未归因。
+			const candidates = [];
+			if (fiber !== null && looksLikeInfrastructure(fiber) === false) candidates.push(fiber);
 			const subtree = row.subtreeComponent ?? null;
-			if (subtree !== null) return subtree;
+			if (subtree !== null) candidates.push(subtree);
 			const dom = row.domComponent ?? null;
-			if (dom !== null) return dom;
-			if (fiber !== null) return fiber;
-			if (row.owner !== null && row.owner !== undefined) return short(row.owner);
-			return null;
+			if (dom !== null) candidates.push(dom);
+			if (fiber !== null) candidates.push(fiber);
+			if (row.owner !== null && row.owner !== undefined) candidates.push(short(row.owner));
+			for (const name of candidates) if (isRecorderName(name) === false) return name;
+			return candidates.length === 0 ? null : candidates[0];
+		}
+
+		/** 名字 + (命中记录器自己时的标注);方括号是为了不跟"哪条腿"的圆括号混在一起。 */
+		function blameName(name) {
+			return isRecorderName(name) ? `${name}[${translate('recorder')}]` : name;
 		}
 
 		function blameText(row) {
@@ -1980,14 +2008,14 @@ window.__ModuleLoader__.load({
 			// 场景,答案在子树里;而流式那种增量更新,答案在祖先方向。
 			if (fiber !== null && looksLikeInfrastructure(fiber) === false) {
 				const backup = subtree !== null && subtree !== fiber ? subtree : (dom !== null && dom !== fiber ? dom : null);
-				if (backup === null) return fiber;
+				if (backup === null) return blameName(fiber);
 				const label = subtree !== null && subtree !== fiber ? translate('legSubtree') : translate('stressFromDom');
-				return `${fiber} / ${backup}(${label})`;
+				return `${blameName(fiber)} / ${blameName(backup)}(${label})`;
 			}
-			if (subtree !== null) return `${subtree}(${translate('legSubtree')})`;
-			if (dom !== null) return `${dom}(${translate('stressFromDom')})`;
-			if (fiber !== null) return fiber;
-			if (row.owner !== null && row.owner !== undefined) return short(row.owner);
+			if (subtree !== null) return `${blameName(subtree)}(${translate('legSubtree')})`;
+			if (dom !== null) return `${blameName(dom)}(${translate('stressFromDom')})`;
+			if (fiber !== null) return blameName(fiber);
+			if (row.owner !== null && row.owner !== undefined) return blameName(short(row.owner));
 			return translate('unblamed');
 		}
 
@@ -3177,7 +3205,9 @@ window.__ModuleLoader__.load({
 			const tally = longTaskTally();
 			return `${translate('overviewHint')}\n` +
 				`${translate('hit')} = 四条腿任一命中:${translate('legFiber')} ${tally.fiber} · ${translate('legSubtree')} ${tally.subtree} · ${translate('legDom')} ${tally.dom} · ${translate('legOwner')} ${tally.owner} · ${translate('unblamed')} ${tally.none}` +
-				(tally.topNames.length === 0 ? '' : `\n${translate('topBlame')}: ${tally.topNames.map(([name, count]) => `${name} ${count}×`).join(' · ')}`);
+				(tally.topNames.length === 0 ? '' : `\n${translate('topBlame')}: ${tally.topNames.map(([name, count]) => `${name} ${count}×`).join(' · ')}`) +
+				// B1:记录器自己单列,并且**明说它不在这张榜里参与排名**
+				(tally.selfTotal === 0 ? '' : `\n${translate('recorder')}(${translate('blameSelfHint')}): ${tally.self.map(([name, count]) => `${name} ${count}×`).join(' · ')}`);
 		}
 
 		/** 折叠摘要里的一句话节点数:取不到就如实说未采集。 */
@@ -3202,7 +3232,7 @@ window.__ModuleLoader__.load({
 				state.streaming ? 1 : 0, state.idleSince === 0 ? 0 : Math.round((performance.now() - state.idleSince) / 1000),
 				rows.slice(0, TOP_N).map((row) => `${row.id}:${row.cps}:${row.cpsPeak}`).join(','),
 				`${tally.fiber}/${tally.subtree}/${tally.dom}/${tally.owner}/${tally.none}`,
-				tally.topNames.map((row) => `${row[0]}:${row[1]}`).join(','),
+				tally.topNames.map((row) => `${row[0]}:${row[1]}`).join(','), tally.selfTotal,
 				state.host === null || state.host === undefined ? 'x' : `${state.host.eventLoop?.p50}/${state.host.eventLoop?.p99}/${state.hostError}`,
 				linkRowText(), state.loadState, state.linkText,
 				experiment.phase, experiment.message, experiment.results.length, experiment.restored === null ? 0 : 1,
@@ -3263,7 +3293,7 @@ window.__ModuleLoader__.load({
 				unattrHint: '帧间隔里没被插桩回调解释掉的部分:样式重算、绘制、以及等待 vsync。CSS 动画的开销只在这里现形。',
 				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', domWritesShort: 'DOM 写入', est: '≈',
 				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', hit: '命中', times: ' 次',
-				maxBlame: '整窗最多', topBlame: '归属 Top', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名',
+				maxBlame: '整窗最多', topBlame: '归属 Top', blameSelfHint: '本记录器自己的回调,不算在上面那张榜里', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名',
 				blameHint: '本秒执行速率 / 峰值速率(EMA 平滑后的每秒执行次数)与合计耗时;悬停某一行看它的执行次数、同步耗时与累计',
 				restHint: '其余 = 除 Top3 之外还有几个归属方(名字各不相同,按累计耗时排在后面);这一行给的是它们的合计速率',
 				cnExec: '该秒执行', cnCost: '该秒同步耗时',
@@ -3321,7 +3351,7 @@ window.__ModuleLoader__.load({
 				unattrHint: 'Frame gap not explained by instrumented callbacks: style recalc, paint, and vsync wait. CSS-animation cost only shows up here.',
 				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', domWritesShort: 'DOM writes', est: '≈',
 				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', hit: 'hit', times: '',
-				maxBlame: 'window top', topBlame: 'attribution top', legFiber: 'fiber', legSubtree: 'subtree', legDom: 'DOM write', legOwner: 'package',
+				maxBlame: 'window top', topBlame: 'attribution top', blameSelfHint: 'the recorder\'s own callbacks, not part of the list above', legFiber: 'fiber', legSubtree: 'subtree', legDom: 'DOM write', legOwner: 'package',
 				blameHint: 'Per-second execution rate / peak rate (EMA-smoothed) plus the summed synchronous time; hover a row for its execution count, cost and cumulative totals',
 				restHint: 'rest = how many further owners fall outside the top 3 (distinct names, ranked by cumulative time); this row shows their combined rate',
 				cnExec: 'executed this second', cnCost: 'sync time this second',
@@ -3745,9 +3775,11 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.num }, worstSecondText())),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('topBlame')),
-						h('span', { style: S.num }, tally.topNames.length === 0
+						h('span', { style: S.num }, (tally.topNames.length === 0
 							? t('none')
-							: tally.topNames.map(([name, count]) => `${short(name)} ${count}×`).join(' · ') + (tally.top.length > 3 ? ` · ${t('rest')} ${tally.top.length - 3}` : ''))),
+							: tally.topNames.map(([name, count]) => `${short(name)} ${count}×`).join(' · ') + (tally.top.length > 3 ? ` · ${t('rest')} ${tally.top.length - 3}` : ''))
+							// B1:记录器自己单列在同一个值里(混排会让人以为本 HUD 在拖慢页面)
+							+ (tally.selfTotal === 0 ? '' : `${tally.topNames.length === 0 ? '' : ' · '}${t('recorder')} ${tally.selfTotal}×`))),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, `${t('hit')} (${t('legFiber')}/${t('legSubtree')}/${t('legDom')}/${t('legOwner')})`),
 						h('span', { style: S.num }, `${tally.fiber}/${tally.subtree}/${tally.dom}/${tally.owner}${tally.none === 0 ? '' : ` · ${t('unblamed')} ${tally.none}`}`)),

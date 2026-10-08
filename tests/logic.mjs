@@ -193,6 +193,7 @@ const sandbox = `
 		stressHint: 'stressHint', stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点', unblamed: '未归因',
 		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
 		stressBurn: '人为燃烧',
+		recorder: '记录器自身',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchManualNote: '手动标记', domWritesShort: 'DOM 写入',
 		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
@@ -274,6 +275,9 @@ const newPieces = [
 	'function restTitleText(',
 	'function msPerSecText(',
 	'function looksLikeInfrastructure(',
+	'const SELF_NAMES = ',
+	'function isRecorderName(',
+	'function blameName(',
 	'function primaryBlame(',
 	'function legOf(',
 	'function applyLongTaskStats(',
@@ -539,6 +543,33 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 		EX.blameText({ component: 'SlotOutlet', domComponent: null, owner: null }), 'SlotOutlet');
 	check('长任务:什么都没有 → 未归因',
 		EX.blameText({ component: null, domComponent: null, owner: null }), '未归因');
+	// B1:记录器自己在归因里被**标注**,不是静默剔除(每帧都在跑,静默丢掉会读成"没人干活")
+	check('B1:命中记录器自己时加后缀(三条腿都会标)',
+		[
+			EX.blameText({ component: 'PerfHud', subtreeComponent: null, domComponent: null, owner: null }),
+			EX.blameText({ component: null, subtreeComponent: null, domComponent: 'PerfHudStress', owner: null }),
+			EX.blameText({ component: null, subtreeComponent: null, domComponent: null, owner: 'dsh-perf-hud' }),
+			EX.blameText({ component: 'ChatView', subtreeComponent: null, domComponent: null, owner: null }),
+		],
+		['PerfHud[记录器自身]', 'PerfHudStress[记录器自身](DOM 写入)', 'dsh-perf-hud[记录器自身]', 'ChatView']);
+	check('B1:有别的候选时 primaryBlame 跳过记录器自己,一个都没有时照实返回它',
+		[
+			EX.primaryBlame({ component: 'PerfHud', subtreeComponent: 'ChatView', domComponent: null, owner: null }),
+			EX.primaryBlame({ component: 'PerfHud', subtreeComponent: null, domComponent: null, owner: null }),
+		],
+		['ChatView', 'PerfHud']);
+	check('B1:归属汇总把记录器自己从 Top 里分出来单列',
+		(() => {
+			box.state.ltNames.clear();
+			box.state.ltTotal = 3;
+			for (const row of [
+				{ t: 1, component: 'ChatView', subtreeComponent: null, domComponent: null, owner: null },
+				{ t: 2, component: 'PerfHud', subtreeComponent: null, domComponent: null, owner: null },
+				{ t: 3, component: 'PerfHud', subtreeComponent: null, domComponent: null, owner: null },
+			]) EX.applyLongTaskStats(row);
+			const split = EX.longTaskTally();
+			return [split.topNames.map((row) => row[0]), split.self.map((row) => [row[0], row[1]]), split.selfTotal];
+		})(), [['ChatView'], [['PerfHud', 2]], 2]);
 	// 命中率说明不了问题(DOM 腿在流式时几乎必然命中)——要看名字分布。
 	// 并且钉住"命中"与"分布"是同一套判定(旧版 ltBlamed 漏了 dom 腿,两者对不上)。
 	box.state.ltNames.clear();

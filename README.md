@@ -146,7 +146,7 @@ dsh plugin --profile web add "$PWD"
 3. **隔离实验会临时写 profile 的持久化 bundle 选择**(面板上已不提供入口,只在控制台调 `__perfHud.experiment()`;`__perfHud.marks()` 同理)(`pluginManager.setBundleEnabled`)。它有硬安全线:必须 `confirm`、拒绝改本插件与 `session-persistence-jsonl`、每步记宿主回执、结束后逐项核验恢复;中断也会走恢复流程。不想动配置就别点「开始实验」。
 4. **宿主半只做两件事**:事件循环采样与一个 HTTP 路由(`/api/dsh-perf-hud/host`,受宿主自身鉴权保护,无 cookie 返回 401)。它不注册服务、不改宿主原型、不写插件自己的持久化状态。
 5. **CSS 动画不经 JS**:鲸鱼摆动那类 `steps()` 关键帧只体现在 FPS / 最差帧 /「帧内未归因」,归因表里看不到它。
-6. **命中率会被 DOM 腿抬高**:流式时几乎必然命中,必须配合「归属 Top」分布读。
+6. **命中率会被 DOM 腿抬高**:流式时几乎必然命中,必须配合「归属 Top」分布读。记录器自己也在四条腿的射程里 —— 命中本 HUD(`PerfHud` / `PerfHudStress` / 包名)的长任务会被标成「记录器自身」,并从「归属 Top」里**单列出来**,只有别的候选都说不通时才让它当元凶(静默剔除会让人读成"这段时间没人干活",比标注更糟)。
 7. 面板状态只进 `localStorage`;导出件在你本机生成,不发往任何地方。
 8. **浏览器在另一台机器上时,「链路 RTT」高是真实的**:如果经隧道访问 `127.0.0.1:3080`,隧道本身的 RTT p50 可以是数十到数百毫秒,而本机 curl 同一路由只要几毫秒。面板为此有「疑似链路」判据和「链路已排除(宿主与隧道均正常)」结论 —— 别把这个数字当 bug。
 
@@ -177,9 +177,9 @@ dsh plugin --profile web add "$PWD"
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 258 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 261 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js
-# 合计 293 条断言,离线,无需 DSH 在跑
+# 合计 296 条断言,离线,无需 DSH 在跑
 ```
 
 线上验证(需要先换 cookie,步骤见 [AGENTS.md](AGENTS.md) §2.2):

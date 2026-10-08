@@ -34,7 +34,7 @@ English summary follows the Chinese text below.
 
 ```sh
 node tests/attribution.mjs   # 11 条
-node tests/logic.mjs         # 258 条(含静态检查与长度预算)
+node tests/logic.mjs         # 261 条(含静态检查与长度预算)
 node tests/host.mjs          # 24 条
 ```
 
@@ -71,7 +71,7 @@ node tests/host.mjs          # 24 条
 ## 文档与翻译
 
 - 用户可见的行为变化必须同步 [README.md](README.md) 与 [README_EN.md](README_EN.md);开发规则变化同步 [AGENTS.md](AGENTS.md)。
-- 断言数字(293 = 11 + 258 + 24)出现在 README / REVIEW / AGENTS / CONTRIBUTING 里,**改了要一起改**(CI 有一条门禁专门核这个)。
+- 断言数字(296 = 11 + 261 + 24)出现在 README / REVIEW / AGENTS / CONTRIBUTING 里,**改了要一起改**(CI 有一条门禁专门核这个)。
 - 英文版可以只覆盖主路径,但**不要写与中文不一致的结论**。
 
 ## 行为准则
@@ -89,7 +89,7 @@ This file covers the workflow.
   most usefully — the panel's **Export JSON**, which carries a self-describing `context` header and any panel
   render errors in its `errors` section.
 - **PRs**: open an issue first for anything non-trivial; branch off the latest `main`; run the three offline suites
-  (`node tests/{attribution,logic,host}.mjs`, 293 assertions) before pushing; attach a screenshot for any panel or
+  (`node tests/{attribution,logic,host}.mjs`, 296 assertions) before pushing; attach a screenshot for any panel or
   layout change.
 - **Known traps**: edit `client.js` in small anchored batches (a whole-block replacement once swallowed neighbouring
   declarations and permanently disabled the panel entry); keep instrumentation reversible; never render a misleading
