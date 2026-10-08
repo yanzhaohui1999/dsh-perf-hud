@@ -2539,6 +2539,15 @@ window.__ModuleLoader__.load({
 					isolation: { candidates: experiment.candidates, method: experiment.method, loadBurnMs: EXPERIMENT_LOAD_BURN_MS, loadPeriodMs: EXPERIMENT_LOAD_PERIOD_MS },
 					// 判色阈值也写进文件:别人拿到 JSON 能按同一套口径重新解读
 					recorder: selfStats(),   // 测量工具先自证没有明显改变被测对象
+					// 证据的审计属性:拿到文件的人要能判断"这份证据被裁过没有、读回来的算不算数"。
+					// 事故包的 context.watch 里本来就有这几个计数,这里补的是**整机导出件**那一份。
+					store: {
+						restored: state.watch.restored,          // 这次启动从落盘读回几条
+						trimmedByBytes: state.watch.trimmedByBytes,   // 因为字节上限被裁掉的条数
+						deduped: state.watch.deduped,            // 同一 id / 同一 at|cause 去重去掉的条数
+						captured: state.watch.captured,          // 一共捕获过几次
+						dropped: state.watch.dropped,            // 抓到了但没留存下来的次数
+					},
 					thresholds: {
 						fps: { warnBelow: 50, errorBelow: 30 },
 						frameMs: { warnAbove: 120, errorAbove: 200 },

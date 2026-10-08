@@ -156,6 +156,12 @@ process.exitCode = failed === 0 ? 0 : 1;
 
 	// 导出里必须有错误账本(下次再抛错,导出件能带出原文)
 	check('client.js 带 errors 导出段', /errors:\s*state\.errors/.test(source), true);
+
+	// 导出件的审计属性:文件离开现场后,读的人要能判断"这份证据被裁过没有"
+	const storeBlock = /store:\s*\{([\s\S]{0,500}?)\n\t{5}\}/.exec(source);
+	check('client.js 导出件带 store 段(restored/trimmedByBytes/deduped/captured/dropped)',
+		storeBlock !== null && ['restored', 'trimmedByBytes', 'deduped', 'captured', 'dropped'].every((key) => storeBlock[1].includes(`${key}:`)),
+		true);
 }
 
 // ═══════════════ A/B/C/D/E 新增逻辑的离线验证 ═══════════════
