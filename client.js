@@ -3188,6 +3188,64 @@ window.__ModuleLoader__.load({
 			return best;
 		}
 
+		// 面板上的 60 秒帧条:一格一秒。导出件那条 ASCII 条带是按事故窗口分格,这里按整秒 ——
+		// "一格 = 那一段里最差的一帧"这个读法一致,阈值也逐条对应,所以两处能对着看。
+		const SPARK_SECONDS = 60;
+		const SPARK_HEIGHT = 18;
+		const SPARK_MAX_MS = 200;    // 画满高度的帧间隔(再高也只是画满)
+
+		/** 最近 SPARK_SECONDS 秒的分格数据:一格一秒,格值 = 那一格里最差那帧的间隔;间隙另标。 */
+		function sparkBars(now) {
+			const from = now - SPARK_SECONDS * 1000;
+			const cells = [];
+			for (let i = 0; i < SPARK_SECONDS; i += 1) cells.push({ ms: 0, seen: false, gap: false });
+			for (const row of frameRing.slice(from, now)) {
+				const index = Math.min(SPARK_SECONDS - 1, Math.max(0, Math.floor((row.t - from) / 1000)));
+				const cell = cells[index];
+				if (row.gap === true) { cell.gap = true; continue; }
+				cell.seen = true;
+				if (row.ms > cell.ms) cell.ms = row.ms;
+			}
+			return cells;
+		}
+
+		/**
+		 * 一格算哪一档 —— 与导出件 ASCII 条带**逐条对应**:
+		 * `█` ≥100ms → bad · `▒` ≥50ms → warn · `·` 其余 → ok · `_` 整格 rAF 间隙 → gap · 空格 没采到 → empty。
+		 * 阈值改动必须两处一起改(logic.mjs 有一条断言专门核这件事)。
+		 */
+		function sparkLevel(cell) {
+			if (cell.seen === true) {
+				if (cell.ms >= 100) return 'bad';
+				if (cell.ms >= 50) return 'warn';
+				return 'ok';
+			}
+			return cell.gap === true ? 'gap' : 'empty';
+		}
+
+		/** 60 秒帧条本体(约 100×18 的 SVG,只用 theme token)。 */
+		function sparkStrip() {
+			const cells = sparkBars(performance.now());
+			const colors = {
+				bad: 'var(--dsw-alias-state-error-primary)',
+				warn: 'var(--dsw-alias-state-warn-primary)',
+				ok: 'var(--dsw-alias-label-secondary)',
+				gap: 'var(--dsw-alias-border-l2)',
+			};
+			const bars = [];
+			for (let i = 0; i < cells.length; i += 1) {
+				const level = sparkLevel(cells[i]);
+				if (level === 'empty') continue;
+				// 间隙画成最矮的一根:它是"这段时间没在测",不是"这段时间没卡"
+				const height = level === 'gap' ? 2 : Math.max(2, Math.min(SPARK_HEIGHT, Math.round((cells[i].ms / SPARK_MAX_MS) * SPARK_HEIGHT)));
+				bars.push(h('rect', { key: `s${i}`, x: i, y: SPARK_HEIGHT - height, width: 1, height, fill: colors[level] }));
+			}
+			return h('svg', {
+				width: 100, height: SPARK_HEIGHT, viewBox: `0 0 ${SPARK_SECONDS} ${SPARK_HEIGHT}`, preserveAspectRatio: 'none',
+				style: { flex: '0 0 auto' },
+			}, bars);
+		}
+
 		function detailSummary() {
 			const second = worstSecond();
 			// 帧内未归因搬进这一组之后,它的数字要留在摘要上 —— 否则常显就更"瞎"了
@@ -3290,6 +3348,10 @@ window.__ModuleLoader__.load({
 				state.marks.length, state.errors.length, state.stressNodes > 0 ? 1 : 0, state.baselineRunning ? 1 : 0,
 				unexplainedFrame() === null ? 0 : 1, infraVerdict().text,
 				Object.values(state.groups).map((value) => (value ? 1 : 0)).join(''),
+				// 60 秒帧条:它每秒都在滚(老格子出窗口、新格子进来),而其它数字可能几百秒不动 ——
+				// 不放进指纹的话,展开着也会冻在打开那一刻。用 5 秒刻度而不是每帧算一遍条子,
+				// 是为了不让"面板自己的开销"变成每 tick 遍历 3600 帧。
+				Math.floor(performance.now() / 5000),
 			].join('|');
 		}
 
@@ -3358,6 +3420,8 @@ window.__ModuleLoader__.load({
 				deepShort: '深录', deepHint: '深录(= 插桩 + 精确归因):装上调度点与 DOM 写入的包装,并拉那份 12MB 的 sourcemap。默认关着 —— 守夜与现场都不插桩',
 				recorder: '记录器自身', recorderHint: '每帧给这个 HUD 自己的 rAF 回调计时:测量工具必须自证没有明显改变被测对象。p99 取最近 600 帧',
 				split: '帧里花在哪', splitTotal: '这段长动画帧共', splitWorst: '最差那条',
+				spark: '60 秒帧条',
+				sparkHint: '最近 60 秒,一格一秒:高度 = 那一秒里最差那一帧的间隔,颜色与导出件的 ASCII 帧条带用同一组阈值(≥100ms 红 / ≥50ms 黄 / 其余正常)。整格都是 rAF 挂起的那一秒画成最矮的灰柱 —— 那是间隙,不是卡顿;空白 = 那一秒没采到',
 				splitHead: '脚本侧', splitRender: '渲染', splitTail: '样式+布局+绘制',
 				splitNoLoaf: '暂时没有(要等到一条 >50ms 的长动画帧;LoAF 只报 50ms 以上的)',
 				splitHint: 'LoAF 的三个时间点能拆出来的极限:脚本侧(任务+同步 JS)/ 渲染(rAF 回调)/ 样式+布局+绘制。绘制与合成分不开,所以最后一段是"剩下的都在这儿",别读成"样式布局占了多少";要分开只能录 Chrome trace',
@@ -3417,6 +3481,8 @@ window.__ModuleLoader__.load({
 				deepShort: 'deep', deepHint: 'Deep = instrumentation + precise attribution: wraps scheduling points and DOM writes and fetches the 12MB sourcemap. Off by default',
 				recorder: 'HUD itself', recorderHint: 'Times this HUD own rAF callback: a measuring tool must prove it does not change what it measures. p99 over the last 600 frames',
 				split: 'where the frame went', splitTotal: 'long frame total', splitWorst: 'worst',
+				spark: '60s frame strip',
+				sparkHint: 'Last 60 seconds, one bar per second: height = the worst frame interval in that second, and the colours use the same thresholds as the ASCII frame strip in the export (>=100ms red / >=50ms yellow / otherwise normal). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall; blank = nothing sampled in that second',
 				splitHead: 'script side', splitRender: 'render', splitTail: 'style+layout+paint',
 				splitNoLoaf: 'not yet (needs a long animation frame >50ms; LoAF only reports those)',
 				splitHint: 'As far as LoAF can decompose it: script side (task + sync JS) / render (rAF callbacks) / style+layout+paint. Paint and compositing cannot be separated in-page, so the last slice is "everything else" — do not read it as "style and layout only"; separating them needs a Chrome trace',
@@ -3813,6 +3879,11 @@ window.__ModuleLoader__.load({
 								h('div', { style: S.num, title }, `${t('split')} ${split.total}ms`),
 								h('div', { style: S.sub, title }, `${t('splitHead')} ${pct(split.head)} · ${t('splitRender')} ${pct(split.render)} · ${t('splitTail')} ${pct(split.tail)}`)));
 					})(),
+					// 60 秒迷你时间条:一格一秒、格值取格里最差那帧,阈值与导出件 ASCII 条带一致
+					h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },
+						h('span', { style: S.label, title: t('sparkHint') }, t('spark')),
+						h('span', { style: { flex: '1 1 auto', textAlign: 'right' } },
+							frameRing.size === 0 ? t('notYet') : sparkStrip())),
 					// 帧里"JS 之外"的残差:唯一能反映 CSS/绘制卡顿的数字,从常显挪进来
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),

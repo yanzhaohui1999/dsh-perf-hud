@@ -83,6 +83,7 @@ The panel is layered: only "is it smooth + whose fault" is always visible; the o
 | **Host event loop** | `perf_hooks.monitorEventLoopDelay({resolution: 1})`, per-second p50/p99/max, 300s ring |
 | **Host event arrival** | Commit (`event.time`) → listener invocation lag via the public `ctx.on('session/event')`; not the listener's CPU time |
 | **Link RTT** | 1KB cache-busted same-origin probe every 10s, 64KB throughput every 60s. "Link suspected" needs p99 > 300ms, normal FPS and n ≥ 2 |
+| **60s frame strip** | In the forensics group: one bar per second, height = the worst frame interval in that second, colours use the **same thresholds as the ASCII frame strip in the export** (≥100ms red / ≥50ms yellow). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall |
 
 **Export JSON** carries a `context` header: scenario / idle seconds / precise-attribution and per-sourcemap-section
 state / host route, profile, Node and plugin version / experiment candidates and method / every colouring
@@ -150,9 +151,9 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 267 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 271 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          #  24 assertions: real index.js driven by a fake ctx
-# 302 offline assertions total, no running DSH required
+# 306 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):

@@ -162,6 +162,12 @@ process.exitCode = failed === 0 ? 0 : 1;
 	check('client.js 导出件带 store 段(restored/trimmedByBytes/deduped/captured/dropped)',
 		storeBlock !== null && ['restored', 'trimmedByBytes', 'deduped', 'captured', 'dropped'].every((key) => storeBlock[1].includes(`${key}:`)),
 		true);
+
+	// D2:面板的 60 秒帧条与导出件的 ASCII 条带**必须**用同一组阈值 —— 两处读数打架比没有还糟
+	const inspector = readFileSync(new URL('../tools/inspect-incident.mjs', import.meta.url), 'utf8');
+	check('D2:帧条与导出件 ASCII 条带同一组阈值(>=100ms / >=50ms)',
+		[/ms >= 100\) return '█'/, /ms >= 50\) return '▒'/].every((re) => re.test(inspector))
+		&& [/ms >= 100\) return 'bad'/, /ms >= 50\) return 'warn'/, /if \(cell\.seen === true\)/].every((re) => re.test(source)), true);
 }
 
 // ═══════════════ A/B/C/D/E 新增逻辑的离线验证 ═══════════════
@@ -933,6 +939,12 @@ const watchSource = (() => {
 const watchPieces = [
 	watchSource,
 	`${extract(source, 'const frameRing = {')};`,
+	// 时间条的常量是三条独立 const:按行取(extract 会去找 '{',对它们不适用)
+	source.slice(source.indexOf('const SPARK_SECONDS'), source.indexOf('\n', source.indexOf('const SPARK_SECONDS'))),
+	source.slice(source.indexOf('const SPARK_HEIGHT'), source.indexOf('\n', source.indexOf('const SPARK_HEIGHT'))),
+	source.slice(source.indexOf('const SPARK_MAX_MS'), source.indexOf('\n', source.indexOf('const SPARK_MAX_MS'))),
+	extract(source, 'function sparkBars('),
+	extract(source, 'function sparkLevel('),
 	extract(source, 'function watchTrigger('),
 	extract(source, 'function loafScripts('),
 	extract(source, 'function wallClock('),
@@ -998,6 +1010,7 @@ const watchBox = new Function(`
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
+		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1339,6 +1352,36 @@ check('守夜行:裁过就写出来', watch.watchPanelText().includes('裁掉 1'
 watch.state.watch.trimmedByBytes = 0;
 watch.state.watch.incidents.length = 0;
 check('落盘:清空后落盘的那份也是空的', [watch.saveIncidents(), JSON.parse(watch.store.get('test:incidents')).incidents.length], [true, 0]);
+
+// ── D2:60 秒迷你时间条(面板)与 ASCII 条带同一口径 ──────────────────
+check('D2:分档与 ASCII 条带逐条对应(≥100 红 / ≥50 黄 / 其余正常 / 整格间隙 / 没采到)',
+	[
+		watch.sparkLevel({ ms: 100, seen: true, gap: false }),
+		watch.sparkLevel({ ms: 50, seen: true, gap: false }),
+		watch.sparkLevel({ ms: 49, seen: true, gap: false }),
+		watch.sparkLevel({ ms: 0, seen: false, gap: true }),
+		watch.sparkLevel({ ms: 0, seen: false, gap: false }),
+	],
+	['bad', 'warn', 'ok', 'gap', 'empty']);
+check('D2:一格一秒共 60 格,格值取格里最差那一帧',
+	(() => {
+		const base = 100000;
+		watch.frameRing.reset();
+		watch.frameRing.push(base - 60000, 16.66, false);
+		watch.frameRing.push(base - 59000, 30, false);
+		watch.frameRing.push(base - 30000, 55, false);
+		watch.frameRing.push(base - 29500, 120, false);    // 同一格里更差的一帧
+		watch.frameRing.push(base - 1000, 900, true);      // rAF 挂起
+		const cells = watch.sparkBars(base);
+		return [cells.length, cells.length === watch.SPARK_SECONDS, cells[0].ms, cells[1].ms, cells[30].ms, watch.SPARK_HEIGHT];
+	})(),
+	[60, true, 16.7, 30, 120, 18]);
+check('D2:整格 rAF 间隙 → gap(矮柱,不是卡顿),那一秒没采到 → empty',
+	(() => {
+		const cells = watch.sparkBars(100000);
+		return [watch.sparkLevel(cells[59]), cells[59].seen, cells[10].seen, cells[10].ms];
+	})(),
+	['gap', false, false, 0]);
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;
