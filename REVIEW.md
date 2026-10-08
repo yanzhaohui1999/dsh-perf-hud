@@ -36,6 +36,7 @@
 | 离线断言全绿 | `npm test` | **322** 条(attribution 11 / logic 287 / host 24) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
+| 守夜默认**零插桩** | `snapshot().instrumented` 在三种模式下的取值 | 面板打开、HUD 开着:`instrumented: false / deep: false`;点「深录」→ `true / true`;点回去 → `false / false`,`errors` 全程 0 |
 | 事故落盘且活过刷新 | 抓一次 → 刷新 → `watch().restored` | restored **10**;读回条目带 `restored:true`、`env.perfOrigin` 保留,`report()` 跨会话可渲染(184 帧) |
 | 留存两档并集 | 塞跨天旧事故 → 刷新 → `watch().kept[].tier` | 15 条旧事故(一天 12 条 + 另外三天各 1 条)→ **restored 13** · tier `{worst 9, daily 3, both 1}`,工具箱清单里「当天最差」出现 3 次 |
 | 跨会话基线只进导出件 | `snapshot().context.sessionBaselines` | 一次会话一条(`frames 82 / p50 23.6ms`),`note` 写死「粗参照,不是回归判定」;面板不显示(静态断言钉住) |
@@ -78,7 +79,7 @@
 
 | # | 条目 | 状态 | 备注 |
 |---|---|---|---|
-| D1 | 三种模式(守夜/现场/深录) | 🔶 `b79853e` | 代码已落地(`applyProbeState` 只在地録装插桩,标题栏按钮改「深录」);**待补验**:点开前后 `instrumented` 是否真的 false→true —— 上一轮的读数表达式取错了字段路径(`snapshot().environment.*` 那一层没取对),下次先打印一次 `snapshot()` 的键再断言 |
+| D1 | 三种模式(守夜/现场/深录) | ✅ `b79853e` | 代码已落地(`applyProbeState` 只在深录装插桩);**待补验已补上**(2026-10-08 晚,headless Chrome + CDP):默认打开面板时 `instrumented: false / deep: false` —— 点「深录」→ `true / true` —— 再点回去 → `false / false`,`errors` 全程 0。上次取错字段路径(`snapshot().environment.*`)的坑没再犯:字段就在 `snapshot()` 顶层 |
 | A1 | 记录器自身开销 | 🔶 `b79853e` | `recordSelf`/`selfStats`/面板一行/导出 `context.recorder` 都在;**待补**:在真实页面读一次 p99 的真实数字并记进 §2 |
 | A2 | 跨会话基线 | ✅ `c0d7317` | 每个会话一条 `{p50,p90,p99,worstMs,frames,at,since}`,最多 20 条,只进导出件(静态断言钉住「不进面板」);`note` 写死「粗参照,不是回归判定」;写盘时机 = 每次导出 + `pagehide` |
 | A4 | Chrome trace | ✅ `b9258fd` | 人工录指引(已有)+ 页面内准 trace(`event` / `element` timing,≥100ms,留最近 200 条)。**只做页面内那一半**:帧内拆分页面内没有 API,已写进 `missing` + `howToRead`(见 §3.2),不承诺 |
