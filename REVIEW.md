@@ -77,7 +77,7 @@
 | A1 | 记录器自身开销 | 🔶 `b79853e` | `recordSelf`/`selfStats`/面板一行/导出 `context.recorder` 都在;**待补**:在真实页面读一次 p99 的真实数字并记进 §2 |
 | A2 | 跨会话基线 | ⬜ | 每个会话落盘一份分布(保留最近约 20 个),只进导出件 |
 | A4 | Chrome trace | ⬜ | 人工录指引(已有)+ 页面内准 trace(event/element timing)|
-| A5 | 宿主进程火焰图 | ⬜ | `node:inspector` 同进程按需采 **`.cpuprofile`**;**要改 `index.js` → 需要重启宿主,重启前必须问过用户** |
+| A5 | 宿主进程火焰图 | 🔶 `d1ab74b` | 宿主半用内置 `node:inspector` 在**同进程**按需采 `.cpuprofile`:`POST {op:'profileStart', seconds?}`(默认 5 秒、夹 [0.1,30];只等"真的开起来"就返回,采样由定时器后台收尾)+ `POST {op:'profileGet'}`(没采过回 404「还没采过」,不回空对象),`GET` 的 `host.cpuProfile` 给状态;不常开、单飞(重入 500 拒绝)、只在内存、失败照实回错误原文。实测(Node v25.9.0,**本机独立进程 —— 宿主真实进程未实测,要重启宿主才生效**):5 秒 profile 轻负载 **11.5KB**/15 节点/1226 采样、80% CPU 重负载 **12.5KB**/23 节点/974 采样、边解析 5.5MB JSON **10.3KB**/17 节点/906 采样;采样期间宿主 event-loop 差异在噪声内(p50 1.27→1.28ms,连"采样后"的 p99 都略高于"采样中")。两条与交办描述不符的实测结论见 AGENTS §8.16/§8.17。**待补验**:重启后在真宿主进程上采一次,核对 `bytes`/`samples` 与这次同量级 |
 | B1 | 记录器自身被当元凶 | ⬜ | 标注 + 汇总单列;`primaryBlame` 跳过它 |
 | B2 | 压缩名过滤 | ⬜ | 代码改法:`usableComponentName` 里 `name.startsWith('$')` → `return null`。**坑**:`usableComponentName(type)` 第一行是 `if (typeof type !== 'function') return null` —— 断言必须传**类/函数**(`class ChatView {}`),传 `{ name: 'ChatView' }` 会全返回 null(上一轮就是这么把提交写坏的,已回退 `cd65639`/`add0632`)。另外 `(ChatView)` 这种括号名根本进不到这里,更早被 `looksLikeInfrastructure` 挡掉 |
 | B3 | 落盘计数进导出件 | ⬜ | 导出 `context` 加一段 `store`: `restored` / `trimmedByBytes` / `deduped` / `captured` / `dropped` |

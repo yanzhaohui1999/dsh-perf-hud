@@ -17,6 +17,7 @@
 
 ### 新增
 
+- **宿主进程 CPU 火焰图(A5)**:宿主半用内置 `node:inspector` 在**同进程**按需采一段 V8 CPU profile(`Profiler.enable → start → N 秒 → stop`),`Profiler.stop` 回的就是标准 `.cpuprofile`,speedscope 可直接打开。路由形态沿用既有那套(`requestBody: 'buffered'` + `Request`/`Response.json`):`POST {op:'profileStart', seconds?}` —— 默认 **5 秒**、夹 [0.1, 30],**只等"真的开起来"就返回**(采样由定时器后台收尾,不占着 HTTP 请求 5 秒);`POST {op:'profileGet'}` —— 取回最近一次采到的 profile,**没采过回 404「还没采过」而不是空对象**;`GET` 的 `host.cpuProfile` 给状态(`running` / `collected` / `bytes` / `samples` / `meta` / `error`)。四条硬性:① **不常开**(采样本身有开销,只由显式 op 触发)、**单飞**(采集中重入 500 拒绝);② 失败(会话未连接 / `Profiler.*` 报错)**照实回错误原文**,不许假装成功;③ profile **只在内存**,不写任何目录;④ 不改宿主任何原型(`apply(ctx, options)` 的第二参只是测试缝)。两条**实测证伪**写进 [AGENTS.md](AGENTS.md) §8.16/§8.17:① "宿主已开着别的 inspector 会冲突"不成立 —— 同进程 `new Session().connect()` 不需要 `--inspect`,`inspector.url()` 是 undefined,且**多会话并存**(另一会话正在采时再 `Profiler.start` 也不报错,后来的直接接手采样;防互踩的是我们自己的单飞);② 采样密度实测只有 **~180~250 次/秒**(标称 1000Hz),所以 5 秒包只有 ~1000 个采样、**约 10~13KB**(轻负载 11.5KB / 重负载 12.5KB / 边解析 5.5MB JSON 10.3KB)—— 体积由**不同调用栈的数量**决定、不由时长决定。宿主 event-loop 影响实测在噪声内(p50 1.27→1.28ms)。⚠️ 宿主半改动,**要重启宿主才生效**
 - **事故落盘**:留存的事故进 `localStorage`(512KB 上限,超了丢最弱的;写失败如实报 `persistError`),刷新/重启后仍在;每条带 `env.perfOrigin`,跨会话读时 perf 毫秒能对齐墙上时间
 - **面板瘦身:把旧方向的东西从界面上撤掉**(面板从 ~20 行 + 4 按钮收到 ~4 行 + 3 件控件):
   - **隔离实验**(候选 / 基线 / 噪声底 / 逐条结果 / 恢复状态 + 3 个按钮)—— 方向已明确不做(让给 `dsh-performance-guard`),而且它要写 profile 的持久化选择,不该放在随手点的位置;能力保留在 `__perfHud.experiment()` / `abortExperiment()` / `baselines()` / `stress()`;

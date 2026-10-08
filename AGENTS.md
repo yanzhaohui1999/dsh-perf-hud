@@ -256,6 +256,8 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 13. **长度预算的桩数据必须是真实量级**:`detailSummary` 的预算一直是 30~34,而桩里的数字全是 0/个位数,于是"最差秒 152ms · 未归因 17ms · DOM 写入 36250"在 396px 面板里被挤成两行这件事**从来没被断言发现**。现在桩里塞五位数,并把摘要砍到只留结论对。
 14. **批量替换(按次数替换)会改到同名调用点,而且文件本身还是"语法正确"的**:给 `frame()` 的 rAF 循环插一句自计时,锚点 `state.fpsLoop = natives.requestAnimationFrame(frame);` 在 `frame()` 与 `start()` 里**各有一处**,按次数替换就把 `selfStarted` 插进了 `start()` —— 那里没有这个变量,于是**插件激活直接失败**(外壳日志 `web boot: 1 entry did not activate / dsh-perf-hud: failed`),面板整块消失,而 `node --check` 与三套件**全绿**(单测只抽纯函数,不跑 `apply`)。教训:替换后要 `grep -c` 确认命中数;凡是插进"只在浏览器里跑"的路径(apply / start / 渲染),必须真的打开页面看一眼。
 15. **改 `client.js` 时不要同时跑"受控实测"**:`dsh-client-hmr` 会热载新代码,正在跑的采集会**换到新实例**(seq 归零、状态重置),实验结果直接作废。实测踩过一次:边写落盘功能边跑受控捕获,拿到的 id 与时间戳全对不上。要采集就先把代码定下来。
+16. **`node:inspector` 的同进程会话总能连上,而且允许多会话并存**(Node v25.9.0 实测,A5 采宿主 CPU profile 时撞到):`new Session().connect()` 不需要 `--inspect`(连上后 `inspector.url()` 是 `undefined`);**另一个会话正在采时再 `Profiler.start` 也不报错** —— 后来的那个直接接手采样,两个会话各自 `Profiler.stop` 都能拿到 profile。所以「宿主已经开着别的 inspector,所以我们会失败」是**错的**:真正防止两段采样互相踩的是我们自己的单飞(`running` 标志),不是 V8。错误分支实际挡的是:inspector 不可用 / 会话未连接或已断开(`post` 没 connect → `Session is not connected`;同一会话重复 `connect()` → `The inspector session is already connected`)/ `Profiler.*` 自身报错。**不管哪种都要把错误原文回给调用方,不许假装成功。**
+17. **V8 CPU profile 的采样密度远低于标称**:`Profiler.start` 的默认间隔是 1000µs,但实测只有 **~180~250 次/秒**(V8 只在"可采样点"取栈,原生/GC 期间取不到)。所以一段 **5 秒** `.cpuprofile` 只有 ~1000 个采样、**约 10~13KB**(轻负载 11.5KB / 重负载 12.5KB / 边解析 5.5MB JSON 10.3KB),体积由**不同调用栈的数量**决定、不由时长决定 —— "profile 会很大所以别常开"里的**体积**不是理由,常开的代价在采样本身。反过来:回包体积从来不是问题,别为此加压缩/分片。
 
 ---
 
