@@ -37,6 +37,11 @@
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 事故落盘且活过刷新 | 抓一次 → 刷新 → `watch().restored` | restored **10**;读回条目带 `restored:true`、`env.perfOrigin` 保留,`report()` 跨会话可渲染(184 帧) |
+| 留存两档并集 | 塞跨天旧事故 → 刷新 → `watch().kept[].tier` | 15 条旧事故(一天 12 条 + 另外三天各 1 条)→ **restored 13** · tier `{worst 9, daily 3, both 1}`,工具箱清单里「当天最差」出现 3 次 |
+| 跨会话基线只进导出件 | `snapshot().context.sessionBaselines` | 一次会话一条(`frames 82 / p50 23.6ms`),`note` 写死「粗参照,不是回归判定」;面板不显示(静态断言钉住) |
+| 60 秒帧条与导出件同口径 | 面板 SVG + `tools/inspect-incident.mjs` 的 ASCII | 真实页面 100×18 / `viewBox 0 0 60 18`,`errors: 0`;阈值一致性有静态断言(≥100 / ≥50) |
+| 脚本侧按包 | 面板「脚本按包」/ `incident.packages` | 真实页面 **`dsh-api-gateway 881ms · dsh-client-connection 312ms · dsh-client-modules 208ms · 其余 1`**;「纯 JS / 强制布局」= `1655.3ms / 18.9ms` |
+| 交互延迟(页面内那一半) | `snapshot().interactions` / CDP 真实输入 | `state: on`(supported = element + event);一次真实点击 **20** 条入库,`pointerover` 那条 `ms 112 / waitMs 0.3 / handlerMs 0.4` —— 端到端长 ≠ 页面反应慢;`element` 恒 0 并解释原因 |
 | 落盘容量如实 | `watch().trimmedByBytes` / `deduped` | 512KB 上限时真实会话显示「裁掉 6」→ 已提到 **2MB**;同一 id / 同一 `at|cause` 去重后被去掉的条数也单独计数 |
 | 事故包可导出、可解析、自描述 | `exportIncident(0)` + `tools/inspect-incident.mjs` | 41KB / schema 2;渲染出 ASCII 帧条带 + longtask / LoAF / 脚本三张表 + 缺失声明 |
 | 事故包不虚胖 | 身材回归断言 + 实测 | 同一份内容 URL 抽表前 **116.6KB** → 抽表后 **29.6KB**(导出缩进 138.6 → 51.5KB) |
@@ -75,16 +80,16 @@
 |---|---|---|---|
 | D1 | 三种模式(守夜/现场/深录) | 🔶 `b79853e` | 代码已落地(`applyProbeState` 只在地録装插桩,标题栏按钮改「深录」);**待补验**:点开前后 `instrumented` 是否真的 false→true —— 上一轮的读数表达式取错了字段路径(`snapshot().environment.*` 那一层没取对),下次先打印一次 `snapshot()` 的键再断言 |
 | A1 | 记录器自身开销 | 🔶 `b79853e` | `recordSelf`/`selfStats`/面板一行/导出 `context.recorder` 都在;**待补**:在真实页面读一次 p99 的真实数字并记进 §2 |
-| A2 | 跨会话基线 | ⬜ | 每个会话落盘一份分布(保留最近约 20 个),只进导出件 |
-| A4 | Chrome trace | ⬜ | 人工录指引(已有)+ 页面内准 trace(event/element timing)|
-| A5 | 宿主进程火焰图 | ⬜ | `node:inspector` 同进程按需采 **`.cpuprofile`**;**要改 `index.js` → 需要重启宿主,重启前必须问过用户** |
-| B1 | 记录器自身被当元凶 | ⬜ | 标注 + 汇总单列;`primaryBlame` 跳过它 |
-| B2 | 压缩名过滤 | ⬜ | 代码改法:`usableComponentName` 里 `name.startsWith('$')` → `return null`。**坑**:`usableComponentName(type)` 第一行是 `if (typeof type !== 'function') return null` —— 断言必须传**类/函数**(`class ChatView {}`),传 `{ name: 'ChatView' }` 会全返回 null(上一轮就是这么把提交写坏的,已回退 `cd65639`/`add0632`)。另外 `(ChatView)` 这种括号名根本进不到这里,更早被 `looksLikeInfrastructure` 挡掉 |
-| B3 | 落盘计数进导出件 | ⬜ | 导出 `context` 加一段 `store`: `restored` / `trimmedByBytes` / `deduped` / `captured` / `dropped` |
-| C2 | i18n 英文兜底 | ⬜ | 兜底改成"跟文档语言,取不到才英文";先清面板撤下后遗留的死字符串 |
-| D2 | 60 秒时间条 | ⬜ | 放进「取证明细」,与导出件 ASCII 条带同口径 |
-| D3 | 留存策略 | ⬜ | 最差 10 条 + "每天最差 1 条"(最多 7 天)|
-| D5 | 饼图二级 | ⬜ | 脚本侧展开成按包分布;另给纯 JS vs 强制样式布局(`forcedStyleAndLayoutDuration`)|
+| A2 | 跨会话基线 | ✅ `c0d7317` | 每个会话一条 `{p50,p90,p99,worstMs,frames,at,since}`,最多 20 条,只进导出件(静态断言钉住「不进面板」);`note` 写死「粗参照,不是回归判定」;写盘时机 = 每次导出 + `pagehide` |
+| A4 | Chrome trace | ✅ `b9258fd` | 人工录指引(已有)+ 页面内准 trace(`event` / `element` timing,≥100ms,留最近 200 条)。**只做页面内那一半**:帧内拆分页面内没有 API,已写进 `missing` + `howToRead`(见 §3.2),不承诺 |
+| A5 | 宿主进程火焰图 | 🔶 另一条分支 | `node:inspector` 同进程按需采 **`.cpuprofile`**;**在 `feat/a5-host` 分支上做**(要改 `index.js` → 需要重启宿主,重启前必须问过用户),合并时由协调者重算断言总数 |
+| B1 | 记录器自身被当元凶 | ✅ `e0733cb` | 标注 + 汇总单列;`primaryBlame` 在有别的候选时跳过它。真页面实测:`PerfHud/PerfHudStress` 那条 224ms 长任务改为归到 `RootEntry`,只剩记录器自己时才进「记录器自身 N×」 |
+| B2 | 压缩名过滤 | ✅ `a0ec157` | `usableComponentName` 里 `name.startsWith('$')` → `return null`。**坑(踩过两次)**:`usableComponentName(type)` 第一行是 `if (typeof type !== 'function') return null` —— 断言必须传**类/函数**(`class ChatView {}`),传 `{ name: 'ChatView' }` 会全返回 null(上一轮就是这么把提交写坏的,已回退 `cd65639`/`add0632`)。另外 `(ChatView)` 这种括号名根本进不到这里,更早被 `looksLikeInfrastructure` 挡掉 |
+| B3 | 落盘计数进导出件 | ✅ `86087cf` | 导出 `context` 加一段 `store`: `restored` / `trimmedByBytes` / `deduped` / `captured` / `dropped`(静态断言核五个键都在) |
+| C2 | i18n 英文兜底 | ⬜ | 兜底改成"跟文档语言,取不到才英文";先清面板撤下后遗留的死字符串(排在最后单独做) |
+| D2 | 60 秒时间条 | ✅ `cfcf00b` | 放进「取证明细」,100×18 的 SVG,**与导出件 ASCII 条带同口径**(静态断言读 `tools/inspect-incident.mjs` 核阈值) |
+| D3 | 留存策略 | ✅ `5c4fea1` | 最差 10 条 + "每天最差 1 条"(最多 7 天);每条带 `day` / `tier`,清单里给「当天最差」标注;上限 = 10 + 7 |
+| D5 | 饼图二级 | ✅ `098ed33` | 脚本侧展开成**按包**分布(与 `incident.packages` 同一条 resolve 路);另给纯 JS vs 强制样式布局(`scripts[].forcedMs`),并写明强制布局已含在脚本耗时里 |
 
 **跑这些改动时的两条硬规矩**(都是踩过的):① 替换 `client.js` 之后要 `grep -c` 确认命中数 —— 锚点在 `frame()` 与 `start()` 各有一处的坑已经踩过一次(见 [AGENTS.md](AGENTS.md) §8 第 14 条);② 凡是插进 `apply` / `start` / 渲染路径的改动,**必须真的打开页面看一眼**,因为离线三套件只抽纯函数、不跑 `apply`。
 
