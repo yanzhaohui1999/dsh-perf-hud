@@ -394,6 +394,10 @@ check('B2:$ 开头的压缩名被挡掉;具名组件照旧通过,匿名仍是 nu
 	EX.usableComponentName(class {}),
 	EX.usableComponentName(class ChatView {}),
 ], [null, null, null, 'ChatView']);
+// 防"理由写错":括号名**不是**被 looksLikeInfrastructure 挡掉的(提交说明里这么写过,是错的)。
+// 真正的原因是 usableComponentName 只收 React 的 type,而 `(Name)` 是渲染层加的显示标记。
+check('B2:括号名并不是被 looksLikeInfrastructure 挡掉的(实测那条判据返回 false)',
+	[EX.looksLikeInfrastructure('(ChatView)'), EX.looksLikeInfrastructure('ChatView')], [false, false]);
 
 // ── A2:LoAF 脚本 → 包名(charPos → 行号 → 分段表)────────────────────
 const comboUrl = 'http://h/plugins/??dsh-a/client.js,dsh-b/client.js&rev=9';

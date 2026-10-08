@@ -642,7 +642,10 @@ window.__ModuleLoader__.load({
 			if (/^[A-Za-z]{1,2}\d{0,3}$/.test(name)) return null;
 			// 打包器生成的 `$` 开头名字对读的人零信息,一律挡掉(实测生产构建里 `$c` / `$w`
 			// 会混进"独立包名/组件名"的读数,而且看着像真名字,比匿名更误导)。
-			// 括号形态不用在这里管:`(Name)` 是显示时加的兜底桶标记,进不到这个函数。
+			// 括号形态 `(Name)` **不在这里处理**:它是 DOM 写入表那个"组件兜底桶"的显示标记,
+			// 由渲染层加上去,不会作为 type 回到这个函数(这个函数的入参只有 React 的 type)。
+			// ⚠️ 曾经写过"括号名更早被 looksLikeInfrastructure 挡掉" —— **那是错的**:
+			// `looksLikeInfrastructure('(ChatView)')` 实测为 false(两条正则都不匹配它)。
 			if (name.startsWith('$')) return null;
 			return name;
 		}
