@@ -339,10 +339,10 @@ check('sectionOwner(第 11 行) = b(0-based 10 起)', EX.sectionOwner(entry, 11)
 check('sectionOwner(第 25 行) = b', EX.sectionOwner(entry, 25), 'b');
 check('sectionOwner(第 26 行) = c', EX.sectionOwner(entry, 26), 'c');
 check('sectionOwner(第 0 行,非法) = null', EX.sectionOwner(entry, 0), null);
-check('B2:$ 开头的压缩名被挡掉,括号形态留下(它是兜底桶标记,有语义)', [
+check('B2:$ 开头的压缩名被挡掉;正常组件名照旧通过', [
 	EX.usableComponentName({ name: '$c' }), EX.usableComponentName({ name: '$w' }),
 	EX.usableComponentName({ name: '(ChatView)' }), EX.usableComponentName({ name: 'ChatView' }),
-], [null, null, '(ChatView)', 'ChatView']);
+], [null, null, null, 'ChatView']);
 
 // ── A2:LoAF 脚本 → 包名(charPos → 行号 → 分段表)────────────────────
 const comboUrl = 'http://h/plugins/??dsh-a/client.js,dsh-b/client.js&rev=9';

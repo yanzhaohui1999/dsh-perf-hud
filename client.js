@@ -617,8 +617,8 @@ window.__ModuleLoader__.load({
 			const name = type.displayName ?? type.name;
 			if (typeof name !== 'string' || name === '' || REACT_INTERNAL.has(name) || looksLikeInfrastructure(name)) return null;
 			if (/^[A-Za-z]{1,2}\d{0,3}$/.test(name)) return null;
-			// B2:打包器/工具链生成的 `$` 开头名字对用户零信息,一律挡掉。
-			// 括号形态**保留** —— 那是"组件兜底桶"的标记(`(Name)`),有语义,不是压缩名。
+			// B2:打包器/工具链生成的 `$` 开头名字对用户零信息,一律挡掉(实测 `$c` / `$w` 会漏进来)。
+			// 括号形态不用管:`(Name)` 是显示时加的标记,进到这里之前已经被 looksLikeInfrastructure 挡掉。
 			if (name.startsWith('$')) return null;
 			return name;
 		}
