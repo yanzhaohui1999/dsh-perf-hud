@@ -219,6 +219,9 @@ const newPieces = [
 	'function ownerOfUrl(',
 	'function sectionOwner(',
 	'function bundleMap(',
+	'const SELF_RING = ',
+	'function recordSelf(',
+	'function selfStats(',
 	'const LS_MAP = ',
 	'const scriptLines = ',
 	'const SCRIPT_LINES_MAX = ',
@@ -304,6 +307,7 @@ const newPieces = [
 const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
+		SELF_RING, recordSelf, selfStats, recorderText,
 		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
@@ -1094,6 +1098,21 @@ check('导出文件名:本地时间、可排序、无冒号(Windows 合法)', ((
 	const name = watch.incidentFileName({ id: 'i84' }, '2026-10-08T14:03:58.490Z');
 	return [/^perf-hud-\d{8}-\d{6}-i84\.json$/.test(name), name.includes(':'), name.includes('T'), name.includes('Z')];
 })(), [true, false, false, false]);
+check('A1 记录器自身开销:环形缓冲 + p99/峰/样本数', (() => {
+	box.state.selfRing.length = 0;
+	box.state.selfCount = 0;
+	box.state.selfMax = 0;
+	for (let i = 1; i <= 100; i += 1) box.recordSelf(i / 100);
+	const stats = box.selfStats();
+	return [stats.samples, stats.max, stats.p99 > 0 && stats.p99 <= 1];
+})(), [100, 1, true]);
+check('A1 自身开销:环形缓冲有上限(不会无限长)', (() => {
+	box.state.selfRing.length = 0;
+	for (let i = 0; i < box.SELF_RING + 50; i += 1) box.recordSelf(0.1);
+	const length = box.state.selfRing.length;
+	box.state.selfRing.length = 0;
+	return length;
+})(), 600);
 check('取件:下标 0 是最差,latest 是时刻最新 —— 面板那个按钮以前导的是最差', (() => {
 	const saved = watch.state.watch.incidents.slice();
 	watch.state.watch.incidents.length = 0;

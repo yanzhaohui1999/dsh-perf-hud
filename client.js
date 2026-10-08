@@ -42,6 +42,7 @@ window.__ModuleLoader__.load({
 		const MUT_SAMPLE = 10;       // DOM 写入归因:每 10 次抓一次栈
 		const MUT_TOP = 2;           // 面板展示的 DOM 写入者条数
 		const BUNDLE_PREFIX = 'bundle:';       // 多包合并 URL 的 key 前缀
+		const LS_DEEP = 'dsh-perf-hud:deep';
 		const LS_PRECISE = 'dsh-perf-hud:precise';
 		const LS_MAP = 'dsh-perf-hud:map';     // 按 rev 缓存的 section 分段表
 		const LS_MARKS = 'dsh-perf-hud:marks';
@@ -680,6 +681,11 @@ window.__ModuleLoader__.load({
 			lastTick: 0,
 			// A 精确归因
 			precise: false,
+			deep: false,           // 深录:装插桩 + 精确归因;默认关(守夜/现场都不装)
+			selfRing: [],          // 最近 SELF_RING 次自身 rAF 回调耗时(A1 自证开销)
+			selfAt: 0,
+			selfCount: 0,
+			selfMax: 0,
 			bundleKeys: new Set(),   // 见过的多包 URL
 			// B fiber
 			idleBaseline: null,
@@ -1247,7 +1253,8 @@ window.__ModuleLoader__.load({
 				env: {
 					domNodes: state.dom.total,
 					heapUsedBytes: state.heap,
-					instrumented: state.on,
+					instrumented: state.on && state.deep === true,
+					deep: state.deep === true,
 					precise: state.precise,
 					// 跨会话(落盘后重开页面)读这份事故时,perf 毫秒要靠它才能对齐墙上时间
 					perfOrigin: new Date(perfOrigin()).toISOString(),
@@ -1408,8 +1415,35 @@ window.__ModuleLoader__.load({
 		}
 
 		// ───────────────────────────── FPS:1 秒滚动窗口 ─────────────────────────────
+		const SELF_RING = 600;
+
+		/**
+		 * A1:记录器自身开销。测量别人的东西必须先自证"我没让它变慢" —— 每帧给自己的
+		 * rAF 回调计时,留最近 600 帧,面板与导出件都给 p99 与峰。
+		 */
+		function recordSelf(ms) {
+			const ring = state.selfRing;
+			if (ring.length < SELF_RING) ring.push(ms);
+			else { ring[state.selfAt % SELF_RING] = ms; state.selfAt += 1; }
+			state.selfCount += 1;
+			if (ms > state.selfMax) state.selfMax = ms;
+		}
+
+		function selfStats() {
+			const ring = state.selfRing;
+			if (ring.length === 0) return { p99: null, max: null, samples: 0 };
+			const sorted = ring.slice().sort((a, b) => a - b);
+			return { p99: round1(percentile(sorted, 0.99)), max: round1(state.selfMax), samples: state.selfCount };
+		}
+
+		function recorderText() {
+			const stats = selfStats();
+			return stats.p99 === null ? translate('none') : `p99 ${stats.p99}ms · ${translate('peak')} ${stats.max}ms · ${stats.samples}`;
+		}
+
 		function frame() {
 			if (state.on === false) return;
+			const selfStarted = performance.now();
 			const now = performance.now();
 			const busy = state.busyMs;
 			state.busyMs = 0;
@@ -1455,6 +1489,7 @@ window.__ModuleLoader__.load({
 				state.unattrWorst = 0;
 				state.windowStart = now;
 			}
+			recordSelf(performance.now() - selfStarted);
 			state.fpsLoop = natives.requestAnimationFrame(frame);
 		}
 
@@ -1707,6 +1742,9 @@ window.__ModuleLoader__.load({
 			try { state.want = localStorage.getItem(LS_ON) !== '0'; } catch (error) { state.want = true; }
 			try { state.collapsed = localStorage.getItem(LS_UI) === '1'; } catch (error) { state.collapsed = false; }
 			try { state.precise = localStorage.getItem(LS_PRECISE) === '1'; } catch (error) { state.precise = false; }
+			try { state.deep = localStorage.getItem(LS_DEEP) === '1'; } catch (error) { state.deep = false; }
+			// 深录关着的时候不该还挂着精确归因(那会白拉那份 12MB 的 map)
+			if (state.deep === false) state.precise = false;
 			try {
 				const saved = JSON.parse(localStorage.getItem(LS_GROUPS) ?? 'null');
 				if (saved !== null && typeof saved === 'object') {
@@ -2478,7 +2516,8 @@ window.__ModuleLoader__.load({
 				context: {
 					scenario: state.streaming ? 'streaming' : 'idle',
 					idleSeconds: state.idleSince === 0 ? 0 : Math.round((performance.now() - state.idleSince) / 1000),
-					instrumented: state.on,
+					instrumented: state.on && state.deep === true,
+					deep: state.deep === true,
 					precise: {
 						enabled: state.precise,
 						bundles: [...bundleMaps.entries()].map(([key, entry]) => ({
@@ -2495,6 +2534,7 @@ window.__ModuleLoader__.load({
 					},
 					isolation: { candidates: experiment.candidates, method: experiment.method, loadBurnMs: EXPERIMENT_LOAD_BURN_MS, loadPeriodMs: EXPERIMENT_LOAD_PERIOD_MS },
 					// 判色阈值也写进文件:别人拿到 JSON 能按同一套口径重新解读
+					recorder: selfStats(),   // 测量工具先自证没有明显改变被测对象
 					thresholds: {
 						fps: { warnBelow: 50, errorBelow: 30 },
 						frameMs: { warnAbove: 120, errorAbove: 200 },
@@ -2505,7 +2545,8 @@ window.__ModuleLoader__.load({
 				},
 				page: location.href,
 				userAgent: navigator.userAgent,
-				instrumented: state.on,
+				instrumented: state.on && state.deep === true,
+				deep: state.deep === true,
 				since: new Date(state.since > 0 ? state.since : Date.now()).toISOString(),
 				summary: {
 					fps: round1(state.fps),
@@ -2717,19 +2758,50 @@ window.__ModuleLoader__.load({
 			bump();
 		}
 
+		/**
+		 * 插桩的装/卸。**只有深录档才装**(见 AGENTS §0.1 三种模式)—— 守夜与现场都不装,
+		 * 面板上那几行回调归因在没装的时候如实写"未开插桩",而不是假装读数为 0。
+		 * 还原时只在"当前仍是我们那份包装"时才写回,避免踩掉别人的包装(同 §5)。
+		 */
+		function applyProbeState() {
+			const want = state.on === true && state.deep === true;
+			if (want) {
+				W.setTimeout = wrappers.timeout;
+				W.setInterval = wrappers.interval;
+				W.requestAnimationFrame = wrappers.raf;
+				Node.prototype.appendChild = mutWrappers.appendChild;
+				Node.prototype.insertBefore = mutWrappers.insertBefore;
+				Element.prototype.setAttribute = mutWrappers.setAttribute;
+				return;
+			}
+			if (W.setTimeout === wrappers.timeout) W.setTimeout = natives.setTimeout;
+			if (W.setInterval === wrappers.interval) W.setInterval = natives.setInterval;
+			if (W.requestAnimationFrame === wrappers.raf) W.requestAnimationFrame = natives.requestAnimationFrame;
+			if (Node.prototype.appendChild === mutWrappers.appendChild) Node.prototype.appendChild = mutNatives.appendChild;
+			if (Node.prototype.insertBefore === mutWrappers.insertBefore) Node.prototype.insertBefore = mutNatives.insertBefore;
+			if (Element.prototype.setAttribute === mutWrappers.setAttribute) Element.prototype.setAttribute = mutNatives.setAttribute;
+		}
+
+		/** 深录开关:插桩 + 精确归因一起进出(两者是"要抓全"的同一件事)。 */
+		function setDeep(on) {
+			state.deep = on === true;
+			try { localStorage.setItem(LS_DEEP, state.deep ? '1' : '0'); } catch (error) { /* 记不住就本次会话有效 */ }
+			if (state.deep === false && state.precise === true) setPrecise(false);
+			if (state.deep === true && state.precise === false) setPrecise(true);
+			applyProbeState();
+			dirty = true;
+			bump();
+		}
+
 		function start() {
 			if (state.on) return;
 			state.on = true;
-			W.setTimeout = wrappers.timeout;
-			W.setInterval = wrappers.interval;
-			W.requestAnimationFrame = wrappers.raf;
-			Node.prototype.appendChild = mutWrappers.appendChild;
-			Node.prototype.insertBefore = mutWrappers.insertBefore;
-			Element.prototype.setAttribute = mutWrappers.setAttribute;
+			applyProbeState();
 			state.windowStart = performance.now();
 			state.windowFrames = 0;
 			state.lastFrameAt = 0;
 			state.worstFrameMs = 0;
+			recordSelf(performance.now() - selfStarted);
 			state.fpsLoop = natives.requestAnimationFrame(frame);
 			state.sampleTimer = natives.setInterval(sampleTick, 1000);
 			state.domTimer = natives.setInterval(sampleDom, 2000);
@@ -2751,13 +2823,7 @@ window.__ModuleLoader__.load({
 			state.on = false;
 			// 关掉 HUD 不能把插件留在"被隔离"的状态:正在跑的实验立刻走恢复流程。
 			if (experiment.phase === 'running') abortExperiment();
-			// 只在全局仍是我们自己那份包装时恢复:同页热更新出新实例时,别把新的踩掉。
-			if (W.setTimeout === wrappers.timeout) W.setTimeout = natives.setTimeout;
-			if (W.setInterval === wrappers.interval) W.setInterval = natives.setInterval;
-			if (W.requestAnimationFrame === wrappers.raf) W.requestAnimationFrame = natives.requestAnimationFrame;
-			if (Node.prototype.appendChild === mutWrappers.appendChild) Node.prototype.appendChild = mutNatives.appendChild;
-			if (Node.prototype.insertBefore === mutWrappers.insertBefore) Node.prototype.insertBefore = mutNatives.insertBefore;
-			if (Element.prototype.setAttribute === mutWrappers.setAttribute) Element.prototype.setAttribute = mutNatives.setAttribute;
+			applyProbeState();   // state.on 已经置 false,这里必然走"卸"的分支
 			natives.cancelAnimationFrame(state.fpsLoop);
 			natives.clearInterval(state.sampleTimer);
 			natives.clearInterval(state.domTimer);
@@ -3196,6 +3262,8 @@ window.__ModuleLoader__.load({
 				component: '组件', cumulative: '累计', maps: '批次分段',
 				overview: '概览', overviewHint: '三秒判断:最差帧 + 最差 longtask 及其归属 + 归因命中数',
 				overviewFrame: '帧', overviewBlame: '最差那条', worstSecondShort: '最差秒', hostShort: '宿主',
+				deepShort: '深录', deepHint: '深录(= 插桩 + 精确归因):装上调度点与 DOM 写入的包装,并拉那份 12MB 的 sourcemap。默认关着 —— 守夜与现场都不插桩',
+				recorder: '记录器自身', recorderHint: '每帧给这个 HUD 自己的 rAF 回调计时:测量工具必须自证没有明显改变被测对象。p99 取最近 600 帧',
 				split: '帧里花在哪', splitTotal: '这段长动画帧共', splitWorst: '最差那条',
 				splitHead: '脚本侧', splitRender: '渲染', splitTail: '样式+布局+绘制',
 				splitNoLoaf: '暂时没有(要等到一条 >50ms 的长动画帧;LoAF 只报 50ms 以上的)',
@@ -3252,6 +3320,8 @@ window.__ModuleLoader__.load({
 				component: 'component', cumulative: 'total', maps: 'maps',
 				overview: 'overview', overviewHint: 'Three-second read: worst frame + worst longtask and its owner + attribution hit ratio',
 				overviewFrame: 'frame', overviewBlame: 'worst one', worstSecondShort: 'worst sec', hostShort: 'host',
+				deepShort: 'deep', deepHint: 'Deep = instrumentation + precise attribution: wraps scheduling points and DOM writes and fetches the 12MB sourcemap. Off by default',
+				recorder: 'HUD itself', recorderHint: 'Times this HUD own rAF callback: a measuring tool must prove it does not change what it measures. p99 over the last 600 frames',
 				split: 'where the frame went', splitTotal: 'long frame total', splitWorst: 'worst',
 				splitHead: 'script side', splitRender: 'render', splitTail: 'style+layout+paint',
 				splitNoLoaf: 'not yet (needs a long animation frame >50ms; LoAF only reports those)',
@@ -3556,10 +3626,10 @@ window.__ModuleLoader__.load({
 				h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(1)} fps`),
 				h('button', {
 					type: 'button',
-					style: { ...S.btn, color: state.precise ? 'var(--dsw-alias-brand-primary)' : undefined },
-					title: t('preciseHint'),
-					onClick: () => setPrecise(state.precise === false),
-				}, `${t('preciseShort')}${state.precise ? '✓' : ''}`),
+					style: { ...S.btn, color: state.deep ? 'var(--dsw-alias-brand-primary)' : undefined },
+					title: t('deepHint'),
+					onClick: () => setDeep(state.deep === false),
+				}, `${t('deepShort')}${state.deep ? '✓' : ''}`),
 				h('button', { type: 'button', style: S.btn, title: open ? t('collapse') : t('expand'), onClick: toggle }, open ? '–' : '+'),
 				h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff')));
 
@@ -3655,6 +3725,9 @@ window.__ModuleLoader__.load({
 							`${state.unattrAvg.toFixed(1)}ms · ${t('peak')} ${state.unattrPeak.toFixed(0)}ms`)),
 					unexplained === null ? null : h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } },
 						`${t('unexplained')}:${unexplained.ms}ms(${unexplained.percent}%)→ ${t('unexplainedHint')}`),
+					h('div', { style: S.row },
+						h('span', { style: S.label, title: t('recorderHint') }, t('recorder')),
+						h('span', { style: S.num }, recorderText())),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('worstSecond')),
 						h('span', { style: S.num }, worstSecondText())),
