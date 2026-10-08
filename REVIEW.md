@@ -67,7 +67,28 @@
 
 本仓库只能把这两条做成上游能直接用的证据(事故包的 `packages` 已指向具体包与调用点),以及自己这侧不重复它们。
 
-### 3.1 定了要做的
+### 3.1 定了要做的(**状态 2026-10-08 晚**)
+
+图例:✅ 已落地 · 🔶 部分/待补验 · ⬜ 还没动
+
+| # | 条目 | 状态 | 备注 |
+|---|---|---|---|
+| D1 | 三种模式(守夜/现场/深录) | 🔶 `b79853e` | 代码已落地(`applyProbeState` 只在地録装插桩,标题栏按钮改「深录」);**待补验**:点开前后 `instrumented` 是否真的 false→true —— 上一轮的读数表达式取错了字段路径(`snapshot().environment.*` 那一层没取对),下次先打印一次 `snapshot()` 的键再断言 |
+| A1 | 记录器自身开销 | 🔶 `b79853e` | `recordSelf`/`selfStats`/面板一行/导出 `context.recorder` 都在;**待补**:在真实页面读一次 p99 的真实数字并记进 §2 |
+| A2 | 跨会话基线 | ⬜ | 每个会话落盘一份分布(保留最近约 20 个),只进导出件 |
+| A4 | Chrome trace | ⬜ | 人工录指引(已有)+ 页面内准 trace(event/element timing)|
+| A5 | 宿主进程火焰图 | ⬜ | `node:inspector` 同进程按需采 **`.cpuprofile`**;**要改 `index.js` → 需要重启宿主,重启前必须问过用户** |
+| B1 | 记录器自身被当元凶 | ⬜ | 标注 + 汇总单列;`primaryBlame` 跳过它 |
+| B2 | 压缩名过滤 | ⬜ | 代码改法:`usableComponentName` 里 `name.startsWith('$')` → `return null`。**坑**:`usableComponentName(type)` 第一行是 `if (typeof type !== 'function') return null` —— 断言必须传**类/函数**(`class ChatView {}`),传 `{ name: 'ChatView' }` 会全返回 null(上一轮就是这么把提交写坏的,已回退 `cd65639`/`add0632`)。另外 `(ChatView)` 这种括号名根本进不到这里,更早被 `looksLikeInfrastructure` 挡掉 |
+| B3 | 落盘计数进导出件 | ⬜ | 导出 `context` 加一段 `store`: `restored` / `trimmedByBytes` / `deduped` / `captured` / `dropped` |
+| C2 | i18n 英文兜底 | ⬜ | 兜底改成"跟文档语言,取不到才英文";先清面板撤下后遗留的死字符串 |
+| D2 | 60 秒时间条 | ⬜ | 放进「取证明细」,与导出件 ASCII 条带同口径 |
+| D3 | 留存策略 | ⬜ | 最差 10 条 + "每天最差 1 条"(最多 7 天)|
+| D5 | 饼图二级 | ⬜ | 脚本侧展开成按包分布;另给纯 JS vs 强制样式布局(`forcedStyleAndLayoutDuration`)|
+
+**跑这些改动时的两条硬规矩**(都是踩过的):① 替换 `client.js` 之后要 `grep -c` 确认命中数 —— 锚点在 `frame()` 与 `start()` 各有一处的坑已经踩过一次(见 [AGENTS.md](AGENTS.md) §8 第 14 条);② 凡是插进 `apply` / `start` / 渲染路径的改动,**必须真的打开页面看一眼**,因为离线三套件只抽纯函数、不跑 `apply`。
+
+### 3.1.1 原清单
 
 | # | 条目 | 结论与做法 |
 |---|---|---|
