@@ -1433,7 +1433,7 @@ window.__ModuleLoader__.load({
 			const ring = state.selfRing;
 			if (ring.length === 0) return { p99: null, max: null, samples: 0 };
 			const sorted = ring.slice().sort((a, b) => a - b);
-			return { p99: round1(percentile(sorted, 0.99)), max: round1(state.selfMax), samples: state.selfCount };
+			return { p99: round1(percentile(sorted, 99)), max: round1(state.selfMax), samples: state.selfCount };   // percentile 的 p 是百分数
 		}
 
 		function recorderText() {
@@ -2801,7 +2801,6 @@ window.__ModuleLoader__.load({
 			state.windowFrames = 0;
 			state.lastFrameAt = 0;
 			state.worstFrameMs = 0;
-			recordSelf(performance.now() - selfStarted);
 			state.fpsLoop = natives.requestAnimationFrame(frame);
 			state.sampleTimer = natives.setInterval(sampleTick, 1000);
 			state.domTimer = natives.setInterval(sampleDom, 2000);

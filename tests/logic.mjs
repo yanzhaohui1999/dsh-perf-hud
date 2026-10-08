@@ -222,6 +222,7 @@ const newPieces = [
 	'const SELF_RING = ',
 	'function recordSelf(',
 	'function selfStats(',
+	'function recorderText(',
 	'const LS_MAP = ',
 	'const scriptLines = ',
 	'const SCRIPT_LINES_MAX = ',

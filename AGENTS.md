@@ -108,7 +108,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 254 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 256 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -254,7 +254,8 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 11. **单帧尖刺不能用 p50 基线判,而且基线必须排除本窗口**:真实数据里有一帧 **983.7ms**,而它前后都是 **16.7ms(正好 60fps)**、窗口里没有一条 longtask/LoAF 与它重叠 —— 这一帧恰好卡在 1 秒间隙线**下面**(983.7 < 1000),所以被当成"真卡顿"抓了下来。三条改法:① `baseline` 改成 `frameRing.stats(from, to)`(排除本窗口),否则"比会话最差还差"永远不成立;② 额外交 `worstFrameJs`(最差帧有没有 JS 重叠)与 `suspectedThrottle`(≥500ms + 无 JS + 前后帧中位 <100ms);③ 判"是不是真的变差"要看**最差帧的倍数**,不是 p50 —— 同一份包原先给出"与本会话平时基本一致(×1.00)",把 983ms 的尖刺判成了正常。
 12. **`PerformanceObserver.observe({ buffered: true })` 会把已经采过的 LoAF 再放一遍**:每次重新挂观察器(`disable→enable`、HMR 重载、重新 `apply`)都会重放最近 200 条 —— 同一个 `startTime` 于是被**重新触发**,同一次卡顿裂成多条不同 id 的事故。实测面板上同时出现 `i2 / i29 / i31`,三条的时间戳一模一样(298ms @ 23:30:18)。修法:去掉 `buffered: true`(挂上之前的帧我们本来也没采);另外按 `at|cause` 去重兜底 —— 但**缺这两个字段的条目不能参与去重**,否则会把真事故当成重复吃掉(单测里踩过)。
 13. **长度预算的桩数据必须是真实量级**:`detailSummary` 的预算一直是 30~34,而桩里的数字全是 0/个位数,于是"最差秒 152ms · 未归因 17ms · DOM 写入 36250"在 396px 面板里被挤成两行这件事**从来没被断言发现**。现在桩里塞五位数,并把摘要砍到只留结论对。
-14. **改 `client.js` 时不要同时跑"受控实测"**:`dsh-client-hmr` 会热载新代码,正在跑的采集会**换到新实例**(seq 归零、状态重置),实验结果直接作废。实测踩过一次:边写落盘功能边跑受控捕获,拿到的 id 与时间戳全对不上。要采集就先把代码定下来。
+14. **批量替换(按次数替换)会改到同名调用点,而且文件本身还是"语法正确"的**:给 `frame()` 的 rAF 循环插一句自计时,锚点 `state.fpsLoop = natives.requestAnimationFrame(frame);` 在 `frame()` 与 `start()` 里**各有一处**,按次数替换就把 `selfStarted` 插进了 `start()` —— 那里没有这个变量,于是**插件激活直接失败**(外壳日志 `web boot: 1 entry did not activate / dsh-perf-hud: failed`),面板整块消失,而 `node --check` 与三套件**全绿**(单测只抽纯函数,不跑 `apply`)。教训:替换后要 `grep -c` 确认命中数;凡是插进"只在浏览器里跑"的路径(apply / start / 渲染),必须真的打开页面看一眼。
+15. **改 `client.js` 时不要同时跑"受控实测"**:`dsh-client-hmr` 会热载新代码,正在跑的采集会**换到新实例**(seq 归零、状态重置),实验结果直接作废。实测踩过一次:边写落盘功能边跑受控捕获,拿到的 id 与时间戳全对不上。要采集就先把代码定下来。
 
 ---
 
