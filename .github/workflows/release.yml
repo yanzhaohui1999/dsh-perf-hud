@@ -45,7 +45,7 @@ jobs:
           echo "tag=$tag package=$pkg"
           test "$tag" = "$pkg"
 
-      - name: Offline suites (323 assertions)
+      - name: Offline suites (338 assertions)
         run: |
           node tests/attribution.mjs
           node tests/logic.mjs

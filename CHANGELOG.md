@@ -17,6 +17,7 @@
 
 ### 新增
 
+- **宿主进程 CPU 火焰图(A5)**:宿主半用内置 `node:inspector` 在**同进程**按需采一段 V8 CPU profile(`Profiler.enable → start → N 秒 → stop`),`Profiler.stop` 回的就是标准 `.cpuprofile`,speedscope 可直接打开。路由形态沿用既有那套(`requestBody: 'buffered'` + `Request`/`Response.json`):`POST {op:'profileStart', seconds?}` —— 默认 **5 秒**、夹 [0.1, 30],**只等"真的开起来"就返回**(采样由定时器后台收尾,不占着 HTTP 请求 5 秒);`POST {op:'profileGet'}` —— 取回最近一次采到的 profile,**没采过回 404「还没采过」而不是空对象**;`GET` 的 `host.cpuProfile` 给状态(`running` / `collected` / `bytes` / `samples` / `meta` / `error`)。四条硬性:① **不常开**(采样本身有开销,只由显式 op 触发)、**单飞**(采集中重入 500 拒绝);② 失败(会话未连接 / `Profiler.*` 报错)**照实回错误原文**,不许假装成功;③ profile **只在内存**,不写任何目录;④ 不改宿主任何原型(`apply(ctx, options)` 的第二参只是测试缝)。两条**实测证伪**写进 [AGENTS.md](AGENTS.md) §8.16/§8.17:① "宿主已开着别的 inspector 会冲突"不成立 —— 同进程 `new Session().connect()` 不需要 `--inspect`,`inspector.url()` 是 undefined,且**多会话并存**(另一会话正在采时再 `Profiler.start` 也不报错,后来的直接接手采样;防互踩的是我们自己的单飞);② 采样密度实测只有 **~180~250 次/秒**(标称 1000Hz),所以 5 秒包只有 ~1000 个采样、**约 10~13KB**(轻负载 11.5KB / 重负载 12.5KB / 边解析 5.5MB JSON 10.3KB)—— 体积由**不同调用栈的数量**决定、不由时长决定。宿主 event-loop 影响实测在噪声内(p50 1.27→1.28ms)。⚠️ 宿主半改动,**要重启宿主才生效**
 - **交互延迟采集(event / element timing,A4 的页面内那一半)**:一个 `PerformanceObserver` 同时挂 `event`(带 `durationThreshold: 100`)与 `element`,留最近 200 条;整机导出件给全量、事故包给窗口内的。每条给端到端 `ms`、推导出来的 `waitMs`(输入延迟)/ `handlerMs`(处理器本身)与 `isInteraction`(`interactionId > 0` 才是真交互)。**只进导出件,面板不显示**。**不承诺帧内拆分**:输入延迟 / 处理 / 呈现三段页面内没有 API,已写进 `missing` + `howToRead` 并给出 DevTools 的替代路径;`element` timing 只观察带 `elementtiming` 属性的元素,DSH 页面上恒为 0 —— 照实记 0 并解释原因,不假装采到。真页面实测(CDP 真实鼠标输入):20 条事件入库,`pointerover` 的 `ms 112 / waitMs 0.3 / handlerMs 0.4` —— 正好说明"端到端长 ≠ 页面反应慢"
 - **饼图二级:脚本侧按包 + 纯 JS / 强制样式布局**(「取证明细」组里再加两行):「脚本按包」把最近这段 LoAF 窗口的脚本耗时按包汇总(与事故包 `incident.packages` 走同一条 resolve 路),「纯 JS / 强制布局」把 `forcedStyleAndLayoutDuration` 从脚本耗时里单列 —— 它**已经算在**脚本耗时里,回答的是"脚本慢是因为 JS 还是因为样式"。结果按窗口指纹缓存,不让面板每 tick 重算 200×12 条脚本。实测面板给出 `dsh-api-gateway 881ms · dsh-client-connection 312ms · dsh-client-modules 208ms`
 - **导出件带跨会话基线(A2)**:每个会话落一条帧分布(`p50` / `p90` / `p99` / 最差 / 帧数 / 时刻 / 会话起点),最多留最近 20 条,写进导出的 `context.sessionBaselines`(整机导出件与事故包都带)。**只进导出件,面板不显示** —— 它不是"现在"的读数;文件里就标明它是**粗参照,不是回归判定**(会话之间的负载、视口、是否插桩都不同,帧数量级能差一个数量级)。事故包 `missing` 里那条"没有对照基线"随之改成"跨机器 / 跨浏览器"
@@ -80,7 +81,7 @@
 - 概览改块式左对齐 + 主动断行(名字相同时整行不显示);补长度预算断言(36/60/30/30/34/24)
 - 隔离实验主指标改用「每帧未归因残差」,并收窄口径为"空闲筛查,不是因果证明"
 - 合并判色:FPS ≤50 或最差帧 ≥120ms → 黄;≤30 或 ≥200ms → 红(任一触发即降色)
-- 测试:323 条离线断言(attribution 11 / logic 288 / host 24)+ 两个线上套件
+- 测试:338 条离线断言(attribution 11 / logic 288 / host 39)+ 两个线上套件
 
 ### 文档
 

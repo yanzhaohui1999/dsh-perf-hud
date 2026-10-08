@@ -6,6 +6,9 @@
  * 用一个最小 ctx 装上 index.js 的 apply(),拿到它注册的 /api/dsh-perf-hud/host 路由,
  * 直接以 Request/Response 驱动它,断言:GET 探针、事件循环读数、bundle 读写代理、
  * 以及"没有 confirm 绝不写配置"这条安全线。顺带打印真实测到的事件循环延迟。
+ *
+ * CPU profile 那一段**不真的去采**(那是进程级的重活),用假的 inspector 桩注入 ——
+ * 与客户端半 logic.mjs 的做法一致:测的是 index.js 那份代码,不是另写一份等价实现。
  */
 import { readFileSync } from 'node:fs';
 import { apply } from '../index.js';
@@ -40,6 +43,31 @@ const manager = {
 	},
 };
 
+// ── 假的 inspector 桩:离线套件不真的去采(进程级的重活) ────────────
+// 只记录被调用的方法名 + 回一份最小但**结构合法**的 .cpuprofile,用来断言状态机与安全线。
+const inspectorCalls = [];
+const fakeProfile = {
+	nodes: [
+		{ id: 1, callFrame: { functionName: 'fakeHostLoop', url: '/w/index.js', lineNumber: 1, columnNumber: 1 }, hitCount: 3, children: [] },
+		{ id: 2, callFrame: { functionName: '(idle)', url: '', lineNumber: 0, columnNumber: 0 }, hitCount: 1, children: [] },
+	],
+	startTime: 1000,
+	endTime: 61000,
+	samples: [1, 1, 2],
+	timeDeltas: [100, 200, 300],
+};
+const fakeInspector = {
+	Session: class {
+		connect() { inspectorCalls.push('connect'); }
+		disconnect() { inspectorCalls.push('disconnect'); }
+		post(method, _params, callback) {
+			inspectorCalls.push(method);
+			if (method === 'Profiler.stop') callback(null, { profile: fakeProfile });
+			else callback(null, {});
+		}
+	},
+};
+
 const routes = new Map();
 const disposers = [];
 const listeners = new Map();          // 宿主 ctx.on 注册的监听器(公开接口)
@@ -65,7 +93,7 @@ const pluginContext = {
 	},
 };
 
-apply(pluginContext);
+apply(pluginContext, { inspector: fakeInspector });
 
 const route = routes.get('/api/dsh-perf-hud/host');
 check('注册了 /api/dsh-perf-hud/host', route !== undefined);
@@ -147,6 +175,85 @@ check('确认后写入并把 ChangeResult 原样带回', ok.result?.application 
 
 const unknown = await post({ op: 'nope' });
 check('未知 op 返回 400', unknown.status === 400);
+
+// ── 宿主 CPU profile:显式按需、单飞、不假装成功 ────────────────────
+// 采样有开销,所以先钉住"没触发就是没采过" —— 回的是状态而不是空对象,
+// 否则调用方会把"从没采过"读成"采到了但宿主是空的"。
+const idleProfile = await (await get('')).json();
+check('未触发时状态是没采过(不常开)',
+	idleProfile.host?.cpuProfile?.collected === false && idleProfile.host?.cpuProfile?.collections === 0
+	&& idleProfile.host?.cpuProfile?.running === false, JSON.stringify(idleProfile.host?.cpuProfile));
+const noProfileYet = await post({ op: 'profileGet' });
+const noProfileBody = await noProfileYet.json();
+check('没采过就照实说"还没采过"', noProfileBody.ok === false && noProfileBody.error === '还没采过',
+	JSON.stringify(noProfileBody).slice(0, 120));
+check('没采过取回是 404(不是 200 空对象)', noProfileYet.status === 404, `status=${noProfileYet.status}`);
+
+const started = await (await post({ op: 'profileStart', seconds: 0.1 })).json();
+check('显式触发后进入采集中', started.ok === true && started.running === true && started.seconds === 0.1,
+	JSON.stringify(started).slice(0, 120));
+check('走的是 Profiler.enable → Profiler.start', JSON.stringify(inspectorCalls) === JSON.stringify(['connect', 'Profiler.enable', 'Profiler.start']),
+	JSON.stringify(inspectorCalls));
+
+const second = await post({ op: 'profileStart', seconds: 0.1 });
+const secondBody = await second.json();
+check('同一时间只允许一个采样(重入被拒)', secondBody.ok === false && second.status === 500, secondBody.error);
+check('重入被拒时没有再开一次采样', inspectorCalls.filter((m) => m === 'Profiler.start').length === 1);
+
+await new Promise((resolve) => setTimeout(resolve, 250));
+const collected = await (await post({ op: 'profileGet' })).json();
+check('采完能取回标准 .cpuprofile 结构',
+	collected.ok === true && Array.isArray(collected.profile?.nodes) && Array.isArray(collected.profile?.samples)
+	&& typeof collected.profile?.startTime === 'number', JSON.stringify(collected.meta));
+check('profile 原样返回(不被加工)', collected.profile?.nodes?.[0]?.callFrame?.functionName === 'fakeHostLoop');
+check('带回自描述元信息(时长/节点/采样/字节/pid)',
+	collected.meta?.bytes > 0 && collected.meta?.nodes === 2 && collected.meta?.samples === 3
+	&& collected.meta?.pid === process.pid && collected.running === false && collected.collections === 1,
+	JSON.stringify(collected.meta));
+check('采完断开 inspector 会话(不留常开句柄)',
+	inspectorCalls.filter((m) => m === 'Profiler.stop').length === 1 && inspectorCalls.at(-1) === 'disconnect',
+	JSON.stringify(inspectorCalls));
+
+// 失败路径:宿主已经开着别的 profiler / inspector 被占 —— 必须回错误原文,绝不假装成功。
+const routes2 = new Map();
+const CONNECT_ERROR = 'inspector 会话不可用:已被占用';
+const ctx2 = {
+	root: Object.create(proto),
+	get() { return undefined; },
+	on() { return () => {}; },
+	effect(fn) { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose); return () => {}; },
+	inject(_names, callback) {
+		callback({
+			get: (name) => (name === 'connection'
+				? { fetch: { register: (route) => { routes2.set(route.path, route); return () => {}; } } }
+				: undefined),
+			effect(fn) { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose); return () => {}; },
+		});
+	},
+};
+apply(ctx2, {
+	inspector: { Session: class { connect() { throw new Error(CONNECT_ERROR); } disconnect() {} post() {} } },
+});
+const route2 = routes2.get('/api/dsh-perf-hud/host');
+const failedRes = await route2.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host', {
+	method: 'POST',
+	headers: { 'content-type': 'application/json' },
+	body: JSON.stringify({ op: 'profileStart' }),
+}));
+const failedBody = await failedRes.json();
+check('会话建不起来时回错误原文', failedBody.ok === false && failedBody.error === CONNECT_ERROR,
+	JSON.stringify(failedBody.error));
+check('失败如实回 5xx,且没进入采集中', failedRes.status === 500 && failedBody.running === false,
+	`status=${failedRes.status}`);
+check('失败时也照实报默认时长(5 秒)', failedBody.seconds === 5, `seconds=${failedBody.seconds}`);
+const failedGet = await route2.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host', {
+	method: 'POST',
+	headers: { 'content-type': 'application/json' },
+	body: JSON.stringify({ op: 'profileGet' }),
+}));
+const failedGetBody = await failedGet.json();
+check('失败之后仍然是"没采过"', failedGetBody.ok === false && failedGetBody.collected === false,
+	JSON.stringify(failedGetBody).slice(0, 120));
 
 for (const dispose of disposers) {
 	if (typeof dispose === 'function') dispose();

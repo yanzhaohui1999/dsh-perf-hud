@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ⬜ 仓库已建(私有),待转公开、加 topic |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,漏一份就失败 |
-| 6 | 门禁全绿 | ✅ 323 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ 338 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
 | 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
 
@@ -33,7 +33,7 @@
 
 | 判据 | 怎么验 | 最新实测 |
 |---|---|---|
-| 离线断言全绿 | `npm test` | **323** 条(attribution 11 / logic 288 / host 24) |
+| 离线断言全绿 | `npm test` | **338** 条(attribution 11 / logic 288 / host 39) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 守夜默认**零插桩** | `snapshot().instrumented` 在三种模式下的取值 | 面板打开、HUD 开着:`instrumented: false / deep: false`;点「深录」→ `true / true`;点回去 → `false / false`,`errors` 全程 0 |
@@ -83,7 +83,6 @@
 | A1 | 记录器自身开销 | 🔶 `b79853e` | `recordSelf`/`selfStats`/面板一行/导出 `context.recorder` 都在;**待补**:在真实页面读一次 p99 的真实数字并记进 §2 |
 | A2 | 跨会话基线 | ✅ `c0d7317` | 每个会话一条 `{p50,p90,p99,worstMs,frames,at,since}`,最多 20 条,只进导出件(静态断言钉住「不进面板」);`note` 写死「粗参照,不是回归判定」;写盘时机 = 每次导出 + `pagehide` |
 | A4 | Chrome trace | ✅ `b9258fd` | 人工录指引(已有)+ 页面内准 trace(`event` / `element` timing,≥100ms,留最近 200 条)。**只做页面内那一半**:帧内拆分页面内没有 API,已写进 `missing` + `howToRead`(见 §3.2),不承诺 |
-| A5 | 宿主进程火焰图 | 🔶 另一条分支 | `node:inspector` 同进程按需采 **`.cpuprofile`**;**在 `feat/a5-host` 分支上做**(要改 `index.js` → 需要重启宿主,重启前必须问过用户),合并时由协调者重算断言总数 |
 | B1 | 记录器自身被当元凶 | ✅ `e0733cb` | 标注 + 汇总单列;`primaryBlame` 在有别的候选时跳过它。真页面实测:`PerfHud/PerfHudStress` 那条 224ms 长任务改为归到 `RootEntry`,只剩记录器自己时才进「记录器自身 N×」 |
 | B2 | 压缩名过滤 | ✅ `a0ec157` | `usableComponentName` 里 `name.startsWith('$')` → `return null`。**坑(踩过两次)**:`usableComponentName(type)` 第一行是 `if (typeof type !== 'function') return null` —— 断言必须传**类/函数**(`class ChatView {}`),传 `{ name: 'ChatView' }` 会全返回 null(上一轮就是这么把提交写坏的,已回退 `cd65639`/`add0632`)。⚠️ 那两次回退的说明里还留了一句**错的**理由:"`(ChatView)` 早被 `looksLikeInfrastructure` 挡掉" —— 实测 `looksLikeInfrastructure('(ChatView)')` 是 **false**(两条正则 `Slot\|Outlet\|Column` 与 `(Boundary\|Provider\|Context)$` 都不匹配它)。正确的理由是**入参类型**:这个函数只收 React 的 type,而 `(Name)` 是渲染层给 DOM 写入表"组件兜底桶"加的显示标记,不会作为 type 回来 |
 | B3 | 落盘计数进导出件 | ✅ `86087cf` | 导出 `context` 加一段 `store`: `restored` / `trimmedByBytes` / `deduped` / `captured` / `dropped`(静态断言核五个键都在) |
@@ -91,6 +90,8 @@
 | D2 | 60 秒时间条 | ✅ `cfcf00b` | 放进「取证明细」,100×18 的 SVG,**与导出件 ASCII 条带同口径**(静态断言读 `tools/inspect-incident.mjs` 核阈值) |
 | D3 | 留存策略 | ✅ `5c4fea1` | 最差 10 条 + "每天最差 1 条"(最多 7 天);每条带 `day` / `tier`,清单里给「当天最差」标注;上限 = 10 + 7 |
 | D5 | 饼图二级 | ✅ `098ed33` | 脚本侧展开成**按包**分布(与 `incident.packages` 同一条 resolve 路);另给纯 JS vs 强制样式布局(`scripts[].forcedMs`),并写明强制布局已含在脚本耗时里 |
+
+| A5 | 宿主进程火焰图 | 🔶 `d1ab74b` | 宿主半用内置 `node:inspector` 在**同进程**按需采 `.cpuprofile`:`POST {op:'profileStart', seconds?}`(默认 5 秒、夹 [0.1,30];只等"真的开起来"就返回,采样由定时器后台收尾)+ `POST {op:'profileGet'}`(没采过回 404「还没采过」,不回空对象),`GET` 的 `host.cpuProfile` 给状态;不常开、单飞(重入 500 拒绝)、只在内存、失败照实回错误原文。实测(Node v25.9.0,**本机独立进程 —— 宿主真实进程未实测,要重启宿主才生效**):5 秒 profile 轻负载 **11.5KB**/15 节点/1226 采样、80% CPU 重负载 **12.5KB**/23 节点/974 采样、边解析 5.5MB JSON **10.3KB**/17 节点/906 采样;采样期间宿主 event-loop 差异在噪声内(p50 1.27→1.28ms,连"采样后"的 p99 都略高于"采样中")。两条与交办描述不符的实测结论见 AGENTS §8.16/§8.17。**待补验**:重启后在真宿主进程上采一次,核对 `bytes`/`samples` 与这次同量级 |
 
 **跑这些改动时的两条硬规矩**(都是踩过的):① 替换 `client.js` 之后要 `grep -c` 确认命中数 —— 锚点在 `frame()` 与 `start()` 各有一处的坑已经踩过一次(见 [AGENTS.md](AGENTS.md) §8 第 14 条);② 凡是插进 `apply` / `start` / 渲染路径的改动,**必须真的打开页面看一眼**,因为离线三套件只抽纯函数、不跑 `apply`。
 
