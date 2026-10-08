@@ -339,6 +339,14 @@ check('sectionOwner(第 11 行) = b(0-based 10 起)', EX.sectionOwner(entry, 11)
 check('sectionOwner(第 25 行) = b', EX.sectionOwner(entry, 25), 'b');
 check('sectionOwner(第 26 行) = c', EX.sectionOwner(entry, 26), 'c');
 check('sectionOwner(第 0 行,非法) = null', EX.sectionOwner(entry, 0), null);
+// 断言必须传**类/函数**:usableComponentName 第一行是 `typeof type !== 'function'`,传
+// `{ name: 'ChatView' }` 会全返回 null(上一轮就是这么把一个假绿的提交写出来的)。
+check('B2:$ 开头的压缩名被挡掉;具名组件照旧通过,匿名仍是 null', [
+	EX.usableComponentName(class $c {}),
+	EX.usableComponentName(class $w {}),
+	EX.usableComponentName(class {}),
+	EX.usableComponentName(class ChatView {}),
+], [null, null, null, 'ChatView']);
 
 // ── A2:LoAF 脚本 → 包名(charPos → 行号 → 分段表)────────────────────
 const comboUrl = 'http://h/plugins/??dsh-a/client.js,dsh-b/client.js&rev=9';

@@ -617,6 +617,10 @@ window.__ModuleLoader__.load({
 			const name = type.displayName ?? type.name;
 			if (typeof name !== 'string' || name === '' || REACT_INTERNAL.has(name) || looksLikeInfrastructure(name)) return null;
 			if (/^[A-Za-z]{1,2}\d{0,3}$/.test(name)) return null;
+			// 打包器生成的 `$` 开头名字对读的人零信息,一律挡掉(实测生产构建里 `$c` / `$w`
+			// 会混进"独立包名/组件名"的读数,而且看着像真名字,比匿名更误导)。
+			// 括号形态不用在这里管:`(Name)` 是显示时加的兜底桶标记,进不到这个函数。
+			if (name.startsWith('$')) return null;
 			return name;
 		}
 
