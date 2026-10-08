@@ -178,6 +178,12 @@ process.exitCode = failed === 0 ? 0 : 1;
 		/packageOfScript\(script\.url, script\.charPos\)/.test(source)
 		&& /forcedMs: script\.forcedMs/.test(source)
 		&& /forced \+= script\.forcedMs \?\? 0/.test(source), true);
+
+	// A4:交互延迟这一层"只进导出件",而且必须两个导出件都带(事故包只带窗口内的)
+	check('A4:交互延迟进两个导出件(事故包按窗口过滤)',
+		[/interactionsInWindow: interactions\.length/, /const interactions = \(state\.watch\.interactions \?\? \[\]\)\.filter/, /records: state\.watch\.interactions,/].every((re) => re.test(source)), true);
+	check('A4:交互延迟不进面板渲染区(只进导出件)',
+		source.slice(source.indexOf('function PerfHud(')).includes('interactions'), false);
 }
 
 // ═══════════════ A/B/C/D/E 新增逻辑的离线验证 ═══════════════
@@ -257,6 +263,7 @@ const newPieces = [
 	'const LS_MAP = ',
 	'const LS_SESSIONS = ',
 	'const SESSION_KEEP = ',
+	'const WATCH_EVENT_MS = ',
 	'function sessionRecord(',
 	'function saveSessionBaseline(',
 	'function sessionBaselines(',
@@ -973,6 +980,8 @@ const watchPieces = [
 	extract(source, 'function sessionRecord('),
 	extract(source, 'function saveSessionBaseline('),
 	extract(source, 'function sessionBaselines('),
+	extract(source, 'function watchInteraction('),
+	extract(source, 'function startInteractions('),
 	`${extract(source, 'const scriptTallyCache = ')};`,
 	extract(source, 'function scriptPkgTally('),
 	extract(source, 'function watchTrigger('),
@@ -1019,6 +1028,14 @@ const watchBox = new Function(`
 	const location = { href: 'http://127.0.0.1:3080/' };
 	const navigator = { userAgent: 'test-agent', hardwareConcurrency: 10 };
 	const W = { innerWidth: 1600, innerHeight: 900, devicePixelRatio: 2 };
+	// A4 的假 PerformanceObserver:能换 supportedEntryTypes、记账 observe() 的选项、按需投喂条目
+	const observeCalls = [];
+	const observers = [];
+	function FakeObserver(callback) { this.callback = callback; observers.push(this); }
+	FakeObserver.prototype.observe = function (options) { observeCalls.push(options); };
+	FakeObserver.prototype.disconnect = function () { this.disconnected = true; };
+	FakeObserver.supportedEntryTypes = ['event', 'element'];
+	W.PerformanceObserver = FakeObserver;
 	// 面板文案用的两个桩:断言只检查"人看到的字",key 兜底返回 key 本身
 	const translate = (key) => ({
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉', times: ' 次',
@@ -1037,7 +1054,9 @@ const watchBox = new Function(`
 		on: true, precise: false, streaming: true, heap: 1048576, host: null, hostAt: 0,
 		dom: { total: 1234 },
 		longTasks: [],
-		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null },
+		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
+			// A4:交互计时的状态位(eventObserver 由 startInteractions 自己写)
+			eventObserver: null, eventState: 'not-started', eventSupported: [], interactions: [], eventCount: 0, elementCount: 0 },
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
@@ -1048,6 +1067,10 @@ const watchBox = new Function(`
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
 		setNow: (value) => { nowMs = value; },
+		startInteractions, watchInteraction, WATCH_EVENT_MAX,
+		setEntryTypes: (types) => { FakeObserver.supportedEntryTypes = types; },
+		observedOptions: () => observeCalls.map((options) => (options.type === 'event' ? 'event:' + options.durationThreshold : options.type)),
+		emit: (rows) => { for (const entry of observers) entry.callback({ getEntries: () => rows }); },
 		runTimer: (index) => timers[index].fn(),
 	};
 `)();
@@ -1473,6 +1496,39 @@ check('D5:窗口变了才重算',
 		return [after !== before, after.js, after.top];
 	})(),
 	[true, 120, [['dsh-a', 60], ['dsh-b', 50]]]);
+
+// ── A4:交互延迟(event / element timing,只进导出件)──────────────────
+check('A4:浏览器不支持 event timing 时照实报,不假装装上', (() => {
+	watch.state.watch.eventObserver = null;
+	watch.state.watch.eventState = 'not-started';
+	watch.setEntryTypes([]);
+	return watch.startInteractions();
+})(), 'unsupported:no-event-timing');
+check('A4:event 带 durationThreshold、element 单独注册;两者分开计数', (() => {
+	watch.setEntryTypes(['event', 'element']);
+	watch.state.watch.eventObserver = null;
+	watch.state.watch.eventState = 'not-started';
+	watch.state.watch.interactions.length = 0;
+	watch.state.watch.eventCount = 0;
+	watch.state.watch.elementCount = 0;
+	const state0 = watch.startInteractions();
+	const options = watch.observedOptions();
+	watch.emit([
+		{ entryType: 'event', name: 'click', startTime: 123.44, duration: 180.26, processingStart: 130, processingEnd: 175, interactionId: 7 },
+		{ entryType: 'element', element: 'div#x', startTime: 200, duration: 0, renderTime: 210 },
+	]);
+	const rows = watch.state.watch.interactions;
+	return [state0, options, rows.length, rows[0].name, rows[0].ms, rows[0].waitMs, rows[0].handlerMs, rows[0].isInteraction, rows[0].interactionId, rows[1].type, rows[1].name, rows[1].isInteraction, watch.state.watch.eventCount, watch.state.watch.elementCount];
+})(), ['on', ['event:100', 'element'], 2, 'click', 180.3, 6.6, 45, true, 7, 'element', 'div#x', false, 1, 1]);
+check('A4:环形上限到了丢最早的(留最近 200 条)', (() => {
+	const many = [];
+	for (let i = 0; i < watch.WATCH_EVENT_MAX + 5; i += 1) {
+		many.push({ entryType: 'event', name: 'input', startTime: 500 + i, duration: 120, processingStart: 501, processingEnd: 505, interactionId: i });
+	}
+	watch.emit(many);
+	const rows = watch.state.watch.interactions;
+	return [rows.length, rows[0].at, rows[rows.length - 1].at];
+})(), [200, 505, 704]);
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;

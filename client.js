@@ -78,6 +78,10 @@ window.__ModuleLoader__.load({
 		const WATCH_TRIGGER_MS = 100;          // 帧间隔 / blockingDuration 越过它就起一次捕获
 		const WATCH_GAP_MS = 1000;             // 帧间隔超过它视为 rAF 挂起:是间隙,不是卡顿
 		const WATCH_REACTION_MS = 3000;        // 手动标记时回退的"人的反应时间"
+		// A4:交互延迟(event timing)。只收 ≥100ms 的 —— 与守夜同一条线,而且要的不是全量事件流
+		// (mousemove/keydown 那种量级会把环形缓冲冲掉)。element timing 走同一个观察器。
+		const WATCH_EVENT_MS = 100;
+		const WATCH_EVENT_MAX = 200;           // 交互计时的环形上限
 		const WATCH_PERSIST_MAX_BYTES = 2097152;  // 事故落盘的字节上限(超了丢最弱的);512KB 时实测只装得下 8 条
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
 		const REACT_INTERNAL = new Set(['Fragment', 'Suspense', 'StrictMode', 'Profiler', 'ForwardRef', 'Memo', 'Provider', 'Consumer', 'Root', 'Anonymous']);
@@ -738,6 +742,13 @@ window.__ModuleLoader__.load({
 				trimmedByBytes: 0,       // 因为超过 WATCH_PERSIST_MAX_BYTES 被裁掉的条数(内存与落盘保持一致)
 				deduped: 0,              // 同一个 id 被存过多次时,读回时去掉的条数
 				restored: 0,             // 这次启动从落盘里读回了几条
+				// A4:交互延迟(event / element timing)。只进导出件,面板不显示
+				eventObserver: null,
+				eventState: 'not-started',   // not-started / on / stopped / unsupported:… / error:…
+				eventSupported: [],          // 浏览器实际支持的 entryType(照实记,不假设)
+				interactions: [],            // 最近的交互计时(升序)
+				eventCount: 0,
+				elementCount: 0,
 				persistError: null,      // 落盘失败的原因(失败就照实说,不假装存下来了)
 				coveredUntil: 0,         // 最近一份事故窗口的结束时刻(perf ms):这段不再另立事故
 			},
@@ -1061,6 +1072,69 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * A4(页面内那一半):交互延迟。
+		 *
+		 * `event` timing 是页面内**唯一**能拿到"这一下点了多久才反应"的 API:它给端到端时长
+		 * (`duration`)与 `processingStart/End`,所以能说清"有多少是排在主线程后面等出来的"。
+		 * ⚠️ **不承诺帧内拆分** —— 输入延迟 / 处理 / 呈现这三段的进一步拆分页面内没有 API
+		 * (要拆只能看 DevTools 的 Interactions 轨道,已写进 missing)。
+		 * `element` timing 只观察带 `elementtiming` 属性的元素,DSH 的 DOM 上没有这个属性,
+		 * 所以这一路**大概率恒为 0** —— 照实记 0 并写进导出件,不假装采到了。
+		 */
+		function watchInteraction(entry) {
+			const watch = state.watch;
+			const isElement = entry.entryType === 'element';
+			if (isElement) watch.elementCount += 1;
+			else watch.eventCount += 1;
+			const start = entry.startTime ?? 0;
+			const processingStart = entry.processingStart ?? start;
+			const processingEnd = entry.processingEnd ?? processingStart;
+			watch.interactions.push({
+				type: entry.entryType,
+				// 事件名(click / keydown…)或元素选择器
+				name: String(isElement ? (entry.element ?? entry.name ?? '?') : (entry.name ?? '?')).slice(0, 60),
+				at: round1(start),
+				ms: round1(entry.duration ?? 0),      // 端到端(到下一次渲染更新为止)
+				// 下面两个是推导值,但读文件的人第一眼要的就是它们:多少是排队等出来的、多少是处理
+				waitMs: round1(processingStart - start),          // 输入延迟:事件发生 → 处理器真正开始
+				handlerMs: round1(processingEnd - processingStart),   // 处理器本身
+				processingStart: round1(entry.processingStart ?? 0),
+				processingEnd: round1(entry.processingEnd ?? 0),
+				interactionId: typeof entry.interactionId === 'number' ? entry.interactionId : null,
+				// interactionId > 0 才是"一次交互"里的那一批;0 的是 pointerover 这类被动事件
+				isInteraction: typeof entry.interactionId === 'number' && entry.interactionId > 0,
+				renderTime: isElement ? round1(entry.renderTime ?? 0) : undefined,
+			});
+			if (watch.interactions.length > WATCH_EVENT_MAX) watch.interactions.splice(0, watch.interactions.length - WATCH_EVENT_MAX);
+		}
+
+		/** 装上交互计时观察器(可还原:stop() 里 disconnect)。返回状态串,照实写进导出件。 */
+		function startInteractions() {
+			const watch = state.watch;
+			if (watch.eventObserver !== null) return watch.eventState;
+			const Observer = W.PerformanceObserver;
+			if (typeof Observer !== 'function') return (watch.eventState = 'unsupported:no-PerformanceObserver');
+			const supported = Array.isArray(Observer.supportedEntryTypes) ? Observer.supportedEntryTypes : [];
+			watch.eventSupported = supported.filter((type) => type === 'event' || type === 'element');
+			if (watch.eventSupported.length === 0) return (watch.eventState = 'unsupported:no-event-timing');
+			try {
+				const observer = new Observer((list) => {
+					for (const entry of list.getEntries()) watchInteraction(entry);
+				});
+				// 也不带 buffered:挂上之前的事件不属于这段时间的交互(同 LoAF 那条的理由)
+				for (const type of watch.eventSupported) {
+					if (type === 'event') observer.observe({ type: 'event', durationThreshold: WATCH_EVENT_MS });
+					else observer.observe({ type: 'element' });
+				}
+				watch.eventObserver = observer;
+				watch.eventState = 'on';
+			} catch (error) {
+				watch.eventState = `error:${error instanceof Error ? error.message : String(error)}`;
+			}
+			return watch.eventState;
+		}
+
+		/**
 		 * 每帧一次(从 FPS 循环里调)。
 		 * 帧间隔超过 WATCH_GAP_MS 说明 rAF 被挂起(标签页隐藏/系统休眠):那是间隙,
 		 * 既不算卡顿也不触发 —— 否则每次切回标签页都会"抓到"一次几百秒的假事故。
@@ -1193,6 +1267,8 @@ window.__ModuleLoader__.load({
 				})),
 			}));
 			const longTasks = state.longTasks.filter((row) => row.at >= from && row.at <= to);
+			// A4:窗口内的交互延迟(端到端时长;页面内没有帧内拆分,见 watchInteraction 的说明)
+			const interactions = (state.watch.interactions ?? []).filter((row) => row.at >= from && row.at <= to);
 			let worst = null;
 			let live = 0;
 			let over50 = 0;
@@ -1285,6 +1361,7 @@ window.__ModuleLoader__.load({
 					pkgCoverage: { resolved: pkgResolved, total: scripts.length },   // 有名字的脚本占比
 					pkgVia,                       // 每一条脚本"是怎么定名的"(url / section / not-plugin / …)
 					longTasksInWindow: longTasks.length,
+					interactionsInWindow: interactions.length,   // A4:窗口内的交互次数(≥100ms 的那些)
 					topScripts: scripts.slice(0, 5).map((script) => ({
 						at: script.at, u: script.u, ms: script.ms, fn: script.fn, invokerType: script.invokerType, charPos: script.charPos,
 						pkg: script.pkg, pkgVia: script.pkgVia,
@@ -1305,6 +1382,7 @@ window.__ModuleLoader__.load({
 				frames,
 				loaf,
 				longTasks,
+				interactions,
 				baseline: frameRing.stats(from, to),   // 排除本窗口之后的分布:含自己就永远"比不上"
 				host: state.host === null || state.host === undefined ? null : {
 					at: state.hostAt > 0 ? new Date(state.hostAt).toISOString() : null,
@@ -1458,6 +1536,15 @@ window.__ModuleLoader__.load({
 			return {
 				recording: watch.on,
 				loaf: watch.loafState,
+				// A4:交互延迟(event / element timing)。面板不显示,导出件里照实写状态与计数
+				interactions: {
+					state: watch.eventState,
+					supported: watch.eventSupported,
+					thresholdMs: WATCH_EVENT_MS,
+					events: watch.eventCount,
+					elements: watch.elementCount,
+					kept: watch.interactions.length,
+				},
 				frameSamples: frameRing.size,
 				frameBudget: WATCH_FRAMES,
 				coveredMs: oldest === 0 ? 0 : round1(performance.now() - oldest),
@@ -2765,6 +2852,17 @@ window.__ModuleLoader__.load({
 					eventWatch: state.hostEvents,
 				},
 				link: { stats60s: linkStats(), throughput: state.linkText, suspect: suspectLink(), samples: state.link.slice(-120) },
+				// A4:交互延迟(event / element timing)。只进导出件,面板不显示
+				interactions: {
+					state: state.watch.eventState,
+					supported: state.watch.eventSupported,
+					thresholdMs: WATCH_EVENT_MS,
+					events: state.watch.eventCount,
+					elements: state.watch.elementCount,
+					note: 'event 给端到端时长(ms)与推导出来的 waitMs(输入延迟)/ handlerMs(处理器本身);isInteraction 为真的才是 interactionId>0 的"真交互",pointerover 那类被动事件也会进来(它们的 ms 是到下一次渲染更新为止)。element 只观察带 elementtiming 属性的元素(DSH 的 DOM 上没有,恒为 0 是正常的)。帧内拆分(输入延迟/处理/呈现)页面内拿不到',
+					kept: state.watch.interactions.length,
+					records: state.watch.interactions,
+				},
 				verification: verification(),
 				errors: state.errors,
 			};
@@ -2826,6 +2924,19 @@ window.__ModuleLoader__.load({
 				howToAdd.push('面板「精确」或 __perfHud.setPrecise(true) —— 只能改善之后抓到的事故,这一条不会重放');
 			}
 			missing.push('devtools-trace:完整的 Chrome trace(页面内录不了)');
+			// A4:交互延迟采到了什么、没采到什么,一律照实写
+			if (state.watch.eventState !== 'on') {
+				missing.push(`interaction-timing:交互延迟(event timing)—— ${state.watch.eventState}`);
+				howToAdd.push('event timing 要 Chrome 96+;装不上时这一层给不出"点了多久才反应"');
+			} else if (incident.summary.interactionsInWindow === 0) {
+				missing.push(`interaction-timing:这个窗口里没有 ≥${WATCH_EVENT_MS}ms 的交互(阈值以下的事件不记;长时间没有真人操作也会是 0)`);
+				howToAdd.push('复现时真的点几下(≥100ms 的交互才会进环形缓冲),再导出');
+			}
+			if (state.watch.elementCount === 0) {
+				missing.push('element-timing:元素渲染时刻 —— `element` timing 只观察带 `elementtiming` 属性的元素,DSH 的 DOM 上没有这个属性,所以这一路恒为 0(照实记,不假装采到)');
+			}
+			missing.push('interaction-breakdown:单次交互内部"输入延迟 / 处理 / 呈现"的拆分 —— 页面内没有 API,这里只有端到端时长与 processingStart/End');
+			howToAdd.push('要拆交互的三段:DevTools → Performance 录制,Hover 到 Interactions 轨道上那一下,看 Input delay / Processing / Presentation');
 			howToAdd.push('DevTools → Performance → 录制(勾 include script source maps)→ Save trace → Perfetto 打开');
 			missing.push('compositor:帧时间到底花在合成 / 光栅 / GPU 的哪一段(这一层只看得到主线程侧)');
 			missing.push('recorder-cost:本记录器自身的开销没有独立测量(它每帧跑一次 rAF 采样)');
@@ -2863,6 +2974,7 @@ window.__ModuleLoader__.load({
 						'incident.loaf 与 incident.frames 是**同一信号的两个视图**(LoAF 的 t+dur 就落在某一帧上),不是两份独立证据:别相加,也别当互相印证',
 						'incident.loaf[].blocking(blockingDuration)只累计"被归因到的 >50ms 长任务"的超出部分 —— **它可以是 0,而这一帧仍然有几百毫秒**。判严重度看帧间隔,blocking=0 不等于没卡',
 						'incident.longTasks 是既有四条腿落在窗口内的明细(at=任务开始的 perf 毫秒,t=上报时刻的墙钟毫秒),**它不是慢帧清单**:条数通常远少于超线帧',
+						'incident.interactions 是窗口内 ≥100ms 的交互(event / element timing):`ms` 是端到端(到下一次渲染更新为止),`waitMs` 是事件发生到处理器真正开始的输入延迟、`handlerMs` 是处理器本身(两个都是推导值,原始字段 processingStart/End 也在);`isInteraction` 为真的才是 interactionId>0 的真交互,pointerover 那类被动事件也会进来。**这一层不承诺帧内拆分**(输入延迟 / 处理 / 呈现得去 DevTools 的 Interactions 轨道看);`type: "element"` 的条目只可能来自带 `elementtiming` 属性的元素,DSH 页面上恒为 0',
 						'incident.baseline 是**除这一段之外**整个帧环的分布(故意排除本窗口,否则"比会话最差还差"永远不成立)—— 拿它和 summary 比,才知道这一段是真的比平时差还是这台机器一直这样',
 						'context.sessionBaselines 是**跨会话**的帧分布(每个会话一条,最多 20 条;只进导出件,面板不显示)。它是**粗参照,不是回归判定**:会话之间的负载、视口、是否插桩都不同,帧数量级也能差一个数量级 —— 只看"这次是不是比平时差一个量级",别拿它下"变慢了"的结论',
 						'summary.worstFrameJs / suspectedThrottle:最差那一帧有没有 longtask / LoAF 与它重叠;若 none 且前后帧都健康(worstFrameNeighboursMs < 100),更像浏览器把 rAF 节流或挂起了一次,不是页面真忙了那么久',
@@ -2960,6 +3072,7 @@ window.__ModuleLoader__.load({
 			state.ltObserver = startLongTask();
 			state.watch.on = true;
 			startLoaf();
+			startInteractions();
 			startDomWatch();
 			sampleDom();
 			probeLink('rtt');
@@ -2992,6 +3105,11 @@ window.__ModuleLoader__.load({
 				state.watch.loafObserver.disconnect();
 				state.watch.loafObserver = null;
 				state.watch.loafState = 'stopped';
+			}
+			if (state.watch.eventObserver !== null) {
+				state.watch.eventObserver.disconnect();
+				state.watch.eventObserver = null;
+				state.watch.eventState = 'stopped';
 			}
 			state.fps = 0;
 			flush(true);

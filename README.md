@@ -115,7 +115,9 @@ dsh plugin --profile web add "$PWD"
 
 **「其余 (N)」** = 除 Top3 外还有几个归属方(名字各不相同,按累计耗时排序),行值给它们的合计速率。
 
-**导出 JSON** 带 `context` 自描述头:场景 / 空闲秒数 / 精确归因与每个 sourcemap 分段的状态 / 宿主路由与 profile、Node、插件版本 / 实验候选与方法 / 全部判色阈值。`window.__perfHud.snapshot()` 与面板「导出 JSON」同源。
+**导出 JSON** 带 `context` 自描述头:场景 / 空闲秒数 / 精确归因与每个 sourcemap 分段的状态 / 宿主路由与 profile、Node、插件版本 / 实验候选与方法 / 全部判色阈值 / 跨会话基线。`window.__perfHud.snapshot()` 与面板「导出 JSON」同源。
+
+**交互延迟**(`event` / `element` timing,只记 ≥100ms 的事件)也只进导出件。那一段给端到端时长 `ms`、推导出来的 `waitMs`(输入延迟)与 `handlerMs`(处理器本身),`isInteraction` 标出哪些是真交互(`interactionId > 0`);**帧内拆分(输入延迟 / 处理 / 呈现)页面内拿不到**,要拆得去 DevTools 的 Interactions 轨道看。`element` timing 只观察带 `elementtiming` 属性的元素 —— DSH 的 DOM 上没有这个属性,所以这一路**恒为 0**,导出件里照实写 0 并解释原因,不假装采到。
 
 ## 🔬 四条腿归因
 
@@ -181,9 +183,9 @@ dsh plugin --profile web add "$PWD"
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 282 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 287 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 24 条:用假 ctx 驱动真实 index.js
-# 合计 317 条断言,离线,无需 DSH 在跑
+# 合计 322 条断言,离线,无需 DSH 在跑
 ```
 
 线上验证(需要先换 cookie,步骤见 [AGENTS.md](AGENTS.md) §2.2):

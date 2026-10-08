@@ -37,6 +37,13 @@ one `PerformanceObserver` (LoAF, Chrome 123+):
 An incident pack carries `context.missing` — what this capture does **not** contain (no DevTools trace,
 no host CPU profile, platforms without LoAF) and how to get it — and it does no attribution inference.
 
+**Interaction latency** (`event` / `element` timing, only events ≥100ms) goes into the exports only, never the
+panel: each record has the end-to-end `ms`, the derived `waitMs` (input delay) and `handlerMs` (the handler
+itself), and `isInteraction` marks the real interactions (`interactionId > 0`). **No frame-internal breakdown is
+promised** — splitting input delay / processing / presentation needs DevTools' Interactions track. `element`
+timing only observes elements carrying the `elementtiming` attribute, which DSH's DOM never sets, so that leg is
+**always 0** and is reported as 0 with the reason, never faked.
+
 ## What it answers
 
 | Question | What the panel shows |
@@ -155,9 +162,9 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 282 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 287 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          #  24 assertions: real index.js driven by a fake ctx
-# 317 offline assertions total, no running DSH required
+# 322 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
