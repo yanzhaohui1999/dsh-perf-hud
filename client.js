@@ -66,7 +66,11 @@ window.__ModuleLoader__.load({
 		const WATCH_FRAMES = 12000;            // 帧级环形缓冲条数(60fps ≈ 3.3 分钟)
 		const WATCH_LOAF_MAX = 200;            // 保留多少条长动画帧
 		const WATCH_SCRIPT_MAX = 12;           // 一条长动画帧最多记多少个脚本
-		const WATCH_INCIDENT_MAX = 10;         // 自动留存最差几次(真正的天花板是 WATCH_PERSIST_MAX_BYTES)
+		const WATCH_INCIDENT_MAX = 10;         // 全局最差档:自动留存最差几次(真正的天花板是 WATCH_PERSIST_MAX_BYTES)
+		const WATCH_DAILY_DAYS = 7;            // 每天最差档:最多留最近几天的"当天最差一条"
+		// 两档合起来的上限。单靠全局最差那一档不行:实测一次会话「捕获 40 · 丢弃 38」,
+		// 最差 10 条会全挤在同一小时里,于是"昨天下午那次卡"永远留不下来。
+		const WATCH_KEEP_MAX = WATCH_INCIDENT_MAX + WATCH_DAILY_DAYS;
 		const WATCH_PRE_MS = 10000;            // 前摇:事件发生前的 10 秒
 		const WATCH_POST_MS = 3000;            // 后摇:事件发生后再等 3 秒才切片
 		const WATCH_TRIGGER_MS = 100;          // 帧间隔 / blockingDuration 越过它就起一次捕获
@@ -1090,21 +1094,61 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * 留存策略:只留最严重的 WATCH_INCIDENT_MAX 次。
+		 * 留存策略:两档并集。
+		 *   ① 全局最差 WATCH_INCIDENT_MAX 条;
+		 *   ② 每天最差 1 条,最多最近 WATCH_DAILY_DAYS 天。
+		 * 只有 ① 时,短时间里连抓 10 次就把更早的整天挤掉了;② 保证"每天至少留一条证据"。
 		 * "抓到了但没留存"和"没抓到"是两件事,所以 dropped 单独计数,不混进 captured。
 		 */
 		function keepIncident(incident) {
 			const watch = state.watch;
 			const list = watch.incidents;
-			const full = list.length >= WATCH_INCIDENT_MAX;
-			if (full && incident.severity <= list[list.length - 1].severity) {
-				watch.dropped += 1;
-				return 'dropped';
+			const previous = list.slice();
+			const kept = pruneIncidents(previous.concat(incident));
+			const survived = kept.indexOf(incident) !== -1;
+			const displaced = previous.some((row) => kept.indexOf(row) === -1);
+			list.length = 0;
+			for (const row of kept) list.push(row);
+			if (survived === false) { watch.dropped += 1; return 'dropped'; }
+			return displaced ? 'replaced' : 'kept';
+		}
+
+		/** 事故发生在哪一天(本地日期)—— 只用于"每天最差一条"那个档位;取不到时间算 null。 */
+		function dayKeyOf(row) {
+			const at = Date.parse(row === null || row === undefined ? '' : row.at);
+			if (Number.isFinite(at) === false) return null;
+			const d = new Date(at);
+			// 补零:日期键要按字符串排序取"最近 N 天",'2026-10-8' > '2026-10-10' 是错的
+			const p = (n) => String(n).padStart(2, '0');
+			return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+		}
+
+		/**
+		 * 按两档策略裁一次,并给活下来的每条写上 `tier`(它是靠哪一档留下的)。
+		 * 出入都按**严重度降序** —— 落盘的字节裁切(`list.pop()` 丢最弱的)依赖这个不变量。
+		 */
+		function pruneIncidents(list) {
+			const sorted = list.slice().sort((a, b) => b.severity - a.severity);
+			const worst = sorted.slice(0, WATCH_INCIDENT_MAX);
+			const bestOfDay = new Map();
+			for (const row of sorted) {
+				const key = row.day ?? dayKeyOf(row);
+				row.day = key;
+				// 降序遍历:每天碰到的第一条就是当天最差
+				if (key === null || bestOfDay.has(key)) continue;
+				bestOfDay.set(key, row);
 			}
-			if (full) list.pop();
-			list.push(incident);
-			list.sort((a, b) => b.severity - a.severity);
-			return full ? 'replaced' : 'kept';
+			const days = [...bestOfDay.keys()].sort().slice(-WATCH_DAILY_DAYS);   // 最近的 N 天
+			const kept = new Set(worst);
+			for (const key of days) kept.add(bestOfDay.get(key));
+			const daily = new Set(days.map((key) => bestOfDay.get(key)));
+			const out = sorted.filter((row) => kept.has(row));
+			for (const row of out) {
+				const inWorst = worst.indexOf(row) !== -1;
+				const inDaily = daily.has(row);
+				row.tier = inWorst && inDaily ? 'both' : (inWorst ? 'worst' : 'daily');
+			}
+			return out;
 		}
 
 		/**
@@ -1384,7 +1428,9 @@ window.__ModuleLoader__.load({
 				}
 				unique.push(row);
 			}
-			watch.incidents = unique.slice(0, WATCH_INCIDENT_MAX);
+			// 读回来也按同一份两档策略裁一遍:落盘那份是旧版本写的、或天数已经翻过去了,
+			// 都可能比现在的上限多。裁不动也要保证"看到的 = 刷新后还在的"。
+			watch.incidents = pruneIncidents(unique);
 			watch.restored = watch.incidents.length;
 			// 新事故的序号从读回来的最大 id 之后继续,否则新 id 会和旧的撞(旧包里的 i2 撞了三次)
 			for (const row of watch.incidents) {
@@ -1422,10 +1468,11 @@ window.__ModuleLoader__.load({
 				trimmedByBytes: watch.trimmedByBytes,
 				deduped: watch.deduped,
 				persistError: watch.persistError,
-				kept: watch.incidents.map((row) => ({ id: row.id, severity: row.severity, cause: row.cause, at: row.at, note: row.note })),
+				kept: watch.incidents.map((row) => ({ id: row.id, severity: row.severity, cause: row.cause, at: row.at, note: row.note, tier: row.tier ?? null, day: row.day ?? null })),
 				triggers: {
 					frameMs: WATCH_TRIGGER_MS, gapMs: WATCH_GAP_MS,
 					preMs: WATCH_PRE_MS, postMs: WATCH_POST_MS, keep: WATCH_INCIDENT_MAX,
+					dailyDays: WATCH_DAILY_DAYS, keepMax: WATCH_KEEP_MAX,
 					reactionMs: WATCH_REACTION_MS,
 				},
 			};
@@ -2745,7 +2792,8 @@ window.__ModuleLoader__.load({
 					thresholds: {
 						triggerMs: WATCH_TRIGGER_MS, gapMs: WATCH_GAP_MS,
 						preMs: WATCH_PRE_MS, postMs: WATCH_POST_MS,
-						keep: WATCH_INCIDENT_MAX, reactionMs: WATCH_REACTION_MS,
+						keep: WATCH_INCIDENT_MAX, dailyDays: WATCH_DAILY_DAYS, keepMax: WATCH_KEEP_MAX,
+						reactionMs: WATCH_REACTION_MS,
 					},
 					missing,
 					howToAdd,
@@ -2762,6 +2810,7 @@ window.__ModuleLoader__.load({
 						'incident.packages 是按包汇总的脚本耗时(降序),summary.pkgCoverage 是有名字的脚本占比 —— 覆盖率不到 100% 时别把第一行当成全部',
 						'incident.summary 是上面几块的汇总(含窗口自己的 p50/p90/p99),方便直接和 incident.baseline 比;这一层不做推断,结论请自己下',
 						'context.watch.kept 按**严重度降序**,不是时间序;带 restored 的条目来自上一次会话(时间靠 env.perfOrigin 对齐),所以 id 与时间看起来会跳',
+						'context.watch.kept[].tier 说明这条是靠哪一档留下来的:worst = 全局最差那一档(前 10 条)、daily = 它那一天最差的一条(最多留最近 7 天)、both = 两档都占。留存是**两档并集**,所以条数上限是 10 + 7 而不是 10 —— 单靠全局最差档时,"昨天下午那次卡"会被同一小时里的 10 次挤掉',
 					],
 				},
 				incident,
@@ -3197,6 +3246,8 @@ window.__ModuleLoader__.load({
 			return `${index + 1}. ${row.id} · ${row.cause} · ${Math.round(row.severity)}ms` +
 				(Number.isFinite(at) ? ` · ${clock(at)}` : '') +
 				(row.restored === true ? ` · ${translate('watchRestored')}` : '') +
+				// 靠"每天最差"那一档留下的要标出来,否则读者会奇怪它为什么没被更差的事故挤掉
+				(row.tier === 'daily' ? ` · ${translate('watchDaily')}` : '') +
 				(row.note === null || row.note === undefined ? '' : ` · ${row.note}`);
 		}
 
@@ -3336,8 +3387,9 @@ window.__ModuleLoader__.load({
 				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
 				// 守夜层(默认常开、不插桩):面板上只露一行状态 + 工具箱里的清单与两个按钮
 				watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOnDisk: '落盘',
+				watchDaily: '当天最差',
 				watchNone: '还没抓到', watchOff: '未开录', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉',
-				watchHint: '默认常开、不插桩:一个 rAF 循环 + 一个 LoAF 观察器。帧间隔(或 LoAF 的 blockingDuration)超过 100ms 就自动抓「前 10 秒 + 后 3 秒」原样切片,只留最差 10 次并落盘(刷新后还在;落盘另有 512KB 上限,超了就裁掉最弱的并在这一行标出「裁掉 N」)要抓偶发卡顿就让它一直开着 —— 出事后用「导出最近一次」把证据包交给分析者。',
+				watchHint: '默认常开、不插桩:一个 rAF 循环 + 一个 LoAF 观察器。帧间隔(或 LoAF 的 blockingDuration)超过 100ms 就自动抓「前 10 秒 + 后 3 秒」原样切片,留存取**两档并集**:全局最差 10 次 + 每天最差 1 条(最多最近 7 天,清单里标「当天最差」),刷新后还在;落盘另有 2MB 上限,超了就裁掉最弱的并在这一行标出「裁掉 N」。要抓偶发卡顿就让它一直开着 —— 出事后用「导出最近一次」把证据包交给分析者。',
 				watchMark: '标记刚才', watchMarkHint: '手动记一次「刚刚卡了一下」:自动回退 3 秒(人的反应时间),立刻切片,并把上面输入框的备注原样写进证据包',
 				watchExport: '导出最近一次', watchExportHint: '下载**时刻最新**那一条的完整证据包(帧序列 + LoAF + 窗口内 longtask + 环境与缺失声明;不是最差那条)。要别的:__perfHud.exportIncident(\'i55\') 按 id、或 exportIncident(0) 取最差的',
 				watchManualNote: '手动标记',
@@ -3393,8 +3445,9 @@ window.__ModuleLoader__.load({
 				unattrShort: 'unattr', unattrSuffix: '/frame', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
 				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
 				watch: 'Night watch', watchCaught: 'caught', watchWorst: 'worst', watchRestored: 'restored', watchOnDisk: 'on disk',
+				watchDaily: 'daily worst',
 				watchNone: 'nothing caught yet', watchOff: 'not recording', watchPersistFailed: 'persist failed', watchTrimmed: 'trimmed',
-				watchHint: 'On by default and it patches nothing: one rAF loop plus one LoAF observer. When a frame interval (or LoAF blockingDuration) crosses 100ms it captures the 10s before and 3s after verbatim, keeps the worst 10, and persists them (they survive a reload). Leave it running to catch intermittent stalls; after one, hand the evidence pack to an analyst with "Export latest".',
+				watchHint: 'On by default and it patches nothing: one rAF loop plus one LoAF observer. When a frame interval (or LoAF blockingDuration) crosses 100ms it captures the 10s before and 3s after verbatim and keeps the **union of two tiers**: the worst 10 overall plus one worst-per-day (at most the last 7 days, marked "daily worst" in the list); they survive a reload. Persistence has a 2MB byte cap; when it trims, the count shows up as "trimmed N". Leave it running to catch intermittent stalls; after one, hand the evidence pack to an analyst with "Export latest".',
 				watchMark: 'Mark just now', watchMarkHint: 'Manually record "it just stuttered": rewinds 3s (human reaction time), slices immediately, and copies the note from the input above into the pack',
 				watchExport: 'Export latest', watchExportHint: 'Download the **newest by time** incident (frames + LoAF + long tasks in the window + environment and missing-data notes; not the worst one). For others: __perfHud.exportIncident(\'i55\') by id, or exportIncident(0) for the worst',
 				watchManualNote: 'manual mark',

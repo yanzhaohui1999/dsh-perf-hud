@@ -25,8 +25,11 @@ one `PerformanceObserver` (LoAF, Chrome 123+):
 - a per-frame ring buffer (12000 frames ≈ 3.3 minutes at 60fps);
 - any frame over **100ms** (or LoAF `blockingDuration` over 100ms) is captured automatically: the
   **10 seconds before** and 3 seconds after are sliced out verbatim;
-- kept incidents are persisted (localStorage, 512KB cap) and survive a reload; `watch().restored` says how many came back;
-- only the worst **5** are kept; stalls that were captured but not good enough to keep are counted
+- retention is the **union of two tiers**: the worst **10** overall plus **one worst-per-day** (at most the
+  last 7 days, marked "daily worst" in the list) — ranking by global severity alone lets ten stalls in the
+  same hour push yesterday's stall out entirely (measured: `captured 40 · dropped 38`);
+- kept incidents are persisted (localStorage, 2MB cap) and survive a reload; `watch().restored` says how many came back;
+- stalls that were captured but not good enough to keep are counted
   separately (`dropped`) from stalls never captured;
 - multi-second "gaps" from a hidden tab are **not** stalls (rAF was suspended) and are marked `gap`;
 - `__perfHud.watch()` · `incidents()` · `report(0)` · `exportIncident(0)` · `capture(note)` · `clearIncidents()`.
@@ -147,9 +150,9 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 261 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 267 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          #  24 assertions: real index.js driven by a fake ctx
-# 296 offline assertions total, no running DSH required
+# 302 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
