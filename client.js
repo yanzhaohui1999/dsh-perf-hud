@@ -617,6 +617,9 @@ window.__ModuleLoader__.load({
 			const name = type.displayName ?? type.name;
 			if (typeof name !== 'string' || name === '' || REACT_INTERNAL.has(name) || looksLikeInfrastructure(name)) return null;
 			if (/^[A-Za-z]{1,2}\d{0,3}$/.test(name)) return null;
+			// B2:打包器/工具链生成的 `$` 开头名字对用户零信息,一律挡掉。
+			// 括号形态**保留** —— 那是"组件兜底桶"的标记(`(Name)`),有语义,不是压缩名。
+			if (name.startsWith('$')) return null;
 			return name;
 		}
 
@@ -2535,6 +2538,14 @@ window.__ModuleLoader__.load({
 					isolation: { candidates: experiment.candidates, method: experiment.method, loadBurnMs: EXPERIMENT_LOAD_BURN_MS, loadPeriodMs: EXPERIMENT_LOAD_PERIOD_MS },
 					// 判色阈值也写进文件:别人拿到 JSON 能按同一套口径重新解读
 					recorder: selfStats(),   // 测量工具先自证没有明显改变被测对象
+					// B3:证据的审计属性 —— 拿到文件的人要能判断"这份是不是被裁过"
+					store: {
+						restored: state.watch.restored,
+						trimmedByBytes: state.watch.trimmedByBytes,
+						deduped: state.watch.deduped,
+						captured: state.watch.captured,
+						dropped: state.watch.dropped,
+					},
 					thresholds: {
 						fps: { warnBelow: 50, errorBelow: 30 },
 						frameMs: { warnAbove: 120, errorAbove: 200 },
