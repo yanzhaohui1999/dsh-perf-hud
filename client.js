@@ -2869,6 +2869,7 @@ window.__ModuleLoader__.load({
 						'脚本的 URL 不在脚本里:incident.urls 是字符串表,scripts[].u 是它的下标(u=-1 表示没有 URL)—— 抽表是因为同一个 combo URL 会重复几十遍',
 						'scripts[].pkg 是这条脚本归属的包名(合并批里靠"字符位置 → 行号 → sourcemap 分段表"还原);pkg 为 null 时看 scripts[].pkgVia:url(单包 URL 直接读出来)/ section(分段表算出来)/ precise-off(精确归因没开)/ text-pending(脚本文本还在拉)/ not-plugin(宿主自己的 bundle)…',
 						'incident.packages 是按包汇总的脚本耗时(降序),summary.pkgCoverage 是有名字的脚本占比 —— 覆盖率不到 100% 时别把第一行当成全部',
+						'脚本侧再往下拆一层:scripts[].forcedMs(forcedStyleAndLayoutDuration)是脚本耗时里"强制样式布局"那部分 —— **它已经算在 ms 里**,别再相加;它是"来源是样式而不是业务逻辑"的同步布局。面板「取证明细」里那两行(脚本按包 / 纯 JS 与强制布局)就是这两件事',
 						'incident.summary 是上面几块的汇总(含窗口自己的 p50/p90/p99),方便直接和 incident.baseline 比;这一层不做推断,结论请自己下',
 						'context.watch.kept 按**严重度降序**,不是时间序;带 restored 的条目来自上一次会话(时间靠 env.perfOrigin 对齐),所以 id 与时间看起来会跳',
 						'context.watch.kept[].tier 说明这条是靠哪一档留下来的:worst = 全局最差那一档(前 10 条)、daily = 它那一天最差的一条(最多留最近 7 天)、both = 两档都占。留存是**两档并集**,所以条数上限是 10 + 7 而不是 10 —— 单靠全局最差档时,"昨天下午那次卡"会被同一小时里的 10 次挤掉',
@@ -3284,6 +3285,41 @@ window.__ModuleLoader__.load({
 			return cell.gap === true ? 'gap' : 'empty';
 		}
 
+		/**
+		 * D5 二级:脚本侧往下拆一层。
+		 *   ① 按包汇总脚本耗时(`scripts[].pkg` 与事故包 `incident.packages` 走**同一条**
+		 *      resolve 路:单包 URL 直接读出来,合并批按 sourcemap 分段还原);
+		 *   ② 纯 JS 与"强制样式布局"分开:LoAF 的 forcedStyleAndLayoutDuration 是读布局/写样式
+		 *      逼出来的同步布局,它是脚本耗时的一部分,但来源是样式而不是业务逻辑。
+		 * 结果按窗口指纹缓存 —— 每 tick 重算 200×12 条脚本,会让面板自己变成新的开销。
+		 */
+		const scriptTallyCache = { stamp: null, value: null };
+		function scriptPkgTally() {
+			const rows = state.watch.loaf;
+			const stamp = rows.length === 0 ? 'x' : `${rows.length}|${rows[rows.length - 1].t}`;
+			if (scriptTallyCache.stamp === stamp) return scriptTallyCache.value;
+			const byPkg = new Map();
+			let js = 0;
+			let forced = 0;
+			let unresolved = 0;
+			for (const row of rows) {
+				for (const script of row.scripts ?? []) {
+					js += script.ms ?? 0;
+					forced += script.forcedMs ?? 0;
+					const resolved = packageOfScript(script.url, script.charPos);
+					if (resolved.pkg === null) { unresolved += 1; continue; }
+					byPkg.set(resolved.pkg, (byPkg.get(resolved.pkg) ?? 0) + (script.ms ?? 0));
+				}
+			}
+			const value = {
+				js: round1(js), forced: round1(forced), unresolved,
+				top: [...byPkg.entries()].sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
+			};
+			scriptTallyCache.stamp = stamp;
+			scriptTallyCache.value = value;
+			return value;
+		}
+
 		/** 60 秒帧条本体(约 100×18 的 SVG,只用 theme token)。 */
 		function sparkStrip() {
 			const cells = sparkBars(performance.now());
@@ -3483,6 +3519,10 @@ window.__ModuleLoader__.load({
 				split: '帧里花在哪', splitTotal: '这段长动画帧共', splitWorst: '最差那条',
 				spark: '60 秒帧条',
 				sparkHint: '最近 60 秒,一格一秒:高度 = 那一秒里最差那一帧的间隔,颜色与导出件的 ASCII 帧条带用同一组阈值(≥100ms 红 / ≥50ms 黄 / 其余正常)。整格都是 rAF 挂起的那一秒画成最矮的灰柱 —— 那是间隙,不是卡顿;空白 = 那一秒没采到',
+				pkgSplit: '脚本按包', pkgNone: '未定名',
+				pkgHint: '最近这段 LoAF 窗口里,脚本耗时按包汇总(与事故包 incident.packages 同一条 resolve 路:单包 URL 直接读出来,合并批按 sourcemap 分段还原)。合并批里没开「精确」就只能给到那个 58 包的批 URL,这是刻意的,不硬猜',
+				jsVsForced: '纯 JS / 强制布局', jsOnly: '纯 JS', forcedLayout: '强制样式布局',
+				forcedHint: 'LoAF 的 forcedStyleAndLayoutDuration:读布局 / 写样式逼出来的同步布局。它**已经算在**脚本耗时里,来源却是样式而不是业务逻辑 —— 分不清"这块是 JS 慢还是样式慢"时看这一行',
 				splitHead: '脚本侧', splitRender: '渲染', splitTail: '样式+布局+绘制',
 				splitNoLoaf: '暂时没有(要等到一条 >50ms 的长动画帧;LoAF 只报 50ms 以上的)',
 				splitHint: 'LoAF 的三个时间点能拆出来的极限:脚本侧(任务+同步 JS)/ 渲染(rAF 回调)/ 样式+布局+绘制。绘制与合成分不开,所以最后一段是"剩下的都在这儿",别读成"样式布局占了多少";要分开只能录 Chrome trace',
@@ -3544,6 +3584,10 @@ window.__ModuleLoader__.load({
 				split: 'where the frame went', splitTotal: 'long frame total', splitWorst: 'worst',
 				spark: '60s frame strip',
 				sparkHint: 'Last 60 seconds, one bar per second: height = the worst frame interval in that second, and the colours use the same thresholds as the ASCII frame strip in the export (>=100ms red / >=50ms yellow / otherwise normal). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall; blank = nothing sampled in that second',
+				pkgSplit: 'script by package', pkgNone: 'unnamed',
+				pkgHint: 'Script time in the recent LoAF window, summed per package (the same resolve path as incident.packages: read straight off single-package URLs, restored from sourcemap sections for combo batches). Without precise attribution a combo batch can only be named as its 58-package batch URL — that is deliberate, nothing is guessed',
+				jsVsForced: 'pure JS / forced layout', jsOnly: 'pure JS', forcedLayout: 'forced style+layout',
+				forcedHint: 'LoAF forcedStyleAndLayoutDuration: synchronous layout forced by reading layout or writing style. It is **already inside** script time, but it comes from styling rather than business logic — read this row when you cannot tell whether the script side is slow because of JS or because of style',
 				splitHead: 'script side', splitRender: 'render', splitTail: 'style+layout+paint',
 				splitNoLoaf: 'not yet (needs a long animation frame >50ms; LoAF only reports those)',
 				splitHint: 'As far as LoAF can decompose it: script side (task + sync JS) / render (rAF callbacks) / style+layout+paint. Paint and compositing cannot be separated in-page, so the last slice is "everything else" — do not read it as "style and layout only"; separating them needs a Chrome trace',
@@ -3939,6 +3983,24 @@ window.__ModuleLoader__.load({
 							h('div', { style: { flex: '1 1 auto', textAlign: 'right', lineHeight: 1.5 } },
 								h('div', { style: S.num, title }, `${t('split')} ${split.total}ms`),
 								h('div', { style: S.sub, title }, `${t('splitHead')} ${pct(split.head)} · ${t('splitRender')} ${pct(split.render)} · ${t('splitTail')} ${pct(split.tail)}`)));
+					})(),
+					// D5 二级:上面那张饼的"脚本侧"再往下拆一层 —— 按包 + 纯 JS / 强制样式布局。
+					// 没有脚本证据(还没抓到长动画帧)就整块不显示,而不是给两行 0(那会读成"脚本没耗时")。
+					(() => {
+						const pkgs = scriptPkgTally();
+						if (pkgs.js <= 0) return null;
+						const top = pkgs.top.slice(0, 3);
+						const rest = pkgs.top.length - top.length;
+						const who = top.length === 0
+							? `${t('pkgNone')}${pkgs.unresolved === 0 ? '' : `(${t('unblamed')} ${pkgs.unresolved})`}`
+							: top.map(([name, ms]) => `${short(name)} ${Math.round(ms)}ms`).join(' · ') + (rest > 0 ? ` · ${t('rest')} ${rest}` : '');
+						return h('div', null,
+							h('div', { style: S.row },
+								h('span', { style: S.label, title: t('pkgHint') }, t('pkgSplit')),
+								h('span', { style: S.num }, who)),
+							h('div', { style: S.row },
+								h('span', { style: S.label, title: t('forcedHint') }, t('jsVsForced')),
+								h('span', { style: S.num }, `${t('jsOnly')} ${pkgs.js}ms · ${t('forcedLayout')} ${pkgs.forced}ms`)));
 					})(),
 					// 60 秒迷你时间条:一格一秒、格值取格里最差那帧,阈值与导出件 ASCII 条带一致
 					h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },

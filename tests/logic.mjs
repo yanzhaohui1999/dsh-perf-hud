@@ -172,6 +172,12 @@ process.exitCode = failed === 0 ? 0 : 1;
 	// A2:跨会话基线是"只进导出件"的 —— 两个导出件都要带,面板一个字都不显示
 	check('A2:整机导出件与事故包都带跨会话基线',
 		(source.match(/sessionBaselines: sessionBaselines\(\)/g) ?? []).length, 2);
+
+	// D5:面板的二级拆分与导出件必须吃同一份字段(否则"按包"两边会算出不同答案)
+	check('D5:面板二级与导出件用同一份字段(packageOfScript(url,charPos) 与 forcedMs)',
+		/packageOfScript\(script\.url, script\.charPos\)/.test(source)
+		&& /forcedMs: script\.forcedMs/.test(source)
+		&& /forced \+= script\.forcedMs \?\? 0/.test(source), true);
 }
 
 // ═══════════════ A/B/C/D/E 新增逻辑的离线验证 ═══════════════
@@ -967,6 +973,8 @@ const watchPieces = [
 	extract(source, 'function sessionRecord('),
 	extract(source, 'function saveSessionBaseline('),
 	extract(source, 'function sessionBaselines('),
+	`${extract(source, 'const scriptTallyCache = ')};`,
+	extract(source, 'function scriptPkgTally('),
 	extract(source, 'function watchTrigger('),
 	extract(source, 'function loafScripts('),
 	extract(source, 'function wallClock('),
@@ -1005,7 +1013,9 @@ const watchBox = new Function(`
 	const PKG = 'dsh-perf-hud';
 	// assembleIncident 会调用 packageOfScript:这里用桩把它隔离掉(真函数在上一个盒子里
 	// 有 11 条断言),只验证"切片时确实记了 pkg / pkgVia 两个字段"这个契约。
-	const packageOfScript = () => ({ pkg: null, via: 'stub' });
+	// 按 URL 查表 —— D5 的"脚本按包"要能给出不同的包名
+	const pkgByUrl = new Map();
+	const packageOfScript = (url) => pkgByUrl.get(url) ?? { pkg: null, via: 'stub' };
 	const location = { href: 'http://127.0.0.1:3080/' };
 	const navigator = { userAgent: 'test-agent', hardwareConcurrency: 10 };
 	const W = { innerWidth: 1600, innerHeight: 900, devicePixelRatio: 2 };
@@ -1033,7 +1043,7 @@ const watchBox = new Function(`
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
-		sessionRecord, saveSessionBaseline, sessionBaselines,
+		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1436,6 +1446,33 @@ check('A2:最多留最近 20 个会话,更早的被挤出去', (() => {
 	watch.state.since = 0;
 	return [list.length, list[0].since, list[list.length - 1].since];
 })(), [20, new Date(1700000000000 + 5000).toISOString(), new Date(1700000000000 + 24000).toISOString()]);
+
+// ── D5:脚本侧二级(按包 + 纯 JS / 强制样式布局)──────────────────────
+watch.state.watch.loaf = [
+	{ t: 1000, dur: 200, blocking: 0, scripts: [
+		{ url: 'u-a', ms: 60, forcedMs: 5 },
+		{ url: 'u-b', ms: 30, forcedMs: 0 },
+		{ url: 'u-x', ms: 10, forcedMs: 1 },   // 定不到包:算 unresolved,不进任何包
+	] },
+];
+watch.pkgByUrl.set('u-a', { pkg: 'dsh-a', via: 'url' });
+watch.pkgByUrl.set('u-b', { pkg: 'dsh-b', via: 'url' });
+check('D5:脚本按包降序汇总;纯 JS 与强制样式布局分开算;定不到包的单独计数',
+	(() => {
+		const tally = watch.scriptPkgTally();
+		return [tally.top, tally.js, tally.forced, tally.unresolved];
+	})(),
+	[[['dsh-a', 60], ['dsh-b', 30]], 100, 6, 1]);
+check('D5:LoAF 窗口没变就复用上一次的结果(不让面板每 tick 重算 200×12 条脚本)',
+	watch.scriptPkgTally() === watch.scriptPkgTally(), true);
+check('D5:窗口变了才重算',
+	(() => {
+		const before = watch.scriptPkgTally();
+		watch.state.watch.loaf = watch.state.watch.loaf.concat([{ t: 2000, dur: 80, blocking: 0, scripts: [{ url: 'u-b', ms: 20, forcedMs: 0 }] }]);
+		const after = watch.scriptPkgTally();
+		return [after !== before, after.js, after.top];
+	})(),
+	[true, 120, [['dsh-a', 60], ['dsh-b', 50]]]);
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;
