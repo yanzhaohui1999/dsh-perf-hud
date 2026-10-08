@@ -3052,8 +3052,12 @@ window.__ModuleLoader__.load({
 			return `${translate('hostShort')} ${host} · ${translate('linkShort')} ${link.count === 0 ? translate('notYet') : `${link.p99}ms`} · ${infraVerdict().text}`;
 		}
 
+		/** 工具箱摘要:这一组现在只装守夜(事故清单 + 备注 + 导出),摘要就照它写。 */
 		function toolsSummary() {
-			return `${translate('isolation')} ${experiment.phase} · ${translate('marks')} ${state.marks.length}`;
+			const worst = state.watch.incidents.length === 0 ? null : state.watch.incidents[0];
+			return worst === null
+				? `${translate('watch')} ${translate('watchNone')}`
+				: `${translate('watch')} ${state.watch.incidents.length}${translate('times')} · ${translate('watchWorst')} ${worst.severity.toFixed(0)}ms`;
 		}
 
 		/**
@@ -3709,27 +3713,6 @@ window.__ModuleLoader__.load({
 
 				// ── 折叠 4:工具箱(隔离实验 / 场景标记 / 验收)──
 				group('tools', t('groupTools'), toolsSummary(),
-					h('div', { style: S.row },
-						h('span', { style: S.label, title: `${t('expHint')}\n${t('method')}: ${experiment.method}` }, t('isolation')),
-						h('span', { style: S.num }, experimentText())),
-					h('div', { style: S.sub }, `${t('candidate')}: ${experiment.candidates.length === 0 ? t('notYet') : experiment.candidates.join(' ')}${experiment.via === null ? '' : ` · ${viaLabel(experiment.via)}`}`),
-					experiment.baseline === null ? null : h('div', { style: S.sub }, `${t('baseline')}: ${experiment.baseline.fps}fps · LT ${experiment.baseline.longTasks} · ${experiment.baseline.domPerMin}${t('perMin')}`),
-					experiment.noise === null ? null : h('div', { style: S.sub }, `${t('noiseFloor')}: ±${experiment.noise.fps}fps · ±${experiment.noise.unattrAvg}ms${t('unattrSuffix')} · ±${experiment.noise.longTasks}LT · ±${experiment.noise.domPerMin}${t('perMin')}`),
-					experiment.results.length === 0 ? null : h('div', null, experiment.results.map((row) => h('div', { key: row.name },
-						h('div', { style: S.row },
-							h('span', { style: S.label, title: JSON.stringify(row.changeResult ?? row.error ?? null) }, `${short(row.name)}${row.applied ? '' : ` ${t('skipped')}`}`),
-							h('span', { style: S.num }, row.delta === undefined || row.delta === null ? (row.reason ?? '') : `Δfps ${signed(row.delta.fps)} · ΔLT ${signed(row.delta.longTasks)}`)),
-						row.delta === undefined || row.delta === null ? null : h('div', { style: S.sub },
-							`Δ${t('unattrShort')} ${signed(row.delta.unattrAvg)}ms · ΔDOM ${signed(row.delta.domPerMin)}${t('perMin')} · ${t('restore')} ${row.restore?.ok === true ? '✓' : '✗'}` +
-							` · ${t('beyondNoise')} ${beyondNoiseText(row)}` +
-							(row.confounded === true ? ` · ⚠️ ${t('confounded')}` : ''))))),
-					experiment.restored === null ? null : h('div', { style: S.sub },
-						`${t('restore')}: ${experiment.restored.ok === true ? `✓ ${experiment.restored.restores?.length ?? 0}` : `✗ ${experiment.restored.diff?.length ?? 0} 处不一致`}`),
-					h('div', { style: S.buttons },
-						h('button', { type: 'button', style: S.btn, disabled: experiment.phase === 'running', onClick: () => runExperiment() }, t('startExp')),
-						h('button', { type: 'button', style: S.btn, onClick: () => abortExperiment() }, t('abortExp')),
-						h('button', { type: 'button', style: S.btn, title: t('stressHint'), onClick: () => W.__perfHud.stress() }, t('stress'))),
-					h('div', { style: S.sub }, stressText()),
 					// 守夜层:最差几次的清单 + 手动补记 + 导出最近一次
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('watchHint') }, t('watch')),
@@ -3737,14 +3720,7 @@ window.__ModuleLoader__.load({
 					state.watch.incidents.length === 0 ? null : h('div', null,
 						state.watch.incidents.map((row, index) => h('div', { key: row.id, style: S.sub }, watchRowText(row, index)))),
 					h('div', { style: S.buttons },
-						h('button', { type: 'button', style: S.btn, disabled: state.watch.on === false, title: t('watchMarkHint'), onClick: () => { W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft); setDraft(''); } }, t('watchMark')),
-						h('button', { type: 'button', style: S.btn, disabled: state.watch.incidents.length === 0, title: t('watchExportHint'), onClick: () => W.__perfHud.exportIncident('latest') }, t('watchExport'))),
-					h('div', { style: S.row },
-						h('span', { style: S.label }, t('marks')),
-						h('span', { style: S.num }, state.marks.length === 0 ? t('none') : `${state.marks.length} · ${clock(state.marks[state.marks.length - 1]?.t ?? Date.now())}`)),
-					state.marks.length === 0 ? null : h('div', { style: S.sub },
-						`${(state.marks[state.marks.length - 1]?.note || t('noNote'))} · ${state.marks[state.marks.length - 1]?.fps ?? '?'}fps · LT ${state.marks[state.marks.length - 1]?.longTask ? `${state.marks[state.marks.length - 1].longTask.ms}ms` : t('none')}`),
-					h('div', { style: S.buttons },
+						// 备注输入框留着:它就是「标记刚才」写进事故包的 note
 						h('input', {
 							type: 'text',
 							value: draft,
@@ -3752,25 +3728,12 @@ window.__ModuleLoader__.load({
 							onChange: (event) => setDraft(event.target.value),
 							style: S.input,
 						}),
-						h('button', { type: 'button', style: S.btn, onClick: () => { addMark(draft); setDraft(''); } }, t('mark'))),
-					h('div', { style: S.row },
-						h('span', { style: S.label }, t('verify')),
-						h('span', { style: S.num }, `${v.precise.mapStates?.ready ?? 0}/${v.precise.bundles} ${t('maps')}`)),
-					h('div', { style: S.row },
-						h('span', { style: S.label }, t('vPrecise')),
-						h('span', { style: S.num }, v.independentPackages.count === 0
-							? t('notYet')
-							: `${v.independentPackages.count} · ${v.independentPackages.sample.join(' ')}`)),
-					h('div', { style: S.row },
-						h('span', { style: S.label }, t('vLt')),
-						h('span', { style: S.num }, `${v.longTask.attributed}/${v.longTask.total} · ${t('component')} ${v.longTask.withComponent}`)),
-					h('div', { style: S.row },
-						h('span', { style: S.label }, t('vIdle')),
-						h('span', { style: S.num }, v.idle.baseline === null ? t('notYet') : `${t('messages')} ${v.idle.baseline.domPerMin}${t('perMin')}`))),
+						h('button', { type: 'button', style: S.btn, disabled: state.watch.on === false, title: t('watchMarkHint'), onClick: () => { W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft); setDraft(''); } }, t('watchMark')),
+						h('button', { type: 'button', style: S.btn, disabled: state.watch.incidents.length === 0, title: t('watchExportHint'), onClick: () => W.__perfHud.exportIncident('latest') }, t('watchExport'))),
 
 				h('div', { style: { ...S.sep, display: 'flex', gap: 6 } },
 					h('button', { type: 'button', style: S.btn, onClick: exportJson }, t('exportJson')),
-					h('button', { type: 'button', style: S.btn, onClick: () => W.__perfHud.clear() }, t('clear'))));
+					h('button', { type: 'button', style: S.btn, onClick: () => W.__perfHud.clear() }, t('clear')))));
 
 			// 自带边界:渲染抛错时只降级成一块小面板,不让外壳把整个条目停用。
 			return h(HudBoundary, { renderError: renderErrorView },
