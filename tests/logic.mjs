@@ -845,6 +845,7 @@ const watchPieces = [
 	extract(source, 'function saveIncidents('),
 	extract(source, 'function restoreIncidents('),
 	extract(source, 'function pickIncident('),
+	extract(source, 'function incidentFileName('),
 	extract(source, 'function incidentReport('),
 	extract(source, 'function round1('),
 ].join('\n');
@@ -887,7 +888,7 @@ const watchBox = new Function(`
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
-		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, timers, store,
+		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, timers, store,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1067,6 +1068,10 @@ check('切片时给每条脚本记了 pkg 与 pkgVia(这里 packageOfScript 是�
 	return [probe.summary.pkgCoverage, 'pkg' in script, script.pkgVia];
 })(), [{ resolved: 0, total: 1 }, true, 'stub']);
 watch.state.watch.coveredUntil = 0;
+check('导出文件名:本地时间、可排序、无冒号(Windows 合法)', (() => {
+	const name = watch.incidentFileName({ id: 'i84' }, '2026-10-08T14:03:58.490Z');
+	return [/^perf-hud-\d{8}-\d{6}-i84\.json$/.test(name), name.includes(':'), name.includes('T'), name.includes('Z')];
+})(), [true, false, false, false]);
 check('取件:下标 0 是最差,latest 是时刻最新 —— 面板那个按钮以前导的是最差', (() => {
 	const saved = watch.state.watch.incidents.slice();
 	watch.state.watch.incidents.length = 0;

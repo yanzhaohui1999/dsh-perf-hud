@@ -1253,6 +1253,9 @@ window.__ModuleLoader__.load({
 					perfOrigin: new Date(perfOrigin()).toISOString(),
 					// 渲染环境:判断"这段是坏还是这台机器一直这样"的另一个前提
 					viewport: `${W.innerWidth}×${W.innerHeight}`,
+				// 本地时区偏移(分钟,UTC+8 = 480)—— 只读文件的人靠它把 ISO 换成本地时间;
+				// 注意 JS 的 getTimezoneOffset() 符号是反的
+				utcOffsetMin: -new Date().getTimezoneOffset(),
 					devicePixelRatio: W.devicePixelRatio,
 					hardwareConcurrency: navigator.hardwareConcurrency ?? null,
 					visibility: document.visibilityState,
@@ -2665,6 +2668,7 @@ window.__ModuleLoader__.load({
 					missing,
 					howToAdd,
 					howToRead: [
+						'incident.env.utcOffsetMin 是采这份包时的本地时区偏移(分钟,UTC+8 = 480):把 at 加上它才是当时墙上钟的时间',
 						'incident.frames:窗口内每一帧(t 是 perf 毫秒,要靠 incident.env.perfOrigin 换成墙钟;ms 是帧间隔;gap:true 表示 rAF 被挂起,不是卡顿)。首帧晚于 window.fromMs 是正常的,但**差得多就说明这一段被挂起过**(实测有一份晚了 6.3 秒,因为中间有一次 22.7 秒的 rAF 挂起)—— 去看 frames[].gap',
 						'incident.loaf 与 incident.frames 是**同一信号的两个视图**(LoAF 的 t+dur 就落在某一帧上),不是两份独立证据:别相加,也别当互相印证',
 						'incident.loaf[].blocking(blockingDuration)只累计"被归因到的 >50ms 长任务"的超出部分 —— **它可以是 0,而这一帧仍然有几百毫秒**。判严重度看帧间隔,blocking=0 不等于没卡',
@@ -2683,13 +2687,25 @@ window.__ModuleLoader__.load({
 		}
 
 		/** 下载一份事故包。返回 false 表示没这个 id(不静默成功)。 */
+		/**
+		 * 导出文件名:`perf-hud-20261008-220358-i84.json`。
+		 * 用**事故发生的本地时间**(不是导出时间)——文件名要回答"这是哪一次",不是"我什么时候导的";
+		 * ISO 的 `2026-10-08T14-03-58-490Z` 既难读又和面板上的时间对不上。日期在前可排序,
+		 * 不含冒号(Windows 不允许)。完整 ISO 与 perfOrigin 都在文件体里。
+		 */
+		function incidentFileName(incident, at) {
+			const d = at instanceof Date ? at : new Date(at);
+			const p = (n) => (String(n).length < 2 ? `0${n}` : String(n));
+			return `perf-hud-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${incident.id}.json`;
+		}
+
 		function exportIncident(id) {
 			const report = incidentReport(id);
 			if (report === null) return false;
 			const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
 			const link = document.createElement('a');
 			link.href = url;
-			link.download = `perf-hud-incident-${report.incident.id}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+			link.download = incidentFileName(report.incident, report.incident.at);
 			link.click();
 			natives.setTimeout(() => URL.revokeObjectURL(url), 2000);
 			return true;

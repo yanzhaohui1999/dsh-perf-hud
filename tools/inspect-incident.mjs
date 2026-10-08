@@ -73,6 +73,20 @@ const pad = (text, size, align = 'left') => {
 	const s = String(text);
 	return s.length >= size ? s : align === 'right' ? s.padStart(size, ' ') : s.padEnd(size, ' ');
 };
+// 包里记了时区就用它;没记(改动之前采的旧包)就退回**读的人这台机器**的时区,并明确标出来 ——
+// 猜时区比不显示更糟,但同一台机器上读自己的包时它是准的。
+const packOffset = typeof incident.env?.utcOffsetMin === 'number' ? incident.env.utcOffsetMin : null;
+const utcOffsetMin = packOffset === null ? -new Date().getTimezoneOffset() : packOffset;
+/** ISO → 当时的本地墙上钟时间。包里没记时区(旧包)时返回 null,不猜。 */
+const localTime = (iso) => {
+	if (utcOffsetMin === null || typeof iso !== 'string') return null;
+	const ms = Date.parse(iso);
+	if (Number.isNaN(ms)) return null;
+	return new Date(ms + utcOffsetMin * 60000).toISOString().slice(0, 19).replace('T', ' ');
+};
+const tzLabel = ` (UTC${utcOffsetMin >= 0 ? '+' : '-'}${Math.abs(utcOffsetMin) / 60}${packOffset === null ? ', 按本机时区折算 —— 包里没记' : ''})`;
+/** 毫秒 → 人能读的时长(短了就秒,长了就小时)。 */
+const spanText = (ms) => (ms >= 3600000 ? `${num(ms / 3600000, 1)} 小时` : `${num(ms / 1000, 0)}s`);
 const num = (value, digits = 1) => (typeof value === 'number' ? String(Math.round(value * 10 ** digits) / 10 ** digits) : '—');
 const sec = (ms) => `${ms >= 0 ? '+' : ''}${(ms / 1000).toFixed(1)}s`;
 const rule = (title) => `\n── ${title} ${'─'.repeat(Math.max(0, WIDTH - title.length - 4))}`;
@@ -98,11 +112,12 @@ function shortUrl(url) {
 
 // ── 1. 头部 ────────────────────────────────────────────────────────────
 const window0 = incident.window ?? {};
-console.log(`\n事故 ${incident.id ?? '?'}  ·  ${report.exportedAt ?? '?'}${report.schema === undefined ? '' : `  ·  schema ${report.schema}`}`);
+console.log(`\n事故 ${incident.id ?? '?'}${incident.restored === true ? '(读回)' : ''}  ·  ${localTime(incident.at) ?? incident.at ?? '?'}${tzLabel}${report.schema === undefined ? '' : `  ·  schema ${report.schema}`}`);
+if (localTime(incident.at) !== null) console.log(`(机器可读的同一个时刻:${incident.at}  ·  导出于 ${report.exportedAt ?? '?'})`);
 console.log(`${file}`);
 console.log(rule('发生了什么'));
 console.log(`触发原因   ${incident.cause ?? '?'}${incident.cause === 'loaf' ? '(长动画帧的 blockingDuration 超线)' : incident.cause === 'frame' ? '(帧间隔超线)' : incident.cause === 'manual' ? '(手动标记)' : ''}`);
-console.log(`触发时刻   ${incident.at ?? '?'}  ·  perf ${num(incident.atPerfMs)}ms`);
+console.log(`触发时刻   ${localTime(incident.at) ?? incident.at ?? '?'}${tzLabel}  ·  perf ${num(incident.atPerfMs)}ms`);
 console.log(`严重度     ${num(incident.severity)}ms${incident.restored === true ? '   ⚠️ 这份是上次会话落盘读回的,perf 毫秒按 env.perfOrigin 对齐' : ''}`);
 console.log(`窗口       ${window0.from ?? '?'} → ${window0.to ?? '?'}  (前摇 ${num(window0.preMs, 0)}ms + 后摇 ${num(window0.postMs, 0)}ms)`);
 console.log(`保留状态   ${incident.kept ?? '?'}${incident.note === null || incident.note === undefined ? '' : `  ·  标记:${incident.note}`}`);
@@ -179,7 +194,10 @@ if (live.length > 0) {
 				: p50Ratio !== null && p50Ratio >= 1.5 ? `整段慢性劣化(p50 ×${p50Ratio.toFixed(2)})`
 					: p50Ratio !== null && p50Ratio >= 1.15 ? `略差于平时(p50 ×${p50Ratio.toFixed(2)})`
 						: '与本会话其余部分基本一致';
-		console.log(`会话基线   其余 ${num(baseline.frames, 0)} 帧 · 跨度 ${num((baseline.spanMs ?? 0) / 1000)}s(真的在跑 ${num((baseline.busyMs ?? baseline.spanMs ?? 0) / 1000)}s → ${num(baseline.fps)}fps)· p50 ${num(baseline.p50)}ms · p90 ${num(baseline.p90)}ms · 最差 ${num(baseline.worstMs)}ms`);
+		console.log(`会话基线   其余 ${num(baseline.frames, 0)} 帧 · 覆盖 ${spanText(baseline.spanMs ?? 0)}(其中真的在跑 ${spanText(baseline.busyMs ?? baseline.spanMs ?? 0)} → ${num(baseline.fps)}fps)· p50 ${num(baseline.p50)}ms · p90 ${num(baseline.p90)}ms · 最差 ${num(baseline.worstMs)}ms`);
+		if ((baseline.spanMs ?? 0) > 600000) {
+			console.log(`⚠️ 基线横跨 ${spanText(baseline.spanMs)} 的墙上钟时间(中间有 rAF 挂起/后台时段),它是"这台机器这些帧的样子",不是一段连续观察 —— 倍数看趋势,别当精确值`);
+		}
 		// 基线太薄时(刚刷新不久)那个倍数没有意义 —— 明确说出来,别让人拿着 ×19 去改代码
 		const thin = typeof baseline.frames === 'number' && baseline.frames < 200;
 		console.log(`对比       ${verdict}${thin ? `\n⚠️ 基线只有 ${num(baseline.frames, 0)} 帧(刚刷新不久),这个倍数不可信 —— 隔几分钟再看这一段的绝对值` : ''}`);
