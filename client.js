@@ -3198,6 +3198,7 @@ window.__ModuleLoader__.load({
 				overviewFrame: '帧', overviewBlame: '最差那条', worstSecondShort: '最差秒', hostShort: '宿主',
 				split: '帧里花在哪', splitTotal: '这段长动画帧共', splitWorst: '最差那条',
 				splitHead: '脚本侧', splitRender: '渲染', splitTail: '样式+布局+绘制',
+				splitNoLoaf: '暂时没有(要等到一条 >50ms 的长动画帧;LoAF 只报 50ms 以上的)',
 				splitHint: 'LoAF 的三个时间点能拆出来的极限:脚本侧(任务+同步 JS)/ 渲染(rAF 回调)/ 样式+布局+绘制。绘制与合成分不开,所以最后一段是"剩下的都在这儿",别读成"样式布局占了多少";要分开只能录 Chrome trace',
 				preciseShort: '精确', worstOne: '最差那条',
 				unexplained: '该帧几乎无 JS 解释', unexplainedHint: '样式/布局/绘制/vsync;可用 Rendering 面板的 Paint flashing 交叉验证',
@@ -3253,6 +3254,7 @@ window.__ModuleLoader__.load({
 				overviewFrame: 'frame', overviewBlame: 'worst one', worstSecondShort: 'worst sec', hostShort: 'host',
 				split: 'where the frame went', splitTotal: 'long frame total', splitWorst: 'worst',
 				splitHead: 'script side', splitRender: 'render', splitTail: 'style+layout+paint',
+				splitNoLoaf: 'not yet (needs a long animation frame >50ms; LoAF only reports those)',
 				splitHint: 'As far as LoAF can decompose it: script side (task + sync JS) / render (rAF callbacks) / style+layout+paint. Paint and compositing cannot be separated in-page, so the last slice is "everything else" — do not read it as "style and layout only"; separating them needs a Chrome trace',
 				preciseShort: 'precise', worstOne: 'worst one',
 				unexplained: 'no JS explanation for that frame', unexplainedHint: 'style/layout/paint/vsync; cross-check with Paint flashing in the Rendering panel',
@@ -3618,7 +3620,7 @@ window.__ModuleLoader__.load({
 						const split = frameSplit(worstLoaf());
 						if (split === null) return h('div', { style: S.row },
 							h('span', { style: S.label, title: t('splitHint') }, t('split')),
-							h('span', { style: S.num }, t('none')));
+							h('span', { style: S.num }, t('splitNoLoaf')));
 						const C = 2 * Math.PI * 20;
 						const slices = [
 							{ ms: split.head, color: 'var(--dsw-alias-state-error-primary)' },
