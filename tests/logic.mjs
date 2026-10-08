@@ -141,7 +141,12 @@ process.exitCode = failed === 0 ? 0 : 1;
 		components.filter((name) => !declared.has(name)), []);
 
 	const renderRegion = source.slice(source.indexOf('function PerfHud('));
-	const bare = [...new Set([...renderRegion.matchAll(/(?<![.\w$])([a-z_$][\w$]*)\s*\(/g)].map((m) => m[1]))];
+	// 单/双引号字符串里的内容不是 JS 调用(SVG/CSS 的 `transform: 'rotate(-90 24 24)'` 就是典型);
+	// 模板字符串**要留着** —— `${t('x')}` 里的调用是真调用,不能一起丢掉。
+	const renderCode = renderRegion
+		.replace(/'(?:[^'\\]|\\.)*'/g, "''")
+		.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+	const bare = [...new Set([...renderCode.matchAll(/(?<![.\w$])([a-z_$][\w$]*)\s*\(/g)].map((m) => m[1]))];
 	check('面板渲染区的函数调用都有声明(signed 事故回归)',
 		bare.filter((name) => !declared.has(name) && !GLOBALS.has(name) && !CSS_FUNCS.has(name)), []);
 
@@ -844,6 +849,8 @@ const watchPieces = [
 	extract(source, 'function perfOrigin('),
 	extract(source, 'function saveIncidents('),
 	extract(source, 'function restoreIncidents('),
+	extract(source, 'function frameSplit('),
+	extract(source, 'function worstLoaf('),
 	extract(source, 'function pickIncident('),
 	extract(source, 'function incidentFileName('),
 	extract(source, 'function incidentReport('),
@@ -888,7 +895,7 @@ const watchBox = new Function(`
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
-		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, timers, store,
+		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1068,6 +1075,21 @@ check('切片时给每条脚本记了 pkg 与 pkgVia(这里 packageOfScript 是�
 	return [probe.summary.pkgCoverage, 'pkg' in script, script.pkgVia];
 })(), [{ resolved: 0, total: 1 }, true, 'stub']);
 watch.state.watch.coveredUntil = 0;
+check('帧拆分:LoAF 三个时间点 → 脚本侧 / 渲染 / 样式+布局+绘制的占比', watch.frameSplit({
+	t: 1000, dur: 200, renderStart: 1120, styleAndLayoutStart: 1140, blocking: 90,
+	scripts: [{ ms: 60 }, { ms: 40 }],
+}), { at: 1000, total: 200, head: 120, js: 100, render: 20, tail: 60, blocking: 90 });
+check('帧拆分:缺 renderStart 时全部算"脚本侧",不猜', watch.frameSplit({ t: 0, dur: 60, blocking: 1, scripts: [] }), { at: 0, total: 60, head: 60, js: 0, render: 0, tail: 0, blocking: 1 });
+check('帧拆分:脏数据返回 null', [watch.frameSplit(null), watch.frameSplit({ t: 0, dur: 0 })], [null, null]);
+check('worstLoaf 取 blocking 最大的那条', (() => {
+	const saved = watch.state.watch.loaf.slice();
+	watch.state.watch.loaf.length = 0;
+	watch.state.watch.loaf.push({ t: 1, dur: 60, blocking: 10, scripts: [] }, { t: 2, dur: 300, blocking: 200, scripts: [] });
+	const got = watch.worstLoaf().t;
+	watch.state.watch.loaf.length = 0;
+	for (const row of saved) watch.state.watch.loaf.push(row);
+	return got;
+})(), 2);
 check('导出文件名:本地时间、可排序、无冒号(Windows 合法)', (() => {
 	const name = watch.incidentFileName({ id: 'i84' }, '2026-10-08T14:03:58.490Z');
 	return [/^perf-hud-\d{8}-\d{6}-i84\.json$/.test(name), name.includes(':'), name.includes('T'), name.includes('Z')];

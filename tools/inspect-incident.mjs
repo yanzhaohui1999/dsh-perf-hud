@@ -215,10 +215,40 @@ for (const row of longTasks) {
 console.log(rule('LoAF 长动画帧(blocking 才是"挡了多久")'));
 if (loaf.length === 0) console.log('(没有:LoAF 未装,或这段窗口里没有长动画帧)');
 const worstLoaf = loaf.slice().sort((a, b) => b.blocking - a.blocking).slice(0, 12);
+
+// 长动画帧的时间去向(LoAF 的三个时间点)。这里重写一份是刻意的:工具要能单独跑,
+// 不能 import client.js;判据与 client.js 的 frameSplit 一致。
+const splitOf = (row) => {
+	const total = typeof row.dur === 'number' && row.dur > 0 ? row.dur : null;
+	if (total === null) return null;
+	const renderStart = typeof row.renderStart === 'number' && row.renderStart > row.t ? row.renderStart : null;
+	const styleStart = typeof row.styleAndLayoutStart === 'number' && row.styleAndLayoutStart > row.t ? row.styleAndLayoutStart : null;
+	const head = renderStart === null ? total : renderStart - row.t;
+	const render = renderStart === null ? 0 : (styleStart === null ? total - head : styleStart - renderStart);
+	return { total, head, render, tail: Math.max(0, total - head - render) };
+};
+const pctOf = (part, total) => `${Math.round((part / total) * 100)}%`;
+const splitBar = (split) => {
+	const cells = 10;
+	const n = (part) => Math.round((part / split.total) * cells);
+	return `${'#'.repeat(n(split.head))}${'='.repeat(n(split.render))}${'.'.repeat(Math.max(0, cells - n(split.head) - n(split.render)))}`;
+};
 for (const row of worstLoaf) {
-	console.log(`  ${pad(sec(row.t - (incident.atPerfMs ?? 0)), 7, 'right')}  dur ${pad(`${num(row.dur)}ms`, 8, 'right')}  blocking ${pad(`${num(row.blocking)}ms`, 8, 'right')}  脚本 ${row.scripts.length} 个`);
+	const split = splitOf(row);
+	const parts = split === null ? '' : `  拆 ${splitBar(split)} 脚本侧 ${pctOf(split.head, split.total)} · 渲染 ${pctOf(split.render, split.total)} · 样式+布局+绘制 ${pctOf(split.tail, split.total)}`;
+	console.log(`  ${pad(sec(row.t - (incident.atPerfMs ?? 0)), 7, 'right')}  dur ${pad(`${num(row.dur)}ms`, 8, 'right')}  blocking ${pad(`${num(row.blocking)}ms`, 8, 'right')}  脚本 ${row.scripts.length} 个${parts}`);
 }
 if (loaf.length > worstLoaf.length) console.log(`  …共 ${loaf.length} 条,上面按 blocking 取前 ${worstLoaf.length} 条`);
+
+{
+	const totals = loaf.map(splitOf).filter(Boolean).reduce((acc, split) => ({
+		total: acc.total + split.total, head: acc.head + split.head, render: acc.render + split.render, tail: acc.tail + split.tail,
+	}), { total: 0, head: 0, render: 0, tail: 0 });
+	if (totals.total > 0) {
+		console.log(`  合计 ${splitBar(totals)} 脚本侧 ${pctOf(totals.head, totals.total)} · 渲染 ${pctOf(totals.render, totals.total)} · 样式+布局+绘制 ${pctOf(totals.tail, totals.total)}   (${num(totals.total)}ms,${loaf.length} 条)`);
+	}
+	console.log('       图例:# 脚本侧(任务+同步 JS)= 渲染(rAF 回调). 样式+布局+绘制 —— 绘制与合成**分不开**,最后一段是"剩下的都在这儿",别读成"样式布局占多少";要分开只能录 Chrome trace');
+}
 
 console.log(rule('按包汇总(脚本耗时归到包名)—— 这一层才是"是谁"'));
 const packages = Array.isArray(incident.packages) ? incident.packages : [];

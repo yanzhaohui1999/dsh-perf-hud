@@ -2996,6 +2996,43 @@ window.__ModuleLoader__.load({
 		}
 
 		/** 折叠组的一句话摘要:刻意短 —— 摘要自己换行会比正文更难看(实测)。 */
+		/**
+		 * 一个长动画帧的时间去哪了 —— 这是页面内能拿到的极限,LoAF 只给三个时间点:
+		 *   [t, renderStart)              任务 + 脚本(同步 JS)
+		 *   [renderStart, styleAndLayout) rAF 回调 / 渲染准备
+		 *   [styleAndLayout, t+dur)       样式 + 布局 + 绘制/合成
+		 * **绘制与合成分不开**(要分只能录 Chrome trace,那一项在缺失声明里)——
+		 * 所以第三段是"剩下的都在这儿",不要读成"样式布局占了多少"。
+		 */
+		function frameSplit(row) {
+			if (row === null || row === undefined || typeof row.dur !== 'number' || row.dur <= 0) return null;
+			const start = row.t;
+			const total = row.dur;
+			const renderStart = typeof row.renderStart === 'number' && row.renderStart > start ? row.renderStart : null;
+			const styleStart = typeof row.styleAndLayoutStart === 'number' && row.styleAndLayoutStart > start ? row.styleAndLayoutStart : null;
+			let js = 0;
+			for (const script of row.scripts ?? []) js += script.ms ?? 0;
+			const head = renderStart === null ? total : renderStart - start;
+			const render = renderStart === null ? 0 : (styleStart === null ? total - head : styleStart - renderStart);
+			const tail = Math.max(0, total - head - render);
+			return {
+				at: row.t,
+				total: round1(total),
+				head: round1(head),          // 任务 + 脚本
+				js: round1(js),              // 其中脚本本身(是 head 的一部分)
+				render: round1(render),
+				tail: round1(tail),
+				blocking: round1(row.blocking ?? 0),
+			};
+		}
+
+		/** 最近那条 blocking 最大的长动画帧(面板的饼图看的就是它)。 */
+		function worstLoaf() {
+			let best = null;
+			for (const row of state.watch.loaf) if (best === null || (row.blocking ?? 0) > (best.blocking ?? 0)) best = row;
+			return best;
+		}
+
 		function detailSummary() {
 			const second = worstSecond();
 			// 帧内未归因搬进这一组之后,它的数字要留在摘要上 —— 否则常显就更"瞎"了
@@ -3155,6 +3192,9 @@ window.__ModuleLoader__.load({
 				component: '组件', cumulative: '累计', maps: '批次分段',
 				overview: '概览', overviewHint: '三秒判断:最差帧 + 最差 longtask 及其归属 + 归因命中数',
 				overviewFrame: '帧', overviewBlame: '最差那条', worstSecondShort: '最差秒', hostShort: '宿主',
+				split: '帧里花在哪', splitTotal: '这段长动画帧共', splitWorst: '最差那条',
+				splitHead: '脚本侧', splitRender: '渲染', splitTail: '样式+布局+绘制',
+				splitHint: 'LoAF 的三个时间点能拆出来的极限:脚本侧(任务+同步 JS)/ 渲染(rAF 回调)/ 样式+布局+绘制。绘制与合成分不开,所以最后一段是"剩下的都在这儿",别读成"样式布局占了多少";要分开只能录 Chrome trace',
 				preciseShort: '精确', worstOne: '最差那条',
 				unexplained: '该帧几乎无 JS 解释', unexplainedHint: '样式/布局/绘制/vsync;可用 Rendering 面板的 Paint flashing 交叉验证',
 				verdict: '判定', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)',
@@ -3207,6 +3247,9 @@ window.__ModuleLoader__.load({
 				component: 'component', cumulative: 'total', maps: 'maps',
 				overview: 'overview', overviewHint: 'Three-second read: worst frame + worst longtask and its owner + attribution hit ratio',
 				overviewFrame: 'frame', overviewBlame: 'worst one', worstSecondShort: 'worst sec', hostShort: 'host',
+				split: 'where the frame went', splitTotal: 'long frame total', splitWorst: 'worst',
+				splitHead: 'script side', splitRender: 'render', splitTail: 'style+layout+paint',
+				splitHint: 'As far as LoAF can decompose it: script side (task + sync JS) / render (rAF callbacks) / style+layout+paint. Paint and compositing cannot be separated in-page, so the last slice is "everything else" — do not read it as "style and layout only"; separating them needs a Chrome trace',
 				preciseShort: 'precise', worstOne: 'worst one',
 				unexplained: 'no JS explanation for that frame', unexplainedHint: 'style/layout/paint/vsync; cross-check with Paint flashing in the Rendering panel',
 				verdict: 'verdict', linkShort: 'RTT', suspectSuffix: ' suspect', cleared: 'link cleared (host and tunnel both normal)',
@@ -3565,6 +3608,40 @@ window.__ModuleLoader__.load({
 
 				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
 				group('detail', t('groupDetail'), detailSummary(),
+					// 长动画帧的时间去向:三段饼图。页面内看不到"绘制/合成",所以只有三段,
+					// 第三段是"剩下的都在这儿" —— 拿它当"样式布局占比"会读错。
+					(() => {
+						const split = frameSplit(worstLoaf());
+						if (split === null) return h('div', { style: S.row },
+							h('span', { style: S.label, title: t('splitHint') }, t('split')),
+							h('span', { style: S.num }, t('none')));
+						const C = 2 * Math.PI * 20;
+						const slices = [
+							{ ms: split.head, color: 'var(--dsw-alias-state-error-primary)' },
+							{ ms: split.render, color: 'var(--dsw-alias-state-warn-primary)' },
+							{ ms: split.tail, color: 'var(--dsw-alias-brand-primary)' },
+						];
+						let passed = 0;
+						const arcs = [];
+						for (const slice of slices) {
+							const length = (slice.ms / split.total) * C;
+							arcs.push(h('circle', {
+								key: `slice-${arcs.length}`, cx: 24, cy: 24, r: 20, fill: 'none',
+								stroke: slice.color, strokeWidth: 9,
+								strokeDasharray: `${length.toFixed(1)} ${(C - length).toFixed(1)}`,
+								strokeDashoffset: (-passed).toFixed(1),
+								transform: 'rotate(-90 24 24)',
+							}));
+							passed += length;
+						}
+						const pct = (ms) => `${Math.round((ms / split.total) * 100)}%`;
+						const title = `${t('splitTotal')} ${split.total}ms(${t('splitWorst')} blocking ${split.blocking}ms)\n${t('splitHead')} ${split.head}ms(脚本 ${split.js}ms)\n${t('splitRender')} ${split.render}ms\n${t('splitTail')} ${split.tail}ms`;
+						return h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },
+							h('svg', { width: 48, height: 48, viewBox: '0 0 48 48', style: { flex: '0 0 auto' } }, arcs),
+							h('div', { style: { flex: '1 1 auto', textAlign: 'right', lineHeight: 1.5 } },
+								h('div', { style: S.num, title }, `${t('split')} ${split.total}ms`),
+								h('div', { style: S.sub, title }, `${t('splitHead')} ${pct(split.head)} · ${t('splitRender')} ${pct(split.render)} · ${t('splitTail')} ${pct(split.tail)}`)));
+					})(),
 					// 帧里"JS 之外"的残差:唯一能反映 CSS/绘制卡顿的数字,从常显挪进来
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),
