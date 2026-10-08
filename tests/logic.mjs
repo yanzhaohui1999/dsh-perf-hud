@@ -168,6 +168,10 @@ process.exitCode = failed === 0 ? 0 : 1;
 	check('D2:帧条与导出件 ASCII 条带同一组阈值(>=100ms / >=50ms)',
 		[/ms >= 100\) return '█'/, /ms >= 50\) return '▒'/].every((re) => re.test(inspector))
 		&& [/ms >= 100\) return 'bad'/, /ms >= 50\) return 'warn'/, /if \(cell\.seen === true\)/].every((re) => re.test(source)), true);
+
+	// A2:跨会话基线是"只进导出件"的 —— 两个导出件都要带,面板一个字都不显示
+	check('A2:整机导出件与事故包都带跨会话基线',
+		(source.match(/sessionBaselines: sessionBaselines\(\)/g) ?? []).length, 2);
 }
 
 // ═══════════════ A/B/C/D/E 新增逻辑的离线验证 ═══════════════
@@ -181,6 +185,8 @@ const sandbox = `
 	const document = { documentElement: {}, querySelector: () => (streamingFlag ? {} : null) };
 	const localStorage = { store: new Map(), getItem(k) { return this.store.has(k) ? this.store.get(k) : null; }, setItem(k, v) { this.store.set(String(k), String(v)); } };
 	const natives = { setTimeout: (fn, ms) => setTimeout(fn, ms), setInterval: () => 0, clearInterval: () => {} };
+	// A2 的跨会话基线要吃帧环:这个盒子里不测帧环(有专门的盒子),给个"一帧都没有"的桩
+	const frameRing = { size: 0, stats: () => null };
 	const sleep = (ms) => new Promise((resolve) => natives.setTimeout(resolve, ms));
 	let dirty = false;
 	const ring = [];
@@ -243,6 +249,11 @@ const newPieces = [
 	'function selfStats(',
 	'function recorderText(',
 	'const LS_MAP = ',
+	'const LS_SESSIONS = ',
+	'const SESSION_KEEP = ',
+	'function sessionRecord(',
+	'function saveSessionBaseline(',
+	'function sessionBaselines(',
 	'const scriptLines = ',
 	'const SCRIPT_LINES_MAX = ',
 	'async function loadScriptLines(',
@@ -906,6 +917,11 @@ const exported = box.EX.snapshot();
 
 
 check('导出含 timeline 段', Array.isArray(exported.timeline?.samples), true);
+// A2:跨会话基线的口径必须写在文件里 —— 它是粗参照,不是回归判定
+check('A2:导出件带跨会话基线(这个盒子里没有帧环 → 空数组,note 写明口径)',
+	[Array.isArray(exported.context.sessionBaselines.sessions), exported.context.sessionBaselines.sessions.length,
+		exported.context.sessionBaselines.keep, /不是回归判定/.test(exported.context.sessionBaselines.note)],
+	[true, 0, 20, true]);
 check('timeline 带每秒曲线与 60 秒切片',
 	exported.timeline.samples.length === box.state.samplesLength && Array.isArray(exported.timeline.last60s), true);
 check('timeline 带场景标记与空闲基线',
@@ -945,6 +961,12 @@ const watchPieces = [
 	source.slice(source.indexOf('const SPARK_MAX_MS'), source.indexOf('\n', source.indexOf('const SPARK_MAX_MS'))),
 	extract(source, 'function sparkBars('),
 	extract(source, 'function sparkLevel('),
+	// A2 跨会话基线:常量按行取,函数照 extract
+	source.slice(source.indexOf('const LS_SESSIONS'), source.indexOf('\n', source.indexOf('const LS_SESSIONS'))),
+	source.slice(source.indexOf('const SESSION_KEEP'), source.indexOf('\n', source.indexOf('const SESSION_KEEP'))),
+	extract(source, 'function sessionRecord('),
+	extract(source, 'function saveSessionBaseline('),
+	extract(source, 'function sessionBaselines('),
 	extract(source, 'function watchTrigger('),
 	extract(source, 'function loafScripts('),
 	extract(source, 'function wallClock('),
@@ -1011,6 +1033,7 @@ const watchBox = new Function(`
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
+		sessionRecord, saveSessionBaseline, sessionBaselines,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1300,6 +1323,8 @@ check('事故包:缺失项都给了补齐办法', watch.incidentReport(0).contex
 check('事故包:独立读者点出的三条缺口也列进 missing',
 	['compositor:', 'recorder-cost:', 'baseline:'].map((prefix) => watch.incidentReport(0).context.missing.some((line) => line.startsWith(prefix))),
 	[true, true, true]);
+check('事故包:A2 落地后那条"没有对照基线"改成"跨机器 / 跨浏览器"',
+	watch.incidentReport(0).context.missing.some((line) => line.startsWith('baseline:') && line.includes('跨机器')), true);
 check('事故包:带上渲染环境(视口 / DPR / 核数)',
 	[watch.incidentReport(0).incident.env.viewport, watch.incidentReport(0).incident.env.devicePixelRatio, watch.incidentReport(0).incident.env.hardwareConcurrency],
 	['1600×900', 2, 10]);
@@ -1382,6 +1407,35 @@ check('D2:整格 rAF 间隙 → gap(矮柱,不是卡顿),那一秒没采到 → 
 		return [watch.sparkLevel(cells[59]), cells[59].seen, cells[10].seen, cells[10].ms];
 	})(),
 	['gap', false, false, 0]);
+
+// ── A2:跨会话基线(每个会话一条,只进导出件)────────────────────────
+// 前面的用例里,事故包的 context 已经往这份落盘写了若干条(那是真实现的行为),先清干净
+watch.store.set('dsh-perf-hud:sessions:v1', JSON.stringify({ v: 1, sessions: [] }));
+watch.state.since = 1700000000000;
+check('A2:一帧都没采到时不编数字', (() => {
+	watch.frameRing.reset();
+	return [watch.sessionRecord(), watch.saveSessionBaseline()];
+})(), [null, []]);
+watch.frameRing.reset();
+for (let i = 0; i < 10; i += 1) watch.frameRing.push(1000 + i * 16.7, 16.7, false);
+check('A2:导出的基线写明"粗参照,不是回归判定",并带全分布字段', (() => {
+	const box0 = watch.sessionBaselines();
+	const keys = Object.keys(box0.sessions[0] ?? {});
+	return [box0.sessions.length, box0.keep, box0.sessions[0].frames, /不是回归判定/.test(box0.note),
+		['p50', 'p90', 'p99', 'worstMs', 'frames', 'at', 'since'].every((key) => keys.indexOf(key) !== -1)];
+})(), [1, 20, 10, true, true]);
+check('A2:同一个会话反复取只占一条(按 since 认人)',
+	[watch.sessionBaselines().sessions.length, watch.sessionBaselines().sessions[0].since === watch.sessionBaselines().sessions[0].since], [1, true]);
+check('A2:最多留最近 20 个会话,更早的被挤出去', (() => {
+	watch.store.set('dsh-perf-hud:sessions:v1', JSON.stringify({ v: 1, sessions: [] }));
+	for (let i = 0; i < 25; i += 1) {
+		watch.state.since = 1700000000000 + i * 1000;
+		watch.sessionBaselines();
+	}
+	const list = JSON.parse(watch.store.get('dsh-perf-hud:sessions:v1')).sessions;
+	watch.state.since = 0;
+	return [list.length, list[0].since, list[list.length - 1].since];
+})(), [20, new Date(1700000000000 + 5000).toISOString(), new Date(1700000000000 + 24000).toISOString()]);
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;

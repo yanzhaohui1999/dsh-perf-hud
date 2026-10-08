@@ -87,7 +87,10 @@ The panel is layered: only "is it smooth + whose fault" is always visible; the o
 
 **Export JSON** carries a `context` header: scenario / idle seconds / precise-attribution and per-sourcemap-section
 state / host route, profile, Node and plugin version / experiment candidates and method / every colouring
-threshold. `window.__perfHud.snapshot()` is the same source as the panel's export button.
+threshold / a **cross-session baseline** (one p50/p90/p99/worst/frames/timestamp record per session, last 20 kept).
+That list is export-only (the panel never shows it) and is labelled a **rough reference, not a regression verdict** —
+sessions differ in load, viewport and whether instrumentation was on, and frame counts can differ by an order of
+magnitude. `window.__perfHud.snapshot()` is the same source as the panel's export button.
 
 ## Four-leg attribution
 
@@ -151,9 +154,9 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 271 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 278 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          #  24 assertions: real index.js driven by a fake ctx
-# 306 offline assertions total, no running DSH required
+# 313 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):

@@ -48,6 +48,8 @@ window.__ModuleLoader__.load({
 		const LS_MARKS = 'dsh-perf-hud:marks';
 		const LS_GROUPS = 'dsh-perf-hud:groups';
 		const LS_INCIDENTS = 'dsh-perf-hud:incidents:v1';   // 守夜层留存的事故(要活过刷新)
+		const LS_SESSIONS = 'dsh-perf-hud:sessions:v1';     // A2 跨会话基线(每个会话一条,只进导出件)
+		const SESSION_KEEP = 20;                            // 跨会话基线保留最近几个会话
 		const HOST_ROUTE = '/api/dsh-perf-hud/host';
 		const RTT_INTERVAL_MS = 10000;
 		const LOAD_INTERVAL_MS = 60000;
@@ -1830,6 +1832,59 @@ window.__ModuleLoader__.load({
 			} catch (error) { /* 配额满:持久化放弃,内存缓冲照常 */ }
 		}
 
+		// ───────────────────────── A2:跨会话基线 ─────────────────────────
+		/**
+		 * 一次会话的帧分布(整段帧环,不排除任何窗口)。
+		 *
+		 * 事故包里的 `baseline` 只是**同一个会话**的其余部分 —— 换一个会话就没法回答"这台机器
+		 * 平时是多少"。所以每个会话落一条,只进导出件(面板不显示:它不是"现在"的读数)。
+		 */
+		function sessionRecord() {
+			const stats = frameRing.stats();
+			if (stats === null) return null;   // 一帧都没采到:不编数字
+			return {
+				at: new Date().toISOString(),          // 这条记录最后一次更新的时刻
+				since: new Date(state.since > 0 ? state.since : Date.now()).toISOString(),   // 会话身份
+				frames: stats.frames,
+				p50: stats.p50, p90: stats.p90, p99: stats.p99, worstMs: stats.worstMs,
+				fps: stats.fps, spanMs: stats.spanMs, busyMs: stats.busyMs,
+			};
+		}
+
+		/**
+		 * 把本次会话的分布写进跨会话基线(同一个会话只占一条,按 since 认人)。
+		 * 写失败不抛:拿不到跨会话基线不影响本次读数,导出件里就只是少一段。
+		 */
+		function saveSessionBaseline() {
+			const record = sessionRecord();
+			if (record === null) return [];
+			let list = [];
+			try {
+				const parsed = JSON.parse(localStorage.getItem(LS_SESSIONS) ?? 'null');
+				if (parsed !== null && Array.isArray(parsed.sessions)) list = parsed.sessions;
+			} catch (error) { list = []; }
+			const kept = list.filter((row) => row !== null && typeof row === 'object' && row.since !== record.since);
+			kept.push(record);
+			if (kept.length > SESSION_KEEP) kept.splice(0, kept.length - SESSION_KEEP);
+			try {
+				localStorage.setItem(LS_SESSIONS, JSON.stringify({ v: 1, savedAt: Date.now(), sessions: kept }));
+			} catch (error) { /* 配额满:放弃持久化,不假装成功 */ }
+			return kept;
+		}
+
+		/**
+		 * 导出件里的跨会话基线。**口径必须写死在文件里**:它是"粗参照",不是回归判定 ——
+		 * 会话之间的负载、视口、是否插桩都不同,帧数量级能差一个数量级(实测有的会话 5156 帧、
+		 * 有的 184 帧),拿它当"变慢了"的证据会得出错误结论。
+		 */
+		function sessionBaselines() {
+			return {
+				note: '粗参照,不是回归判定:每个会话的分布只代表那一次(负载、视口、是否插桩都不同,帧数量级也可能差一个数量级);只用来看"这次是不是比平时差一个量级"',
+				keep: SESSION_KEEP,
+				sessions: saveSessionBaseline(),
+			};
+		}
+
 		// ───────────── D. 宿主事件循环 + 链路 RTT / 吞吐 ─────────────
 		const sleep = (ms) => new Promise((resolve) => natives.setTimeout(resolve, ms));
 
@@ -2623,6 +2678,8 @@ window.__ModuleLoader__.load({
 						captured: state.watch.captured,          // 一共捕获过几次
 						dropped: state.watch.dropped,            // 抓到了但没留存下来的次数
 					},
+					// A2:跨会话基线(每个会话一条,只进导出件)。口径写在 note 里
+					sessionBaselines: sessionBaselines(),
 					thresholds: {
 						fps: { warnBelow: 50, errorBelow: 30 },
 						frameMs: { warnAbove: 120, errorAbove: 200 },
@@ -2772,7 +2829,8 @@ window.__ModuleLoader__.load({
 			howToAdd.push('DevTools → Performance → 录制(勾 include script source maps)→ Save trace → Perfetto 打开');
 			missing.push('compositor:帧时间到底花在合成 / 光栅 / GPU 的哪一段(这一层只看得到主线程侧)');
 			missing.push('recorder-cost:本记录器自身的开销没有独立测量(它每帧跑一次 rAF 采样)');
-			missing.push('baseline:同环境 / 跨会话的对照基线(这份包里只有本次会话的分布)');
+			// A2 落地之后剩下的缺口是"跨机器 / 跨浏览器",不再是"没有对照基线"
+			missing.push('baseline:跨机器 / 跨浏览器的对照基线 —— context.sessionBaselines 只来自同一个浏览器 profile,而且只是粗参照');
 			missing.push(incident.host === null
 				? 'host:没有任何宿主快照(宿主半未加载或路由不可达)'
 				: `host-cpuprofile:宿主进程的 CPU 火焰图 —— 而这份宿主快照是${incident.host.snapshotAgeMs >= 0 ? `事故前 ${incident.host.snapshotAgeMs}ms` : `事故**后** ${-incident.host.snapshotAgeMs}ms`}采的(每 10 秒一次),未必覆盖卡顿瞬间;别把它当"宿主没问题"的证据`);
@@ -2789,6 +2847,8 @@ window.__ModuleLoader__.load({
 					userAgent: navigator.userAgent,
 					scenario: state.streaming ? 'streaming' : 'idle',
 					watch: watchStatus(),
+					// A2:跨会话基线(只进导出件)。readonly 参照,别当回归判定
+					sessionBaselines: sessionBaselines(),
 					thresholds: {
 						triggerMs: WATCH_TRIGGER_MS, gapMs: WATCH_GAP_MS,
 						preMs: WATCH_PRE_MS, postMs: WATCH_POST_MS,
@@ -2804,6 +2864,7 @@ window.__ModuleLoader__.load({
 						'incident.loaf[].blocking(blockingDuration)只累计"被归因到的 >50ms 长任务"的超出部分 —— **它可以是 0,而这一帧仍然有几百毫秒**。判严重度看帧间隔,blocking=0 不等于没卡',
 						'incident.longTasks 是既有四条腿落在窗口内的明细(at=任务开始的 perf 毫秒,t=上报时刻的墙钟毫秒),**它不是慢帧清单**:条数通常远少于超线帧',
 						'incident.baseline 是**除这一段之外**整个帧环的分布(故意排除本窗口,否则"比会话最差还差"永远不成立)—— 拿它和 summary 比,才知道这一段是真的比平时差还是这台机器一直这样',
+						'context.sessionBaselines 是**跨会话**的帧分布(每个会话一条,最多 20 条;只进导出件,面板不显示)。它是**粗参照,不是回归判定**:会话之间的负载、视口、是否插桩都不同,帧数量级也能差一个数量级 —— 只看"这次是不是比平时差一个量级",别拿它下"变慢了"的结论',
 						'summary.worstFrameJs / suspectedThrottle:最差那一帧有没有 longtask / LoAF 与它重叠;若 none 且前后帧都健康(worstFrameNeighboursMs < 100),更像浏览器把 rAF 节流或挂起了一次,不是页面真忙了那么久',
 						'脚本的 URL 不在脚本里:incident.urls 是字符串表,scripts[].u 是它的下标(u=-1 表示没有 URL)—— 抽表是因为同一个 combo URL 会重复几十遍',
 						'scripts[].pkg 是这条脚本归属的包名(合并批里靠"字符位置 → 行号 → sourcemap 分段表"还原);pkg 为 null 时看 scripts[].pkgVia:url(单包 URL 直接读出来)/ section(分段表算出来)/ precise-off(精确归因没开)/ text-pending(脚本文本还在拉)/ not-plugin(宿主自己的 bundle)…',
@@ -4010,8 +4071,9 @@ window.__ModuleLoader__.load({
 				}
 			}
 
-			// 页面隐藏/关闭前落盘,别丢最后 5 秒的样本。
-			const persist = () => flush(true);
+			// 页面隐藏/关闭前落盘,别丢最后 5 秒的样本。顺带记一条 A2 的跨会话基线:
+			// 会话结束时的分布只在这一次机会里拿得到(下次打开就是新会话了)。
+			const persist = () => { flush(true); saveSessionBaseline(); };
 			const persistIfHidden = () => { if (document.visibilityState === 'hidden') flush(true); };
 			W.addEventListener('pagehide', persist);
 			W.addEventListener('visibilitychange', persistIfHidden);
