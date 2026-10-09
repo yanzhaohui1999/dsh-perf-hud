@@ -85,6 +85,7 @@
 
 ### 文档
 
+- **手册补上这一批新增读数**:README「面板怎么读」收录三档模式(守夜 = 默认 = 零插桩 / 现场同档 / 深录才插桩 + 精确归因)与四个新读数(帧里花在哪的三段饼、脚本按包、纯 JS vs 强制布局、60 秒帧条、记录器自身);AGENTS §7 用开发口径把同几件事写清(绘制合成分不开、强制布局已含在脚本耗时里、强制布局/按包的缓存与静态断言、`SELF_RING`、深录是唯一插桩开关);README_EN 同步一份摘要
 - `README.md` / `README_EN.md` / `AGENTS.md` / `CONTRIBUTING.md` / `REVIEW.md` / `CHANGELOG.md`
 - **文档收敛成六份**:`README` / `README_EN` / `AGENTS` / `CONTRIBUTING` / `REVIEW` / `CHANGELOG`。
   原来的 `ACCEPTANCE.md`(验收判据与实测数字)并进 [REVIEW.md](REVIEW.md) §2,`DIRECTION.md`(方向取舍)并进

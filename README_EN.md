@@ -77,6 +77,15 @@ The host half is **optional**: without it the panel still works, and the three h
 
 ## Reading the panel
 
+The plugin has **three tiers**, and the default is the cheapest one — it measures other people's performance,
+so it has to be cheap, switchable and reversible itself:
+
+| Tier | When | What it does | Cost |
+|---|---|---|---|
+| **Night watch** (default) | always on | per-frame ring buffer + LoAF observer + interaction timing; keeps the worst 10 stalls plus one worst-per-day | **zero instrumentation**: only the rAF loop that is already running and two `PerformanceObserver`s; patches nothing |
+| **Live view** | you open the panel | overview / top-3 callback attribution / the night-watch line; the other four groups collapse | **the same tier as night watch** — opening the panel does not change what is measured |
+| **Deep record** | you press "深录" (deep) | only then are `setTimeout` / `setInterval` / `rAF` and the DOM-write hooks wrapped, and the 12MB combo sourcemap is fetched (precise attribution) | has a cost and must be turned on explicitly; switching it off restores the natives immediately |
+
 The panel is layered: only "is it smooth + whose fault" is always visible; the other four groups
 (forensics / DOM & heap / host & link / toolbox) start collapsed, each with a one-line summary in its header.
 
@@ -85,6 +94,7 @@ The panel is layered: only "is it smooth + whose fault" is always visible; the o
 | **FPS / worst frame** | Its own rAF loop, 1s rolling window. Combined colouring: FPS ≤50 or worst frame ≥120ms → yellow; ≤30 or ≥200ms → red |
 | **Long tasks** | `PerformanceObserver({entryTypes:['longtask']})` over the last 60s; hit ratio = long tasks with a name from any leg / total |
 | **Unattributed per frame** | The part of the frame gap not explained by instrumented callbacks (style recalc, paint, vsync wait). **CSS animations only show up here** — they never touch the JS scheduler |
+| **Where the frame went** (3-part donut) | The worst long animation frame split by LoAF's three timestamps: script side (task + sync JS) / render (rAF callback) / style+layout+paint. **Paint and compositing cannot be separated** — that needs a Chrome trace — so the third slice is "everything else", **not** a style-layout percentage |
 | **Callback attribution** | `x/s · peak y/s`: EMA (α=0.4) execution rate / single-second maximum; hover shows that second's sync time and the cumulative `N× / Xms`. **A lower bound**: only callbacks scheduled via `setTimeout` / `setInterval` / `rAF` — event handlers, Promises, microtasks and React's own scheduling are not counted |
 | **DOM writes** | Exact total plus per-writer `≈` estimates (one stack sample every 10th write, hits scaled by 10). **The HUD's own writes are not counted** |
 | **Host event loop** | `perf_hooks.monitorEventLoopDelay({resolution: 1})`, per-second p50/p99/max, 300s ring |
@@ -92,6 +102,7 @@ The panel is layered: only "is it smooth + whose fault" is always visible; the o
 | **Link RTT** | 1KB cache-busted same-origin probe every 10s, 64KB throughput every 60s. "Link suspected" needs p99 > 300ms, normal FPS and n ≥ 2 |
 | **60s frame strip** | In the forensics group: one bar per second, height = the worst frame interval in that second, colours use the **same thresholds as the ASCII frame strip in the export** (≥100ms red / ≥50ms yellow). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall |
 | **Script by package / forced layout** | Also in the forensics group: script time in the recent LoAF window summed **per package** (the same resolve path as the export's `incident.packages`), plus the `forcedStyleAndLayoutDuration` share split out. Forced layout is **already included** in script time, not additional — it answers "is the script side slow because of JS or because of style" |
+| **Recorder cost** | In the forensics group: this HUD times its own rAF callback every frame and reports p99 / max / samples over the last 600 frames. This is the measuring tool proving it does not visibly change what it measures — **not** the page's own cost |
 
 **Export JSON** carries a `context` header: scenario / idle seconds / precise-attribution and per-sourcemap-section
 state / host route, profile, Node and plugin version / experiment candidates and method / every colouring
