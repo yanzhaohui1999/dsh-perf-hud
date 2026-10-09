@@ -99,6 +99,16 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
    - Client `Builtin.listBuiltins`:动态客户端半能用的符号(`ctx` / `React` / `host` / `styles` / `console`)。
 4. **重启后要跑的验证器必须起在独立进程组**:它会被重启的 launchd 进程组一起带走,所以用 `setsid`(`python3 -c "os.fork(); os.setsid(); os.execv(...)"`)启动。原来那个封装脚本(`tests/verify-after-restart.sh`)写死了本机 node 与仓库路径,已删 —— 教训留在这一条里,要用时照上面重写几行即可。
 5. **查工作区别走 `workspace/list`**(该端点 404):读 `~/.dsh/storages/workspace.json` 的 `tables.workspaces` + `global.workspaceIds`;细节见 `~/.dsh/dsh-api.md`。
+6. **改完面板 / `apply()` / `start()` 路径之后跑哪个**(§8 第 14 条那条规矩的可执行版本;三个脚本自己起 headless Chrome,零依赖,token 从 `~/Library/Logs/ai.dsh.web.log` 取,共用底座 `tools/cdp.mjs`):
+
+   ```sh
+   node tools/check-panel.mjs                     # 面板渲染 0 错误 + 目标元素在场(默认断言面板标题)
+   node tools/check-panel.mjs --expr="!!document.querySelector('svg[viewBox=\"0 0 60 18\"]')"
+   node tools/check-storage.mjs                   # 写 localStorage → 重新加载 → 读回(落盘/跨会话基线)
+   node tools/check-interaction.mjs               # CDP 发真实输入 → 验 event timing 真的交付
+   ```
+
+   ⚠️ **它们不是离线门禁**:要真浏览器 + 本机跑着 `dsh web`,所以 `npm test` 与 CI 里**没有**它们(CI 只对 `tools/*.mjs` 做 `node --check`)。`check-panel.mjs` 挡的就是"三套件全绿、浏览器里插件激活或渲染失败"那类事故,所以它跑不过就别提交。
 
 ---
 

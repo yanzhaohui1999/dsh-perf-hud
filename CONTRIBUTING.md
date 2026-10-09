@@ -28,7 +28,7 @@ English summary follows the Chinese text below.
 1. **较大改动先开 issue 讨论**,确认方向再动手,避免返工。
 2. 从最新 `main` 切主题分支(`feat/*` / `fix/*` / `docs/*` / `test/*` / `chore/*`)。
 3. 本地自检通过(见下「提交前自检」)。
-4. 提 PR,说明动机、改动点、怎么验证的;面板/排版类改动**请附截图**(维护者常常看不到渲染结果,这也是长度预算断言存在的原因)。
+4. 提 PR,说明动机、改动点、怎么验证的;面板/排版类改动**请把 `node tools/check-panel.mjs` 的输出贴上来**(它真开一次页面 + 断言面板渲染 0 错误;维护者常常看不到渲染结果,这也是长度预算断言存在的原因)。
 
 ### 提交前自检(必过)
 
@@ -40,11 +40,22 @@ node tests/host.mjs          # 39 条
 
 改了面板文案或读数口径时,**必须**确认 `tests/logic.mjs` 的这几类断言仍然绿:
 
-- **长度预算**:概览两行 ≤36 / ≤60 字符,四个折叠组摘要 ≤30/30/34/24;
+- **长度预算**:概览两行 ≤36 / ≤60 字符,四个折叠组摘要 ≤26/30/34/24;
 - **单位一致性**:同一张表里不许一处给 `/s`、另一处给累计;
 - **静态检查**:`h(Uppercase…)` 引用的组件必须声明过、面板渲染区的裸函数调用必须声明过。
 
 > 这三类断言是历史上真实事故的回归测试,不是形式主义。改断言前先确认你不是在删掉证据。
+
+**改到面板渲染 / `apply()` / `start()` 路径的改动,再跑一次真页面验证**(离线三套件只抽纯函数,不跑这些路径 —— 本项目真出过"三套件全绿、浏览器里面板整块消失"的事故):
+
+```sh
+node tools/check-panel.mjs        # 真开一次页面:面板渲染 0 错误 + 目标元素在场(可用 --expr= 换断言)
+node tools/check-storage.mjs      # 写 localStorage → 重新加载 → 读回(落盘 / 跨会话基线)
+node tools/check-interaction.mjs  # CDP 发真实输入,验 event timing 真的交付
+```
+
+⚠️ 这三条**不是离线门禁**:要真浏览器 + 本机跑着 `dsh web`(token 从 `~/Library/Logs/ai.dsh.web.log` 取),
+所以 `npm test` 与 CI 里都没有它们(CI 只对 `tools/*.mjs` 做语法检查)。PR 里附上它们的输出即可。
 
 ### 这个项目的几个「坑」(改动涉及对应区域时务必注意)
 
@@ -89,8 +100,9 @@ This file covers the workflow.
   most usefully — the panel's **Export JSON**, which carries a self-describing `context` header and any panel
   render errors in its `errors` section.
 - **PRs**: open an issue first for anything non-trivial; branch off the latest `main`; run the three offline suites
-  (`node tests/{attribution,logic,host}.mjs`, 338 assertions) before pushing; attach a screenshot for any panel or
-  layout change.
+  (`node tests/{attribution,logic,host}.mjs`, 338 assertions) before pushing; for any panel, `apply()` or `start()`
+  change also run `node tools/check-panel.mjs` (it opens a real page and asserts the panel renders with zero errors —
+  these tools are **not** part of the offline gate) and paste its output instead of a screenshot.
 - **Known traps**: edit `client.js` in small anchored batches (a whole-block replacement once swallowed neighbouring
   declarations and permanently disabled the panel entry); keep instrumentation reversible; never render a misleading
   rounded number (`0ms/s`) — say "not collected" instead; add both `zh` and `en` dictionary entries; the host half

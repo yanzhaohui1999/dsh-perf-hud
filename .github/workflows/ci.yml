@@ -31,11 +31,12 @@ jobs:
 
       # 两个「半边」先过语法:client.js 是浏览器脚本(靠模块表拿 react),
       # index.js 是宿主插件。node --check 只看语法,不执行。
+      # tools/*.mjs 也是只做语法检查 —— 真页面验证器要浏览器与运行中的 dsh web,不进 CI。
       - name: Syntax check
         run: |
           node --check index.js
           node --check client.js
-          node --check tools/inspect-incident.mjs
+          for file in tools/*.mjs; do node --check "$file"; done
 
       # 338 条离线断言:attribution 11 / logic 288 / host 39。
       # logic.mjs 会把 client.js 里的真函数抽进沙箱,所以它同时是客户端半的回归门。

@@ -208,6 +208,19 @@ DSH_COOKIE=… node tests/live-sourcemap.mjs   # 真实 indexed sourcemap 的分
 DSH_COOKIE=… node tests/live-host.mjs        # 真实路由;退出码 3 = 宿主半还未加载(需要重启)
 ```
 
+改到面板渲染或 `apply()` / `start()` 路径时,再跑一次**真页面**验证(自己起 headless Chrome,token 从
+`~/Library/Logs/ai.dsh.web.log` 取):
+
+```sh
+node tools/check-panel.mjs        # 面板渲染 0 错误 + 目标元素在场(--expr= 换断言)
+node tools/check-storage.mjs      # 写 localStorage → 重新加载 → 读回
+node tools/check-interaction.mjs  # CDP 发真实输入,验 event timing 真的交付
+```
+
+⚠️ 这一组**不是离线门禁**:要真浏览器 + 本机跑着 `dsh web`,所以 `npm test` 与 CI 里都没有它(CI 只对
+`tools/*.mjs` 做语法检查)。离线三套件只抽纯函数、**不跑 `apply()` 与渲染**,而"三套件全绿、浏览器里
+面板整块消失"这种事本项目真出过 —— 所以改那两条路径时别只跑 `npm test`。
+
 开发规则、提交规范、代码约定、源码级归因机制与已证伪的死路见 [AGENTS.md](AGENTS.md)(§6 机制 / §8 坑);
 贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

@@ -77,6 +77,7 @@
 
 ### 调整
 
+- **真页面验证器进仓库**(`tools/check-panel.mjs` / `check-storage.mjs` / `check-interaction.mjs`,共用零依赖底座 `tools/cdp.mjs`):改到面板渲染或 `apply()` / `start()` 路径之后,一条命令就能验「HUD 挂上 + 面板渲染 0 错误 + 目标元素在场」,不用每次手写一段 CDP。`check-storage` 走"写 → 重新加载 → 读回",`check-interaction` 用 CDP 发**可信**输入(合成点击 Event Timing 不认)。它们**不是离线门禁**:要真浏览器 + 本机 `dsh web`,所以 `npm test` 与 CI 里都没有(CI 只对 `tools/*.mjs` 做语法检查);CONTRIBUTING 里"面板改动请附截图"也改成了"跑这条、把输出贴上来"
 - **留存策略改成两档并集:全局最差 10 条 + 每天最差 1 条(最多最近 7 天)**。原来只按全局严重度排,于是同一小时里连抓 10 次就能把更早整天的证据全挤掉(实测 `捕获 40 · 丢弃 38`)。现在每条事故带 `day` 与 `tier`(`worst` / `daily` / `both`),工具箱清单里给"当天最差"那档标注,条数上限是 10 + 7;`context.watch.triggers` 与事故包 `context.thresholds` 补 `dailyDays` / `keepMax`,导出件 `howToRead` 说明 `tier` 怎么读
 - 概览改块式左对齐 + 主动断行(名字相同时整行不显示);补长度预算断言(36/60/30/30/34/24)
 - 隔离实验主指标改用「每帧未归因残差」,并收窄口径为"空闲筛查,不是因果证明"
