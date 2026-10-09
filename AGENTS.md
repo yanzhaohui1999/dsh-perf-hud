@@ -22,7 +22,7 @@
 | **现场**(展开面板) | 想看一眼 | 概览(卡不卡 + 最差那条是谁)/ 回调归因 Top3 / 守夜那行;其余四组折叠 | 可忽略 |
 | **深录**(显式) | 要抓全 | 才打开原型插桩(DOM 写入 1/10 采样 + 调度点抓栈)与「精确归因」 | 有代价,必须显式开 |
 
-> ⚠️ **2026-10-08 之前,上表第二列是假的**:插桩没有独立开关,`start()` 一跑就把 `setTimeout/setInterval/rAF` 与 `appendChild/insertBefore/setAttribute` 全包上,「守夜 = 零插桩」在实现上不成立。改动计划见 [REVIEW.md](REVIEW.md) §3.1 的 D1(守夜/现场/深录,两档采集)。
+> ✅ **这张表现在是真的了(2026-10-08,D1)**:在那之前插桩没有独立开关 —— `start()` 一跑就把 `setTimeout/setInterval/rAF` 与 `appendChild/insertBefore/setAttribute` 全包上,「守夜 = 零插桩」只是文档上的话。现在插桩被拆进 `applyProbeState()`,只在 `state.deep`(标题栏「深录」)打开时装,深录同时管精确归因(两者是「要抓全」的同一件事)。实测:默认 `instrumented: false`,点开 → `true`,点回去 → `false`,面板 `errors` 全程 0。
 
 **明确不做**(生态里已经有人做了;重复做比谁都不做更糟,详见 §12):
 

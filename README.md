@@ -147,9 +147,9 @@ dsh plugin --profile web add "$PWD"
 
 ## ⚠️ 风险与边界(必读)
 
-1. **默认开启**。安装后浮层默认就显示,并会插桩全局:`setTimeout` / `setInterval` / `requestAnimationFrame`,以及 `Node.prototype.appendChild` / `insertBefore`、`Element.prototype.setAttribute`(1/10 采样)。
+1. **默认开启,但默认不插桩**。安装后浮层默认就显示,这一档(守夜/现场)只挂本来就在跑的 `requestAnimationFrame` 与两个 `PerformanceObserver`,**不动任何全局**;面板右上角那个「**深录**」开关打开之后,才会插桩 `setTimeout` / `setInterval` / `requestAnimationFrame` 以及 `Node.prototype.appendChild` / `insertBefore`、`Element.prototype.setAttribute`(1/10 采样),并顺带拉那份 12MB 的合并批 sourcemap(精确归因)。关掉深录,插桩立刻卸掉并还原成原生引用。
 2. **一切可还原**。面板「关闭」或 `window.__perfHud.disable()` 会把原型方法还原成原生实现,并且只在"当前仍是我们那个 wrapper"时才还原(不会踩掉别人的包装)。
-3. **隔离实验会临时写 profile 的持久化 bundle 选择**(面板上已不提供入口,只在控制台调 `__perfHud.experiment()`;`__perfHud.marks()` 同理)(`pluginManager.setBundleEnabled`)。它有硬安全线:必须 `confirm`、拒绝改本插件与 `session-persistence-jsonl`、每步记宿主回执、结束后逐项核验恢复;中断也会走恢复流程。不想动配置就别点「开始实验」。
+3. **隔离实验会临时写 profile 的持久化 bundle 选择**(`pluginManager.setBundleEnabled`)。它有硬安全线:必须 `confirm`、拒绝改本插件与 `session-persistence-jsonl`、每步记宿主回执、结束后逐项核验恢复;中断也会走恢复流程。**面板上已不提供入口**,只在控制台调 `__perfHud.experiment()`(`__perfHud.marks()` 同理)—— 不想动配置就别调它。
 4. **宿主半只做两件事**:事件循环采样与一个 HTTP 路由(`/api/dsh-perf-hud/host`,受宿主自身鉴权保护,无 cookie 返回 401)。它不注册服务、不改宿主原型、不写插件自己的持久化状态。
 5. **CSS 动画不经 JS**:鲸鱼摆动那类 `steps()` 关键帧只体现在 FPS / 最差帧 /「帧内未归因」,归因表里看不到它。
 6. **命中率会被 DOM 腿抬高**:流式时几乎必然命中,必须配合「归属 Top」分布读。记录器自己也在四条腿的射程里 —— 命中本 HUD(`PerfHud` / `PerfHudStress` / 包名)的长任务会被标成「记录器自身」,并从「归属 Top」里**单列出来**,只有别的候选都说不通时才让它当元凶(静默剔除会让人读成"这段时间没人干活",比标注更糟)。
