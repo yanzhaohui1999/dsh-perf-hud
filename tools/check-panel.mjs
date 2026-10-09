@@ -33,8 +33,12 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	const errors = await page.evaluate(`window.__perfHud.snapshot().errors`);
 	check('面板渲染 0 错误(HudBoundary 没兜到东西)', Array.isArray(errors) && errors.length === 0, JSON.stringify(errors ?? null));
 
-	const ok = await page.evaluate(`(() => { try { return !!(${expression}); } catch (error) { return 'expr-threw: ' + error.message; } })()`);
-	check(`断言通过:${expression.slice(0, 72)}`, ok === true, ok === true ? '' : `${JSON.stringify(ok)}`);
+	// 只求值一次:**布尔**当断言(`false` 即失败),其它类型当诊断读数(打印出来,不影响通过)
+	const value = await page.evaluate(`(() => { try { return (${expression}); } catch (error) { return 'expr-threw: ' + error.message; } })()`);
+	const threw = typeof value === 'string' && value.startsWith('expr-threw: ');
+	const ok = threw === false && (typeof value === 'boolean' ? value === true : true);
+	check(`断言通过:${expression.slice(0, 72)}`, ok, threw === true ? value : (typeof value === 'boolean' ? JSON.stringify(value) : ''));
+	if (typeof value !== 'boolean') console.log(`     读数 ${JSON.stringify(value)}`);
 });
 
 console.log(failed === 0 ? 'ALL PASS(真页面)' : `FAILURES=${failed}`);
