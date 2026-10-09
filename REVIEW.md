@@ -43,6 +43,7 @@
 | 60 秒帧条与导出件同口径 | 面板 SVG + `tools/inspect-incident.mjs` 的 ASCII | 真实页面 100×18 / `viewBox 0 0 60 18`,`errors: 0`;阈值一致性有静态断言(≥100 / ≥50) |
 | 脚本侧按包 | 面板「脚本按包」/ `incident.packages` | 真实页面 **`dsh-api-gateway 881ms · dsh-client-connection 312ms · dsh-client-modules 208ms · 其余 1`**;「纯 JS / 强制布局」= `1655.3ms / 18.9ms` |
 | 交互延迟(页面内那一半) | `snapshot().interactions` / CDP 真实输入 | `state: on`(supported = element + event);一次真实点击 **20** 条入库,`pointerover` 那条 `ms 112 / waitMs 0.3 / handlerMs 0.4` —— 端到端长 ≠ 页面反应慢;`element` 恒 0 并解释原因 |
+| 真页面验证可复跑 | `tools/check-panel.mjs` / `check-storage.mjs` / `check-interaction.mjs` | 三条都真跑过并 PASS(`check-panel --expr=false` 会 FAIL 且退出码 1);它们**不是离线门禁**(要真浏览器 + 本机 `dsh web`),CI 只对 `tools/*.mjs` 做 `node --check` |
 | 落盘容量如实 | `watch().trimmedByBytes` / `deduped` | 512KB 上限时真实会话显示「裁掉 6」→ 已提到 **2MB**;同一 id / 同一 `at|cause` 去重后被去掉的条数也单独计数 |
 | 事故包可导出、可解析、自描述 | `exportIncident(0)` + `tools/inspect-incident.mjs` | 41KB / schema 2;渲染出 ASCII 帧条带 + longtask / LoAF / 脚本三张表 + 缺失声明 |
 | 事故包不虚胖 | 身材回归断言 + 实测 | 同一份内容 URL 抽表前 **116.6KB** → 抽表后 **29.6KB**(导出缩进 138.6 → 51.5KB) |
@@ -86,7 +87,7 @@
 | B1 | 记录器自身被当元凶 | ✅ `e0733cb` | 标注 + 汇总单列;`primaryBlame` 在有别的候选时跳过它。真页面实测:`PerfHud/PerfHudStress` 那条 224ms 长任务改为归到 `RootEntry`,只剩记录器自己时才进「记录器自身 N×」 |
 | B2 | 压缩名过滤 | ✅ `a0ec157` | `usableComponentName` 里 `name.startsWith('$')` → `return null`。**坑(踩过两次)**:`usableComponentName(type)` 第一行是 `if (typeof type !== 'function') return null` —— 断言必须传**类/函数**(`class ChatView {}`),传 `{ name: 'ChatView' }` 会全返回 null(上一轮就是这么把提交写坏的,已回退 `cd65639`/`add0632`)。⚠️ 那两次回退的说明里还留了一句**错的**理由:"`(ChatView)` 早被 `looksLikeInfrastructure` 挡掉" —— 实测 `looksLikeInfrastructure('(ChatView)')` 是 **false**(两条正则 `Slot\|Outlet\|Column` 与 `(Boundary\|Provider\|Context)$` 都不匹配它)。正确的理由是**入参类型**:这个函数只收 React 的 type,而 `(Name)` 是渲染层给 DOM 写入表"组件兜底桶"加的显示标记,不会作为 type 回来 |
 | B3 | 落盘计数进导出件 | ✅ `86087cf` | 导出 `context` 加一段 `store`: `restored` / `trimmedByBytes` / `deduped` / `captured` / `dropped`(静态断言核五个键都在) |
-| C2 | i18n 英文兜底 | ✅ | **兜底跟文档语言**:`document.documentElement.lang`(取不到退 `navigator.language`)→ 是中文用 `DICT.zh`,其余(含认不出来)用 `DICT.en`,两本都没有才原样返回键名(简单反转 `DICT.en ?? key` 会让中文用户看到英文,同样否掉)。死键清干净:两本字典各 **166 → 134** 键(隔离实验 / 场景标记 / 验收 / 自测按钮那几批,加上更早的 `fps` / `longtask` / `ltCount` / `hits` / `domWritesShort` / `unattrSuffix` / `watchOnDisk` / `precise*`)。两条断言钉住:**键集合一致** + **每个键都有人引用**(后者只认字面量调用;`stressText()` 那几条串留下是因为它本身按 D4 保留,虽然它在 `client.js` 里已无调用点)。实测本机页面 `htmlLang / navLang 都是 zh-CN` |
+| C2 | i18n 英文兜底 | ✅ `970c9da` | **兜底跟文档语言**:`document.documentElement.lang`(取不到退 `navigator.language`)→ 是中文用 `DICT.zh`,其余(含认不出来)用 `DICT.en`,两本都没有才原样返回键名(简单反转 `DICT.en ?? key` 会让中文用户看到英文,同样否掉)。死键清干净:两本字典各 **166 → 134** 键(隔离实验 / 场景标记 / 验收 / 自测按钮那几批,加上更早的 `fps` / `longtask` / `ltCount` / `hits` / `domWritesShort` / `unattrSuffix` / `watchOnDisk` / `precise*`)。两条断言钉住:**键集合一致** + **每个键都有人引用**(后者只认字面量调用;`stressText()` 那几条串留下是因为它本身按 D4 保留,虽然它在 `client.js` 里已无调用点)。实测本机页面 `htmlLang / navLang 都是 zh-CN` |
 | D2 | 60 秒时间条 | ✅ `cfcf00b` | 放进「取证明细」,100×18 的 SVG,**与导出件 ASCII 条带同口径**(静态断言读 `tools/inspect-incident.mjs` 核阈值) |
 | D3 | 留存策略 | ✅ `5c4fea1` | 最差 10 条 + "每天最差 1 条"(最多 7 天);每条带 `day` / `tier`,清单里给「当天最差」标注;上限 = 10 + 7 |
 | D5 | 饼图二级 | ✅ `098ed33` | 脚本侧展开成**按包**分布(与 `incident.packages` 同一条 resolve 路);另给纯 JS vs 强制样式布局(`scripts[].forcedMs`),并写明强制布局已含在脚本耗时里 |
