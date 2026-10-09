@@ -2924,7 +2924,7 @@ window.__ModuleLoader__.load({
 			}
 			if (incident.env.precise === false) {
 				missing.push('precise:合并批次里的单包名 —— 也包含 LoAF 脚本的 scripts[].pkg(需要精确归因,会拉那份 12MB 的 map)');
-				howToAdd.push('面板「精确」或 __perfHud.setPrecise(true) —— 只能改善之后抓到的事故,这一条不会重放');
+				howToAdd.push('面板「深录」(它同时打开精确归因)或 __perfHud.setPrecise(true) —— 只能改善之后抓到的事故,这一条不会重放');
 			}
 			missing.push('devtools-trace:完整的 Chrome trace(页面内录不了)');
 			// A4:交互延迟采到了什么、没采到什么,一律照实写
