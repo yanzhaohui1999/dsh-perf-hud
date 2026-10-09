@@ -173,9 +173,9 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 288 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 292 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 39 assertions: real index.js driven by a fake ctx
-# 338 offline assertions total, no running DSH required
+# 342 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):

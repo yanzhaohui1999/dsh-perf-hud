@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ⬜ 仓库已建(私有),待转公开、加 topic |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,漏一份就失败 |
-| 6 | 门禁全绿 | ✅ 338 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ 342 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
 | 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
 
@@ -33,7 +33,7 @@
 
 | 判据 | 怎么验 | 最新实测 |
 |---|---|---|
-| 离线断言全绿 | `npm test` | **338** 条(attribution 11 / logic 288 / host 39) |
+| 离线断言全绿 | `npm test` | **342** 条(attribution 11 / logic 292 / host 39) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 守夜默认**零插桩** | `snapshot().instrumented` 在三种模式下的取值 | 面板打开、HUD 开着:`instrumented: false / deep: false`;点「深录」→ `true / true`;点回去 → `false / false`,`errors` 全程 0 |
@@ -86,7 +86,7 @@
 | B1 | 记录器自身被当元凶 | ✅ `e0733cb` | 标注 + 汇总单列;`primaryBlame` 在有别的候选时跳过它。真页面实测:`PerfHud/PerfHudStress` 那条 224ms 长任务改为归到 `RootEntry`,只剩记录器自己时才进「记录器自身 N×」 |
 | B2 | 压缩名过滤 | ✅ `a0ec157` | `usableComponentName` 里 `name.startsWith('$')` → `return null`。**坑(踩过两次)**:`usableComponentName(type)` 第一行是 `if (typeof type !== 'function') return null` —— 断言必须传**类/函数**(`class ChatView {}`),传 `{ name: 'ChatView' }` 会全返回 null(上一轮就是这么把提交写坏的,已回退 `cd65639`/`add0632`)。⚠️ 那两次回退的说明里还留了一句**错的**理由:"`(ChatView)` 早被 `looksLikeInfrastructure` 挡掉" —— 实测 `looksLikeInfrastructure('(ChatView)')` 是 **false**(两条正则 `Slot\|Outlet\|Column` 与 `(Boundary\|Provider\|Context)$` 都不匹配它)。正确的理由是**入参类型**:这个函数只收 React 的 type,而 `(Name)` 是渲染层给 DOM 写入表"组件兜底桶"加的显示标记,不会作为 type 回来 |
 | B3 | 落盘计数进导出件 | ✅ `86087cf` | 导出 `context` 加一段 `store`: `restored` / `trimmedByBytes` / `deduped` / `captured` / `dropped`(静态断言核五个键都在) |
-| C2 | i18n 英文兜底 | ⬜ | 兜底改成"跟文档语言,取不到才英文";先清面板撤下后遗留的死字符串(排在最后单独做) |
+| C2 | i18n 英文兜底 | ✅ | **兜底跟文档语言**:`document.documentElement.lang`(取不到退 `navigator.language`)→ 是中文用 `DICT.zh`,其余(含认不出来)用 `DICT.en`,两本都没有才原样返回键名(简单反转 `DICT.en ?? key` 会让中文用户看到英文,同样否掉)。死键清干净:两本字典各 **166 → 134** 键(隔离实验 / 场景标记 / 验收 / 自测按钮那几批,加上更早的 `fps` / `longtask` / `ltCount` / `hits` / `domWritesShort` / `unattrSuffix` / `watchOnDisk` / `precise*`)。两条断言钉住:**键集合一致** + **每个键都有人引用**(后者只认字面量调用;`stressText()` 那几条串留下是因为它本身按 D4 保留,虽然它在 `client.js` 里已无调用点)。实测本机页面 `htmlLang / navLang 都是 zh-CN` |
 | D2 | 60 秒时间条 | ✅ `cfcf00b` | 放进「取证明细」,100×18 的 SVG,**与导出件 ASCII 条带同口径**(静态断言读 `tools/inspect-incident.mjs` 核阈值) |
 | D3 | 留存策略 | ✅ `5c4fea1` | 最差 10 条 + "每天最差 1 条"(最多 7 天);每条带 `day` / `tier`,清单里给「当天最差」标注;上限 = 10 + 7 |
 | D5 | 饼图二级 | ✅ `098ed33` | 脚本侧展开成**按包**分布(与 `incident.packages` 同一条 resolve 路);另给纯 JS vs 强制样式布局(`scripts[].forcedMs`),并写明强制布局已含在脚本耗时里 |

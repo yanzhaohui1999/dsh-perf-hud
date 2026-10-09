@@ -118,7 +118,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 288 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 292 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 39 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -175,7 +175,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **能不说就不说**:「最多」与「最差那条」名字相同时整行不显示(它只是把同一句话说两遍);说明文字放 `title` 悬停,不占正文。
 - **长度预算**:概览两行与四个折叠组摘要都有字符上限(36 / 60 / **26** / 30 / 34 / 24,顺序 = 概览两行 + 取证明细 / DOM 与堆 / 宿主与链路 / 工具箱),由 `tests/logic.mjs` 钉住 —— 本会话看不到浏览器渲染,只能靠预算把"又挤成三行"这类回归钉在测试里。改文案必须重跑。**这份清单以断言为准**:AGENTS 里这行曾写成 34(记的是另一组数字),对不上时改文档,不要改断言。
 - **单位一致性**:同一张表里不许一处给 `/s`、另一处给累计;任何"和邻居不同单位"的读数都要有断言(曾出现"上面是 /s、下面给累计")。
-- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键;兜底策略与"哪些串还没进词典"见 [REVIEW.md](REVIEW.md) §3(仍未做)。
+- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键 —— 两条断言钉住这件事(logic.mjs):**键集合必须一致**、**每个键都得有人引用**(撤下界面时留下的死键会被报出来;死键那条只认字面量 `t('…')` / `translate('…')`,真要加动态取键得先放宽它)。**兜底策略跟文档语言**:locale 服务不在时按 `document.documentElement.lang`(取不到退 `navigator.language`)选那本字典,不是中文就用英文 —— 写死中文会让英文用户看到中文,简单反转(`DICT.en ?? key`)又会让中文用户看到英文,两种都错。
 - **插桩必须可还原**:包装 `setTimeout/setInterval/rAF` 与 `appendChild/insertBefore/setAttribute` 时,保存原生引用、只在"当前仍是我们那个 wrapper"时才还原(避免踩掉别人的包装)。
 - **改 `client.js` 一律用带锚点的小批次**:一次替换一个可唯一匹配的片段,失败即整批作废。本项目有**两次**"整段替换吞掉相邻声明"的事故(§8 第 7 条)。
 

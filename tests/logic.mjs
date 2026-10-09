@@ -263,6 +263,9 @@ const newPieces = [
 	'const LS_MAP = ',
 	'const LS_SESSIONS = ',
 	'const SESSION_KEEP = ',
+	'const DICT = {',
+	'function docLang(',
+	'function fallback(',
 	'const WATCH_EVENT_MS = ',
 	'function sessionRecord(',
 	'function saveSessionBaseline(',
@@ -355,6 +358,7 @@ const box = new Function(`${sandbox}\n${newPieces}
 	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
 		SELF_RING, recordSelf, selfStats, recorderText,
+		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_KEEP_MAX,
 		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText } };`)();
 const EX = box.EX;
@@ -398,6 +402,34 @@ check('B2:$ 开头的压缩名被挡掉;具名组件照旧通过,匿名仍是 nu
 // 真正的原因是 usableComponentName 只收 React 的 type,而 `(Name)` 是渲染层加的显示标记。
 check('B2:括号名并不是被 looksLikeInfrastructure 挡掉的(实测那条判据返回 false)',
 	[EX.looksLikeInfrastructure('(ChatView)'), EX.looksLikeInfrastructure('ChatView')], [false, false]);
+
+// ── C2:i18n(兜底跟文档语言 + 词典同源)──────────────────────────────
+check('C2:两本字典键集合完全一致(成对改的机器检查)',
+	JSON.stringify(Object.keys(box.DICT.zh).sort()) === JSON.stringify(Object.keys(box.DICT.en).sort()), true);
+check('C2:词典里没有"没人引用"的死键(面板撤下后遗留的串)', (() => {
+	const dictBlock = extract(source, 'const DICT = {');
+	const outside = source.replace(dictBlock, '');
+	// 只认字面量调用:本项目没有 `translate(变量)` 这种动态取键 —— 真要加动态键,这条断言得先放宽
+	const referenced = new Set([...outside.matchAll(/\b(?:t|translate)\(\s*(['"])([A-Za-z_$][\w$]*)\1\s*\)/g)].map((row) => row[2]));
+	return Object.keys(box.DICT.zh).filter((key) => referenced.has(key) === false);
+})(), []);
+check('C2:兜底跟文档语言走(zh → 中文,其余含认不出来 → 英文),不是写死中文', (() => {
+	const read = (lang, navLang) => {
+		box.document.documentElement.lang = lang;
+		box.navigator.language = navLang;
+		return box.fallback('title');
+	};
+	const values = [read('zh-CN', undefined), read('en-GB', undefined), read('ja', undefined), read('', 'zh-TW'), read('', undefined)];
+	box.document.documentElement.lang = '';
+	box.navigator.language = undefined;
+	return values;
+})(), ['性能 HUD', 'Perf HUD', 'Perf HUD', '性能 HUD', 'Perf HUD']);
+check('C2:两本都没这个键就原样返回(不编造)', (() => {
+	box.document.documentElement.lang = 'zh-CN';
+	const value = box.fallback('definitely-not-a-key');
+	box.document.documentElement.lang = '';
+	return value;
+})(), 'definitely-not-a-key');
 
 // ── A2:LoAF 脚本 → 包名(charPos → 行号 → 分段表)────────────────────
 const comboUrl = 'http://h/plugins/??dsh-a/client.js,dsh-b/client.js&rev=9';

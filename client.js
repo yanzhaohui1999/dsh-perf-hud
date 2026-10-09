@@ -3617,13 +3617,13 @@ window.__ModuleLoader__.load({
 		const DICT = {
 			zh: {
 				title: '性能 HUD', off: '已关', turnOn: '开启', turnOff: '关闭',
-				fps: 'FPS', frameWorst: '最差帧', longtask: 'Longtask 60s', blame: '回调归因(耗时)',
+				frameWorst: '最差帧', blame: '回调归因(耗时)',
 				rest: '其余', dom: 'DOM 节点', none: '无', exportJson: '导出 JSON', clear: '清空',
 				collapse: '折叠', expand: '展开', sessions: '会话列表', messages: '消息区', perMin: '/分',
 				unattr: '帧内未归因', peak: '峰',
 				unattrHint: '帧间隔里没被插桩回调解释掉的部分:样式重算、绘制、以及等待 vsync。CSS 动画的开销只在这里现形。',
-				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', domWritesShort: 'DOM 写入', est: '≈',
-				worstSecond: '最差那秒', ltCount: 'Longtask 次数', hits: '归因命中', hit: '命中', times: ' 次',
+				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', est: '≈',
+				worstSecond: '最差那秒', hit: '命中', times: ' 次',
 				maxBlame: '整窗最多', topBlame: '归属 Top', blameSelfHint: '本记录器自己的回调,不算在上面那张榜里', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名',
 				blameHint: '本秒执行速率 / 峰值速率(EMA 平滑后的每秒执行次数)与合计耗时;悬停某一行看它的执行次数、同步耗时与累计',
 				restHint: '其余 = 除 Top3 之外还有几个归属方(名字各不相同,按累计耗时排在后面);这一行给的是它们的合计速率',
@@ -3631,8 +3631,7 @@ window.__ModuleLoader__.load({
 				cnScope: '口径:只含 setTimeout/setInterval/requestAnimationFrame 这三次调度的回调;事件处理器 / Promise / 微任务 / React 自身调度不计入,所以这是下界',
 				perSec: '/s', samples: '次采样', unblamed: '未归因',
 				domWritesHint: '前一项是精确总次数;下面按插件给出估算(每 10 次采样一次栈,命中按 10 折算)。',
-				precise: '精确归因', preciseHint: '开启后按合并 bundle 的 sourcemap 分段还原单包名(懒加载,同一个 rev 只拉一次 map)',
-				component: '组件', cumulative: '累计', maps: '批次分段',
+				component: '组件', cumulative: '累计',
 				overview: '概览', overviewHint: '三秒判断:最差帧 + 最差 longtask 及其归属 + 归因命中数',
 				overviewFrame: '帧', overviewBlame: '最差那条', worstSecondShort: '最差秒', hostShort: '宿主',
 				deepShort: '深录', deepHint: '深录(= 插桩 + 精确归因):装上调度点与 DOM 写入的包装,并拉那份 12MB 的 sourcemap。默认关着 —— 守夜与现场都不插桩',
@@ -3647,7 +3646,7 @@ window.__ModuleLoader__.load({
 				splitHead: '脚本侧', splitRender: '渲染', splitTail: '样式+布局+绘制',
 				splitNoLoaf: '暂时没有(要等到一条 >50ms 的长动画帧;LoAF 只报 50ms 以上的)',
 				splitHint: 'LoAF 的三个时间点能拆出来的极限:脚本侧(任务+同步 JS)/ 渲染(rAF 回调)/ 样式+布局+绘制。绘制与合成分不开,所以最后一段是"剩下的都在这儿",别读成"样式布局占了多少";要分开只能录 Chrome trace',
-				preciseShort: '精确', worstOne: '最差那条',
+				worstOne: '最差那条',
 				unexplained: '该帧几乎无 JS 解释', unexplainedHint: '样式/布局/绘制/vsync;可用 Rendering 面板的 Paint flashing 交叉验证',
 				verdict: '判定', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)',
 				groupDetail: '取证明细', groupDom: 'DOM 与堆', groupHost: '宿主与链路', groupTools: '工具箱', nodesSuffix: ' 节点',
@@ -3660,19 +3659,13 @@ window.__ModuleLoader__.load({
 				renderError: '面板渲染出错', retry: '重试',
 				renderErrorHint: '采集没停:上面是错误原文;点「重试」恢复面板,或直接导出(errors 段里也有)',
 				linkHint: '每 10 秒一次 1KB 同源探测(带 cache-buster)算 RTT,n 是最近 60 秒的样本数;吞吐每 60 秒一次 64KB(启动后 3 秒先补一次)。p99 > 300ms 且 FPS 正常且 n≥2 才判「疑似链路」',
-				suspect: '疑似链路', isolation: '隔离实验', candidate: '候选', baseline: '基线',
-				startExp: '开始实验', abortExp: '中止并恢复', stress: '自测:渲染卡顿',
-				stressHint: '自测:一次同步提交渲染 8000 个离屏节点 + 显式燃烧 80ms(节点数凑不稳,故明着燃烧),用来自检归因链路',
+				suspect: '疑似链路',
 				stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点',
 				stressNoTask: '未观察到长任务', stressCommit: '提交', stressBurn: '人为燃烧', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
-				expHint: '开跑前会等会话空闲(最多 5 分钟;流式窗口的对照不可比),然后每个窗口注入同一份合成负载(每 250ms 燃烧 8ms)—— 空闲下比较本身没有意义。随后逐候选关闭 60 秒并恢复,每步记宿主回执、恢复后逐项核验;每个候选只跟紧邻基线对照,基线漂移作为噪声底。',
-				method: '方法', noiseFloor: '噪声底', beyondNoise: '超出噪声', confounded: '窗口含流式,该对照不可比',
-				skipped: '跳过', restore: '恢复', marks: '场景标记',
 				via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
-				unattrShort: '未归因', unattrSuffix: '/帧', mark: '标记', markPlaceholder: '备注(可选)', noNote: '(无备注)',
-				verify: '验收', vPrecise: '独立包名', vLt: 'longtask 归因', vIdle: '空闲基线',
+				unattrShort: '未归因', markPlaceholder: '备注(可选)',
 				// 守夜层(默认常开、不插桩):面板上只露一行状态 + 工具箱里的清单与两个按钮
-				watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOnDisk: '落盘',
+				watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回',
 				watchDaily: '当天最差',
 				watchNone: '还没抓到', watchOff: '未开录', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉',
 				watchHint: '默认常开、不插桩:一个 rAF 循环 + 一个 LoAF 观察器。帧间隔(或 LoAF 的 blockingDuration)超过 100ms 就自动抓「前 10 秒 + 后 3 秒」原样切片,留存取**两档并集**:全局最差 10 次 + 每天最差 1 条(最多最近 7 天,清单里标「当天最差」),刷新后还在;落盘另有 2MB 上限,超了就裁掉最弱的并在这一行标出「裁掉 N」。要抓偶发卡顿就让它一直开着 —— 出事后用「导出最近一次」把证据包交给分析者。',
@@ -3682,13 +3675,13 @@ window.__ModuleLoader__.load({
 			},
 			en: {
 				title: 'Perf HUD', off: 'off', turnOn: 'on', turnOff: 'off',
-				fps: 'FPS', frameWorst: 'worst frame', longtask: 'longtask 60s', blame: 'attribution (time)',
+				frameWorst: 'worst frame', blame: 'attribution (time)',
 				rest: 'rest', dom: 'DOM nodes', none: 'n/a', exportJson: 'Export JSON', clear: 'Clear',
 				collapse: 'Collapse', expand: 'Expand', sessions: 'Sessions', messages: 'Messages', perMin: '/min',
 				unattr: 'unattributed/frame', peak: 'peak',
 				unattrHint: 'Frame gap not explained by instrumented callbacks: style recalc, paint, and vsync wait. CSS-animation cost only shows up here.',
-				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', domWritesShort: 'DOM writes', est: '≈',
-				worstSecond: 'worst second', ltCount: 'longtask count', hits: 'attributed', hit: 'hit', times: '',
+				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', est: '≈',
+				worstSecond: 'worst second', hit: 'hit', times: '',
 				maxBlame: 'window top', topBlame: 'attribution top', blameSelfHint: 'the recorder\'s own callbacks, not part of the list above', legFiber: 'fiber', legSubtree: 'subtree', legDom: 'DOM write', legOwner: 'package',
 				blameHint: 'Per-second execution rate / peak rate (EMA-smoothed) plus the summed synchronous time; hover a row for its execution count, cost and cumulative totals',
 				restHint: 'rest = how many further owners fall outside the top 3 (distinct names, ranked by cumulative time); this row shows their combined rate',
@@ -3696,8 +3689,7 @@ window.__ModuleLoader__.load({
 				cnScope: 'Scope: only callbacks scheduled through setTimeout/setInterval/requestAnimationFrame; event handlers, Promises, microtasks and React\'s own scheduling are not counted, so this is a lower bound',
 				perSec: '/s', samples: ' samples', unblamed: 'unattributed',
 				domWritesHint: 'First number is the exact total; the rows below are estimates (stacks sampled every 10th write, hits scaled by 10).',
-				precise: 'precise', preciseHint: 'Resolve single package names from the merged bundle sourcemap sections (lazy; one map fetch per rev)',
-				component: 'component', cumulative: 'total', maps: 'maps',
+				component: 'component', cumulative: 'total',
 				overview: 'overview', overviewHint: 'Three-second read: worst frame + worst longtask and its owner + attribution hit ratio',
 				overviewFrame: 'frame', overviewBlame: 'worst one', worstSecondShort: 'worst sec', hostShort: 'host',
 				deepShort: 'deep', deepHint: 'Deep = instrumentation + precise attribution: wraps scheduling points and DOM writes and fetches the 12MB sourcemap. Off by default',
@@ -3712,7 +3704,7 @@ window.__ModuleLoader__.load({
 				splitHead: 'script side', splitRender: 'render', splitTail: 'style+layout+paint',
 				splitNoLoaf: 'not yet (needs a long animation frame >50ms; LoAF only reports those)',
 				splitHint: 'As far as LoAF can decompose it: script side (task + sync JS) / render (rAF callbacks) / style+layout+paint. Paint and compositing cannot be separated in-page, so the last slice is "everything else" — do not read it as "style and layout only"; separating them needs a Chrome trace',
-				preciseShort: 'precise', worstOne: 'worst one',
+				worstOne: 'worst one',
 				unexplained: 'no JS explanation for that frame', unexplainedHint: 'style/layout/paint/vsync; cross-check with Paint flashing in the Rendering panel',
 				verdict: 'verdict', linkShort: 'RTT', suspectSuffix: ' suspect', cleared: 'link cleared (host and tunnel both normal)',
 				groupDetail: 'forensics', groupDom: 'DOM & heap', groupHost: 'host & link', groupTools: 'toolbox', nodesSuffix: ' nodes',
@@ -3725,18 +3717,12 @@ window.__ModuleLoader__.load({
 				renderError: 'panel render error', retry: 'Retry',
 				renderErrorHint: 'Collection keeps running: the raw error is above. Retry to restore, or export (also in the errors section)',
 				linkHint: 'A 1KB same-origin probe (cache-busted) every 10s gives RTT; n is the sample count over the last 60s. Throughput is a 64KB fetch every 60s (one extra 3s after start). \"Link suspected\" needs p99 > 300ms, normal FPS, and n >= 2',
-				suspect: 'link suspected', isolation: 'isolation', candidate: 'candidates', baseline: 'baseline',
-				startExp: 'Run experiment', abortExp: 'Abort and restore', stress: 'Self-test: render stall',
-				stressHint: 'Self-test: one synchronous commit rendering 8000 offscreen nodes plus an explicit 80ms burn (node counts alone are not reliable), to self-check the attribution chain',
+				suspect: 'link suspected',
 				stressRunning: 'self-test running', stressDone: 'self-test result', nodes: 'nodes',
 				stressNoTask: 'no long task observed', stressCommit: 'commit', stressBurn: 'synthetic burn', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable', stressFromDom: 'DOM write',
-				expHint: 'Waits for an idle session first (up to 5 min; streaming windows are not comparable), then injects the same synthetic load into every window (8ms burn every 250ms) - comparing idle windows alone means nothing. Each candidate is then disabled for 60s and restored, recording the host receipt and verifying the restore; each candidate is compared with its nearest baseline, with baseline drift as the noise floor.',
-				method: 'method', noiseFloor: 'noise floor', beyondNoise: 'beyond noise', confounded: 'window had streaming; this comparison is not valid',
-				skipped: 'skipped', restore: 'restore', marks: 'marks',
 				via: 'channel', viaRemote: 'ctx.remote (client remote)', viaRoute: 'host route /api/dsh-perf-hud/host',
-				unattrShort: 'unattr', unattrSuffix: '/frame', mark: 'Mark', markPlaceholder: 'note (optional)', noNote: '(no note)',
-				verify: 'acceptance', vPrecise: 'own package names', vLt: 'longtask attribution', vIdle: 'idle baseline',
-				watch: 'Night watch', watchCaught: 'caught', watchWorst: 'worst', watchRestored: 'restored', watchOnDisk: 'on disk',
+				unattrShort: 'unattr', markPlaceholder: 'note (optional)',
+				watch: 'Night watch', watchCaught: 'caught', watchWorst: 'worst', watchRestored: 'restored',
 				watchDaily: 'daily worst',
 				watchNone: 'nothing caught yet', watchOff: 'not recording', watchPersistFailed: 'persist failed', watchTrimmed: 'trimmed',
 				watchHint: 'On by default and it patches nothing: one rAF loop plus one LoAF observer. When a frame interval (or LoAF blockingDuration) crosses 100ms it captures the 10s before and 3s after verbatim and keeps the **union of two tiers**: the worst 10 overall plus one worst-per-day (at most the last 7 days, marked "daily worst" in the list); they survive a reload. Persistence has a 2MB byte cap; when it trims, the count shows up as "trimmed N". Leave it running to catch intermittent stalls; after one, hand the evidence pack to an analyst with "Export latest".',
@@ -3745,7 +3731,27 @@ window.__ModuleLoader__.load({
 				watchManualNote: 'manual mark',
 			},
 		};
-		const fallback = (key) => DICT.zh[key] ?? key;
+		/**
+		 * 内置兜底:语言**跟文档走**。
+		 *
+		 * locale 服务不在(或接口变了)时用它。以前这里写死中文 —— 英文用户看到中文是 bug;
+		 * 但简单反转(`DICT.en[key] ?? key`)同样错:中文用户会看到英文串。所以先看文档语言
+		 * (`document.documentElement.lang`,取不到再退 `navigator.language`),是中文就用中文那本,
+		 * 其余(含认不出来)用英文那本;两本字典**键集合由断言钉住一致**(见 tests/logic.mjs),
+		 * 所以"取不到"只可能是语言认不出来,不是某本字典缺键。
+		 */
+		function docLang() {
+			const html = document.documentElement;
+			if (html !== null && html !== undefined && typeof html.lang === 'string' && html.lang !== '') return html.lang.toLowerCase();
+			return typeof navigator === 'object' && navigator !== null && typeof navigator.language === 'string'
+				? navigator.language.toLowerCase()
+				: '';
+		}
+
+		function fallback(key) {
+			if (docLang().startsWith('zh')) return DICT.zh[key] ?? DICT.en[key] ?? key;
+			return DICT.en[key] ?? key;
+		}
 		let translate = fallback;
 
 		// ─────────────────────────────── 面板(React) ───────────────────────────────
