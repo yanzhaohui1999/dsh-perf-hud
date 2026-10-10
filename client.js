@@ -3398,6 +3398,43 @@ window.__ModuleLoader__.load({
 			];
 		}
 
+		/**
+		 * 圆环的**段**:脚本那一段再按「来源」切细(同一族的红,由深到浅 = 耗时降序),
+		 * 后面照旧接 任务 / 渲染 / 样式+布局+绘制 —— 所以一个环上最多 3+1+3 = 7 段。
+		 * 三条硬性:
+		 *   ① **只做分区**:各段之和恒等于 `split.total`(脚本那几段之和用减法凑齐,
+		 *      `其余` 那一段补足差额),否则弧会互相盖住;
+		 *   ② 按来源的原始求和可能**大于**脚本那一段(frameSplit 把 js 夹到了 ≤ 任务段,
+		 *      而渲染阶段跑的脚本也算在 `scripts[]` 里)—— 那种情况下按比例缩一下,保持分区;
+		 *   ③ 颜色只给名字(`error` / `warn` / `brand` / `neutral`),token 由渲染那侧映射。
+		 */
+		function frameArcs(split, sources) {
+			const rows = sources ?? [];
+			const sum = rows.reduce((acc, [, ms]) => acc + ms, 0);
+			const scale = sum > split.js && sum > 0 ? split.js / sum : 1;
+			const shades = [1, 0.72, 0.46];
+			const arcs = [];
+			if (split.js > 0) {
+				if (rows.length === 0) {
+					arcs.push({ ms: split.js, color: 'error', opacity: 1 });
+				} else {
+					let used = 0;
+					rows.slice(0, shades.length).forEach(([, ms], index) => {
+						const value = round1(ms * scale);
+						used += value;
+						arcs.push({ ms: value, color: 'error', opacity: shades[index] });
+					});
+					const rest = round1(split.js - used);
+					if (rest > 0) arcs.push({ ms: rest, color: 'error', opacity: 0.28 });
+				}
+			}
+			// 任务里没归到脚本的那部分用中性灰:它现在和"脚本的四个红"同处一环,再用红会分不清
+			arcs.push({ ms: split.taskOther, color: 'neutral', opacity: 1 });
+			arcs.push({ ms: split.render, color: 'warn', opacity: 1 });
+			arcs.push({ ms: split.tail, color: 'brand', opacity: 1 });
+			return arcs;
+		}
+
 		/** 最近那条 blocking 最大的长动画帧(面板的饼图看的就是它)。 */
 		function worstLoaf() {
 			let best = null;
@@ -3780,7 +3817,7 @@ window.__ModuleLoader__.load({
 				invokerHint: 'LoAF 的 scripts[].invoker:这条脚本是**谁调起来的** —— setTimeout / rAF、某个事件处理器(实测最多的是 `DOMWebSocket.onmessage`,即会话事件流)、Promise 回调、脚本加载。它与「按包」是同一份脚本耗时的两种切法:按来源覆盖全部脚本,按包只覆盖定得到包名的那部分(所以合计不相等是正常的,总数看上面的脚本耗时)。⚠️ 它只回答"哪一类调用",不回答"函数里面慢在哪" —— 函数级要 Chrome trace,页面内没有采样器',
 				splitJsHint: '脚本自身的三分:纯执行 / 强制样式布局(读布局、写样式逼出来的同步布局)/ 暂停(同步 XHR、对话框把它卡住的时间)。三者都是 scripts[].duration 的分区内,**相加 = 脚本耗时**,不是另加的。这一行是上面那张饼的**同一帧**',
 				splitNoLoaf: '暂时没有(要等到一条 >50ms 的长动画帧;LoAF 只报 50ms 以上的)',
-				splitHint: 'LoAF 的三个时间点能拆出来的极限:任务(含同步 JS)/ 渲染(rAF 回调)/ 样式+布局+绘制。任务那一侧再拆成"被 LoAF 归到脚本的"与"没归到的"(短于上报阈值的脚本 + 事件派发 / 微任务 / GC 这类非脚本开销);脚本自己再拆成纯执行 / 强制样式布局 / 暂停。**绘制与合成分不开**,所以最后一段是"剩下的都在这儿",别读成"样式布局占了多少";要分开只能录 Chrome trace',
+				splitHint: 'LoAF 的三个时间点能拆出来的极限。环上最多 7 段:脚本那一段再按**调用来源**(invoker,与下面「本帧按来源」同一个顺序)切成最多 4 块 —— 同一族的红、由深到浅;任务里没归到脚本的那部分是**灰的**;再往后是渲染(rAF 回调)与样式+布局+绘制。段与段之间留了 1.4px 缝(同一族的红靠缝才看得出是几块),小段扣不起缝就不扣。**绘制与合成分不开**,所以最后一段是"剩下的都在这儿",别读成"样式布局占了多少";要分开只能录 Chrome trace',
 				worstOne: '最差那条',
 				unexplained: '该帧几乎无 JS 解释', unexplainedHint: '样式/布局/绘制/vsync;可用 Rendering 面板的 Paint flashing 交叉验证',
 				verdict: '判定', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)',
@@ -3842,7 +3879,7 @@ window.__ModuleLoader__.load({
 				invokerHint: 'LoAF\'s scripts[].invoker: what invoked this script — setTimeout / rAF, an event handler (the most common one here is `DOMWebSocket.onmessage`, the session event stream), a promise callback, a script load. It and "by package" are two slicings of the same script time: "by source" covers every script, "by package" only those whose package could be resolved (so the two totals differ; the total is the script time above). ⚠️ It answers "which kind of call", not "which function inside is slow" — function level needs a Chrome trace, there is no in-page sampler',
 				splitJsHint: 'The script slice split three ways: exec / forced style+layout (sync layout forced by reading layout or writing style) / paused (time blocked in sync XHR or dialogs). All three are partitions of scripts[].duration and **sum to it** — they are not additional. This row is **the same frame as the pie above**',
 				splitNoLoaf: 'not yet (needs a long animation frame >50ms; LoAF only reports those)',
-				splitHint: 'As far as LoAF can decompose it: task (including sync JS) / render (rAF callbacks) / style+layout+paint. The task side splits again into "attributed to a script by LoAF" and "everything else in the task" (scripts below the reporting threshold, plus event dispatch / microtasks / GC). The script itself splits into exec / forced style+layout / paused. Paint and compositing **cannot** be separated in-page, so the last slice is "everything else" — do not read it as "style and layout only"; separating them needs a Chrome trace',
+				splitHint: 'As far as LoAF can decompose it. Up to 7 arcs: the script slice is split again by **invoker** (same order as the "by source" row below) into up to 4 pieces — one red family, dark to light; the unattributed part of the task is **grey**; then render (rAF callbacks) and style+layout+paint. Arcs are separated by a 1.4px gap (that is the only way same-family reds read as separate pieces); slices too small to afford the gap keep their full length. Paint and compositing **cannot** be separated in-page, so the last slice is "everything else" — do not read it as "style and layout only"; separating them needs a Chrome trace',
 				worstOne: 'worst one',
 				unexplained: 'no JS explanation for that frame', unexplainedHint: 'style/layout/paint/vsync; cross-check with Paint flashing in the Rendering panel',
 				verdict: 'verdict', linkShort: 'RTT', suspectSuffix: ' suspect', cleared: 'link cleared (host and tunnel both normal)',
@@ -4216,40 +4253,56 @@ window.__ModuleLoader__.load({
 
 				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
 				group('detail', t('groupDetail'), detailSummary(),
-					// 长动画帧的时间去向:四段饼图 —— 脚本 / 任务里没归到脚本的 / 渲染 / 样式+布局+绘制。
+					// 长动画帧的时间去向:圆环。脚本那一段再按「来源」切细(最多 7 段),
 					// 页面内看不到"绘制/合成",最后一段是"剩下的都在这儿" —— 拿它当"样式布局占比"会读错。
 					(() => {
-						const split = frameSplit(worstLoaf());
+						const worst = worstLoaf();
+						const split = frameSplit(worst);
 						if (split === null) return h('div', { style: S.row },
 							h('span', { style: S.label, title: t('splitHint') }, t('split')),
 							h('span', { style: S.num }, t('splitNoLoaf')));
-						const C = 2 * Math.PI * 20;
-						// 四段:脚本(实心红)/ 任务里没归到脚本的那部分(同色淡:同一侧、不同归属)/
-						// 渲染 / 样式+布局+绘制。淡的那段用 stroke-opacity,不引新 token。
-						const slices = [
-							{ ms: split.js, color: 'var(--dsw-alias-state-error-primary)', opacity: 1 },
-							{ ms: split.taskOther, color: 'var(--dsw-alias-state-error-primary)', opacity: 0.45 },
-							{ ms: split.render, color: 'var(--dsw-alias-state-warn-primary)', opacity: 1 },
-							{ ms: split.tail, color: 'var(--dsw-alias-brand-primary)', opacity: 1 },
-						];
+						const frameTally = framePkgTally(worst);
+						const sources = frameTally === null ? [] : frameTally.byInvoker;
+						// 48px 的环只有 126px 周长(1% ≈ 1.3px),段一多就分不出来 —— 放大到 84px,
+						// 并在段与段之间留 1.4px 的缝:同一族的红靠缝才看得出是几块。
+						const R = 34;
+						const C = 2 * Math.PI * R;
+						const GAP = 1.4;
+						const COLORS = {
+							error: 'var(--dsw-alias-state-error-primary)',
+							warn: 'var(--dsw-alias-state-warn-primary)',
+							brand: 'var(--dsw-alias-brand-primary)',
+							neutral: 'var(--dsw-alias-label-secondary)',
+						};
+						const slices = frameArcs(split, sources);
 						let passed = 0;
 						const arcs = [];
-						for (const slice of slices) {
-							const length = (slice.ms / split.total) * C;
+						for (let i = 0; i < slices.length; i += 1) {
+							const raw = (slices[i].ms / split.total) * C;
+							// 缝只在"扣得起"的段上扣:小段扣掉缝就等于消失了
+							const length = raw > GAP * 2 ? raw - GAP : raw;
+							// 推进量按**原始**长度走,缝才落在两段之间(而不是把后面的段往前挪)
+							const offset = passed;
+							passed += raw;
+							if (length <= 0.05) continue;
 							arcs.push(h('circle', {
-								key: `slice-${arcs.length}`, cx: 24, cy: 24, r: 20, fill: 'none',
-								stroke: slice.color, strokeWidth: 9, strokeOpacity: slice.opacity,
+								key: `slice-${i}`, cx: 42, cy: 42, r: R, fill: 'none',
+								stroke: COLORS[slices[i].color], strokeWidth: 13, strokeOpacity: slices[i].opacity,
 								strokeDasharray: `${length.toFixed(1)} ${(C - length).toFixed(1)}`,
-								strokeDashoffset: (-passed).toFixed(1),
-								transform: 'rotate(-90 24 24)',
+								strokeDashoffset: (-offset).toFixed(1),
+								transform: 'rotate(-90 42 42)',
 							}));
-							passed += length;
 						}
+						const pctOfJs = (ms) => `${Math.round((ms / (split.js || 1)) * 100)}%`;
+						const srcLine = sources.length === 0
+							? ''
+							: `\n${t('splitInvoker')} ${sources.slice(0, 3).map(([name, ms]) => `${name} ${pctOfJs(ms)}`).join(' · ')}`;
 						const title = `${t('splitTotal')} ${split.total}ms(${t('splitWorst')} blocking ${split.blocking}ms)\n`
-							+ `${t('splitScript')} ${split.js}ms(${t('jsExec')} ${split.exec} · ${t('forcedLayout')} ${split.forced} · ${t('jsPause')} ${split.pause})\n`
+							+ `${t('splitScript')} ${split.js}ms(${t('jsExec')} ${split.exec} · ${t('forcedLayout')} ${split.forced} · ${t('jsPause')} ${split.pause})`
+							+ `${srcLine}\n`
 							+ `${t('splitTask')} ${split.taskOther}ms\n${t('splitRender')} ${split.render}ms\n${t('splitTail')} ${split.tail}ms`;
 						return h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },
-							h('svg', { width: 48, height: 48, viewBox: '0 0 48 48', style: { flex: '0 0 auto' } }, arcs),
+							h('svg', { width: 84, height: 84, viewBox: '0 0 84 84', style: { flex: '0 0 auto' } }, arcs),
 							h('div', { style: { flex: '1 1 auto', textAlign: 'right', lineHeight: 1.5, minWidth: 0 } },
 								h('div', { style: S.num, title }, `${t('split')} ${split.total}ms`),
 								splitLegend(split).map((line, index) => h('div', { key: `legend-${index}`, style: S.sub, title }, line))));

@@ -1046,6 +1046,7 @@ const watchPieces = [
 	extract(source, 'function restoreIncidents('),
 	extract(source, 'function frameSplit('),
 	extract(source, 'function splitLegend('),
+	extract(source, 'function frameArcs('),
 	extract(source, 'function worstLoaf('),
 	extract(source, 'function pickIncident('),
 	extract(source, 'function incidentFileName('),
@@ -1112,7 +1113,7 @@ const watchBox = new Function(`
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
-		tallyScripts, framePkgTally, pkgWhoText, jsBreakdownText, splitLegend, invokerLabel, invokerWhoText,
+		tallyScripts, framePkgTally, pkgWhoText, jsBreakdownText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1337,6 +1338,24 @@ check('帧拆分:脏数据返回 null', [watch.frameSplit(null), watch.frameSpli
 check('圆环图例:两行、每行两段(四个百分比挤一行会折行);顺序与圆环一致',
 	watch.splitLegend({ total: 200, js: 100, taskOther: 20, render: 20, tail: 60 }),
 	['脚本 50% · 任务 10%', '渲染 10% · 样式+布局+绘制 30%']);
+check('圆环分段:脚本按来源切细(同一族红,由深到浅),各段之和 = 整帧',
+	(() => {
+		const arcs = watch.frameArcs(
+			{ total: 200, js: 120, taskOther: 30, render: 20, tail: 30, exec: 120, forced: 0, pause: 0 },
+			[['a', 60], ['b', 40], ['c', 10], ['d', 10]],
+		);
+		return [arcs.map((arc) => [arc.ms, arc.color, arc.opacity]), arcs.reduce((acc, arc) => acc + arc.ms, 0)];
+	})(),
+	[[[60, 'error', 1], [40, 'error', 0.72], [10, 'error', 0.46], [10, 'error', 0.28], [30, 'neutral', 1], [20, 'warn', 1], [30, 'brand', 1]], 200]);
+check('圆环分段:没有来源证据时脚本仍是一整块;任务那段是中性灰(不再和脚本同色)',
+	watch.frameArcs({ total: 100, js: 50, taskOther: 10, render: 10, tail: 30 }, []).map((arc) => [arc.ms, arc.color]),
+	[[50, 'error'], [10, 'neutral'], [10, 'warn'], [30, 'brand']]);
+check('圆环分段:按来源的求和大于脚本那段时按比例缩(否则弧会互相盖住)',
+	(() => {
+		const arcs = watch.frameArcs({ total: 100, js: 40, taskOther: 0, render: 10, tail: 50 }, [['a', 60], ['b', 20]]);
+		return [arcs.map((arc) => arc.ms), arcs.reduce((acc, arc) => acc + arc.ms, 0)];
+	})(),
+	[[30, 10, 0, 10, 50], 100]);
 check('圆环图例两行的长度预算(zh;396px 面板)', watch.splitLegend({ total: 200, js: 100, taskOther: 20, render: 20, tail: 60 }).every((line) => line.length <= 26), true);
 check('worstLoaf 取 blocking 最大的那条', (() => {
 	const saved = watch.state.watch.loaf.slice();

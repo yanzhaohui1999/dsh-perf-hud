@@ -94,7 +94,7 @@ The panel is layered: only "is it smooth + whose fault" is always visible; the o
 | **FPS / worst frame** | Its own rAF loop, 1s rolling window. Combined colouring: FPS ≤50 or worst frame ≥120ms → yellow; ≤30 or ≥200ms → red |
 | **Long tasks** | `PerformanceObserver({entryTypes:['longtask']})` over the last 60s; hit ratio = long tasks with a name from any leg / total |
 | **Unattributed per frame** | The part of the frame gap not explained by instrumented callbacks (style recalc, paint, vsync wait). **CSS animations only show up here** — they never touch the JS scheduler |
-| **Where the frame went** (4-part donut) | The worst long animation frame split by LoAF's three timestamps: script (sync JS LoAF attributed to a script) / task (the rest of the task: scripts below the reporting threshold, event dispatch, microtasks, GC) / render (rAF callback) / style+layout+paint. **Paint and compositing cannot be separated** — that needs a Chrome trace — so the last slice is "everything else", **not** a style-layout percentage |
+| **Where the frame went** (donut, up to 7 arcs) | The worst long animation frame split by LoAF's three timestamps: script (split again by invoker into up to 4 pieces, one red family dark→light) / the unattributed rest of the task (neutral grey) / render (rAF callback) / style+layout+paint. Arcs are separated by a 1.4px gap (slices too small to afford it keep their full length). **Paint and compositing cannot be separated** — that needs a Chrome trace — so the last slice is "everything else", **not** a style-layout percentage |
 | **Script split · this frame / · window** | Script time split into exec / forced style+layout / paused; **the three sum to script time** (partitions, not additions). "this frame" is the same frame as the donut above, "window" aggregates the last 200 LoAF entries — same definition, **two denominators** |
 | **By source · this frame / · window** | Script time grouped by **LoAF's `invoker`**: what invoked the script (`setTimeout` / rAF, an event handler such as `DOMWebSocket.onmessage`, a promise callback, a script load). It covers every script, so its total equals script time, while "by package" only covers scripts whose package resolved — **the two totals are not meant to match**. `SCRIPT[…]` collapses to `script`, a `:` takes the last segment (`TimerHandler:setTimeout` → `setTimeout`), and a missing invoker falls back to `invokerType`. It answers "which kind of call", **not** "which function inside is slow" — that needs a Chrome trace; there is no in-page sampler |
 | **Callback attribution** | `x/s · peak y/s`: EMA (α=0.4) execution rate / single-second maximum; hover shows that second's sync time and the cumulative `N× / Xms`. **A lower bound**: only callbacks scheduled via `setTimeout` / `setInterval` / `rAF` — event handlers, Promises, microtasks and React's own scheduling are not counted |
@@ -175,9 +175,9 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 305 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 308 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 39 assertions: real index.js driven by a fake ctx
-# 355 offline assertions total, no running DSH required
+# 358 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
