@@ -299,7 +299,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 2. 打 tag `vX.Y.Z`(**tag 必须与 `version` 一致**),在 GitHub 建 Release。
 3. `.github/workflows/release.yml` 在该 Release 发布时自动 `npm publish`(用 **npm Trusted Publishing / OIDC**,不配 `NPM_TOKEN`)。
 4. 首次需要在 npmjs.com 手动建包并配 Trusted Publisher(Provider: GitHub Actions;填 owner / repo / `release.yml`)。
-5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/en.json` / `LICENSE`,以及 README 与 AGENTS 链接到的全部文档(`README_EN` / `CONTRIBUTING` / `REVIEW` / `CHANGELOG` / `AGENTS`)—— 漏一份,npm 页面上就是一个死链。`release.yml` 的 Pack and inspect 步骤逐份 grep,漏了就失败。
+5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/en.json` / `LICENSE`,以及 README 与 AGENTS 链接到的全部文档(`README_EN` / `CONTRIBUTING` / `REVIEW` / `CHANGELOG` / `AGENTS`)与 `tools/`(事故包渲染器 + 三个 CDP 验证器,README 让用户直接跑它们,所以必须进包)—— 漏一份,npm 页面上就是一个死链。`release.yml` 的 Pack and inspect 步骤逐份 grep,漏了就失败。
 
 ---
 
