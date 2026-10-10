@@ -3336,11 +3336,19 @@ window.__ModuleLoader__.load({
 		/** 折叠组的一句话摘要:刻意短 —— 摘要自己换行会比正文更难看(实测)。 */
 		/**
 		 * 一个长动画帧的时间去哪了 —— 这是页面内能拿到的极限,LoAF 只给三个时间点:
-		 *   [t, renderStart)              任务 + 脚本(同步 JS)
+		 *   [t, renderStart)              任务(含同步 JS)
+		 *     ├─ scripts[].duration       被 LoAF 归到脚本的那部分(短于上报阈值的脚本不在内)
+		 *     └─ taskOther                剩下的:没上报的短脚本 + 非脚本的任务开销
 		 *   [renderStart, styleAndLayout) rAF 回调 / 渲染准备
 		 *   [styleAndLayout, t+dur)       样式 + 布局 + 绘制/合成
 		 * **绘制与合成分不开**(要分只能录 Chrome trace,那一项在缺失声明里)——
-		 * 所以第三段是"剩下的都在这儿",不要读成"样式布局占了多少"。
+		 * 所以最后一段是"剩下的都在这儿",不要读成"样式布局占了多少"。
+		 * 脚本自己再拆三层:纯执行 / 强制样式布局 / 暂停。后两者是 scripts[] 里的
+		 * forcedStyleAndLayoutDuration 与 pauseDuration,**都已经算在 duration 里**,
+		 * 所以它们是 duration 的分区,不能相加。
+		 * 每一层都向下 clamp:每条脚本的毫秒各自 round1,脚本多而每条约 0.05ms 时,
+		 * 求和会反过来超过父区间(四舍五入的算术后果,不是猜测)—— 分区图的子项
+		 * 永远不许超过父项,否则画出来是负长度的弧。
 		 */
 		function frameSplit(row) {
 			if (row === null || row === undefined || typeof row.dur !== 'number' || row.dur <= 0) return null;
@@ -3348,20 +3356,46 @@ window.__ModuleLoader__.load({
 			const total = row.dur;
 			const renderStart = typeof row.renderStart === 'number' && row.renderStart > start ? row.renderStart : null;
 			const styleStart = typeof row.styleAndLayoutStart === 'number' && row.styleAndLayoutStart > start ? row.styleAndLayoutStart : null;
-			let js = 0;
-			for (const script of row.scripts ?? []) js += script.ms ?? 0;
+			let rawJs = 0;
+			let rawForced = 0;
+			let rawPause = 0;
+			for (const script of row.scripts ?? []) {
+				rawJs += script.ms ?? 0;
+				rawForced += script.forcedMs ?? 0;
+				rawPause += script.pauseMs ?? 0;
+			}
 			const head = renderStart === null ? total : renderStart - start;
+			const js = round1(Math.min(rawJs, head));
+			const forced = round1(Math.min(rawForced, js));
+			const pause = round1(Math.min(rawPause, js - forced));
+			const exec = round1(Math.max(0, js - forced - pause));
 			const render = renderStart === null ? 0 : (styleStart === null ? total - head : styleStart - renderStart);
 			const tail = Math.max(0, total - head - render);
 			return {
 				at: row.t,
 				total: round1(total),
-				head: round1(head),          // 任务 + 脚本
-				js: round1(js),              // 其中脚本本身(是 head 的一部分)
+				head: round1(head),                 // 任务(含同步 JS)
+				js: js,                             // 其中被 LoAF 归到脚本的部分(是 head 的子集)
+				taskOther: round1(head) - js,       // 任务里没归到脚本的部分(与 js 相加正好等于 head)
+				exec: exec,                         // 脚本 = 纯执行 + 强制样式布局 + 暂停
+				forced: forced,
+				pause: pause,
 				render: round1(render),
 				tail: round1(tail),
 				blocking: round1(row.blocking ?? 0),
 			};
+		}
+
+		/**
+		 * 圆环的图例:两行、每行两段 —— 四个百分比挤一行在 396px 的面板里会折行(实测同类事故),
+		 * 顺序与圆环从上往下的走向一致(脚本 → 任务 → 渲染 → 样式+布局+绘制)。
+		 */
+		function splitLegend(split) {
+			const pct = (ms) => `${Math.round((ms / split.total) * 100)}%`;
+			return [
+				`${translate('splitScript')} ${pct(split.js)} · ${translate('splitTask')} ${pct(split.taskOther)}`,
+				`${translate('splitRender')} ${pct(split.render)} · ${translate('splitTail')} ${pct(split.tail)}`,
+			];
 		}
 
 		/** 最近那条 blocking 最大的长动画帧(面板的饼图看的就是它)。 */
@@ -3407,38 +3441,88 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * D5 二级:脚本侧往下拆一层。
-		 *   ① 按包汇总脚本耗时(`scripts[].pkg` 与事故包 `incident.packages` 走**同一条**
+		 * D5 二级:脚本侧往下拆一层 —— 一份汇总,两个分母共用:
+		 *   ① 按包汇总脚本耗时(`script.url` 与事故包 `incident.packages` 走**同一条**
 		 *      resolve 路:单包 URL 直接读出来,合并批按 sourcemap 分段还原);
-		 *   ② 纯 JS 与"强制样式布局"分开:LoAF 的 forcedStyleAndLayoutDuration 是读布局/写样式
-		 *      逼出来的同步布局,它是脚本耗时的一部分,但来源是样式而不是业务逻辑。
-		 * 结果按窗口指纹缓存 —— 每 tick 重算 200×12 条脚本,会让面板自己变成新的开销。
+		 *   ② 纯执行 / 强制样式布局 / 暂停:LoAF 的 forcedStyleAndLayoutDuration 是读布局、
+		 *      写样式逼出来的同步布局,pauseDuration 是被同步 XHR / 对话框卡住的时间 ——
+		 *      两者**都已经算在** duration 里(是分区,不是相加)。
+		 * 计量单位统一为"脚本毫秒",但 unresolved 计的是**条数**(不是毫秒)—— 它表示
+		 * "有几条脚本定不到包名",别和上面的 ms 相加。
+		 */
+		function tallyScripts(rows) {
+			const byPkg = new Map();
+			let js = 0;
+			let forced = 0;
+			let pause = 0;
+			let unresolved = 0;
+			for (const row of rows) {
+				for (const script of row.scripts ?? []) {
+					js += script.ms ?? 0;
+					forced += script.forcedMs ?? 0;
+					pause += script.pauseMs ?? 0;
+					const resolved = packageOfScript(script.url, script.charPos);
+					if (resolved.pkg === null) { unresolved += 1; continue; }
+					byPkg.set(resolved.pkg, (byPkg.get(resolved.pkg) ?? 0) + (script.ms ?? 0));
+				}
+			}
+			return {
+				js: round1(js), exec: round1(Math.max(0, js - forced - pause)), forced: round1(forced), pause: round1(pause), unresolved,
+				top: [...byPkg.entries()].sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
+			};
+		}
+
+		/**
+		 * 脚本侧三分(纯执行 / 强制样式布局 / 暂停):本帧那一行与窗口那一行共用同一份文案。
+		 * 为 0 的那两项**不显示** —— 大多数帧里它俩就是 0,写出来只是噪声,还会把这一行挤成两行
+		 * (实测窗口那行 `纯执行 1116.8ms · 强制 10.7ms · 暂停 0ms` 在 396px 里折过行)。
+		 */
+		function jsBreakdownText(tally) {
+			const parts = [`${translate('jsExec')} ${tally.exec}ms`];
+			if (tally.forced > 0) parts.push(`${translate('forcedShort')} ${tally.forced}ms`);
+			if (tally.pause > 0) parts.push(`${translate('jsPause')} ${tally.pause}ms`);
+			return parts.join(' · ');
+		}
+
+		/**
+		 * 窗口聚合(最近 WATCH_LOAF_MAX 条 LoAF):按窗口指纹缓存 —— 每 tick 重算
+		 * 200×12 条脚本,会让面板自己变成新的开销。
 		 */
 		const scriptTallyCache = { stamp: null, value: null };
 		function scriptPkgTally() {
 			const rows = state.watch.loaf;
 			const stamp = rows.length === 0 ? 'x' : `${rows.length}|${rows[rows.length - 1].t}`;
 			if (scriptTallyCache.stamp === stamp) return scriptTallyCache.value;
-			const byPkg = new Map();
-			let js = 0;
-			let forced = 0;
-			let unresolved = 0;
-			for (const row of rows) {
-				for (const script of row.scripts ?? []) {
-					js += script.ms ?? 0;
-					forced += script.forcedMs ?? 0;
-					const resolved = packageOfScript(script.url, script.charPos);
-					if (resolved.pkg === null) { unresolved += 1; continue; }
-					byPkg.set(resolved.pkg, (byPkg.get(resolved.pkg) ?? 0) + (script.ms ?? 0));
-				}
-			}
-			const value = {
-				js: round1(js), forced: round1(forced), unresolved,
-				top: [...byPkg.entries()].sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
-			};
+			const value = tallyScripts(rows);
 			scriptTallyCache.stamp = stamp;
 			scriptTallyCache.value = value;
 			return value;
+		}
+
+		/**
+		 * 单帧聚合(饼图看的那一条):与窗口聚合**同一份口径、不同分母** —— 面板上两行
+		 * 分别标了"本帧"与"窗口",避免拿两种分母的数字互相印证。只有一条 LoAF 行,
+		 * 不需要缓存(≤ WATCH_SCRIPT_MAX 条脚本)。
+		 */
+		function framePkgTally(row) {
+			if (row === null || row === undefined) return null;
+			return tallyScripts([row]);
+		}
+
+		/**
+		 * "是谁"那一段文案:Top3 包 + 其余 + 定不到包名的条数(本帧与窗口两行共用)。
+		 * 定不到包名时也要说 —— 只报"有名字的那部分"会让人把 200ms 当成这一层的全部
+		 * (实测:窗口里 1116.8ms 脚本只有 200ms 定到了包,旧文案只写 `dsh-client-modules 200ms`)。
+		 */
+		function pkgWhoText(tally) {
+			const top = tally.top.slice(0, 3);
+			const rest = tally.top.length - top.length;
+			if (top.length === 0) {
+				return `${translate('pkgNone')}${tally.unresolved === 0 ? '' : `(${translate('unblamed')} ${tally.unresolved})`}`;
+			}
+			return top.map(([name, ms]) => `${short(name)} ${Math.round(ms)}ms`).join(' · ')
+				+ (rest > 0 ? ` · ${translate('rest')} ${rest}` : '')
+				+ (tally.unresolved > 0 ? ` · ${translate('pkgNone')} ${tally.unresolved}` : '');
 		}
 
 		/** 60 秒帧条本体(约 100×18 的 SVG,只用 theme token)。 */
@@ -3639,13 +3723,15 @@ window.__ModuleLoader__.load({
 				split: '帧里花在哪', splitTotal: '这段长动画帧共', splitWorst: '最差那条',
 				spark: '60 秒帧条',
 				sparkHint: '最近 60 秒,一格一秒:高度 = 那一秒里最差那一帧的间隔,颜色与导出件的 ASCII 帧条带用同一组阈值(≥100ms 红 / ≥50ms 黄 / 其余正常)。整格都是 rAF 挂起的那一秒画成最矮的灰柱 —— 那是间隙,不是卡顿;空白 = 那一秒没采到',
-				pkgSplit: '脚本按包', pkgNone: '未定名',
-				pkgHint: '最近这段 LoAF 窗口里,脚本耗时按包汇总(与事故包 incident.packages 同一条 resolve 路:单包 URL 直接读出来,合并批按 sourcemap 分段还原)。合并批里没开「精确」就只能给到那个 58 包的批 URL,这是刻意的,不硬猜',
-				jsVsForced: '纯 JS / 强制布局', jsOnly: '纯 JS', forcedLayout: '强制样式布局',
-				forcedHint: 'LoAF 的 forcedStyleAndLayoutDuration:读布局 / 写样式逼出来的同步布局。它**已经算在**脚本耗时里,来源却是样式而不是业务逻辑 —— 分不清"这块是 JS 慢还是样式慢"时看这一行',
-				splitHead: '脚本侧', splitRender: '渲染', splitTail: '样式+布局+绘制',
+				pkgSplit: '脚本按包·窗口', pkgNone: '未定名',
+				pkgHint: '最近这段 LoAF **窗口**里(不是上面那一帧),脚本耗时按包汇总(与事故包 incident.packages 同一条 resolve 路:单包 URL 直接读出来,合并批按 sourcemap 分段还原)。合并批里没开「精确」就只能给到那个 58 包的批 URL,这是刻意的,不硬猜',
+				splitJsWindow: '脚本细拆·窗口', forcedLayout: '强制样式布局', forcedShort: '强制',
+				forcedHint: 'LoAF 的 forcedStyleAndLayoutDuration:读布局 / 写样式逼出来的同步布局。它**已经算在**脚本耗时里,来源却是样式而不是业务逻辑 —— 分不清"这块是 JS 慢还是样式慢"时看这一行。这一行是**窗口**聚合',
+				splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
+				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', splitFramePkg: '本帧按包',
+				splitJsHint: '脚本自身的三分:纯执行 / 强制样式布局(读布局、写样式逼出来的同步布局)/ 暂停(同步 XHR、对话框把它卡住的时间)。三者都是 scripts[].duration 的分区内,**相加 = 脚本耗时**,不是另加的。这一行是上面那张饼的**同一帧**',
 				splitNoLoaf: '暂时没有(要等到一条 >50ms 的长动画帧;LoAF 只报 50ms 以上的)',
-				splitHint: 'LoAF 的三个时间点能拆出来的极限:脚本侧(任务+同步 JS)/ 渲染(rAF 回调)/ 样式+布局+绘制。绘制与合成分不开,所以最后一段是"剩下的都在这儿",别读成"样式布局占了多少";要分开只能录 Chrome trace',
+				splitHint: 'LoAF 的三个时间点能拆出来的极限:任务(含同步 JS)/ 渲染(rAF 回调)/ 样式+布局+绘制。任务那一侧再拆成"被 LoAF 归到脚本的"与"没归到的"(短于上报阈值的脚本 + 事件派发 / 微任务 / GC 这类非脚本开销);脚本自己再拆成纯执行 / 强制样式布局 / 暂停。**绘制与合成分不开**,所以最后一段是"剩下的都在这儿",别读成"样式布局占了多少";要分开只能录 Chrome trace',
 				worstOne: '最差那条',
 				unexplained: '该帧几乎无 JS 解释', unexplainedHint: '样式/布局/绘制/vsync;可用 Rendering 面板的 Paint flashing 交叉验证',
 				verdict: '判定', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)',
@@ -3697,13 +3783,15 @@ window.__ModuleLoader__.load({
 				split: 'where the frame went', splitTotal: 'long frame total', splitWorst: 'worst',
 				spark: '60s frame strip',
 				sparkHint: 'Last 60 seconds, one bar per second: height = the worst frame interval in that second, and the colours use the same thresholds as the ASCII frame strip in the export (>=100ms red / >=50ms yellow / otherwise normal). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall; blank = nothing sampled in that second',
-				pkgSplit: 'script by package', pkgNone: 'unnamed',
-				pkgHint: 'Script time in the recent LoAF window, summed per package (the same resolve path as incident.packages: read straight off single-package URLs, restored from sourcemap sections for combo batches). Without precise attribution a combo batch can only be named as its 58-package batch URL — that is deliberate, nothing is guessed',
-				jsVsForced: 'pure JS / forced layout', jsOnly: 'pure JS', forcedLayout: 'forced style+layout',
-				forcedHint: 'LoAF forcedStyleAndLayoutDuration: synchronous layout forced by reading layout or writing style. It is **already inside** script time, but it comes from styling rather than business logic — read this row when you cannot tell whether the script side is slow because of JS or because of style',
-				splitHead: 'script side', splitRender: 'render', splitTail: 'style+layout+paint',
+				pkgSplit: 'script by pkg · window', pkgNone: 'unnamed',
+				pkgHint: 'Script time in the recent LoAF **window** (not the single frame above), summed per package (the same resolve path as incident.packages: read straight off single-package URLs, restored from sourcemap sections for combo batches). Without precise attribution a combo batch can only be named as its 58-package batch URL — that is deliberate, nothing is guessed',
+				splitJsWindow: 'script split · window', forcedLayout: 'forced style+layout', forcedShort: 'forced',
+				forcedHint: 'LoAF forcedStyleAndLayoutDuration: synchronous layout forced by reading layout or writing style. It is **already inside** script time, but it comes from styling rather than business logic — read this row when you cannot tell whether the script side is slow because of JS or because of style. This row is the **window** aggregate',
+				splitScript: 'script', splitTask: 'task', splitRender: 'render', splitTail: 'style+layout+paint',
+				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', splitFramePkg: 'by pkg (this frame)',
+				splitJsHint: 'The script slice split three ways: exec / forced style+layout (sync layout forced by reading layout or writing style) / paused (time blocked in sync XHR or dialogs). All three are partitions of scripts[].duration and **sum to it** — they are not additional. This row is **the same frame as the pie above**',
 				splitNoLoaf: 'not yet (needs a long animation frame >50ms; LoAF only reports those)',
-				splitHint: 'As far as LoAF can decompose it: script side (task + sync JS) / render (rAF callbacks) / style+layout+paint. Paint and compositing cannot be separated in-page, so the last slice is "everything else" — do not read it as "style and layout only"; separating them needs a Chrome trace',
+				splitHint: 'As far as LoAF can decompose it: task (including sync JS) / render (rAF callbacks) / style+layout+paint. The task side splits again into "attributed to a script by LoAF" and "everything else in the task" (scripts below the reporting threshold, plus event dispatch / microtasks / GC). The script itself splits into exec / forced style+layout / paused. Paint and compositing **cannot** be separated in-page, so the last slice is "everything else" — do not read it as "style and layout only"; separating them needs a Chrome trace',
 				worstOne: 'worst one',
 				unexplained: 'no JS explanation for that frame', unexplainedHint: 'style/layout/paint/vsync; cross-check with Paint flashing in the Rendering panel',
 				verdict: 'verdict', linkShort: 'RTT', suspectSuffix: ' suspect', cleared: 'link cleared (host and tunnel both normal)',
@@ -4077,18 +4165,21 @@ window.__ModuleLoader__.load({
 
 				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
 				group('detail', t('groupDetail'), detailSummary(),
-					// 长动画帧的时间去向:三段饼图。页面内看不到"绘制/合成",所以只有三段,
-					// 第三段是"剩下的都在这儿" —— 拿它当"样式布局占比"会读错。
+					// 长动画帧的时间去向:四段饼图 —— 脚本 / 任务里没归到脚本的 / 渲染 / 样式+布局+绘制。
+					// 页面内看不到"绘制/合成",最后一段是"剩下的都在这儿" —— 拿它当"样式布局占比"会读错。
 					(() => {
 						const split = frameSplit(worstLoaf());
 						if (split === null) return h('div', { style: S.row },
 							h('span', { style: S.label, title: t('splitHint') }, t('split')),
 							h('span', { style: S.num }, t('splitNoLoaf')));
 						const C = 2 * Math.PI * 20;
+						// 四段:脚本(实心红)/ 任务里没归到脚本的那部分(同色淡:同一侧、不同归属)/
+						// 渲染 / 样式+布局+绘制。淡的那段用 stroke-opacity,不引新 token。
 						const slices = [
-							{ ms: split.head, color: 'var(--dsw-alias-state-error-primary)' },
-							{ ms: split.render, color: 'var(--dsw-alias-state-warn-primary)' },
-							{ ms: split.tail, color: 'var(--dsw-alias-brand-primary)' },
+							{ ms: split.js, color: 'var(--dsw-alias-state-error-primary)', opacity: 1 },
+							{ ms: split.taskOther, color: 'var(--dsw-alias-state-error-primary)', opacity: 0.45 },
+							{ ms: split.render, color: 'var(--dsw-alias-state-warn-primary)', opacity: 1 },
+							{ ms: split.tail, color: 'var(--dsw-alias-brand-primary)', opacity: 1 },
 						];
 						let passed = 0;
 						const arcs = [];
@@ -4096,38 +4187,50 @@ window.__ModuleLoader__.load({
 							const length = (slice.ms / split.total) * C;
 							arcs.push(h('circle', {
 								key: `slice-${arcs.length}`, cx: 24, cy: 24, r: 20, fill: 'none',
-								stroke: slice.color, strokeWidth: 9,
+								stroke: slice.color, strokeWidth: 9, strokeOpacity: slice.opacity,
 								strokeDasharray: `${length.toFixed(1)} ${(C - length).toFixed(1)}`,
 								strokeDashoffset: (-passed).toFixed(1),
 								transform: 'rotate(-90 24 24)',
 							}));
 							passed += length;
 						}
-						const pct = (ms) => `${Math.round((ms / split.total) * 100)}%`;
-						const title = `${t('splitTotal')} ${split.total}ms(${t('splitWorst')} blocking ${split.blocking}ms)\n${t('splitHead')} ${split.head}ms(脚本 ${split.js}ms)\n${t('splitRender')} ${split.render}ms\n${t('splitTail')} ${split.tail}ms`;
+						const title = `${t('splitTotal')} ${split.total}ms(${t('splitWorst')} blocking ${split.blocking}ms)\n`
+							+ `${t('splitScript')} ${split.js}ms(${t('jsExec')} ${split.exec} · ${t('forcedLayout')} ${split.forced} · ${t('jsPause')} ${split.pause})\n`
+							+ `${t('splitTask')} ${split.taskOther}ms\n${t('splitRender')} ${split.render}ms\n${t('splitTail')} ${split.tail}ms`;
 						return h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },
 							h('svg', { width: 48, height: 48, viewBox: '0 0 48 48', style: { flex: '0 0 auto' } }, arcs),
-							h('div', { style: { flex: '1 1 auto', textAlign: 'right', lineHeight: 1.5 } },
+							h('div', { style: { flex: '1 1 auto', textAlign: 'right', lineHeight: 1.5, minWidth: 0 } },
 								h('div', { style: S.num, title }, `${t('split')} ${split.total}ms`),
-								h('div', { style: S.sub, title }, `${t('splitHead')} ${pct(split.head)} · ${t('splitRender')} ${pct(split.render)} · ${t('splitTail')} ${pct(split.tail)}`)));
+								splitLegend(split).map((line, index) => h('div', { key: `legend-${index}`, style: S.sub, title }, line))));
 					})(),
-					// D5 二级:上面那张饼的"脚本侧"再往下拆一层 —— 按包 + 纯 JS / 强制样式布局。
-					// 没有脚本证据(还没抓到长动画帧)就整块不显示,而不是给两行 0(那会读成"脚本没耗时")。
+					// D5:脚本侧再往下拆。"本帧"那两行与上面那张饼吃**同一条** LoAF(数字能对着看),
+					// "窗口"那两行是最近 200 条的聚合(与事故包 incident.packages 同一口径)。
+					// 本帧没有脚本证据就只留窗口那两行,而不是给一行 0(那会读成"脚本没耗时")。
+					// 这四行走**块式**(标签独占一行、值左对齐):包名 + 三个毫秒数在 396px 里
+					// 右对齐会折成参差不齐的两行(实测 en 下面那行 352px / 可选 365px)——
+					// 块式至少断得整齐,也是 §5 对"可能超一行的行"定的写法。
 					(() => {
-						const pkgs = scriptPkgTally();
-						if (pkgs.js <= 0) return null;
-						const top = pkgs.top.slice(0, 3);
-						const rest = pkgs.top.length - top.length;
-						const who = top.length === 0
-							? `${t('pkgNone')}${pkgs.unresolved === 0 ? '' : `(${t('unblamed')} ${pkgs.unresolved})`}`
-							: top.map(([name, ms]) => `${short(name)} ${Math.round(ms)}ms`).join(' · ') + (rest > 0 ? ` · ${t('rest')} ${rest}` : '');
-						return h('div', null,
-							h('div', { style: S.row },
-								h('span', { style: S.label, title: t('pkgHint') }, t('pkgSplit')),
-								h('span', { style: S.num }, who)),
-							h('div', { style: S.row },
-								h('span', { style: S.label, title: t('forcedHint') }, t('jsVsForced')),
-								h('span', { style: S.num }, `${t('jsOnly')} ${pkgs.js}ms · ${t('forcedLayout')} ${pkgs.forced}ms`)));
+						const frame = frameSplit(worstLoaf());
+						const framePkgs = framePkgTally(worstLoaf());
+						const window = scriptPkgTally();
+						const rows = [];
+						if (frame !== null && frame.js > 0 && framePkgs !== null) {
+							rows.push(h('div', { key: 'frame-js', style: S.block },
+								h('span', { style: S.blockLabel, title: t('splitJsHint') }, t('splitJs')),
+								h('div', { style: S.blockValue }, jsBreakdownText(frame))));
+							rows.push(h('div', { key: 'frame-pkg', style: S.block },
+								h('span', { style: S.blockLabel, title: t('splitJsHint') }, t('splitFramePkg')),
+								h('div', { style: S.blockValue }, pkgWhoText(framePkgs))));
+						}
+						if (window.js > 0) {
+							rows.push(h('div', { key: 'win-pkg', style: S.block },
+								h('span', { style: S.blockLabel, title: t('pkgHint') }, t('pkgSplit')),
+								h('div', { style: S.blockValue }, pkgWhoText(window))));
+							rows.push(h('div', { key: 'win-js', style: S.block },
+								h('span', { style: S.blockLabel, title: t('forcedHint') }, t('splitJsWindow')),
+								h('div', { style: S.blockValue }, jsBreakdownText(window))));
+						}
+						return rows.length === 0 ? null : h('div', null, rows);
 					})(),
 					// 60 秒迷你时间条:一格一秒、格值取格里最差那帧,阈值与导出件 ASCII 条带一致
 					h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },

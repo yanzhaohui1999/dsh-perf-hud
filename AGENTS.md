@@ -118,7 +118,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 292 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 302 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 39 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -234,7 +234,8 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **场景标签**(标题栏 `流式` / `空闲 Ns`)是解读所有数字的前提;空闲基线要 60 秒净增为 0 才算真的空闲。
 - **命中 a/b** = 四条腿任一给出名字的长任务数 / 长任务总数。**它会被 DOM 腿抬高**(流式时写入窗口内几乎必然有写入),必须配合「归属 Top」分布读。
 - **帧内未归因**(2026-10-07 起在「取证明细」组里,不在常显):峰值 ≈ 最差帧(≥95%)时,面板自动给结论"该帧几乎无 JS 解释",并提示用 Rendering 面板的 Paint flashing 交叉验证。**CSS 动画只在这里现形**(它不经 JS 调度器)。
-- **帧里花在哪 / 脚本按包 / 纯 JS vs 强制布局**(都在「取证明细」):三段饼只用 LoAF 给的三个时间点(`t` / `renderStart` / `styleAndLayoutStart`),**绘制与合成分不开**(页面内没有 API,那一层在缺失声明里),所以第三段是"剩下的都在这儿",不能读成"样式布局占比";脚本那一层再往下拆:按包走**与 `incident.packages` 同一条 resolve 路**(`packageOfScript(url, charPos)`),强制布局取 `scripts[].forcedMs` 且**已含在**脚本耗时里(不是另加)。按包的汇总按窗口指纹(`loaf.length|最新一条的 t`)缓存 —— `group()` 的 children 是**先求值再传参**的,收起时也照样构造,不缓存就等于每 tick 重算 200×12 条脚本。
+- **帧里花在哪 / 脚本细拆 / 按包(都在「取证明细」)**:四段饼只用 LoAF 给的三个时间点(`t` / `renderStart` / `styleAndLayoutStart`)—— 任务那一段再按 `scripts[].duration` 分成"被 LoAF 归到脚本的"与"没归到的"(后者是**差值**:短于上报阈值的脚本 + 事件派发 / 微任务 / GC),脚本那一段再按 `forcedStyleAndLayoutDuration` / `pauseDuration` 分成 纯执行 / 强制样式布局 / 暂停(**三者是 `duration` 的分区,相加 = 脚本耗时**;为 0 的两项不显示,免得把行挤成两行)。**绘制与合成分不开**(页面内没有 API,那一层在缺失声明里),所以最后一段是"剩下的都在这儿",不能读成"样式布局占比";按包走**与 `incident.packages` 同一条 resolve 路**(`packageOfScript(url, charPos)`),**定不到包名的条数也要写出来** —— 只报"有名字的那部分"会让人把那 200ms 当成这一层的全部(实测窗口里 1116.8ms 脚本只有 200ms 定到包)。**「本帧」与「窗口」是两个分母**:本帧那份就是饼图那一帧(`framePkgTally`),窗口那份是最近 `WATCH_LOAF_MAX` 条的聚合(`scriptPkgTally`),两处标签都带范围,不能互相印证;窗口那份按窗口指纹(`loaf.length|最新一条的 t`)缓存 —— `group()` 的 children 是**先求值再传参**的,收起时也照样构造,不缓存就等于每 tick 重算 200×12 条脚本(本帧那份 ≤ `WATCH_SCRIPT_MAX` 条脚本,不缓存)。四行都用**块式**布局:en 下值宽实测 352px、行宽只有 365px,`S.row` 的右对齐会折成参差的两行(与 §5 那条"长文本用块式"是同一件事)。
+- **帧拆分的 clamp(向下夹)**:`frameSplit` 里 `js ≤ head`、`forced + pause ≤ js`、`exec ≥ 0` —— 每条脚本的毫秒各自 `round1`,脚本多而每条约 0.05ms 时求和会反过来超过父区间(四舍五入的算术后果);不夹就会画出负长度的弧。三条都有断言。
 - **60 秒帧条**:一格一秒、格值 = 该格里**最差那一帧**的间隔,`sparkLevel` 的阈值与 `tools/inspect-incident.mjs` 的 ASCII 条带**逐条对应**(logic.mjs 有一条静态断言读那个文件核阈值,改一处忘另一处会红);整格 rAF 挂起画成矮灰柱。重绘指纹里带 5 秒刻度,否则空闲时帧条会冻在展开那一刻。
 - **记录器自身(A1)**:每帧给 HUD 自己的 rAF 回调自计时,留最近 `SELF_RING = 600` 帧,面板与导出件(`context.recorder`)给 `p99` / 峰 / 样本数。这条的读法是"测量工具自证没有明显改变被测对象",**不要读成页面开销**。
 - **深录(D1)是唯一的插桩开关**:`applyProbeState()` 只在 `state.deep` 打开时装 `setTimeout` / `setInterval` / `rAF` 与 `appendChild` / `insertBefore` / `setAttribute` 的包装,并同步精确归因(`setDeep` 里两者互锁)。守夜与现场是**同一档采集**,只差面板收放 —— 所以"展开面板会不会改变读数"的答案是**不会**。
@@ -305,8 +306,12 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 
 ## 11. 当前状态
 
-**v0.3.0 已就绪并已推到 origin**(`main` 与 `origin/main` 同步,`tag v0.3.0` 已推):`npm test` **342** 条全绿、
+**v0.3.0 已就绪并已推到 origin**(`main` 与 `origin/main` 同步,`tag v0.3.0` 已推):`npm test` 当时 **342** 条全绿、
 `npm pack --dry-run` **18 个文件**、tag 与 `version` 一致。
+
+**v0.3.0 之后落在 `main` 上的改动**(还没 bump 版本、没打 tag):「帧里花在哪」从三段饼改成四段饼
+(脚本 / 任务里没归到脚本的 / 渲染 / 样式+布局+绘制),脚本侧再拆三层并分成**本帧与窗口两个分母**;
+`npm test` 现在 **352** 条(attribution 11 / logic 302 / host 39),真页面 `check-panel` 验过(见 REVIEW §2)。
 
 **卡在哪**:`npm publish` 需要 npm 凭据,本机没有(`ENEEDAUTH`)—— 这一步等用户解锁。两条路(本机 `npm login` 后发,
 或 npmjs.com 建包 + 配 Trusted Publisher 后由 Release 触发 `release.yml`)写在 [REVIEW.md](REVIEW.md) §3.1。

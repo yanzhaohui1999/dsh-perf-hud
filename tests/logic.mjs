@@ -1019,7 +1019,11 @@ const watchPieces = [
 	extract(source, 'function watchInteraction('),
 	extract(source, 'function startInteractions('),
 	`${extract(source, 'const scriptTallyCache = ')};`,
+	extract(source, 'function tallyScripts('),
 	extract(source, 'function scriptPkgTally('),
+	extract(source, 'function framePkgTally('),
+	extract(source, 'function pkgWhoText('),
+	extract(source, 'function jsBreakdownText('),
 	extract(source, 'function watchTrigger('),
 	extract(source, 'function loafScripts('),
 	extract(source, 'function wallClock('),
@@ -1039,6 +1043,7 @@ const watchPieces = [
 	extract(source, 'function saveIncidents('),
 	extract(source, 'function restoreIncidents('),
 	extract(source, 'function frameSplit('),
+	extract(source, 'function splitLegend('),
 	extract(source, 'function worstLoaf('),
 	extract(source, 'function pickIncident('),
 	extract(source, 'function incidentFileName('),
@@ -1075,7 +1080,13 @@ const watchBox = new Function(`
 	// 面板文案用的两个桩:断言只检查"人看到的字",key 兜底返回 key 本身
 	const translate = (key) => ({
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉', times: ' 次',
+		pkgNone: '未定名', unblamed: '未归因', rest: '其余',
+		splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
+		jsExec: '纯执行', forcedShort: '强制', jsPause: '暂停',
 	})[key] ?? key;
+	// 面板渲染区那两个文案函数用到的短名(真实实现里是 short():去掉 scope 前缀)
+	// 这里不用正则:盒子源码写在模板串里,反斜杠会被模板先吃掉
+	const short = (id) => (id.startsWith('@') ? id.slice(id.indexOf('/') + 1) : id);
 	const clock = (ms) => { const d = new Date(ms); const pad = (n) => (String(n).length < 2 ? '0' + n : String(n)); return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()); };
 	const LS_INCIDENTS = 'test:incidents';
 	const store = new Map();
@@ -1099,6 +1110,7 @@ const watchBox = new Function(`
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
+		tallyScripts, framePkgTally, pkgWhoText, jsBreakdownText, splitLegend,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1282,12 +1294,48 @@ check('切片时给每条脚本记了 pkg 与 pkgVia(这里 packageOfScript 是�
 	return [probe.summary.pkgCoverage, 'pkg' in script, script.pkgVia];
 })(), [{ resolved: 0, total: 1 }, true, 'stub']);
 watch.state.watch.coveredUntil = 0;
-check('帧拆分:LoAF 三个时间点 → 脚本侧 / 渲染 / 样式+布局+绘制的占比', watch.frameSplit({
+check('帧拆分:LoAF 三个时间点 → 脚本 / 任务(没归到脚本的)/ 渲染 / 样式+布局+绘制的占比', watch.frameSplit({
 	t: 1000, dur: 200, renderStart: 1120, styleAndLayoutStart: 1140, blocking: 90,
 	scripts: [{ ms: 60 }, { ms: 40 }],
-}), { at: 1000, total: 200, head: 120, js: 100, render: 20, tail: 60, blocking: 90 });
-check('帧拆分:缺 renderStart 时全部算"脚本侧",不猜', watch.frameSplit({ t: 0, dur: 60, blocking: 1, scripts: [] }), { at: 0, total: 60, head: 60, js: 0, render: 0, tail: 0, blocking: 1 });
+}), { at: 1000, total: 200, head: 120, js: 100, taskOther: 20, exec: 100, forced: 0, pause: 0, render: 20, tail: 60, blocking: 90 });
+check('帧拆分:脚本再拆三层(纯执行 / 强制样式布局 / 暂停)',
+	(() => {
+		const split = watch.frameSplit({
+			t: 10, dur: 100, renderStart: 70, styleAndLayoutStart: 80, blocking: 60,
+			scripts: [{ ms: 40, forcedMs: 12, pauseMs: 8 }, { ms: 5, forcedMs: 0, pauseMs: 0 }],
+		});
+		return [split.js, split.exec, split.forced, split.pause, split.taskOther, split.render, split.tail];
+	})(),
+	[45, 25, 12, 8, 15, 10, 30]);
+check('帧拆分:四段相加 = 整帧(分区,不是各算各的)',
+	(() => {
+		const split = watch.frameSplit({
+			t: 10, dur: 100, renderStart: 70, styleAndLayoutStart: 80, blocking: 60,
+			scripts: [{ ms: 40, forcedMs: 12, pauseMs: 8 }, { ms: 5, forcedMs: 0, pauseMs: 0 }],
+		});
+		return [split.js + split.taskOther, split.head, split.exec + split.forced + split.pause, split.js,
+			split.js + split.taskOther + split.render + split.tail, split.total];
+	})(),
+	[60, 60, 45, 45, 100, 100]);
+// 每条脚本的毫秒各自 round1,脚本多而每条约 0.05ms 时求和会超过父区间 —— 子项不许大过父项
+check('帧拆分:脚本耗时超过"任务"时向下 clamp(否则弧长是负的)',
+	(() => {
+		const split = watch.frameSplit({ t: 0, dur: 100, renderStart: 10.04, styleAndLayoutStart: 10.04, blocking: 5, scripts: [{ ms: 3.4 }, { ms: 3.4 }, { ms: 3.4 }] });
+		return [split.head, split.js, split.taskOther, split.exec];
+	})(),
+	[10, 10, 0, 10]);
+check('帧拆分:强制布局 + 暂停超过脚本耗时时也 clamp',
+	(() => {
+		const split = watch.frameSplit({ t: 0, dur: 50, renderStart: 50, blocking: 5, scripts: [{ ms: 10, forcedMs: 8, pauseMs: 5 }] });
+		return [split.js, split.forced, split.pause, split.exec];
+	})(),
+	[10, 8, 2, 0]);
+check('帧拆分:缺 renderStart 时全部算"任务",不猜', watch.frameSplit({ t: 0, dur: 60, blocking: 1, scripts: [] }), { at: 0, total: 60, head: 60, js: 0, taskOther: 60, exec: 0, forced: 0, pause: 0, render: 0, tail: 0, blocking: 1 });
 check('帧拆分:脏数据返回 null', [watch.frameSplit(null), watch.frameSplit({ t: 0, dur: 0 })], [null, null]);
+check('圆环图例:两行、每行两段(四个百分比挤一行会折行);顺序与圆环一致',
+	watch.splitLegend({ total: 200, js: 100, taskOther: 20, render: 20, tail: 60 }),
+	['脚本 50% · 任务 10%', '渲染 10% · 样式+布局+绘制 30%']);
+check('圆环图例两行的长度预算(zh;396px 面板)', watch.splitLegend({ total: 200, js: 100, taskOther: 20, render: 20, tail: 60 }).every((line) => line.length <= 26), true);
 check('worstLoaf 取 blocking 最大的那条', (() => {
 	const saved = watch.state.watch.loaf.slice();
 	watch.state.watch.loaf.length = 0;
@@ -1506,32 +1554,65 @@ check('A2:最多留最近 20 个会话,更早的被挤出去', (() => {
 	return [list.length, list[0].since, list[list.length - 1].since];
 })(), [20, new Date(1700000000000 + 5000).toISOString(), new Date(1700000000000 + 24000).toISOString()]);
 
-// ── D5:脚本侧二级(按包 + 纯 JS / 强制样式布局)──────────────────────
+// ── D5:脚本侧二级(按包 + 纯执行 / 强制样式布局 / 暂停;窗口与本帧两个分母)──
 watch.state.watch.loaf = [
 	{ t: 1000, dur: 200, blocking: 0, scripts: [
-		{ url: 'u-a', ms: 60, forcedMs: 5 },
-		{ url: 'u-b', ms: 30, forcedMs: 0 },
-		{ url: 'u-x', ms: 10, forcedMs: 1 },   // 定不到包:算 unresolved,不进任何包
+		{ url: 'u-a', ms: 60, forcedMs: 5, pauseMs: 7 },
+		{ url: 'u-b', ms: 30, forcedMs: 0, pauseMs: 0 },
+		{ url: 'u-x', ms: 10, forcedMs: 1, pauseMs: 0 },   // 定不到包:算 unresolved,不进任何包
+	] },
+	{ t: 1500, dur: 90, blocking: 40, scripts: [
+		{ url: 'u-b', ms: 40, forcedMs: 2, pauseMs: 3 },
 	] },
 ];
 watch.pkgByUrl.set('u-a', { pkg: 'dsh-a', via: 'url' });
 watch.pkgByUrl.set('u-b', { pkg: 'dsh-b', via: 'url' });
-check('D5:脚本按包降序汇总;纯 JS 与强制样式布局分开算;定不到包的单独计数',
+check('D5:窗口聚合:按包降序;纯执行 / 强制样式布局 / 暂停三分;定不到包的单独计数',
 	(() => {
 		const tally = watch.scriptPkgTally();
-		return [tally.top, tally.js, tally.forced, tally.unresolved];
+		return [tally.top, tally.js, tally.exec, tally.forced, tally.pause, tally.unresolved];
 	})(),
-	[[['dsh-a', 60], ['dsh-b', 30]], 100, 6, 1]);
+	[[['dsh-b', 70], ['dsh-a', 60]], 140, 122, 8, 10, 1]);
 check('D5:LoAF 窗口没变就复用上一次的结果(不让面板每 tick 重算 200×12 条脚本)',
 	watch.scriptPkgTally() === watch.scriptPkgTally(), true);
 check('D5:窗口变了才重算',
 	(() => {
 		const before = watch.scriptPkgTally();
-		watch.state.watch.loaf = watch.state.watch.loaf.concat([{ t: 2000, dur: 80, blocking: 0, scripts: [{ url: 'u-b', ms: 20, forcedMs: 0 }] }]);
+		watch.state.watch.loaf = watch.state.watch.loaf.concat([{ t: 2000, dur: 80, blocking: 0, scripts: [{ url: 'u-b', ms: 20, forcedMs: 0, pauseMs: 0 }] }]);
 		const after = watch.scriptPkgTally();
 		return [after !== before, after.js, after.top];
 	})(),
-	[true, 120, [['dsh-a', 60], ['dsh-b', 50]]]);
+	[true, 160, [['dsh-b', 90], ['dsh-a', 60]]]);
+// 本帧与窗口是同一份口径、**不同分母** —— 面板上两行分别标了"本帧"与"窗口",
+// 就是为了不让读者拿两种分母的数字互相印证(这正是原来那两行的问题)。
+check('D5:本帧聚合只吃那一条 LoAF(与窗口分母不同)',
+	(() => {
+		const frame = watch.framePkgTally(watch.state.watch.loaf[1]);
+		return [frame.top, frame.js, frame.pause, watch.scriptPkgTally().js];
+	})(),
+	[[['dsh-b', 40]], 40, 3, 160]);
+check('D5:本帧没有脚本时给 0(而不是 null);"没有这一帧"才给 null',
+	[watch.framePkgTally({ t: 1, dur: 10, scripts: [] }).js, watch.framePkgTally(null)],
+	[0, null]);
+check('D5:"是谁"那一段文案:Top3 + 其余 + 定不到包的条数',
+	(() => {
+		watch.pkgByUrl.set('u-c', { pkg: 'dsh-c', via: 'url' });
+		watch.pkgByUrl.set('u-d', { pkg: 'dsh-d', via: 'url' });
+		return [
+			watch.pkgWhoText(watch.tallyScripts([{ scripts: [{ url: 'u-a', ms: 60 }, { url: 'u-b', ms: 30 }, { url: 'u-c', ms: 20 }, { url: 'u-d', ms: 1 }] }])),
+			watch.pkgWhoText({ top: [], unresolved: 2 }),
+			// 有名字但只覆盖一部分:未定名那几条也要说,否则 200ms 会被当成这一层的全部
+			watch.pkgWhoText(watch.tallyScripts([{ scripts: [{ url: 'u-a', ms: 200 }, { url: 'u-zz', ms: 900 }] }])),
+		];
+	})(),
+	['dsh-a 60ms · dsh-b 30ms · dsh-c 20ms · 其余 1', '未定名(未归因 2)', 'dsh-a 200ms · 未定名 1']);
+check('D5:脚本三分的文案(本帧与窗口共用同一份);为 0 的那两项不显示',
+	[
+		watch.jsBreakdownText({ exec: 122, forced: 8, pause: 10 }),
+		watch.jsBreakdownText({ exec: 260, forced: 0, pause: 0 }),
+		watch.jsBreakdownText({ exec: 1116.8, forced: 10.7, pause: 0 }),
+	],
+	['纯执行 122ms · 强制 8ms · 暂停 10ms', '纯执行 260ms', '纯执行 1116.8ms · 强制 10.7ms']);
 
 // ── A4:交互延迟(event / element timing,只进导出件)──────────────────
 check('A4:浏览器不支持 event timing 时照实报,不假装装上', (() => {

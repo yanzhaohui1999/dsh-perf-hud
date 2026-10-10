@@ -94,14 +94,15 @@ The panel is layered: only "is it smooth + whose fault" is always visible; the o
 | **FPS / worst frame** | Its own rAF loop, 1s rolling window. Combined colouring: FPS ≤50 or worst frame ≥120ms → yellow; ≤30 or ≥200ms → red |
 | **Long tasks** | `PerformanceObserver({entryTypes:['longtask']})` over the last 60s; hit ratio = long tasks with a name from any leg / total |
 | **Unattributed per frame** | The part of the frame gap not explained by instrumented callbacks (style recalc, paint, vsync wait). **CSS animations only show up here** — they never touch the JS scheduler |
-| **Where the frame went** (3-part donut) | The worst long animation frame split by LoAF's three timestamps: script side (task + sync JS) / render (rAF callback) / style+layout+paint. **Paint and compositing cannot be separated** — that needs a Chrome trace — so the third slice is "everything else", **not** a style-layout percentage |
+| **Where the frame went** (4-part donut) | The worst long animation frame split by LoAF's three timestamps: script (sync JS LoAF attributed to a script) / task (the rest of the task: scripts below the reporting threshold, event dispatch, microtasks, GC) / render (rAF callback) / style+layout+paint. **Paint and compositing cannot be separated** — that needs a Chrome trace — so the last slice is "everything else", **not** a style-layout percentage |
+| **Script split · this frame / · window** | Script time split into exec / forced style+layout / paused; **the three sum to script time** (partitions, not additions). "this frame" is the same frame as the donut above, "window" aggregates the last 200 LoAF entries — same definition, **two denominators** |
 | **Callback attribution** | `x/s · peak y/s`: EMA (α=0.4) execution rate / single-second maximum; hover shows that second's sync time and the cumulative `N× / Xms`. **A lower bound**: only callbacks scheduled via `setTimeout` / `setInterval` / `rAF` — event handlers, Promises, microtasks and React's own scheduling are not counted |
 | **DOM writes** | Exact total plus per-writer `≈` estimates (one stack sample every 10th write, hits scaled by 10). **The HUD's own writes are not counted** |
 | **Host event loop** | `perf_hooks.monitorEventLoopDelay({resolution: 1})`, per-second p50/p99/max, 300s ring |
 | **Host event arrival** | Commit (`event.time`) → listener invocation lag via the public `ctx.on('session/event')`; not the listener's CPU time |
 | **Link RTT** | 1KB cache-busted same-origin probe every 10s, 64KB throughput every 60s. "Link suspected" needs p99 > 300ms, normal FPS and n ≥ 2 |
 | **60s frame strip** | In the forensics group: one bar per second, height = the worst frame interval in that second, colours use the **same thresholds as the ASCII frame strip in the export** (≥100ms red / ≥50ms yellow). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall |
-| **Script by package / forced layout** | Also in the forensics group: script time in the recent LoAF window summed **per package** (the same resolve path as the export's `incident.packages`), plus the `forcedStyleAndLayoutDuration` share split out. Forced layout is **already included** in script time, not additional — it answers "is the script side slow because of JS or because of style" |
+| **By package · this frame / · window** | Script time summed **per package** (the same resolve path as the export's `incident.packages`). "this frame" is the same frame as the donut; "window" aggregates the last 200 LoAF entries — they are labelled so the two denominators are never cross-checked. Without deep recording (precise attribution) a combo batch can only be named by its 58-package URL — deliberate, nothing is guessed |
 | **Recorder cost** | In the forensics group: this HUD times its own rAF callback every frame and reports p99 / max / samples over the last 600 frames. This is the measuring tool proving it does not visibly change what it measures — **not** the page's own cost |
 
 **Export JSON** carries a `context` header: scenario / idle seconds / precise-attribution and per-sourcemap-section
@@ -173,9 +174,9 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 292 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 302 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 39 assertions: real index.js driven by a fake ctx
-# 342 offline assertions total, no running DSH required
+# 352 offline assertions total, no running DSH required
 ```
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
