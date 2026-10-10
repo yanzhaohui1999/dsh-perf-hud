@@ -15,7 +15,7 @@
 | 2 | 包名可用 | ✅ `dsh-perf-hud` 在 npm 上 404(未被占用)—— **首发前再查一次**,名字被别人抢了就全盘皆输 |
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ⬜ 仓库已建(私有),待转公开、加 topic |
-| 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,漏一份就失败 |
+| 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,而且 **`tools/` 与 `locale/` 按目录核**(以后加验证器或加语言文件不会漏检),显式清单 + 目录共覆盖包内全部 **18** 个文件(含 `package.json`),漏一份就失败 |
 | 6 | 门禁全绿 | ✅ 342 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
 | 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
@@ -90,7 +90,7 @@
   两条路之前都再查一次包名是否仍空闲(§1 #2)。
 - [ ] **提收录 PR**:只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条(§1 #7)。
 
-### 3.2 三条尾巴(2026-10-08 新发现)
+### 3.2 两条尾巴(2026-10-08 新发现)
 
 1. **A5 的客户端一侧还没接线(排到 0.4.0)**:宿主路由已经能采(真宿主实测 `profileStart(1s)` → `profileGet`
    = 292 节点 / 223 采样 / 82KB),但**客户端没有触发它的入口**,导出件里也没有宿主 profile。**声明已经改准**:
@@ -102,8 +102,6 @@
    **没有任何可读结果**(`PerfHudStress` / `stress()` 本身按 D4 保留,它是归因链路的自测夹具)。真要动,应该连着
    "自测结果给谁看"一起定(把结果接回面板 = 小改;或连 `stressText()` 与它引用的那些 i18n 键、8 条断言一起删)。
    现在**明确不做**,免得只清字符串把这个缺口盖住。
-3. **`locale` 的边界**:`package.json#files` 写的是**目录** `locale`,`release.yml` 的 Pack and inspect grep 的是**文件**
-   `locale/en.json` —— 现在等价,但以后往 `locale/` 加语言文件时,`release.yml` 不会检查它(漏进包不会失败)。
 
 ### 3.3 定了不做的
 
