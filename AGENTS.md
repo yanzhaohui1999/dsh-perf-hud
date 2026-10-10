@@ -288,7 +288,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 | [README_EN.md](README_EN.md) | 英文版(摘要式,结论与中文版一致) |
 | [AGENTS.md](AGENTS.md)(本文) | 开发规则 + 源码级机制 + 已知坑 + 方向取舍(§0.1)+ 竞争位置(§12) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献流程:报 bug、提 PR、提交前自检 |
-| [REVIEW.md](REVIEW.md) | 发布:对外门槛、验收判据与实测证据、仍未做 |
+| [REVIEW.md](REVIEW.md) | 发布:对外门槛、验收判据与实测证据、还剩什么(只列没做的) |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更 |
 
 ---
@@ -305,7 +305,14 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 
 ## 11. 当前状态
 
-尚未发布。代码与打包面都已就绪(`npm test` 全绿、`npm pack --dry-run` 产物完整),剩下的是对外动作:仓库已建(私有,`yanzhaohui1999/dsh-perf-hud`)→ 转公开 → npm 首发 → 提收录 PR。门槛、验收证据与还没做的事见 [REVIEW.md](REVIEW.md) §1 / §2 / §3。
+**v0.3.0 已就绪并已推到 origin**(`main` 与 `origin/main` 同步,`tag v0.3.0` 已推):`npm test` **342** 条全绿、
+`npm pack --dry-run` **18 个文件**、tag 与 `version` 一致。
+
+**卡在哪**:`npm publish` 需要 npm 凭据,本机没有(`ENEEDAUTH`)—— 这一步等用户解锁。两条路(本机 `npm login` 后发,
+或 npmjs.com 建包 + 配 Trusted Publisher 后由 Release 触发 `release.yml`)写在 [REVIEW.md](REVIEW.md) §3.1。
+
+**仓库仍是私有**(转公开 + 加 `dsh-plugin` topic 还没做),收录 PR 还没提;三条新发现的尾巴(A5 还没接进客户端/导出件、
+D4 的 `stressText()` 死代码、`locale` 的打包边界)也记在 REVIEW §3.2。已完成的验收证据在 REVIEW §2。
 
 ---
 

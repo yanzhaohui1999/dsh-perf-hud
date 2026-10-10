@@ -28,7 +28,8 @@
 
 ## 2. 验收判据与实测证据
 
-**怎么验**:离线三套件 + 线上脚本 + 用 CDP 打开真实页面(只读)取面板现场读数。
+**怎么验**:离线三套件 + 线上脚本 + 用 CDP 打开真实页面(只读)取面板现场读数。后两类现在都有可复跑的实现:
+`tests/live-*.mjs`(线上路由 / sourcemap)与 `tools/check-*.mjs`(真面板渲染 / 落盘 / 交互,见本表「真页面验证可复跑」一行)。
 本机是 Apple Silicon Mac,DSH `0.2.0-rc.2`;真实会话指用户在 Windows 浏览器上经隧道访问的那个。
 
 | 判据 | 怎么验 | 最新实测 |
@@ -44,11 +45,16 @@
 | 脚本侧按包 | 面板「脚本按包」/ `incident.packages` | 真实页面 **`dsh-api-gateway 881ms · dsh-client-connection 312ms · dsh-client-modules 208ms · 其余 1`**;「纯 JS / 强制布局」= `1655.3ms / 18.9ms` |
 | 交互延迟(页面内那一半) | `snapshot().interactions` / CDP 真实输入 | `state: on`(supported = element + event);一次真实点击 **20** 条入库,`pointerover` 那条 `ms 112 / waitMs 0.3 / handlerMs 0.4` —— 端到端长 ≠ 页面反应慢;`element` 恒 0 并解释原因 |
 | 真页面验证可复跑 | `tools/check-panel.mjs` / `check-storage.mjs` / `check-interaction.mjs` | 三条都真跑过并 PASS(`check-panel --expr=false` 会 FAIL 且退出码 1);它们**不是离线门禁**(要真浏览器 + 本机 `dsh web`),CI 只对 `tools/*.mjs` 做 `node --check` |
+| 记录器自身不冒充元凶 | 面板「归属 Top」/ `blameText` | 真页面:`PerfHud / PerfHudStress` 那条 224ms 长任务改为归到 **`RootEntry`**(真组件);只有记录器自己是唯一候选时才单列「记录器自身 N×」 |
+| 记录器自己贵不贵 | 面板「记录器自身」/ `context.recorder` | 真页面读数:`p99 0.1ms · 峰 0.1ms · 样本 167`(它自己的 rAF 回调,最近 600 帧环形缓冲)。机制由断言钉住(`recordSelf` / `selfStats` / 环形上限 600);这条是**自证**口径,不是页面开销 |
+| 压缩名过滤 | `usableComponentName` 断言(传**类**) | `class $c {}` / `class $w {}` → `null`,`class ChatView {}` → 通过,匿名 `class {}` → `null`;`looksLikeInfrastructure('(ChatView)')` 实测 **false**(曾经有"括号名被它挡掉"的错说法,已加断言钉死) |
+| 落盘审计属性进导出件 | `snapshot().context.store` | `restored` / `trimmedByBytes` / `deduped` / `captured` / `dropped` 五个键都在(静态断言核) |
+| i18n 兜底与词典 | 真实页面 `html[lang]` + 两条断言 | 兜底**跟文档语言**(实测本机 `htmlLang / navLang` 都是 `zh-CN` → 中文);两本字典各 **134** 键、键集合一致、每个键都有人引用(死键会红) |
 | 落盘容量如实 | `watch().trimmedByBytes` / `deduped` | 512KB 上限时真实会话显示「裁掉 6」→ 已提到 **2MB**;同一 id / 同一 `at|cause` 去重后被去掉的条数也单独计数 |
 | 事故包可导出、可解析、自描述 | `exportIncident(0)` + `tools/inspect-incident.mjs` | 41KB / schema 2;渲染出 ASCII 帧条带 + longtask / LoAF / 脚本三张表 + 缺失声明 |
 | 事故包不虚胖 | 身材回归断言 + 实测 | 同一份内容 URL 抽表前 **116.6KB** → 抽表后 **29.6KB**(导出缩进 138.6 → 51.5KB) |
 | 长任务四条腿归因 | `verification()` / 面板 | 真实会话 命中 **35/49** · 组件 35 · 独立包名 **90** |
-| 精确归因(单包名) | 打开「精确」后归因表出现单包名 | 2/2 批次分段 ready;线上 sourcemap 58 sections、116 处边界 **0 错** |
+| 精确归因(单包名) | 打开「深录」后归因表出现单包名 | 2/2 批次分段 ready;线上 sourcemap 58 sections、116 处边界 **0 错** |
 | **LoAF 脚本 → 包名** | `incident.packages` / `summary.pkgCoverage` | 实测一次事故 **37/37** 条脚本全部定名(全部 `via: section`),归到 **`@deepseek-ai/dsh-api-gateway`** —— 同一份数据在这条路之前只能显示"58 个包的合并批 URL" |
 | 假象能被识别 | `incident.summary.suspectedThrottle` | 真实那次 983.7ms 帧:`worstFrameJs: none` + 前后帧中位 16.7ms → 标成**疑似 rAF 节流**,不冒充真卡顿 |
 | 基线可比 | `incident.baseline`(排除本窗口)+ `busyMs` | 真实会话 basline 5156 帧 / 在跑 86s → **60fps**(旧口径会被 22.7s 挂起拉成 43fps) |
@@ -62,9 +68,10 @@
 
 ---
 
-## 3. 待做清单(2026-10-08 逐条定过)
+## 3. 还剩什么(2026-10-08 收敛)
 
-每条都在讨论里过了优劣,下面是结论本身;"理由"只留一句,细节在 [CHANGELOG.md](CHANGELOG.md) 与本文历史里。
+这一节只列**还没做的**。已完成那 12 条(D1 / A1 / A2 / A4 / A5 / B1 / B2 / B3 / C2 / D2 / D3 / D5)的做法与理由
+进了 [CHANGELOG.md](CHANGELOG.md) 的「未发布」段,判据与实测证据在本文 §2 —— 不在这里重复一遍。
 
 ### 3.0 不是本仓库能修的(要报给上游)
 
@@ -74,58 +81,33 @@
 
 本仓库只能把这两条做成上游能直接用的证据(事故包的 `packages` 已指向具体包与调用点),以及自己这侧不重复它们。
 
-### 3.1 定了要做的(**状态 2026-10-08 晚**)
+### 3.1 对外动作(卡在仓库可见性与 npm 凭据上)
 
-图例:✅ 已落地 · 🔶 部分/待补验 · ⬜ 还没动
+- [ ] **仓库转公开 + 加 `dsh-plugin` topic**(§1 #4)。**动手前单独问一次。**
+- [ ] **npm 首发** —— 现在卡在**凭据**:本机 `npm publish` 报 `ENEEDAUTH`(0.3.0 已 bump、tag 已打、已推 origin,包没发出去)。两条路选一条:
+  - **① 本机发**:`npm login` 之后在 main 上 `npm publish`(发之前 `npm pack --dry-run` 应为 **18 个文件**);
+  - **② 纯 CI 发**:npmjs.com 建包 → 配 Trusted Publisher(Provider = GitHub Actions,填 owner / repo / `release.yml`)→ 仓库转公开 → 建 Release,`release.yml` 自动 `npm publish`(不配 `NPM_TOKEN`)。
+  两条路之前都再查一次包名是否仍空闲(§1 #2)。
+- [ ] **提收录 PR**:只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条(§1 #7)。
 
-| # | 条目 | 状态 | 备注 |
-|---|---|---|---|
-| D1 | 三种模式(守夜/现场/深录) | ✅ `b79853e` | 代码已落地(`applyProbeState` 只在深录装插桩);**待补验已补上**(2026-10-08 晚,headless Chrome + CDP):默认打开面板时 `instrumented: false / deep: false` —— 点「深录」→ `true / true` —— 再点回去 → `false / false`,`errors` 全程 0。上次取错字段路径(`snapshot().environment.*`)的坑没再犯:字段就在 `snapshot()` 顶层 |
-| A1 | 记录器自身开销 | 🔶 `b79853e` | `recordSelf`/`selfStats`/面板一行/导出 `context.recorder` 都在;**待补**:在真实页面读一次 p99 的真实数字并记进 §2 |
-| A2 | 跨会话基线 | ✅ `c0d7317` | 每个会话一条 `{p50,p90,p99,worstMs,frames,at,since}`,最多 20 条,只进导出件(静态断言钉住「不进面板」);`note` 写死「粗参照,不是回归判定」;写盘时机 = 每次导出 + `pagehide` |
-| A4 | Chrome trace | ✅ `b9258fd` | 人工录指引(已有)+ 页面内准 trace(`event` / `element` timing,≥100ms,留最近 200 条)。**只做页面内那一半**:帧内拆分页面内没有 API,已写进 `missing` + `howToRead`(见 §3.2),不承诺 |
-| B1 | 记录器自身被当元凶 | ✅ `e0733cb` | 标注 + 汇总单列;`primaryBlame` 在有别的候选时跳过它。真页面实测:`PerfHud/PerfHudStress` 那条 224ms 长任务改为归到 `RootEntry`,只剩记录器自己时才进「记录器自身 N×」 |
-| B2 | 压缩名过滤 | ✅ `a0ec157` | `usableComponentName` 里 `name.startsWith('$')` → `return null`。**坑(踩过两次)**:`usableComponentName(type)` 第一行是 `if (typeof type !== 'function') return null` —— 断言必须传**类/函数**(`class ChatView {}`),传 `{ name: 'ChatView' }` 会全返回 null(上一轮就是这么把提交写坏的,已回退 `cd65639`/`add0632`)。⚠️ 那两次回退的说明里还留了一句**错的**理由:"`(ChatView)` 早被 `looksLikeInfrastructure` 挡掉" —— 实测 `looksLikeInfrastructure('(ChatView)')` 是 **false**(两条正则 `Slot\|Outlet\|Column` 与 `(Boundary\|Provider\|Context)$` 都不匹配它)。正确的理由是**入参类型**:这个函数只收 React 的 type,而 `(Name)` 是渲染层给 DOM 写入表"组件兜底桶"加的显示标记,不会作为 type 回来 |
-| B3 | 落盘计数进导出件 | ✅ `86087cf` | 导出 `context` 加一段 `store`: `restored` / `trimmedByBytes` / `deduped` / `captured` / `dropped`(静态断言核五个键都在) |
-| C2 | i18n 英文兜底 | ✅ `970c9da` | **兜底跟文档语言**:`document.documentElement.lang`(取不到退 `navigator.language`)→ 是中文用 `DICT.zh`,其余(含认不出来)用 `DICT.en`,两本都没有才原样返回键名(简单反转 `DICT.en ?? key` 会让中文用户看到英文,同样否掉)。死键清干净:两本字典各 **166 → 134** 键(隔离实验 / 场景标记 / 验收 / 自测按钮那几批,加上更早的 `fps` / `longtask` / `ltCount` / `hits` / `domWritesShort` / `unattrSuffix` / `watchOnDisk` / `precise*`)。两条断言钉住:**键集合一致** + **每个键都有人引用**(后者只认字面量调用;`stressText()` 那几条串留下是因为它本身按 D4 保留,虽然它在 `client.js` 里已无调用点)。实测本机页面 `htmlLang / navLang 都是 zh-CN` |
-| D2 | 60 秒时间条 | ✅ `cfcf00b` | 放进「取证明细」,100×18 的 SVG,**与导出件 ASCII 条带同口径**(静态断言读 `tools/inspect-incident.mjs` 核阈值) |
-| D3 | 留存策略 | ✅ `5c4fea1` | 最差 10 条 + "每天最差 1 条"(最多 7 天);每条带 `day` / `tier`,清单里给「当天最差」标注;上限 = 10 + 7 |
-| D5 | 饼图二级 | ✅ `098ed33` | 脚本侧展开成**按包**分布(与 `incident.packages` 同一条 resolve 路);另给纯 JS vs 强制样式布局(`scripts[].forcedMs`),并写明强制布局已含在脚本耗时里 |
+### 3.2 三条尾巴(2026-10-08 新发现,都还没做)
 
-| A5 | 宿主进程火焰图 | ✅ `d1ab74b` | **宿主重启后已在真宿主进程实测通过**(2026-10-08):`POST {op:'profileStart',seconds:1}` → `{running:true}`,2 秒后 `POST {op:'profileGet'}` → `ok:true`、**292 节点 / 223 采样 / 82KB**(1 秒);`GET` 未采过时给 `cpuProfile: null` 而不是空对象。⚠️ **体积口径按真宿主修正**:之前那份"5 秒 ~10~13KB"是在**独立 Node 进程**里量的,那里调用栈种数只有 15~23 个;真宿主第一秒就有 292 个节点 —— 结论(体积由**调用栈种数**决定、不由时长决定)不变,但别拿 10KB 当宿主的上限预期。采样密度同样吻合(~223/s,标称 1000Hz) |
+1. **A5 只做到"路由暴露",还没有人用**:客户端没有触发 `profileStart` / `profileGet` 的入口,导出件里也没有宿主
+   profile —— 而事故包的 `missing` 到今天还写着「host-cpuprofile:宿主进程的 CPU 火焰图…拿不到」,**这句已经过时**。
+   要做的话是两处:客户端采一次并塞进导出件 + 改 `missing` 的措辞;或者明确决定"就让它留在控制台",那也必须把
+   `missing` 改准(不许留一句与实现矛盾的声明)。
+2. **D4 的死代码**:`stressText()` 在 `client.js` 里已无调用点(面板不再渲染"自测结果"),它引用的 i18n 键被 8 条
+   断言钉着 —— 当时按 D4「全留」保留。真要清是"函数 + 那些键 + 那些断言一起动"的决定。
+3. **`locale` 的边界**:`package.json#files` 写的是**目录** `locale`,`release.yml` 的 Pack and inspect grep 的是**文件**
+   `locale/en.json` —— 现在等价,但以后往 `locale/` 加语言文件时,`release.yml` 不会检查它(漏进包不会失败)。
 
-**跑这些改动时的两条硬规矩**(都是踩过的):① 替换 `client.js` 之后要 `grep -c` 确认命中数 —— 锚点在 `frame()` 与 `start()` 各有一处的坑已经踩过一次(见 [AGENTS.md](AGENTS.md) §8 第 14 条);② 凡是插进 `apply` / `start` / 渲染路径的改动,**必须真的打开页面看一眼**,因为离线三套件只抽纯函数、不跑 `apply`。
-
-### 3.1.1 原清单
-
-| # | 条目 | 结论与做法 |
-|---|---|---|
-| A1 | 记录器自身开销 | **做**。在 rAF 回调里自计时,导出件给 `recorder.p99/max`,并断言自身回调 p99 在阈值内 —— 测量工具必须自证没有明显改变被测对象 |
-| A2 | 跨会话基线 | **做**。每个会话落盘一份 `{p50,p90,p99,最差,帧数,时刻}`(保留最近约 20 个),**只进导出件**,标注"粗参照,不是回归判定" |
-| A4 | Chrome trace | **两条都要**:保留"人工录 trace"的指引,另做页面内的**准 trace**(`event` / `element` timing 补交互延迟;不承诺帧内拆分) |
-| A5 | 宿主进程火焰图 | **做**,排在 A1/A2 之后。宿主半用内置 `node:inspector` 在同进程内按需采 `.cpuprofile`(不开调试端口);profile 有开销,只在事故后采最近若干秒 |
-| B1 | 记录器自身被当成元凶 | **标注,不静默剔除**:命中本包的名字后加「记录器自身」,汇总里单列一行;`primaryBlame` 跳过它 |
-| B2 | 压缩名过滤 | **做,带边界**:`$` 开头必挡;`(x)` 形态只在没有更好候选时隐藏 |
-| B3 | 落盘计数进导出件 | **做**:`trimmedByBytes` / `deduped` / `restored` 进导出件的 context |
-| C2 | i18n 英文兜底 | **做**,兜底改成"跟文档语言,取不到才英文";先清掉面板撤下后遗留的死字符串 |
-| D1 | 三种模式 | **做**。守夜(默认,只挂 rAF + `PerformanceObserver`)/ 现场(展开面板,仍零插桩)/ 深录(插桩 + 精确归因)。**只给两档采集**:守夜与现场同一档,区别只在面板收放 |
-| D2 | 60 秒时间条 | **做**,放进「取证明细」组(不占常显),与导出件的 ASCII 条带同一口径 |
-| D3 | 留存策略 | **做混合**:最差 10 条不变,另加"每天最差 1 条"槽位(最多 7 天)—— 实测 `捕获 40 · 归并 505 · 丢弃 38`,最差 10 条会全挤在同一小时里 |
-| D5 | 饼图二级 | **做**:一级三段(结论:"不是渲染"),脚本侧展开成**按包**的分布;另给"纯 JS vs 强制样式布局"(`forcedStyleAndLayoutDuration`) |
-
-### 3.2 定了不做的
+### 3.3 定了不做的
 
 | # | 条目 | 为什么不做 |
 |---|---|---|
 | A3 | 合成/光栅/GPU 的拆分 | 页面内没有 API,硬做会引入"看着在测 GPU、其实在猜"的假读数 —— 比不做更糟。保持声明 + 人工检查清单(`chrome://gpu`、Paint flashing、Frame Rendering Stats) |
 | C1 | 桌面端主进程取证 | 需要 Desktop 环境才能验证,而本仓库的规矩是"不凭记忆写 API"。等有环境再排 |
 | D1' | 把插桩做成独立开关(而不是并进模式) | 被 D1 取代:模式比多一个设置维度更贴文档承诺 |
-| D4 | 删掉撤了入口的代码 | **全留**(控制台可达):`PerfHudStress` 是归因链路的自测夹具,`marks` 便宜,`isolation` 留着当备用。死字符串仍然清(A3/C2 直接相关) |
+| D4 | 删掉撤了入口的代码 | **全留**(控制台可达):`PerfHudStress` 是归因链路的自测夹具,`marks` 便宜,`isolation` 留着当备用。死字符串照清(C2 已做)—— 但 `stressText()` 那一路见 §3.2 尾巴 2 |
 
-### 3.3 对外动作
-
-- [ ] 仓库转公开 → 加 `dsh-plugin` topic(**动手前单独问一次**)
-- [ ] npm 首发(先确认名字仍空闲;`release.yml` 用 Trusted Publishing / OIDC)
-- [ ] 提收录 PR(一个 `data/plugins/<owner>__<repo>.yml`)
-
-**时机**:**等 A/B 批做完再发** —— 一次给出完整的东西(记录器 + 事故包 + 三种模式),避免"发了又改读数口径"。
+**时机**:实现批已全部落地(证据在 §2),不再等什么 —— 发布只剩 §3.1 那三件对外动作。

@@ -87,6 +87,8 @@
 
 ### 文档
 
+- **REVIEW 从"待做清单"收敛成"还剩什么"**:已完成那 12 条(D1 / A1 / A2 / A4 / A5 / B1 / B2 / B3 / C2 / D2 / D3 / D5)不再重复列 —— 做法与理由看本文件的「未发布」段,判据与实测证据并进 REVIEW §2(A1 的真实页面读数、B1 的重新归因、B2 的压缩名边界、B3 的 `store` 段、C2 的兜底与词典各加一行);§3 只剩对外动作(转公开 + topic、npm 首发待凭据的两条路、收录 PR)与**三条新尾巴**(A5 只暴露路由还没接进客户端/导出件、D4 的 `stressText()` 死代码、`locale` 的打包边界)。顺带修掉 §2 里"打开「精确」"这类过期指引(那个按钮已并进「深录」)
+- **状态改成实话**:AGENTS §11 与 README 顶部(含状态徽章)写清 `v0.3.0` 已 bump / 打 tag / **已推到 origin**、`npm test` 342 条、`npm pack --dry-run` 18 个文件,以及**首发卡在 npm 凭据**(`ENEEDAUTH`)、仓库仍私有、收录 PR 未提 —— 不再让读者以为东西还没做完
 - **手册补上这一批新增读数**:README「面板怎么读」收录三档模式(守夜 = 默认 = 零插桩 / 现场同档 / 深录才插桩 + 精确归因)与四个新读数(帧里花在哪的三段饼、脚本按包、纯 JS vs 强制布局、60 秒帧条、记录器自身);AGENTS §7 用开发口径把同几件事写清(绘制合成分不开、强制布局已含在脚本耗时里、强制布局/按包的缓存与静态断言、`SELF_RING`、深录是唯一插桩开关);README_EN 同步一份摘要
 - `README.md` / `README_EN.md` / `AGENTS.md` / `CONTRIBUTING.md` / `REVIEW.md` / `CHANGELOG.md`
 - **文档收敛成六份**:`README` / `README_EN` / `AGENTS` / `CONTRIBUTING` / `REVIEW` / `CHANGELOG`。

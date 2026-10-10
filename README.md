@@ -6,14 +6,15 @@
 > **守夜层:偶发卡顿自动留存最差几次,连证据一次性导出**。
 
 <p>
-<img alt="status" src="https://img.shields.io/badge/status-%E6%9C%AA%E5%8F%91%E5%B8%83%EF%BC%88%E5%87%86%E5%A4%87%E4%B8%AD%EF%BC%89-orange" />
+<img alt="status" src="https://img.shields.io/badge/status-v0.3.0%20%C2%B7%20%E5%BE%85%E5%8F%91%E5%B8%83-orange" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.0--rc.2-4d6bfe" />
 </p>
 
 <p align="center">🌏 <b>中文</b> · <a href="./README_EN.md">English</a></p>
 
-> ⚠️ **npm 包尚未发布**(见 [REVIEW.md](REVIEW.md)),当前只能从源码目录安装。
+> ⚠️ **v0.3.0 已就绪,还没发到 npm** —— 首发卡在 npm 凭据(见 [REVIEW.md](REVIEW.md) §3.1)。现在请从源码目录安装;
+> 发布之后这一行会改成 `dsh plugin --profile web add dsh-perf-hud`。
 
 ## 📑 目录
 
