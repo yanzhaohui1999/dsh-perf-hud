@@ -3441,17 +3441,47 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * 一条脚本"是谁调起来的" —— LoAF 的 `invoker` 是一句 devtools 风格的调用点描述。
+		 * 真页面抓到的形态(2026-10-08,一份 24 条脚本的事故):
+		 *   `DOMWebSocket.onmessage`      ×19   会话事件流的消息处理器
+		 *   `TimerHandler:setTimeout`     ×2    → setTimeout
+		 *   `Response.json.then`          ×2    Promise 回调
+		 *   `SCRIPT[src="plugins/??…"]`   ×1    → script(整串是 URL,放不下也没信息量)
+		 * 归一规则:① `SCRIPT[…]` 收敛成 `script`;② 带冒号的取**最后一段**
+		 * (`TimerHandler:setTimeout` → `setTimeout`);③ 还是太长就截断;
+		 * ④ 没有 invoker 就退到 `invokerType`(user-callback / event-listener / …),
+		 * 都没有才写"来源未记录"。
+		 * 它只回答"哪一类调用",**不回答"函数里面慢在哪"** —— 函数级要采样器,页面内没有
+		 * (JS Self-Profiling 被 Document Policy 挡着,实测 `new Profiler()` 抛 NotAllowedError)。
+		 */
+		function invokerLabel(script) {
+			const raw = typeof script.invoker === 'string' ? script.invoker : '';
+			let label = '';
+			if (raw.startsWith('SCRIPT[')) label = 'script';
+			else if (raw !== '') {
+				const cut = raw.lastIndexOf(':');
+				label = cut === -1 ? raw : raw.slice(cut + 1);
+			}
+			if (label === '') label = typeof script.invokerType === 'string' ? script.invokerType : '';
+			if (label === '') return translate('invokerUnknown');
+			return label.length > 28 ? `${label.slice(0, 27)}…` : label;
+		}
+
+		/**
 		 * D5 二级:脚本侧往下拆一层 —— 一份汇总,两个分母共用:
 		 *   ① 按包汇总脚本耗时(`script.url` 与事故包 `incident.packages` 走**同一条**
 		 *      resolve 路:单包 URL 直接读出来,合并批按 sourcemap 分段还原);
 		 *   ② 纯执行 / 强制样式布局 / 暂停:LoAF 的 forcedStyleAndLayoutDuration 是读布局、
 		 *      写样式逼出来的同步布局,pauseDuration 是被同步 XHR / 对话框卡住的时间 ——
-		 *      两者**都已经算在** duration 里(是分区,不是相加)。
-		 * 计量单位统一为"脚本毫秒",但 unresolved 计的是**条数**(不是毫秒)—— 它表示
-		 * "有几条脚本定不到包名",别和上面的 ms 相加。
+		 *      两者**都已经算在** duration 里(是分区,不是相加);
+		 *   ③ 按 invoker 汇总:同一份脚本耗时的**另一种切法**(谁调起来的)。
+		 * ②③ 与 ① 的关系:按包那份只覆盖"定得到包名"的脚本,按来源那份覆盖全部 ——
+		 * 所以「按来源」的合计 = `js`,「按包」的合计 ≤ `js`,两者不是同一件事(有断言钉住)。
+		 * 计量单位统一为"脚本毫秒",但 unresolved 计的是**条数**(不是毫秒)。
 		 */
 		function tallyScripts(rows) {
 			const byPkg = new Map();
+			const byInvoker = new Map();
 			let js = 0;
 			let forced = 0;
 			let pause = 0;
@@ -3461,6 +3491,8 @@ window.__ModuleLoader__.load({
 					js += script.ms ?? 0;
 					forced += script.forcedMs ?? 0;
 					pause += script.pauseMs ?? 0;
+					const label = invokerLabel(script);
+					byInvoker.set(label, (byInvoker.get(label) ?? 0) + (script.ms ?? 0));
 					const resolved = packageOfScript(script.url, script.charPos);
 					if (resolved.pkg === null) { unresolved += 1; continue; }
 					byPkg.set(resolved.pkg, (byPkg.get(resolved.pkg) ?? 0) + (script.ms ?? 0));
@@ -3469,6 +3501,8 @@ window.__ModuleLoader__.load({
 			return {
 				js: round1(js), exec: round1(Math.max(0, js - forced - pause)), forced: round1(forced), pause: round1(pause), unresolved,
 				top: [...byPkg.entries()].sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
+				// ms 为 0 的来源不进榜:它们没占时间,列出来只是噪声
+				byInvoker: [...byInvoker.entries()].filter(([, ms]) => ms > 0).sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
 			};
 		}
 
@@ -3523,6 +3557,19 @@ window.__ModuleLoader__.load({
 			return top.map(([name, ms]) => `${short(name)} ${Math.round(ms)}ms`).join(' · ')
 				+ (rest > 0 ? ` · ${translate('rest')} ${rest}` : '')
 				+ (tally.unresolved > 0 ? ` · ${translate('pkgNone')} ${tally.unresolved}` : '');
+		}
+
+		/**
+		 * 「按来源」那一段文案:Top3 调用来源 + 其余(本帧与窗口两行共用)。
+		 * 它与「按包」是同一份脚本耗时的**两种切法**:按来源覆盖全部脚本、按包只覆盖定到
+		 * 包名的那部分 —— 两个合计不相等是正常的,别拿它们互相印证(要看 `js` 那个总数)。
+		 */
+		function invokerWhoText(tally) {
+			const top = tally.byInvoker.slice(0, 3);
+			const rest = tally.byInvoker.length - top.length;
+			if (top.length === 0) return translate('none');
+			return top.map(([name, ms]) => `${name} ${Math.round(ms)}ms`).join(' · ')
+				+ (rest > 0 ? ` · ${translate('rest')} ${rest}` : '');
 		}
 
 		/** 60 秒帧条本体(约 100×18 的 SVG,只用 theme token)。 */
@@ -3729,6 +3776,8 @@ window.__ModuleLoader__.load({
 				forcedHint: 'LoAF 的 forcedStyleAndLayoutDuration:读布局 / 写样式逼出来的同步布局。它**已经算在**脚本耗时里,来源却是样式而不是业务逻辑 —— 分不清"这块是 JS 慢还是样式慢"时看这一行。这一行是**窗口**聚合',
 				splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', splitFramePkg: '本帧按包',
+				splitInvoker: '本帧按来源', splitInvokerWindow: '按来源·窗口', invokerUnknown: '来源未记录',
+				invokerHint: 'LoAF 的 scripts[].invoker:这条脚本是**谁调起来的** —— setTimeout / rAF、某个事件处理器(实测最多的是 `DOMWebSocket.onmessage`,即会话事件流)、Promise 回调、脚本加载。它与「按包」是同一份脚本耗时的两种切法:按来源覆盖全部脚本,按包只覆盖定得到包名的那部分(所以合计不相等是正常的,总数看上面的脚本耗时)。⚠️ 它只回答"哪一类调用",不回答"函数里面慢在哪" —— 函数级要 Chrome trace,页面内没有采样器',
 				splitJsHint: '脚本自身的三分:纯执行 / 强制样式布局(读布局、写样式逼出来的同步布局)/ 暂停(同步 XHR、对话框把它卡住的时间)。三者都是 scripts[].duration 的分区内,**相加 = 脚本耗时**,不是另加的。这一行是上面那张饼的**同一帧**',
 				splitNoLoaf: '暂时没有(要等到一条 >50ms 的长动画帧;LoAF 只报 50ms 以上的)',
 				splitHint: 'LoAF 的三个时间点能拆出来的极限:任务(含同步 JS)/ 渲染(rAF 回调)/ 样式+布局+绘制。任务那一侧再拆成"被 LoAF 归到脚本的"与"没归到的"(短于上报阈值的脚本 + 事件派发 / 微任务 / GC 这类非脚本开销);脚本自己再拆成纯执行 / 强制样式布局 / 暂停。**绘制与合成分不开**,所以最后一段是"剩下的都在这儿",别读成"样式布局占了多少";要分开只能录 Chrome trace',
@@ -3789,6 +3838,8 @@ window.__ModuleLoader__.load({
 				forcedHint: 'LoAF forcedStyleAndLayoutDuration: synchronous layout forced by reading layout or writing style. It is **already inside** script time, but it comes from styling rather than business logic — read this row when you cannot tell whether the script side is slow because of JS or because of style. This row is the **window** aggregate',
 				splitScript: 'script', splitTask: 'task', splitRender: 'render', splitTail: 'style+layout+paint',
 				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', splitFramePkg: 'by pkg (this frame)',
+				splitInvoker: 'by source (this frame)', splitInvokerWindow: 'by source · window', invokerUnknown: 'source not recorded',
+				invokerHint: 'LoAF\'s scripts[].invoker: what invoked this script — setTimeout / rAF, an event handler (the most common one here is `DOMWebSocket.onmessage`, the session event stream), a promise callback, a script load. It and "by package" are two slicings of the same script time: "by source" covers every script, "by package" only those whose package could be resolved (so the two totals differ; the total is the script time above). ⚠️ It answers "which kind of call", not "which function inside is slow" — function level needs a Chrome trace, there is no in-page sampler',
 				splitJsHint: 'The script slice split three ways: exec / forced style+layout (sync layout forced by reading layout or writing style) / paused (time blocked in sync XHR or dialogs). All three are partitions of scripts[].duration and **sum to it** — they are not additional. This row is **the same frame as the pie above**',
 				splitNoLoaf: 'not yet (needs a long animation frame >50ms; LoAF only reports those)',
 				splitHint: 'As far as LoAF can decompose it: task (including sync JS) / render (rAF callbacks) / style+layout+paint. The task side splits again into "attributed to a script by LoAF" and "everything else in the task" (scripts below the reporting threshold, plus event dispatch / microtasks / GC). The script itself splits into exec / forced style+layout / paused. Paint and compositing **cannot** be separated in-page, so the last slice is "everything else" — do not read it as "style and layout only"; separating them needs a Chrome trace',
@@ -4221,11 +4272,17 @@ window.__ModuleLoader__.load({
 							rows.push(h('div', { key: 'frame-pkg', style: S.block },
 								h('span', { style: S.blockLabel, title: t('splitJsHint') }, t('splitFramePkg')),
 								h('div', { style: S.blockValue }, pkgWhoText(framePkgs))));
+							rows.push(h('div', { key: 'frame-src', style: S.block },
+								h('span', { style: S.blockLabel, title: t('invokerHint') }, t('splitInvoker')),
+								h('div', { style: S.blockValue }, invokerWhoText(framePkgs))));
 						}
 						if (window.js > 0) {
 							rows.push(h('div', { key: 'win-pkg', style: S.block },
 								h('span', { style: S.blockLabel, title: t('pkgHint') }, t('pkgSplit')),
 								h('div', { style: S.blockValue }, pkgWhoText(window))));
+							rows.push(h('div', { key: 'win-src', style: S.block },
+								h('span', { style: S.blockLabel, title: t('invokerHint') }, t('splitInvokerWindow')),
+								h('div', { style: S.blockValue }, invokerWhoText(window))));
 							rows.push(h('div', { key: 'win-js', style: S.block },
 								h('span', { style: S.blockLabel, title: t('forcedHint') }, t('splitJsWindow')),
 								h('div', { style: S.blockValue }, jsBreakdownText(window))));

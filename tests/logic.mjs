@@ -1019,10 +1019,12 @@ const watchPieces = [
 	extract(source, 'function watchInteraction('),
 	extract(source, 'function startInteractions('),
 	`${extract(source, 'const scriptTallyCache = ')};`,
+	extract(source, 'function invokerLabel('),
 	extract(source, 'function tallyScripts('),
 	extract(source, 'function scriptPkgTally('),
 	extract(source, 'function framePkgTally('),
 	extract(source, 'function pkgWhoText('),
+	extract(source, 'function invokerWhoText('),
 	extract(source, 'function jsBreakdownText('),
 	extract(source, 'function watchTrigger('),
 	extract(source, 'function loafScripts('),
@@ -1080,7 +1082,7 @@ const watchBox = new Function(`
 	// 面板文案用的两个桩:断言只检查"人看到的字",key 兜底返回 key 本身
 	const translate = (key) => ({
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉', times: ' 次',
-		pkgNone: '未定名', unblamed: '未归因', rest: '其余',
+		pkgNone: '未定名', unblamed: '未归因', rest: '其余', none: '无', invokerUnknown: '来源未记录',
 		splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 		jsExec: '纯执行', forcedShort: '强制', jsPause: '暂停',
 	})[key] ?? key;
@@ -1110,7 +1112,7 @@ const watchBox = new Function(`
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
-		tallyScripts, framePkgTally, pkgWhoText, jsBreakdownText, splitLegend,
+		tallyScripts, framePkgTally, pkgWhoText, jsBreakdownText, splitLegend, invokerLabel, invokerWhoText,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1557,12 +1559,12 @@ check('A2:最多留最近 20 个会话,更早的被挤出去', (() => {
 // ── D5:脚本侧二级(按包 + 纯执行 / 强制样式布局 / 暂停;窗口与本帧两个分母)──
 watch.state.watch.loaf = [
 	{ t: 1000, dur: 200, blocking: 0, scripts: [
-		{ url: 'u-a', ms: 60, forcedMs: 5, pauseMs: 7 },
-		{ url: 'u-b', ms: 30, forcedMs: 0, pauseMs: 0 },
-		{ url: 'u-x', ms: 10, forcedMs: 1, pauseMs: 0 },   // 定不到包:算 unresolved,不进任何包
+		{ url: 'u-a', ms: 60, forcedMs: 5, pauseMs: 7, invoker: 'TimerHandler:setTimeout' },
+		{ url: 'u-b', ms: 30, forcedMs: 0, pauseMs: 0, invoker: 'DOMWebSocket.onmessage' },
+		{ url: 'u-x', ms: 10, forcedMs: 1, pauseMs: 0, invoker: 'Response.json.then' },   // 定不到包:算 unresolved,不进任何包
 	] },
 	{ t: 1500, dur: 90, blocking: 40, scripts: [
-		{ url: 'u-b', ms: 40, forcedMs: 2, pauseMs: 3 },
+		{ url: 'u-b', ms: 40, forcedMs: 2, pauseMs: 3, invoker: 'DOMWebSocket.onmessage' },
 	] },
 ];
 watch.pkgByUrl.set('u-a', { pkg: 'dsh-a', via: 'url' });
@@ -1606,6 +1608,33 @@ check('D5:"是谁"那一段文案:Top3 + 其余 + 定不到包的条数',
 		];
 	})(),
 	['dsh-a 60ms · dsh-b 30ms · dsh-c 20ms · 其余 1', '未定名(未归因 2)', 'dsh-a 200ms · 未定名 1']);
+check('D5:invoker 归一到可读名字(SCRIPT[…] → script;带冒号取最后一段;缺失退到 invokerType)',
+	[
+		watch.invokerLabel({ invoker: 'TimerHandler:setTimeout' }),
+		watch.invokerLabel({ invoker: 'DOMWebSocket.onmessage' }),
+		watch.invokerLabel({ invoker: 'SCRIPT[src="plugins/??a/client.js,@deepseek"]', invokerType: 'event-listener' }),
+		watch.invokerLabel({ invoker: '', invokerType: 'resolve-promise' }),
+		watch.invokerLabel({ invoker: null, invokerType: null }),
+		watch.invokerLabel({ invoker: 'x'.repeat(60) }),
+	],
+	['setTimeout', 'DOMWebSocket.onmessage', 'script', 'resolve-promise', '来源未记录', `${'x'.repeat(27)}…`]);
+check('D5:按来源与按包是同一份脚本耗时的两种切法:按来源合计 = js,按包只覆盖定到名的',
+	(() => {
+		const tally = watch.scriptPkgTally();
+		const sum = (rows) => Math.round(rows.reduce((acc, [, ms]) => acc + ms, 0) * 10) / 10;
+		return [tally.byInvoker, sum(tally.byInvoker), tally.js, sum(tally.top)];
+	})(),
+	[[['DOMWebSocket.onmessage', 70], ['setTimeout', 60], ['来源未记录', 20], ['Response.json.then', 10]], 160, 160, 150]);
+check('D5:"按来源"那一段文案:Top3 + 其余;一个来源都没有时给"无"',
+	[
+		watch.invokerWhoText(watch.tallyScripts([{ scripts: [
+			{ ms: 60, invoker: 'DOMWebSocket.onmessage' }, { ms: 30, invoker: 'TimerHandler:setTimeout' },
+			{ ms: 20, invoker: 'Response.json.then' }, { ms: 10, invoker: 'TimerHandler:setInterval' },
+			{ ms: 5, invoker: 'DOMWebSocket.onclose' },
+		] }])),
+		watch.invokerWhoText({ byInvoker: [] }),
+	],
+	['DOMWebSocket.onmessage 60ms · setTimeout 30ms · Response.json.then 20ms · 其余 2', '无']);
 check('D5:脚本三分的文案(本帧与窗口共用同一份);为 0 的那两项不显示',
 	[
 		watch.jsBreakdownText({ exec: 122, forced: 8, pause: 10 }),

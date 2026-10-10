@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ⬜ 仓库已建(私有),待转公开、加 topic |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,而且 **`tools/` 与 `locale/` 按目录核**(以后加验证器或加语言文件不会漏检),显式清单 + 目录共覆盖包内全部 **18** 个文件(含 `package.json`),漏一份就失败 |
-| 6 | 门禁全绿 | ✅ 352 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ 355 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
 | 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
 
@@ -34,7 +34,7 @@
 
 | 判据 | 怎么验 | 最新实测 |
 |---|---|---|
-| 离线断言全绿 | `npm test` | **352** 条(attribution 11 / logic 302 / host 39) |
+| 离线断言全绿 | `npm test` | **355** 条(attribution 11 / logic 305 / host 39) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 守夜默认**零插桩** | `snapshot().instrumented` 在三种模式下的取值 | 面板打开、HUD 开着:`instrumented: false / deep: false`;点「深录」→ `true / true`;点回去 → `false / false`,`errors` 全程 0 |
@@ -42,7 +42,7 @@
 | 留存两档并集 | 塞跨天旧事故 → 刷新 → `watch().kept[].tier` | 15 条旧事故(一天 12 条 + 另外三天各 1 条)→ **restored 13** · tier `{worst 9, daily 3, both 1}`,工具箱清单里「当天最差」出现 3 次 |
 | 跨会话基线只进导出件 | `snapshot().context.sessionBaselines` | 一次会话一条(`frames 82 / p50 23.6ms`),`note` 写死「粗参照,不是回归判定」;面板不显示(静态断言钉住) |
 | 60 秒帧条与导出件同口径 | 面板 SVG + `tools/inspect-incident.mjs` 的 ASCII | 真实页面 100×18 / `viewBox 0 0 60 18`,`errors: 0`;阈值一致性有静态断言(≥100 / ≥50) |
-| 帧拆分四段饼 + 脚本两个分母 | 面板 SVG / `frameSplit` / `framePkgTally` | 真实页面(**`node tools/check-panel.mjs --expr=…`**,自己造一条带脚本的 LoAF):圆环 **4 个 `<circle>`**(`stroke-opacity` = `1 / 0.45 / 1 / 1`),图例两行 `脚本 82% · 任务 18%` / `渲染 0% · 样式+布局+绘制 0%`;**四行块式值各 20px 高(单行)**:`纯执行 260.1ms` / `未定名(未归因 1)` / `dsh-client-modules 200ms · 未定名 8` / `纯执行 843.7ms · 强制 12.7ms`;en 最坏值在真实布局里量到 **352px ≤ 行宽 365px**(`S.row` 右对齐会折成参差两行,故改块式),`errors: 0` |
+| 帧拆分四段饼 + 脚本三种切法 / 两个分母 | 面板 SVG / `frameSplit` / `framePkgTally` / `invokerLabel` | 真实页面(**`node tools/check-panel.mjs --expr=…`**,自己造带脚本的 LoAF):圆环 **4 个 `<circle>`**(`stroke-opacity` = `1 / 0.45 / 1 / 1`),图例两行 `脚本 82% · 任务 18%` / `渲染 0% · 样式+布局+绘制 0%`;六行块式值实测 `纯执行 260.1ms` / `未定名(未归因 1)` / **`本帧按来源 setTimeout 260ms`** / `dsh-client-modules 192ms · 未定名 25` / `DOMWebSocket.onmessage 425ms · setTimeout 421ms · Response.json.then 322ms · 其余 1`(39px = 两行,块式换行) / `纯执行 1353.2ms · 强制 6.4ms`;en 最坏值 352px ≤ 行宽 365px,`errors: 0`。**函数级的边界也是实测的**:`typeof Profiler === 'function'` 但 `new Profiler()` 抛 `NotAllowedError … disabled by Document Policy`(响应头实测 `null`) |
 | 脚本侧按包 | 面板「本帧按包 / 脚本按包·窗口」/ `incident.packages` | 真实页面 **`dsh-api-gateway 881ms · dsh-client-connection 312ms · dsh-client-modules 208ms · 其余 1`**(v0.3.0 实测,当时是窗口聚合那一行);定不到包名的条数会跟在同一行尾巴上(`· 未定名 8`) |
 | 交互延迟(页面内那一半) | `snapshot().interactions` / CDP 真实输入 | `state: on`(supported = element + event);一次真实点击 **20** 条入库,`pointerover` 那条 `ms 112 / waitMs 0.3 / handlerMs 0.4` —— 端到端长 ≠ 页面反应慢;`element` 恒 0 并解释原因 |
 | 真页面验证可复跑 | `tools/check-panel.mjs` / `check-storage.mjs` / `check-interaction.mjs` | 三条都真跑过并 PASS(`check-panel --expr=false` 会 FAIL 且退出码 1);它们**不是离线门禁**(要真浏览器 + 本机 `dsh web`),CI 只对 `tools/*.mjs` 做 `node --check` |

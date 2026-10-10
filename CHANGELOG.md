@@ -10,10 +10,12 @@
   - **四段** = 脚本(被 LoAF 归到脚本的同步 JS)/ **任务**(任务里没归到脚本的那部分:`renderStart - t` 减去脚本耗时,含短于上报阈值的脚本、事件派发、微任务、GC)/ 渲染 / 样式+布局+绘制。前两段用同一个红(第二段 `stroke-opacity: 0.45`),不引新 token;图例拆成**两行**,四个百分比挤一行在 396px 里会折行(改文案时用真页面量过行高)。
   - **脚本三层** = 纯执行 / 强制样式布局(`forcedStyleAndLayoutDuration`)/ 暂停(`pauseDuration`)。三者是 `scripts[].duration` 的**分区**(相加 = 脚本耗时,不是另加);**为 0 的两项不显示** —— 大多数帧里它俩就是 0,写出来只是噪声(实测窗口那行带上 `暂停 0ms` 会在 396px 里折行)。`pauseDuration` 此前只被写进事故包、**没有任何界面读它**。
   - **两个分母说清楚**:原来那张饼是**单帧**(blocking 最大的那条 LoAF),下面「脚本按包 / 纯 JS vs 强制布局」却是**整窗聚合** —— 同一张面板上两个词、两种分母,数字对不上账。现在四行都带范围:「脚本细拆 / 本帧按包」= 饼图那一帧(新增 `framePkgTally`),「脚本细拆·窗口 / 脚本按包·窗口」= 最近 `WATCH_LOAF_MAX` 条的聚合(原 `scriptPkgTally`,仍按窗口指纹缓存)。
-  - **顺带修掉一处误读**:按包那行原来只在"一个包都没定到"时才提未定名,于是窗口里 1116.8ms 脚本只定到 200ms 时,那行看起来就是"这一层只有 200ms"。现在尾巴上跟 `· 未定名 8`;四行改用**块式**布局(en 值宽实测 352px、行宽 365px,`S.row` 右对齐会折成参差两行)。
+  - **按来源再拆一层**(`invokerLabel`):脚本耗时按 LoAF 的 `invoker` 汇总 —— 「这条脚本是谁调起来的」。真页面抓到的一份事故里 24 条脚本按 invoker 是 **`DOMWebSocket.onmessage` 19 条**、`TimerHandler:setTimeout` 2、`Response.json.then` 2、脚本加载 1 —— 也就是说那几帧的脚本耗时大头是**会话事件流的消息处理器**,不是定时器也不是渲染,这是原来给不出的答案。归一规则:`SCRIPT[…]` → `script`、带冒号取最后一段(`TimerHandler:setTimeout` → `setTimeout`)、截 28 字符、缺失退到 `invokerType`。它与「按包」是**同一份耗时的两种切法**:按来源覆盖全部脚本(合计 = 脚本耗时),按包只覆盖定得到包名的(合计 ≤ 脚本耗时)—— 两个合计**本来就不相等**,有断言钉住(160 vs 150)。
+  - **顺带修掉一处误读**:按包那行原来只在"一个包都没定到"时才提未定名,于是窗口里 1116.8ms 脚本只定到 200ms 时,那行看起来就是"这一层只有 200ms"。现在尾巴上跟 `· 未定名 8`;六行改用**块式**布局(en 值宽实测 352px、行宽 365px,真数据下 `按来源·窗口` 会占两行,右对齐会折成参差两行)。
   - **`frameSplit` 全部向下 clamp**(`js ≤ head`、`forced + pause ≤ js`、`exec ≥ 0`):每条脚本的毫秒各自 `round1`,脚本多而每条约 0.05ms 时求和会超过父区间 —— 不夹就会画出负长度的弧。三条都有断言。
   - 顺带修掉饼图 tooltip 里硬编码的 `脚本 ${js}ms`(en 用户会看到中文),改用 `splitScript` 键。
-  - 测试:352 条离线断言(attribution 11 / logic 302 / host 39),真页面 `tools/check-panel.mjs` 验过(4 个 `<circle>`、四行值单行、`errors: 0`)。
+  - **函数级那一层实测走不通**:页面内唯一的采样剖析器是 JS Self-Profiling —— `typeof Profiler === 'function'`,但 `new Profiler({sampleInterval:10})` 抛 `NotAllowedError: JS profiling is disabled by Document Policy.`,因为 HTML 响应**没有** `Document-Policy` 头(实测 `null`),而那个头由 DSH 服务的 HTML 决定(动它就越过项目边界)。→ 函数级只剩 CDP / DevTools Performance(`missing` 里的 `devtools-trace`);宿主进程的函数级另有 A5 的 `node:inspector`。
+  - 测试:355 条离线断言(attribution 11 / logic 305 / host 39),真页面 `tools/check-panel.mjs` 验过(4 个 `<circle>`、`本帧按来源 setTimeout 260ms`、`errors: 0`)。
 
 ### 决策(2026-10-08,逐条讨论后定稿)
 
