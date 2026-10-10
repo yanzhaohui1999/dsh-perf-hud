@@ -118,7 +118,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 308 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 310 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 39 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -236,7 +236,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **帧内未归因**(2026-10-07 起在「取证明细」组里,不在常显):峰值 ≈ 最差帧(≥95%)时,面板自动给结论"该帧几乎无 JS 解释",并提示用 Rendering 面板的 Paint flashing 交叉验证。**CSS 动画只在这里现形**(它不经 JS 调度器)。
 - **帧里花在哪 / 脚本细拆 / 按包 / 按来源(一个环 + 六行,都在「取证明细」)**:环只用 LoAF 给的三个时间点(`t` / `renderStart` / `styleAndLayoutStart`),**最多 7 段**(`frameArcs`):脚本那一段再按「调用来源」切细(同一族红 `1 / 0.72 / 0.46 / 0.28`,由深到浅 = 耗时降序,顺序与「本帧按来源」那行一致)、任务里没归到的画**中性灰**、再是渲染与尾部。三条硬性:① **只做分区**,各段之和恒 = `total`(`其余` 那段用减法补足);② 脚本那段的按来源求和**可能大于**它(frameSplit 把 js 夹到了 ≤ 任务段,而渲染阶段跑的脚本也算在 `scripts[]` 里)—— 按比例缩,保持分区(不然弧会互相盖住);③ 环上不出现 CSS:颜色只给名字,由渲染那侧映射 token。**尺寸是量出来的**:48px 的环周长 126px(1% ≈ 1.3px),段一多就分不出来 → 84px、`r = 34`、`stroke-width 13`、段间 **1.4px 缝**(扣除规则:`raw > 2×缝` 才扣,小段保原长;推进量按原始长度走,缝才落在段与段之间)。**单帧里 >5ms 的脚本通常只有 1~2 条**(实测:一个任务里连着做 timer + 事件 + 微任务,LoAF 仍然只报一条 `setTimeout`),所以"块多不多"由这条帧里有几条脚本决定;真正的多来源在「·窗口」那几行。
 - **任务那一段再按 `scripts[].duration` 分成"被 LoAF 归到脚本的"与"没归到的"(后者是**差值**:短于上报阈值的脚本 + 事件派发 / 微任务 / GC),脚本那一段再按 `forcedStyleAndLayoutDuration` / `pauseDuration` 分成 纯执行 / 强制样式布局 / 暂停(**三者是 `duration` 的分区,相加 = 脚本耗时**;为 0 的两项不显示,免得把行挤成两行)。**绘制与合成分不开**(页面内没有 API,那一层在缺失声明里),所以最后一段是"剩下的都在这儿",不能读成"样式布局占比"。
-- **脚本侧是同一份耗时的三种切法,六行 = 三种 × 两个分母**:① 三分(纯执行 / 强制 / 暂停);② **按包**(`packageOfScript(url, charPos)`,与 `incident.packages` 同一条 resolve 路;**只覆盖定得到包名的脚本,合计 ≤ 脚本耗时** —— 定不到名的条数必须写出来,只报"有名字的那部分"会让人把那 200ms 当成这一层的全部,实测窗口里 1116.8ms 脚本只有 200ms 定到包);③ **按来源**(`invokerLabel(script)`:LoAF 的 `invoker`,归一规则 `SCRIPT[…]`→`script`、带冒号取最后一段、截 28 字符、缺失退 `invokerType`;**覆盖全部脚本,合计 = 脚本耗时**)。②③ 的合计**本来就不相等**,不要互相印证 —— 有断言钉住这件事(160 vs 150)。「本帧」= 饼图那一帧(`framePkgTally`),「窗口」= 最近 `WATCH_LOAF_MAX` 条的聚合(`scriptPkgTally`,按窗口指纹 `loaf.length|最新一条的 t` 缓存;本帧那份 ≤ `WATCH_SCRIPT_MAX` 条脚本,不缓存)—— `group()` 的 children 是**先求值再传参**的,收起时也照样构造,不缓存就等于每 tick 重算 200×12 条脚本。
+- **脚本侧是同一份耗时的三种切法,六行 = 三种 × 两个分母**:① 三分(纯执行 / 强制 / 暂停);② **按包**(`packageOfScript(url, charPos)`,与 `incident.packages` 同一条 resolve 路;**只覆盖定得到包名的脚本,合计 ≤ 脚本耗时** —— 定不到名的条数必须写出来,只报"有名字的那部分"会让人把那 200ms 当成这一层的全部,实测窗口里 1116.8ms 脚本只有 200ms 定到包);③ **按来源**(`invokerLabel(script)`:LoAF 的 `invoker`,归一规则 `SCRIPT[…]`→`script`、带冒号取最后一段、截 28 字符、缺失退 `invokerType`;**覆盖全部脚本,合计 = 脚本耗时**)。②③ 的合计**本来就不相等**,不要互相印证 —— 有断言钉住这件事(160 vs 150)。「本帧」= 饼图那一帧(`framePkgTally`),「窗口」= 最近 `WATCH_LOAF_MAX` 条的聚合(`scriptPkgTally`,按窗口指纹 `loaf.length|最新一条的 t` 缓存;本帧那份 ≤ `WATCH_SCRIPT_MAX` 条脚本,不缓存)。**窗口那三行必须带上它们的分母**(`windowScopeText`:条数 + 跨度 + 平均每条)—— 它们是累计,`纯执行 21623.8ms` 不写分母就会被读成"某一次执行花了 21 秒"(真被这么质疑过:200 条长帧各百来毫秒,攒起来就是二十几秒);跨度越久累计越大,所以那一行还写明"别读成越来越慢"。`tallyScripts` 因此多带 `count` 与 `spanMs`(最后一条 t − 第一条 t),`spanText(ms)` 把它写成人读的`43分12秒`—— `group()` 的 children 是**先求值再传参**的,收起时也照样构造,不缓存就等于每 tick 重算 200×12 条脚本。
 - **这一层的天花板(实测,不是推断)**:`invoker` 只回答"哪一类调用",函数级要采样器;页面内唯一那个是 JS Self-Profiling —— `typeof Profiler === 'function'`,但 `new Profiler({…})` 抛 `NotAllowedError: JS profiling is disabled by Document Policy.`,因为 HTML 响应**没有** `Document-Policy` 头(实测 `null`),而那个头由 DSH 服务的 HTML 决定(动它就越过 §0 的边界)。→ 函数级只剩 CDP / DevTools Performance(`missing` 里的 `devtools-trace`);宿主进程的函数级另有 A5 的 `node:inspector`。
 - **这六行用块式布局**:值实测可到 352px(en 最坏),真数据下会超一行(`按来源·窗口` 39px = 两行:`DOMWebSocket.onmessage 425ms · setTimeout 421ms · …`),`S.row` 的右对齐会折成参差的两行(与 §5 那条"长文本用块式"是同一件事)。
 - **帧拆分的 clamp(向下夹)**:`frameSplit` 里 `js ≤ head`、`forced + pause ≤ js`、`exec ≥ 0` —— 每条脚本的毫秒各自 `round1`,脚本多而每条约 0.05ms 时求和会反过来超过父区间(四舍五入的算术后果);不夹就会画出负长度的弧。三条都有断言。
@@ -315,7 +315,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 
 **v0.3.0 之后落在 `main` 上的改动**(还没 bump 版本、没打 tag):「帧里花在哪」从三段饼改成四段饼
 (脚本 / 任务里没归到脚本的 / 渲染 / 样式+布局+绘制),脚本侧再拆三层并分成**本帧与窗口两个分母**;
-`npm test` 现在 **358** 条(attribution 11 / logic 308 / host 39),真页面 `check-panel` 验过(见 REVIEW §2)。
+`npm test` 现在 **360** 条(attribution 11 / logic 310 / host 39),真页面 `check-panel` 验过(见 REVIEW §2)。
 
 **卡在哪**:`npm publish` 需要 npm 凭据,本机没有(`ENEEDAUTH`)—— 这一步等用户解锁。两条路(本机 `npm login` 后发,
 或 npmjs.com 建包 + 配 Trusted Publisher 后由 Release 触发 `release.yml`)写在 [REVIEW.md](REVIEW.md) §3.1。

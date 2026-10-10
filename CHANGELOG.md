@@ -16,7 +16,8 @@
   - **`frameSplit` 全部向下 clamp**(`js ≤ head`、`forced + pause ≤ js`、`exec ≥ 0`):每条脚本的毫秒各自 `round1`,脚本多而每条约 0.05ms 时求和会超过父区间 —— 不夹就会画出负长度的弧。三条都有断言。
   - 顺带修掉饼图 tooltip 里硬编码的 `脚本 ${js}ms`(en 用户会看到中文),改用 `splitScript` 键。
   - **函数级那一层实测走不通**:页面内唯一的采样剖析器是 JS Self-Profiling —— `typeof Profiler === 'function'`,但 `new Profiler({sampleInterval:10})` 抛 `NotAllowedError: JS profiling is disabled by Document Policy.`,因为 HTML 响应**没有** `Document-Policy` 头(实测 `null`),而那个头由 DSH 服务的 HTML 决定(动它就越过项目边界)。→ 函数级只剩 CDP / DevTools Performance(`missing` 里的 `devtools-trace`);宿主进程的函数级另有 A5 的 `node:inspector`。
-  - 测试:355 条离线断言(attribution 11 / logic 305 / host 39),真页面 `tools/check-panel.mjs` 验过(4 个 `<circle>`、`本帧按来源 setTimeout 260ms`、`errors: 0`)。
+  - **窗口那三行补上分母**(`windowScopeText`):它们是**累计**,`纯执行 21623.8ms` 这种数不写分母会被读成"某一次执行花了 21 秒"(实测被这么质疑过)。现在窗口行前面单独一行:`窗口:200 条长动画帧 · 跨 43分12秒 · 平均每条脚本 108.1ms` —— 条数与跨度回答"这段时间卡了多少次",**平均每条那一栏才和上面那张饼可比**(饼是单帧)。跨度越久累计越大,所以 hover 里明写"别拿它当越来越慢"。`tallyScripts` 因此多带 `count` 与 `spanMs`(最后一条 t − 第一条 t),`spanText(ms)` 把它写成人读的 `43分12秒`。
+  - 测试:360 条离线断言(attribution 11 / logic 310 / host 39),真页面 `tools/check-panel.mjs` 验过(4 个 `<circle>`、`本帧按来源 setTimeout 260ms`、`errors: 0`)。
 
 ### 决策(2026-10-08,逐条讨论后定稿)
 

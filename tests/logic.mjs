@@ -1026,6 +1026,8 @@ const watchPieces = [
 	extract(source, 'function pkgWhoText('),
 	extract(source, 'function invokerWhoText('),
 	extract(source, 'function jsBreakdownText('),
+	extract(source, 'function spanText('),
+	extract(source, 'function windowScopeText('),
 	extract(source, 'function watchTrigger('),
 	extract(source, 'function loafScripts('),
 	extract(source, 'function wallClock('),
@@ -1083,9 +1085,11 @@ const watchBox = new Function(`
 	// 面板文案用的两个桩:断言只检查"人看到的字",key 兜底返回 key 本身
 	const translate = (key) => ({
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉', times: ' 次',
-		pkgNone: '未定名', unblamed: '未归因', rest: '其余', none: '无', invokerUnknown: '来源未记录',
+		pkgNone: '未定名', unblamed: '未归因', rest: '其余', none: '无', invokerUnknown: '来源未记录', notYet: '未采集',
 		splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 		jsExec: '纯执行', forcedShort: '强制', jsPause: '暂停',
+		windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
+		hourUnit: '小时', minUnit: '分', secUnit: '秒',
 	})[key] ?? key;
 	// 面板渲染区那两个文案函数用到的短名(真实实现里是 short():去掉 scope 前缀)
 	// 这里不用正则:盒子源码写在模板串里,反斜杠会被模板先吃掉
@@ -1113,7 +1117,7 @@ const watchBox = new Function(`
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
-		tallyScripts, framePkgTally, pkgWhoText, jsBreakdownText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
+		tallyScripts, framePkgTally, pkgWhoText, jsBreakdownText, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1627,6 +1631,15 @@ check('D5:"是谁"那一段文案:Top3 + 其余 + 定不到包的条数',
 		];
 	})(),
 	['dsh-a 60ms · dsh-b 30ms · dsh-c 20ms · 其余 1', '未定名(未归因 2)', 'dsh-a 200ms · 未定名 1']);
+check('D5:跨度写成人读得懂的(秒级以下不写;分/时各自带单位)',
+	[watch.spanText(0), watch.spanText(47000), watch.spanText(2592000), watch.spanText(3780000)],
+	['0秒', '47秒', '43分12秒', '1小时3分']);
+check('D5:窗口那三行必须带分母(条数 + 跨度 + 平均每条)—— 累计数不写分母会被读成"一次执行"',
+	(() => {
+		const tally = watch.scriptPkgTally();
+		return [tally.count, tally.spanMs, watch.windowScopeText(tally), watch.windowScopeText({ count: 0, js: 0, spanMs: 0 })];
+	})(),
+	[3, 1000, '窗口:3 条长动画帧 · 跨 1秒 · 平均每条脚本 53.3ms', '未采集']);
 check('D5:invoker 归一到可读名字(SCRIPT[…] → script;带冒号取最后一段;缺失退到 invokerType)',
 	[
 		watch.invokerLabel({ invoker: 'TimerHandler:setTimeout' }),

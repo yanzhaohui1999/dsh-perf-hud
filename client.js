@@ -3537,6 +3537,10 @@ window.__ModuleLoader__.load({
 			}
 			return {
 				js: round1(js), exec: round1(Math.max(0, js - forced - pause)), forced: round1(forced), pause: round1(pause), unresolved,
+				// 窗口那几行是**累计**,必须带回它的分母:条数与跨度。没有它,`纯执行 21623.8ms`
+				// 会被读成"某一次执行花了 21 秒"(真被这么质疑过)—— 其实是 200 条长帧各百来毫秒攒起来的。
+				count: rows.length,
+				spanMs: rows.length === 0 ? 0 : Math.round(rows[rows.length - 1].t - rows[0].t),
 				top: [...byPkg.entries()].sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
 				// ms 为 0 的来源不进榜:它们没占时间,列出来只是噪声
 				byInvoker: [...byInvoker.entries()].filter(([, ms]) => ms > 0).sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
@@ -3553,6 +3557,27 @@ window.__ModuleLoader__.load({
 			if (tally.forced > 0) parts.push(`${translate('forcedShort')} ${tally.forced}ms`);
 			if (tally.pause > 0) parts.push(`${translate('jsPause')} ${tally.pause}ms`);
 			return parts.join(' · ');
+		}
+
+		/** 一段跨度写成人读得懂的:43分12秒 / 1小时3分 / 47秒(秒级以下不写)。 */
+		function spanText(ms) {
+			const total = Math.max(0, Math.round(ms / 1000));
+			const hours = Math.floor(total / 3600);
+			const minutes = Math.floor((total % 3600) / 60);
+			const seconds = total % 60;
+			if (hours > 0) return `${hours}${translate('hourUnit')}${minutes}${translate('minUnit')}`;
+			if (minutes > 0) return `${minutes}${translate('minUnit')}${seconds}${translate('secUnit')}`;
+			return `${seconds}${translate('secUnit')}`;
+		}
+
+		/**
+		 * 窗口那三行的**分母**:它们是"最近 N 条长动画帧"的累计,不是某一帧的时长。
+		 * 平均每条那一栏才和上面那张饼可比(最差帧 341ms vs 平均 108ms = 这条帧比平时差 3 倍),
+		 * 条数与跨度顺带回答"这段时间卡了多少次"。
+		 */
+		function windowScopeText(tally) {
+			if (tally.count === 0) return translate('notYet');
+			return `${translate('windowScope')}:${tally.count} ${translate('loafRows')} · ${translate('spanOver')} ${spanText(tally.spanMs)} · ${translate('avgPerFrame')} ${round1(tally.js / tally.count)}ms`;
 		}
 
 		/**
@@ -3814,6 +3839,9 @@ window.__ModuleLoader__.load({
 				splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', splitFramePkg: '本帧按包',
 				splitInvoker: '本帧按来源', splitInvokerWindow: '按来源·窗口', invokerUnknown: '来源未记录',
+				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
+				hourUnit: '小时', minUnit: '分', secUnit: '秒',
+				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
 				invokerHint: 'LoAF 的 scripts[].invoker:这条脚本是**谁调起来的** —— setTimeout / rAF、某个事件处理器(实测最多的是 `DOMWebSocket.onmessage`,即会话事件流)、Promise 回调、脚本加载。它与「按包」是同一份脚本耗时的两种切法:按来源覆盖全部脚本,按包只覆盖定得到包名的那部分(所以合计不相等是正常的,总数看上面的脚本耗时)。⚠️ 它只回答"哪一类调用",不回答"函数里面慢在哪" —— 函数级要 Chrome trace,页面内没有采样器',
 				splitJsHint: '脚本自身的三分:纯执行 / 强制样式布局(读布局、写样式逼出来的同步布局)/ 暂停(同步 XHR、对话框把它卡住的时间)。三者都是 scripts[].duration 的分区内,**相加 = 脚本耗时**,不是另加的。这一行是上面那张饼的**同一帧**',
 				splitNoLoaf: '暂时没有(要等到一条 >50ms 的长动画帧;LoAF 只报 50ms 以上的)',
@@ -3876,6 +3904,9 @@ window.__ModuleLoader__.load({
 				splitScript: 'script', splitTask: 'task', splitRender: 'render', splitTail: 'style+layout+paint',
 				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', splitFramePkg: 'by pkg (this frame)',
 				splitInvoker: 'by source (this frame)', splitInvokerWindow: 'by source · window', invokerUnknown: 'source not recorded',
+				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
+				hourUnit: 'h', minUnit: 'm', secUnit: 's',
+				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',
 				invokerHint: 'LoAF\'s scripts[].invoker: what invoked this script — setTimeout / rAF, an event handler (the most common one here is `DOMWebSocket.onmessage`, the session event stream), a promise callback, a script load. It and "by package" are two slicings of the same script time: "by source" covers every script, "by package" only those whose package could be resolved (so the two totals differ; the total is the script time above). ⚠️ It answers "which kind of call", not "which function inside is slow" — function level needs a Chrome trace, there is no in-page sampler',
 				splitJsHint: 'The script slice split three ways: exec / forced style+layout (sync layout forced by reading layout or writing style) / paused (time blocked in sync XHR or dialogs). All three are partitions of scripts[].duration and **sum to it** — they are not additional. This row is **the same frame as the pie above**',
 				splitNoLoaf: 'not yet (needs a long animation frame >50ms; LoAF only reports those)',
@@ -4330,6 +4361,7 @@ window.__ModuleLoader__.load({
 								h('div', { style: S.blockValue }, invokerWhoText(framePkgs))));
 						}
 						if (window.js > 0) {
+							rows.push(h('div', { key: 'win-scope', style: { ...S.sub, marginTop: 7 }, title: t('windowScopeHint') }, windowScopeText(window)));
 							rows.push(h('div', { key: 'win-pkg', style: S.block },
 								h('span', { style: S.blockLabel, title: t('pkgHint') }, t('pkgSplit')),
 								h('div', { style: S.blockValue }, pkgWhoText(window))));
