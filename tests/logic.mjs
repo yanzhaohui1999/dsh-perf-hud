@@ -220,7 +220,7 @@ const sandbox = `
 		recorder: '记录器自身',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchManualNote: '手动标记', domWritesShort: 'DOM 写入',
-		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
+		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', needDeep: '要深录', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -324,6 +324,7 @@ const newPieces = [
 	'function blameText(',
 	'function overviewLine1(',
 	'function overviewLine2(',
+	'function unattrText(',
 	'function detailSummary(',
 	'function domSummary(',
 	'function displayKey(',
@@ -581,11 +582,16 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 	box.state.link = [];
 	check('宿主 p99 超阈值 → 判为宿主存疑', EX.infraVerdict().bad, true);
 	// 未解释帧:最差帧 130ms 而帧内未归因峰值也是 130ms → 那一帧完全没有 JS 解释
+	// (这一条只在插桩下成立:没插桩时 unattr 恒等于帧间隔,那会得出"每条长帧都无 JS 解释")
+	box.state.deep = true;
 	box.state.frameWorst = 130;
 	box.state.unattrPeak = 130;
 	check('未解释帧自动触发(峰值≈最差帧)', EX.unexplainedFrame().percent, 100);
 	box.state.unattrPeak = 30;
 	check('有 JS 解释时不该触发', EX.unexplainedFrame(), null);
+	box.state.unattrPeak = 130;
+	box.state.deep = false;
+	check('没插桩时不报"无 JS 解释"(那时它一定成立,等于恒报)', EX.unexplainedFrame(), null);
 	// 合并判色:FPS 绿不能掩盖最差帧
 	check('FPS 好但最差帧 130ms → 至少黄', EX.levelFrame(54.2, 130).includes('warn'), true);
 	check('FPS 54 且最差帧 18ms → 绿', EX.levelFrame(54.2, 18).includes('success'), true);
@@ -1026,6 +1032,9 @@ const watchPieces = [
 	extract(source, 'function pkgWhoText('),
 	extract(source, 'function invokerWhoText('),
 	extract(source, 'function jsBreakdownText('),
+	extract(source, 'function unattrText('),
+	extract(source, 'function hitText('),
+	extract(source, 'function unexplainedFrame('),
 	extract(source, 'function spanText('),
 	extract(source, 'function windowScopeText('),
 	extract(source, 'function watchTrigger('),
@@ -1089,6 +1098,8 @@ const watchBox = new Function(`
 		splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 		jsExec: '纯执行', forcedShort: '强制', jsPause: '暂停',
 		windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
+		needDeep: '要深录', scopeFrame: '本帧', bySource: '按来源', byPkg: '按包', pkgAllUnnamed: '一个名都没定到(要深录)',
+		hit: '命中', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名', peak: '峰',
 		hourUnit: '小时', minUnit: '分', secUnit: '秒',
 	})[key] ?? key;
 	// 面板渲染区那两个文案函数用到的短名(真实实现里是 short():去掉 scope 前缀)
@@ -1117,7 +1128,7 @@ const watchBox = new Function(`
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
-		tallyScripts, framePkgTally, pkgWhoText, jsBreakdownText, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
+		tallyScripts, framePkgTally, pkgWhoText, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1631,6 +1642,41 @@ check('D5:"是谁"那一段文案:Top3 + 其余 + 定不到包的条数',
 		];
 	})(),
 	['dsh-a 60ms · dsh-b 30ms · dsh-c 20ms · 其余 1', '未定名(未归因 2)', 'dsh-a 200ms · 未定名 1']);
+check('"命中"只列非零的腿(没插桩时子树 / DOM写入 / 包名恒为 0,列出来只是噪声)',
+	(() => {
+		watch.state.ltBlamed = 245;
+		watch.state.ltTotal = 348;
+		return [
+			watch.hitText({ fiber: 245, subtree: 0, dom: 0, owner: 0, none: 103 }),
+			watch.hitText({ fiber: 0, subtree: 0, dom: 0, owner: 0, none: 348 }),
+			watch.hitText({ fiber: 10, subtree: 5, dom: 0, owner: 2, none: 1 }),
+		];
+	})(),
+	['命中 245/348 · fiber 245 · 未归因 103', '命中 245/348 · 未归因 348', '命中 245/348 · fiber 10/子树 5/包名 2 · 未归因 1']);
+check('未插桩时不报「该帧几乎无 JS 解释」(没插桩就没测有没有 JS)',
+	(() => {
+		watch.state.deep = false;
+		watch.state.frameWorst = 342.4;
+		watch.state.unattrPeak = 342.4;
+		const off = watch.unexplainedFrame();
+		watch.state.deep = true;
+		const on = watch.unexplainedFrame();
+		watch.state.deep = false;
+		return [off, on];
+	})(),
+	[null, { ms: 342.4, percent: 100 }]);
+check('未插桩时「帧内未归因」不给数(那时它退化成平均帧间隔,给数就是误导)',
+	(() => {
+		watch.state.unattrAvg = 16.7;
+		watch.state.unattrPeak = 21;
+		watch.state.deep = false;
+		const off = watch.unattrText();
+		watch.state.deep = true;
+		const on = watch.unattrText();
+		watch.state.deep = false;
+		return [off, on];
+	})(),
+	['要深录', '16.7ms · 峰 21ms']);
 check('D5:跨度写成人读得懂的(秒级以下不写;分/时各自带单位)',
 	[watch.spanText(0), watch.spanText(47000), watch.spanText(2592000), watch.spanText(3780000)],
 	['0秒', '47秒', '43分12秒', '1小时3分']);

@@ -3281,6 +3281,9 @@ window.__ModuleLoader__.load({
 		 * 完全没有 JS 回调能为它负责,开销在样式/布局/绘制/vsync 一侧。
 		 */
 		function unexplainedFrame() {
+			// 没插桩时 `unattr` 就等于帧间隔(见 unattrText),这个判据会在**每一条**长帧上
+			// 得出"几乎无 JS 解释"—— 那是假的:我们根本没测有没有 JS。所以先要求插桩。
+			if (state.deep !== true) return null;
 			const worst = state.frameWorst;
 			if (!(worst >= 100) || worst <= 0) return null;
 			const share = state.unattrPeak / worst;
@@ -3657,12 +3660,39 @@ window.__ModuleLoader__.load({
 			}, bars);
 		}
 
+		/**
+		 * 「帧内未归因」的值。⚠️ 它只在**插桩**下有定义:`idle = 帧间隔 − 插桩回调耗时`,
+		 * 没插桩时 busy 恒为 0,这个数就退化成"平均帧间隔"(实测 16.7ms 被当成未归因 ——
+		 * 那正好是 60fps 的帧间隔)。所以未插桩时不给数,直说需要深录。
+		 */
+		function unattrText() {
+			if (state.deep !== true) return translate('needDeep');
+			return `${state.unattrAvg.toFixed(1)}ms · ${translate('peak')} ${state.unattrPeak.toFixed(0)}ms`;
+		}
+
+		/**
+		 * 「命中」那一行:四条腿**只列非零的** —— 没插桩时子树 / DOM写入 / 包名恒为 0,
+		 * 全列出来就是 `245/0/0/0` 这种噪声。比率与概览同一口径(命中长任务数 / 长任务总数)。
+		 */
+		function hitText(tally) {
+			const legs = [
+				[translate('legFiber'), tally.fiber], [translate('legSubtree'), tally.subtree],
+				[translate('legDom'), tally.dom], [translate('legOwner'), tally.owner],
+			].filter(([, count]) => count > 0).map(([name, count]) => `${name} ${count}`);
+			return `${translate('hit')} ${state.ltBlamed}/${state.ltTotal}`
+				+ (legs.length === 0 ? '' : ` · ${legs.join('/')}`)
+				+ (tally.none === 0 ? '' : ` · ${translate('unblamed')} ${tally.none}`);
+		}
+
 		function detailSummary() {
 			const second = worstSecond();
 			// 帧内未归因搬进这一组之后,它的数字要留在摘要上 —— 否则常显就更"瞎"了
 			// 只留"结论对"(最差秒 + 未归因):加上 DOM 写入那一段,真实量级(五位数)会在 396px
 			// 里挤成两行(实测截图),而 DOM 写入展开就能看到,不必占摘要。
-			return `${translate('worstSecondShort')} ${second === null ? translate('none') : `${second.frameMs.toFixed(0)}ms`} · ${translate('unattrShort')} ${state.unattrAvg.toFixed(0)}ms`;
+			// 摘要里只留平均(带峰值会撑到两行 —— 预算断言钉着 ≤26 字);
+			// 没插桩时那个数没意义(见 unattrText),摘要里直说要深录
+			const unattr = state.deep === true ? `${state.unattrAvg.toFixed(0)}ms` : translate('needDeep');
+			return `${translate('worstSecondShort')} ${second === null ? translate('none') : `${second.frameMs.toFixed(0)}ms`} · ${translate('unattrShort')} ${unattr}`;
 		}
 
 		function domSummary() {
@@ -3832,13 +3862,13 @@ window.__ModuleLoader__.load({
 				split: '帧里花在哪', splitTotal: '这段长动画帧共', splitWorst: '最差那条',
 				spark: '60 秒帧条',
 				sparkHint: '最近 60 秒,一格一秒:高度 = 那一秒里最差那一帧的间隔,颜色与导出件的 ASCII 帧条带用同一组阈值(≥100ms 红 / ≥50ms 黄 / 其余正常)。整格都是 rAF 挂起的那一秒画成最矮的灰柱 —— 那是间隙,不是卡顿;空白 = 那一秒没采到',
-				pkgSplit: '脚本按包·窗口', pkgNone: '未定名',
+				pkgNone: '未定名',
 				pkgHint: '最近这段 LoAF **窗口**里(不是上面那一帧),脚本耗时按包汇总(与事故包 incident.packages 同一条 resolve 路:单包 URL 直接读出来,合并批按 sourcemap 分段还原)。合并批里没开「精确」就只能给到那个 58 包的批 URL,这是刻意的,不硬猜',
-				splitJsWindow: '脚本细拆·窗口', forcedLayout: '强制样式布局', forcedShort: '强制',
+				forcedLayout: '强制样式布局', forcedShort: '强制',
 				forcedHint: 'LoAF 的 forcedStyleAndLayoutDuration:读布局 / 写样式逼出来的同步布局。它**已经算在**脚本耗时里,来源却是样式而不是业务逻辑 —— 分不清"这块是 JS 慢还是样式慢"时看这一行。这一行是**窗口**聚合',
 				splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
-				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', splitFramePkg: '本帧按包',
-				splitInvoker: '本帧按来源', splitInvokerWindow: '按来源·窗口', invokerUnknown: '来源未记录',
+				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', scopeFrame: '本帧',
+				bySource: '按来源', byPkg: '按包', pkgAllUnnamed: '一个名都没定到(要深录)', needDeep: '要深录', invokerUnknown: '来源未记录',
 				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
 				hourUnit: '小时', minUnit: '分', secUnit: '秒',
 				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
@@ -3897,13 +3927,13 @@ window.__ModuleLoader__.load({
 				split: 'where the frame went', splitTotal: 'long frame total', splitWorst: 'worst',
 				spark: '60s frame strip',
 				sparkHint: 'Last 60 seconds, one bar per second: height = the worst frame interval in that second, and the colours use the same thresholds as the ASCII frame strip in the export (>=100ms red / >=50ms yellow / otherwise normal). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall; blank = nothing sampled in that second',
-				pkgSplit: 'script by pkg · window', pkgNone: 'unnamed',
+				pkgNone: 'unnamed',
 				pkgHint: 'Script time in the recent LoAF **window** (not the single frame above), summed per package (the same resolve path as incident.packages: read straight off single-package URLs, restored from sourcemap sections for combo batches). Without precise attribution a combo batch can only be named as its 58-package batch URL — that is deliberate, nothing is guessed',
-				splitJsWindow: 'script split · window', forcedLayout: 'forced style+layout', forcedShort: 'forced',
+				forcedLayout: 'forced style+layout', forcedShort: 'forced',
 				forcedHint: 'LoAF forcedStyleAndLayoutDuration: synchronous layout forced by reading layout or writing style. It is **already inside** script time, but it comes from styling rather than business logic — read this row when you cannot tell whether the script side is slow because of JS or because of style. This row is the **window** aggregate',
 				splitScript: 'script', splitTask: 'task', splitRender: 'render', splitTail: 'style+layout+paint',
-				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', splitFramePkg: 'by pkg (this frame)',
-				splitInvoker: 'by source (this frame)', splitInvokerWindow: 'by source · window', invokerUnknown: 'source not recorded',
+				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', scopeFrame: 'this frame',
+				bySource: 'by source', byPkg: 'by package', pkgAllUnnamed: 'nothing resolved (needs deep)', needDeep: 'needs deep', invokerUnknown: 'source not recorded',
 				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
 				hourUnit: 'h', minUnit: 'm', secUnit: 's',
 				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',
@@ -3982,7 +4012,7 @@ window.__ModuleLoader__.load({
 			}),
 			head: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
 			brand: { fontWeight: 700, fontSize: 14, color: 'var(--dsw-alias-label-primary)' },
-			row: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginTop: 5 },
+			row: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginTop: 4 },
 			// 标签不换行、不收缩(原来 flex:1 1 auto 会被长数值挤成一字一行);
 			// 数值占满剩余宽度、右对齐、必要时在自己那一列换行。
 			label: { color: 'var(--dsw-alias-label-secondary)', fontWeight: 700, flex: '0 0 auto', whiteSpace: 'nowrap', lineHeight: 1.5 },
@@ -3997,7 +4027,7 @@ window.__ModuleLoader__.load({
 			block: { display: 'block', marginTop: 2 },
 			blockLabel: { color: 'var(--dsw-alias-label-secondary)', fontWeight: 700 },
 			blockValue: { marginTop: 2, whiteSpace: 'pre-line', lineHeight: 1.5, overflowWrap: 'break-word', fontVariantNumeric: 'tabular-nums' },
-			sep: { marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--dsw-alias-border-l2)' },
+			sep: { marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--dsw-alias-border-l2)' },
 			buttons: { display: 'flex', gap: 8, marginTop: 7, flexWrap: 'wrap' },
 			input: { font: 'inherit', color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 7, padding: '2px 8px', flex: 1, minWidth: 0 },
 		};
@@ -4257,7 +4287,8 @@ window.__ModuleLoader__.load({
 				// ── 常显 2:回调归因 Top3(每插件一行,hover 补 msps 与累计)──
 				// (帧内未归因从常显挪进了「取证明细」:它是"解释",不是"现在卡不卡 / 谁的锅"
 				//  这两个常显问题本身;它的数字挂在那一组的摘要上,展开也看得到。)
-				h('div', { style: S.sep },
+				// 没插桩 / 没抓到回调时这一块是 `0ms/s` + 空表 —— 白占地方,还会被读成"没有开销"
+				(top.length === 0 && rest.length === 0) ? null : h('div', { style: S.sep },
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('blameHint') }, t('blame')),
 						h('span', { style: S.num }, msPerSecText(state.attributedPerSec))),
@@ -4338,41 +4369,33 @@ window.__ModuleLoader__.load({
 								h('div', { style: S.num, title }, `${t('split')} ${split.total}ms`),
 								splitLegend(split).map((line, index) => h('div', { key: `legend-${index}`, style: S.sub, title }, line))));
 					})(),
-					// D5:脚本侧再往下拆。"本帧"那两行与上面那张饼吃**同一条** LoAF(数字能对着看),
-					// "窗口"那两行是最近 200 条的聚合(与事故包 incident.packages 同一口径)。
-					// 本帧没有脚本证据就只留窗口那两行,而不是给一行 0(那会读成"脚本没耗时")。
-					// 这四行走**块式**(标签独占一行、值左对齐):包名 + 三个毫秒数在 396px 里
-					// 右对齐会折成参差不齐的两行(实测 en 下面那行 352px / 可选 365px)——
-					// 块式至少断得整齐,也是 §5 对"可能超一行的行"定的写法。
+					// D5:脚本侧往下拆:**两个小标题各管一组**。「本帧」那组与上面那张饼吃同一条
+					// LoAF(数字能对着看);窗口那组是最近 WATCH_LOAF_MAX 条的累计,它的范围写在
+					// 小标题上 —— 行标签就不用再重复一遍"本帧 / ·窗口",省掉一大截字。
+					// 按包那几行只在**真定到包名**时才出现:一个名都没定到时它只是噪声,换成一行说明。
 					(() => {
 						const frame = frameSplit(worstLoaf());
 						const framePkgs = framePkgTally(worstLoaf());
 						const window = scriptPkgTally();
 						const rows = [];
+						const line = (key, label, hint, value) => h('div', { key, style: S.block },
+							h('span', { style: S.blockLabel, title: hint }, label),
+							h('div', { style: S.blockValue }, value));
+						const head = (key, text, hint) => h('div', { key, style: { ...S.blockLabel, marginTop: 8 }, title: hint }, text);
 						if (frame !== null && frame.js > 0 && framePkgs !== null) {
-							rows.push(h('div', { key: 'frame-js', style: S.block },
-								h('span', { style: S.blockLabel, title: t('splitJsHint') }, t('splitJs')),
-								h('div', { style: S.blockValue }, jsBreakdownText(frame))));
-							rows.push(h('div', { key: 'frame-pkg', style: S.block },
-								h('span', { style: S.blockLabel, title: t('splitJsHint') }, t('splitFramePkg')),
-								h('div', { style: S.blockValue }, pkgWhoText(framePkgs))));
-							rows.push(h('div', { key: 'frame-src', style: S.block },
-								h('span', { style: S.blockLabel, title: t('invokerHint') }, t('splitInvoker')),
-								h('div', { style: S.blockValue }, invokerWhoText(framePkgs))));
+							rows.push(head('frame-head', t('scopeFrame'), t('splitJsHint')));
+							rows.push(line('frame-js', t('splitJs'), t('splitJsHint'), jsBreakdownText(frame)));
+							rows.push(line('frame-src', t('bySource'), t('invokerHint'), invokerWhoText(framePkgs)));
+							if (framePkgs.top.length > 0) rows.push(line('frame-pkg', t('byPkg'), t('pkgHint'), pkgWhoText(framePkgs)));
 						}
 						if (window.js > 0) {
-							rows.push(h('div', { key: 'win-scope', style: { ...S.sub, marginTop: 7 }, title: t('windowScopeHint') }, windowScopeText(window)));
-							rows.push(h('div', { key: 'win-pkg', style: S.block },
-								h('span', { style: S.blockLabel, title: t('pkgHint') }, t('pkgSplit')),
-								h('div', { style: S.blockValue }, pkgWhoText(window))));
-							rows.push(h('div', { key: 'win-src', style: S.block },
-								h('span', { style: S.blockLabel, title: t('invokerHint') }, t('splitInvokerWindow')),
-								h('div', { style: S.blockValue }, invokerWhoText(window))));
-							rows.push(h('div', { key: 'win-js', style: S.block },
-								h('span', { style: S.blockLabel, title: t('forcedHint') }, t('splitJsWindow')),
-								h('div', { style: S.blockValue }, jsBreakdownText(window))));
+							rows.push(head('win-head', windowScopeText(window), t('windowScopeHint')));
+							rows.push(line('win-src', t('bySource'), t('invokerHint'), invokerWhoText(window)));
+							rows.push(line('win-js', t('splitJs'), t('forcedHint'), jsBreakdownText(window)));
+							if (window.top.length > 0) rows.push(line('win-pkg', t('byPkg'), t('pkgHint'), pkgWhoText(window)));
+							// 一个包名都没定到:按包这一层现在没有信息,但也不能装作它不存在
+							if (window.top.length === 0) rows.push(h('div', { key: 'pkg-none', style: S.sub, title: t('pkgHint') }, `${t('byPkg')}:${t('pkgAllUnnamed')}`));
 						}
-						return rows.length === 0 ? null : h('div', null, rows);
 					})(),
 					// 60 秒迷你时间条:一格一秒、格值取格里最差那帧,阈值与导出件 ASCII 条带一致
 					h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },
@@ -4382,8 +4405,8 @@ window.__ModuleLoader__.load({
 					// 帧里"JS 之外"的残差:唯一能反映 CSS/绘制卡顿的数字,从常显挪进来
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),
-						h('span', { style: { ...S.num, color: unexplained === null ? undefined : 'var(--dsw-alias-state-warn-primary)' } },
-							`${state.unattrAvg.toFixed(1)}ms · ${t('peak')} ${state.unattrPeak.toFixed(0)}ms`)),
+						h('span', { style: { ...S.num, color: state.deep === true && unexplained !== null ? 'var(--dsw-alias-state-warn-primary)' : undefined } },
+							unattrText())),
 					unexplained === null ? null : h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } },
 						`${t('unexplained')}:${unexplained.ms}ms(${unexplained.percent}%)→ ${t('unexplainedHint')}`),
 					h('div', { style: S.row },
@@ -4396,16 +4419,16 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.label }, t('topBlame')),
 						h('span', { style: S.num }, (tally.topNames.length === 0
 							? t('none')
-							: tally.topNames.map(([name, count]) => `${short(name)} ${count}×`).join(' · ') + (tally.top.length > 3 ? ` · ${t('rest')} ${tally.top.length - 3}` : ''))
-							// B1:记录器自己单列在同一个值里(混排会让人以为本 HUD 在拖慢页面)
-							+ (tally.selfTotal === 0 ? '' : `${tally.topNames.length === 0 ? '' : ' · '}${t('recorder')} ${tally.selfTotal}×`))),
+							// 记录器自己不再挂在这行尾巴上 —— 它上面就有独立的「记录器自身」一行
+							: tally.topNames.map(([name, count]) => `${short(name)} ${count}×`).join(' · ') + (tally.top.length > 3 ? ` · ${t('rest')} ${tally.top.length - 3}` : '')))),
 					h('div', { style: S.row },
-						h('span', { style: S.label }, `${t('hit')} (${t('legFiber')}/${t('legSubtree')}/${t('legDom')}/${t('legOwner')})`),
-						h('span', { style: S.num }, `${tally.fiber}/${tally.subtree}/${tally.dom}/${tally.owner}${tally.none === 0 ? '' : ` · ${t('unblamed')} ${tally.none}`}`)),
-					h('div', { style: S.row },
+						h('span', { style: S.label, title: `${t('legFiber')} / ${t('legSubtree')} / ${t('legDom')} / ${t('legOwner')}` }, t('hit')),
+						h('span', { style: S.num }, hitText(tally))),
+					// 这两行只有插桩了才有意义(不插桩时计数恒为 0)
+					state.deep !== true ? null : h('div', { style: S.row },
 						h('span', { style: S.label, title: t('domWritesHint') }, t('domWrites')),
 						h('span', { style: S.num }, String(state.mutations))),
-					writeRows()),
+					state.deep !== true ? null : writeRows()),
 
 				// ── 折叠 2:DOM 与堆 ──
 				group('dom', t('groupDom'), domSummary(),

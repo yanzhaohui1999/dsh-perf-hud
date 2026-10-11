@@ -17,7 +17,15 @@
   - 顺带修掉饼图 tooltip 里硬编码的 `脚本 ${js}ms`(en 用户会看到中文),改用 `splitScript` 键。
   - **函数级那一层实测走不通**:页面内唯一的采样剖析器是 JS Self-Profiling —— `typeof Profiler === 'function'`,但 `new Profiler({sampleInterval:10})` 抛 `NotAllowedError: JS profiling is disabled by Document Policy.`,因为 HTML 响应**没有** `Document-Policy` 头(实测 `null`),而那个头由 DSH 服务的 HTML 决定(动它就越过项目边界)。→ 函数级只剩 CDP / DevTools Performance(`missing` 里的 `devtools-trace`);宿主进程的函数级另有 A5 的 `node:inspector`。
   - **窗口那三行补上分母**(`windowScopeText`):它们是**累计**,`纯执行 21623.8ms` 这种数不写分母会被读成"某一次执行花了 21 秒"(实测被这么质疑过)。现在窗口行前面单独一行:`窗口:200 条长动画帧 · 跨 43分12秒 · 平均每条脚本 108.1ms` —— 条数与跨度回答"这段时间卡了多少次",**平均每条那一栏才和上面那张饼可比**(饼是单帧)。跨度越久累计越大,所以 hover 里明写"别拿它当越来越慢"。`tallyScripts` 因此多带 `count` 与 `spanMs`(最后一条 t − 第一条 t),`spanText(ms)` 把它写成人读的 `43分12秒`。
-  - 测试:360 条离线断言(attribution 11 / logic 310 / host 39),真页面 `tools/check-panel.mjs` 验过(4 个 `<circle>`、`本帧按来源 setTimeout 260ms`、`errors: 0`)。
+  - 测试:364 条离线断言(attribution 11 / logic 314 / host 39),真页面 `tools/check-panel.mjs` 验过(4 个 `<circle>`、`本帧按来源 setTimeout 260ms`、`errors: 0`)。
+
+### 修改
+
+- **面板减字**(「取证明细」展开后 16 行 → 11 行左右,标签从 5~7 字缩到 2~3 字):
+  - **没插桩就不显示需要插桩的行**:`回调归因 0ms/s` 那一整段不再占位(它是"没测",不是"没有开销");`DOM 写入(按插件) 0` 同理;`命中` 只列**非零的腿**(`245/348 · fiber 245 · 未归因 103`,不再是 `245/0/0/0`),比率与概览同一口径。
+  - **顺手修掉一个会被误读的数**:`帧内未归因` 只在插桩下有定义(`帧间隔 − 插桩回调`),没插桩时它退化成**平均帧间隔**(实测 16.7ms 被当成未归因);现在没插桩就写「要深录」。同一原因,`unexplainedFrame()` 先要求 `state.deep === true` —— 否则"该帧几乎无 JS 解释"这条结论会在**每一条**长帧上都成立(等于恒报)。
+  - **两个小标题接管范围**:「本帧」/「窗口:200 条长动画帧 · 跨 … · 平均每条脚本 …ms」各管一组,行标签不再重复"本帧 / ·窗口";按包那两行在一个名都没定到时收敛成一行说明。
+  - **去掉重复**:`归属 Top` 尾巴上不再重复「记录器自身 N×」(它上面就有独立一行);行距与分节留白一起收紧(`S.row` 5→4、`S.sep` 10/9→8/8)。
 
 ### 决策(2026-10-08,逐条讨论后定稿)
 
