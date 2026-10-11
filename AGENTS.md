@@ -329,18 +329,19 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 
 1. bump `package.json.version`,跑完 §3 的门禁并全绿。
 2. 打 tag `vX.Y.Z`(**tag 必须与 `version` 一致**),在 GitHub 建 Release。
-3. `.github/workflows/release.yml` 在该 Release 发布时自动 `npm publish`(用 **npm Trusted Publishing / OIDC**,不配 `NPM_TOKEN`)。
-4. 首次需要在 npmjs.com 手动建包并配 Trusted Publisher(Provider: GitHub Actions;填 owner / repo / `release.yml`)。
+3. `.github/workflows/release.yml` 在该 Release 发布时自动 `npm publish`(用 **npm Trusted Publishing / OIDC**,不配 `NPM_TOKEN`)。它对该版本**幂等**:发布前先 `npm view` 查 registry,查到就跳过发布并写 notice(所以给手工首发那一版建 Release 不会发失败,只会跳过);**查询失败照实报错退出**,不当成"没发过"。
+4. **第一个版本必须手工发**(`npm login` 之后 `npm publish --access public`):OIDC / Trusted Publishing 发不了首版 —— npmjs.com 要到包已经存在之后才能配 Trusted Publisher(上游 [npm/cli#8544](https://github.com/npm/cli/issues/8544) 仍 open)。首发之后再去包设置页配 Trusted Publisher(Provider: GitHub Actions;填 owner / repo / `release.yml`);⚠️ **新建配置必须在 2 天内完成一次成功发布**,否则作废且无法编辑 —— 所以配的时机是"接下来两天真的会发一版",给一个已经在 npm 上的版本建 Release **不算**验证。
 5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/en.json` / `LICENSE`,以及 README 与 AGENTS 链接到的全部文档(`README_EN` / `CONTRIBUTING` / `REVIEW` / `CHANGELOG` / `AGENTS`)与 `tools/`(事故包渲染器 + 三个 CDP 验证器,README 让用户直接跑它们,所以必须进包)—— 漏一份,npm 页面上就是一个死链。`release.yml` 的 Pack and inspect 步骤逐份 grep,漏了就失败。
 
 ---
 
 ## 11. 当前状态
 
-**v0.3.0 已就绪并已推到 origin**(`main` 与 `origin/main` 同步,`tag v0.3.0` 已推):`npm test` 当时 **342** 条全绿、
-`npm pack --dry-run` **18 个文件**、tag 与 `version` 一致。
+**v0.4.0 已发布到 npm**(2026-10-11 手工首发):`npm test` **458** 条全绿(attribution 11 / logic 408 / host 39)、
+`npm pack --dry-run` **18 个文件**、`tag v0.4.0` 与 `version` 一致且已推 origin。
+**首发只能手工** —— OIDC / Trusted Publishing 发不了第一个版本(npmjs.com 要到包存在之后才能配 Trusted Publisher,上游 [npm/cli#8544](https://github.com/npm/cli/issues/8544) 仍 open);下一个版本起走 Release 触发 `release.yml`。
 
-**v0.3.0 之后落在 `main` 上的改动**(还没 bump 版本、没打 tag):「帧里花在哪」从三段饼改成四段饼
+**0.4.0 收进的改动**:「帧里花在哪」从三段饼改成四段饼
 (脚本 / 任务里没归到脚本的 / 渲染 / 样式+布局+绘制),脚本侧再拆三层并分成**本帧与窗口两个分母**;
 随后一轮 UI 改版:折叠组变五组(新增「包 × 来源 · 窗口」`cross`,默认收起;`group()` 的 children 改成 thunk,
 收起时不算)、60 秒帧条铺满一行并挪到「取证明细」最前、可作帧导航、事故与帧改成按 id / 就近定位共享一个选中上下文、
@@ -363,11 +364,12 @@ DOM 写入挪进「DOM 与堆」、`回调归因` 未插桩时降级成一行 `�
 - **原始源码行号 / 调用栈 / 函数级耗时仍然拿不到**:要解 section 内层 `mappings`(VLQ)或录 Chrome trace。「可疑脚本」只能缩小到"哪个包的哪个文件哪一段"。
 - **函数名经常缺失**:LoAF 的 `sourceFunctionName` 在合并/压缩脚本里常常是空 —— 面板照实写「函数名未记录」,这不是 bug。
 
-**卡在哪**:`npm publish` 需要 npm 凭据,本机没有(`ENEEDAUTH`)—— 这一步等用户解锁。两条路(本机 `npm login` 后发,
-或 npmjs.com 建包 + 配 Trusted Publisher 后由 Release 触发 `release.yml`)写在 [REVIEW.md](REVIEW.md) §3.1。
-
-**仓库仍是私有**(转公开 + 加 `dsh-plugin` topic 还没做),收录 PR 还没提;三条新发现的尾巴(A5 还没接进客户端/导出件、
-D4 的 `stressText()` 死代码、`locale` 的打包边界)也记在 REVIEW §3.2。已完成的验收证据在 REVIEW §2。
+**卡在哪**:没有了 —— 0.4.0 已经发出去。**下一次发版前**只剩两件对外动作(细节在 [REVIEW.md](REVIEW.md) §3.1):
+① 在 npm 包设置页配 Trusted Publisher(Provider `GitHub Actions`,owner `yanzhaohui1999` / repo `dsh-perf-hud` / Workflow filename `release.yml`)
+—— ⚠️ 新建配置**必须在 2 天内完成一次成功发布**,否则作废且无法编辑,所以**别提前配**;
+② 收录 PR 还没提。
+`release.yml` 对"该版本已在 npm 上"幂等(发布前查 registry,查到就跳过;查询失败照实报错),所以给手工首发那一版建 Release 只会走"跳过"分支,不会再发一次。
+三条新发现的尾巴(A5 还没接进客户端/导出件、D4 的 `stressText()` 死代码、`locale` 的打包边界)也记在 REVIEW §3.2。已完成的验收证据在 REVIEW §2。
 
 ---
 

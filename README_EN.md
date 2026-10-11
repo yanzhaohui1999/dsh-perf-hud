@@ -8,12 +8,13 @@
 > worst few stalls with a full evidence pack.
 
 <p>
-<img alt="status" src="https://img.shields.io/badge/status-unpublished-orange" />
+<img alt="status" src="https://img.shields.io/badge/status-v0.4.0%20%C2%B7%20released-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.0--rc.2-4d6bfe" />
 </p>
 
-> ⚠️ **Not published to npm yet** (see [REVIEW.md](REVIEW.md)); for now install from a source checkout.
+> ✅ **v0.4.0 is on npm** — install with `dsh plugin --profile web add dsh-perf-hud` (release gates and
+> evidence: [REVIEW.md](REVIEW.md)).
 > Docs are maintained in Chinese — [README.md](README.md) is the primary version.
 
 ## Night watch: catching the stall you were not looking at
@@ -56,7 +57,7 @@ timing only observes elements carrying the `elementtiming` attribute, which DSH'
 
 ## Install
 
-Once published to npm:
+From npm:
 
 ```sh
 dsh plugin --profile web add dsh-perf-hud

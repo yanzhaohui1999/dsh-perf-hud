@@ -14,7 +14,7 @@
 | 1 | npm 元数据完整 | ✅ `license` / `repository` / `homepage` / `bugs` / `keywords` / `main` / `engines` / `peerDependencies` / `publishConfig.access: public` 都在 |
 | 2 | 包名可用 | ✅ `dsh-perf-hud` 在 npm 上 404(未被占用)—— **首发前再查一次**,名字被别人抢了就全盘皆输 |
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
-| 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ⬜ 仓库已建(私有),待转公开、加 topic |
+| 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场(2026-10-11 `gh repo view` 实测 `PUBLIC`) |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,而且 **`tools/` 与 `locale/` 按目录核**(以后加验证器或加语言文件不会漏检),显式清单 + 目录共覆盖包内全部 **18** 个文件(含 `package.json`),漏一份就失败 |
 | 6 | 门禁全绿 | ✅ 458 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
@@ -91,9 +91,9 @@
 ## 3. 还剩什么(2026-10-08 定 · 2026-10-11 复核)
 
 这一节只列**还没做的**。已完成那 12 条(D1 / A1 / A2 / A4 / A5 / B1 / B2 / B3 / C2 / D2 / D3 / D5)的做法与理由
-进了 [CHANGELOG.md](CHANGELOG.md) 的「未发布」段,判据与实测证据在本文 §2 —— 不在这里重复一遍。
-本轮 UI 改版(P0 布局可读性 / P1 可追溯诊断交互 / P2 惰性渲染)同样:做法与理由在 CHANGELOG「未发布」段,证据在 §2。
-再一轮(① 证据 → 代码定位 / ② 悬停联动调查与清理 / ③ 首屏精简 / ④ 性能与口径复核)也一样:做法与理由在 CHANGELOG「未发布」段,**实测证据在 §2**,还剩下的债在 §3.4。
+进了 [CHANGELOG.md](CHANGELOG.md) 的 [0.4.0] 段,判据与实测证据在本文 §2 —— 不在这里重复一遍。
+本轮 UI 改版(P0 布局可读性 / P1 可追溯诊断交互 / P2 惰性渲染)同样:做法与理由在 CHANGELOG 的 [0.4.0] 段,证据在 §2。
+再一轮(① 证据 → 代码定位 / ② 悬停联动调查与清理 / ③ 首屏精简 / ④ 性能与口径复核,外加事故回放与存证优先)也一样:做法与理由在 CHANGELOG 的 [0.4.0] 段,**实测证据在 §2**,还剩下的债在 §3.4。
 
 ### 3.0 不是本仓库能修的(要报给上游)
 
@@ -103,23 +103,22 @@
 
 本仓库只能把这两条做成上游能直接用的证据(事故包的 `packages` 已指向具体包与调用点),以及自己这侧不重复它们。
 
-### 3.1 对外动作(卡在仓库可见性与 npm 凭据上)
+### 3.1 对外动作
 
-- [ ] **仓库转公开 + 加 `dsh-plugin` topic**(§1 #4)。**动手前单独问一次。**
-- [ ] **npm 首发** —— 现在卡在**凭据**:本机 `npm publish` 报 `ENEEDAUTH`(0.3.0 已 bump、tag 已打、已推 origin,包没发出去)。两条路选一条:
-  - **① 本机发**:`npm login` 之后在 main 上 `npm publish`(发之前 `npm pack --dry-run` 应为 **18 个文件**);
-  - **② 纯 CI 发**:npmjs.com 建包 → 配 Trusted Publisher(Provider = GitHub Actions,填 owner / repo / `release.yml`)→ 仓库转公开 → 建 Release,`release.yml` 自动 `npm publish`(不配 `NPM_TOKEN`)。
-  两条路之前都再查一次包名是否仍空闲(§1 #2)。
+- [x] **仓库转公开 + 加 `dsh-plugin` topic**(§1 #4)—— 已公开,`dsh-plugin` 等 6 个 topic 在场(2026-10-11 实测)。
+- [x] **npm 首发** —— 2026-10-11:`npm login` 之后本机 `npm publish --access public` 发了 **0.4.0**。**首发只能手工做**:OIDC / Trusted Publishing 发不了第一个版本 —— npmjs.com 要到包已经存在之后才能配 Trusted Publisher(上游 [npm/cli#8544](https://github.com/npm/cli/issues/8544) 至今 open)。
+  - **下一次发版前要做的**:npm 包设置页 → Trusted Publishers → Provider `GitHub Actions`,owner `yanzhaohui1999` / repo `dsh-perf-hud` / Workflow filename `release.yml`,Environment 留空。⚠️ 新建配置**必须 2 天内完成一次成功发布**,否则作废且无法编辑 —— 所以配的时机是"接下来两天真的会发一版";给一个**已经在 npm 上**的版本建 Release **不算验证**(工作流会走"跳过发布"那条分支)。
+  - `release.yml` 现在对"该版本已在 npm 上"幂等:发布前查 registry,查到就跳过并写 notice;**查询失败照实报错退出**,不猜成"没发过"。
 - [ ] **提收录 PR**:只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条(§1 #7)。
 
 ### 3.2 三条尾巴(2026-10-08 新发现)
 
-1. **A5 的客户端一侧还没接线(排到 0.4.0)**:宿主路由已经能采(真宿主实测 `profileStart(1s)` → `profileGet`
+1. **A5 的客户端一侧还没接线(排到 0.5.0)**:宿主路由已经能采(真宿主实测 `profileStart(1s)` → `profileGet`
    = 292 节点 / 223 采样 / 82KB),但**客户端没有触发它的入口**,导出件里也没有宿主 profile。**声明已经改准**:
    事故包的 `missing` 现在写"宿主 CPU 火焰图**没有自动采** + 路由怎么打",不再说"拿不到"。剩下的是接线 ——
-   客户端采一次并塞进导出件,排 **0.4.0**,因为它要在宿主侧**真的花 CPU 采一段时间**,得先定触发方式
+   客户端采一次并塞进导出件,排 **0.5.0**,因为它要在宿主侧**真的花 CPU 采一段时间**,得先定触发方式
    (挂「深录」还是单独一个动作)。
-2. **事故包不带记录器自身的开销(排到 0.4.0,和上面那条一起做)**:整机导出件有 `context.recorder`
+2. **事故包不带记录器自身的开销(排到 0.5.0,和上面那条一起做)**:整机导出件有 `context.recorder`
    (`selfStats()`:`p99` / 峰 / 样本数),**事故包没有** —— 这跟尾巴 1 是同一个性质(**整机有、事故包没有**),
    所以放在一起做,别分两次。**它正是 `missing` 里 `recorder-cost` 那句的来源**:在 `incidentReport()` 的
    `context` 里加一行 `recorder: selfStats()` 之后,那句 `missing` 就不再是缺失项,应当一并删掉
@@ -158,4 +157,4 @@
 - **帧条点击只到"秒"这一级**:一格约 6px,一格里可能有多条 LoAF;`sparkPickMap` 只能取格里 `dur` 最大的那条。要逐帧选只能靠 ◀ ▶ / ⟲。
 - **第 5 个折叠组「包 × 来源 · 窗口」的摘要没有长度预算断言**:`crossSummary` 输出 `short(包) · short(来源) Nms`,名字与来源都可能很长(`dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms` = **53** 字符),在 396px 里会折行。组数从 4 变 5 时漏了这条预算;补的时候要用真实量级的名字(见 AGENTS §8 第 13 条)。
 
-**时机**:实现批已全部落地(证据在 §2),不再等什么 —— 发布只剩 §3.1 那三件对外动作。
+**时机**:0.4.0 已于 2026-10-11 发到 npm(手工首发,见 §3.1);发布这件事只剩两件:下次发版前配 Trusted Publisher、提收录 PR。

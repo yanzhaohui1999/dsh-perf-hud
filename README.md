@@ -6,15 +6,15 @@
 > **守夜层:偶发卡顿自动留存最差几次,连证据一次性导出**。
 
 <p>
-<img alt="status" src="https://img.shields.io/badge/status-v0.3.0%20%C2%B7%20%E5%BE%85%E5%8F%91%E5%B8%83-orange" />
+<img alt="status" src="https://img.shields.io/badge/status-v0.4.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.0--rc.2-4d6bfe" />
 </p>
 
 <p align="center">🌏 <b>中文</b> · <a href="./README_EN.md">English</a></p>
 
-> ⚠️ **v0.3.0 已就绪,还没发到 npm** —— 首发卡在 npm 凭据(见 [REVIEW.md](REVIEW.md) §3.1)。现在请从源码目录安装;
-> 发布之后这一行会改成 `dsh plugin --profile web add dsh-perf-hud`。
+> ✅ **v0.4.0 已发布到 npm** —— `dsh plugin --profile web add dsh-perf-hud` 即可(发布门槛与验收证据见
+> [REVIEW.md](REVIEW.md))。
 
 ## 📑 目录
 
@@ -99,7 +99,7 @@ __perfHud.clearIncidents()    // 只清事故;clear() 刻意不动它
 
 ## 🚀 安装
 
-发布到 npm 后:
+从 npm 安装:
 
 ```sh
 dsh plugin --profile web add dsh-perf-hud
