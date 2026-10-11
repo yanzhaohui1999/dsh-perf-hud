@@ -3512,6 +3512,431 @@ window.__ModuleLoader__.load({
 		};
 		const mb = (bytes) => (bytes / 1048576).toFixed(1);
 
+		// ───────────────────── 能力矩阵与证据出处(导出件的自证部分)─────────────────────
+		/**
+		 * 出处三档。**每个结论都要能回答"这是量出来的还是推出来的"** —— 这是本项目
+		 * 所有"别把相关写成根因"规矩的落点:
+		 *   measured = 直接测量(观察器 / 计数器给的,不是算出来的);
+		 *   inferred = 归因推断(URL、sourcemap 分段表、时间重叠、采样折算);
+		 *   unknown  = 证据不足(拿不到就说拿不到,不补默认值)。
+		 */
+		function provenanceOf(kind) {
+			return kind === 'measured' || kind === 'inferred' || kind === 'unknown' ? kind : 'unknown';
+		}
+
+		/**
+		 * 能力矩阵:每一条证据来源现在处于什么状态、为什么、属于哪一档出处。
+		 * 这是**唯一的事实来源** —— `capabilityMissing()` 与导出件都读它,免得"某一层没采到"
+		 * 这件事在三个地方各说各话(以前 `missing` / `howToAdd` 是手写的一串 if)。
+		 * state 取值:on / degraded / off / unsupported;`reason` 一律是**给用户看的原因**。
+		 */
+		function capabilities() {
+			const watch = state.watch;
+			const maps = { pending: 0, ready: 0, failed: 0 };
+			for (const entry of bundleMaps.values()) maps[entry.state] = (maps[entry.state] ?? 0) + 1;
+			const host = state.host;
+			const loop = host === null || host === undefined ? null : host.eventLoop ?? null;
+			const io = state.watch.interactions.length;
+			// 读数一律**防御性取值**:能力矩阵的职责是"照实说现在有什么",不是"假设字段一定在"
+			const taskRows = Array.isArray(state.longTasks) ? state.longTasks.length : 0;
+			const taskTotal = typeof state.ltTotal === 'number' ? state.ltTotal : taskRows;
+			const linkCount = Array.isArray(state.link) ? state.link.length : 0;
+			const loadState = state.loadState ?? 'pending';
+			const frameCount = frameRing !== undefined && frameRing !== null && typeof frameRing.size === 'number' ? frameRing.size : 0;
+			const leaf = (capState, provenance, reason) => ({ state: capState, provenance: provenanceOf(provenance), reason: reason ?? '' });
+			return {
+				schema: 1,
+				renderer: {
+					frames: leaf(state.on === true ? 'on' : 'off', 'measured',
+						state.on === true ? `帧环 ${frameCount} 帧` : 'HUD 已关闭,帧环没有在采'),
+					loaf: leaf(watch.loafState === 'on' ? 'on' : (watch.loafState === 'unsupported' || String(watch.loafState).startsWith('unsupported') ? 'unsupported' : 'off'),
+						'measured', `LoAF 观察器:${watch.loafState}`),
+					longTasks: leaf(state.on === true ? 'on' : 'off', 'measured', `longtask 明细 ${taskRows} 条 / 累计 ${taskTotal} 条`),
+					// 脚本这一层是**混合**的:函数名与毫秒是 LoAF 直接给的,包名 / 文件 / 行号是推断出来的
+					scriptAttribution: leaf(state.precise === true ? (maps.pending > 0 ? 'degraded' : 'on') : 'degraded', 'inferred',
+						state.precise === true
+							? `精确归因已开;分段表 pending ${maps.pending} / ready ${maps.ready} / failed ${maps.failed}`
+							: '精确归因没开:合并批次只能给整批,拿不到单包名'),
+					domWrites: leaf(state.deep === true ? 'degraded' : 'off', 'inferred',
+						state.deep === true ? `插桩已开(DOM 写入按 1/${MUT_SAMPLE} 采样,估算是折算的)` : '深录没开:DOM 写入者没有记账'),
+					interactions: leaf(watch.eventState === 'on' ? 'on' : (String(watch.eventState).startsWith('unsupported') ? 'unsupported' : 'off'),
+						'measured', `交互计时:${watch.eventState}(窗口内保留 ${io} 条)`),
+					elementTiming: leaf('unsupported', 'unknown', 'DSH 的 DOM 上没有 elementtiming 属性,这一路恒为 0'),
+				},
+				host: {
+					eventLoop: leaf(loop === null ? 'off' : 'on', 'measured',
+						loop === null ? (state.hostError === null || state.hostError === undefined ? '还没拿到宿主快照' : `宿主路由不可达:${state.hostError}`) : `p50/p99/max 已采(${host.at ?? '—'})`),
+					events: leaf(state.hostEvents === null || state.hostEvents === undefined ? 'off' : (state.hostEvents.installed === true ? 'on' : 'degraded'), 'measured',
+						state.hostEvents === null || state.hostEvents === undefined ? '还没请求宿主事件监听' : `session/event 到达延迟:${state.hostEvents.installed === true ? '已装' : state.hostEvents.reason ?? '没装上'}`),
+					cpuProfile: leaf('off', 'unknown', '宿主路由能采 Node CPU profile,客户端还没接线(要动宿主半,排在后面)'),
+				},
+				link: {
+					rtt: leaf(linkCount > 0 ? 'on' : 'off', 'measured', `链路样本 ${linkCount} 条(环形缓冲里全部)`),
+					throughput: leaf(loadState === 'ok' ? 'on' : (String(loadState).startsWith('failed') ? 'degraded' : 'off'), 'measured', `吞吐采样:${loadState}`),
+				},
+				// 明确**不观测**的东西:不假装有,也不给默认值
+				unobserved: [
+					{ id: 'gpu-compositor', reason: '帧时间花在合成 / 光栅 / GPU 的哪一段,页面内没有 API' },
+					{ id: 'electron-main', reason: 'Electron 主进程 / GPU 进程这一层本插件没有采' },
+					{ id: 'raw-source-lines', reason: '原始源码(TS/TSX)行号要解 section 内层 mappings 的 VLQ,本项目没做' },
+					{ id: 'frame-inner-order', reason: '帧内脚本的起止顺序 LoAF 不给(只给每条脚本的时长)' },
+					{ id: 'devtools-trace', reason: '完整 Chrome trace 需要 DevTools 录制,页面内录不了' },
+				],
+			};
+		}
+
+		/**
+		 * 事故包里的缺失声明。**从能力矩阵推**(而不是手写一串 if),但保留每一行的
+		 * `前缀:` 形状与原有措辞 —— 线上/离线都靠前缀断言(见 tests/logic.mjs)。
+		 * `row` 为 null 时只给与这一条事故无关的整机级缺失。
+		 */
+		function capabilityMissing(row) {
+			const caps = capabilities();
+			const missing = [];
+			const howToAdd = [];
+			const incident = row ?? null;
+			const summary = incident === null ? null : incident.summary ?? {};
+			const loaf = caps.renderer.loaf;
+			if (loaf.state !== 'on') {
+				missing.push(`loaf:脚本级归因(这一层唯一的"谁"的来源)—— ${state.watch.loafState}`);
+				howToAdd.push('LoAF 要 Chrome 123+ 且非 dsh-app:// 源;不满足时只能靠既有 longtask 明细与人工 trace');
+			} else if (incident !== null && summary.topScripts.length === 0) {
+				missing.push('loaf-scripts:这一帧没有脚本(<5ms 的脚本不上报;Mac/Windows 桌面端 dsh-app:// 上恒为空)');
+			} else if (incident !== null && summary.pkgCoverage !== undefined && summary.pkgCoverage.resolved < summary.pkgCoverage.total) {
+				// 用完整分布(summary.pkgVia),不要只数 topScripts —— 否则会写出"2/11 没定到(not-plugin×1)"这种自相矛盾的话
+				const all = summary.pkgVia ?? {};
+				const unresolved = Object.entries(all).filter(([key]) => key !== 'url' && key !== 'section');
+				missing.push(`loaf-pkg:${summary.pkgCoverage.total - summary.pkgCoverage.resolved}/${summary.pkgCoverage.total} 条脚本没定到包名(${unresolved.map(([k, v]) => `${k}×${v}`).join(' · ') || '原因见 summary.pkgVia'})`);
+			}
+			if (state.on === false) {
+				missing.push('instrumentation:四条腿的归因(没插桩就没有 DOM 写入与调度点包名)');
+				howToAdd.push('打开 HUD(面板「开启」或 __perfHud.enable())');
+			}
+			if (incident !== null && incident.env.precise === false) {
+				missing.push('precise:合并批次里的单包名 —— 也包含 LoAF 脚本的 scripts[].pkg(需要精确归因,会拉那份 12MB 的 map)');
+				howToAdd.push('面板「深录」(它同时打开精确归因)或 __perfHud.setPrecise(true) —— 只能改善之后抓到的事故,这一条不会重放');
+			}
+			missing.push('devtools-trace:完整的 Chrome trace(页面内录不了)');
+			// A4:交互延迟采到了什么、没采到什么,一律照实写
+			if (caps.renderer.interactions.state !== 'on') {
+				missing.push(`interaction-timing:交互延迟(event timing)—— ${state.watch.eventState}`);
+				howToAdd.push('event timing 要 Chrome 96+;装不上时这一层给不出"点了多久才反应"');
+			} else if (incident !== null && summary.interactionsInWindow === 0) {
+				missing.push(`interaction-timing:这个窗口里没有 ≥${WATCH_EVENT_MS}ms 的交互(阈值以下的事件不记;长时间没有真人操作也会是 0)`);
+				howToAdd.push('复现时真的点几下(≥100ms 的交互才会进环形缓冲),再导出');
+			}
+			if (state.watch.elementCount === 0) {
+				missing.push('element-timing:元素渲染时刻 —— element timing 只观察带 elementtiming 属性的元素,DSH 的 DOM 上没有这个属性,所以这一路恒为 0(照实记,不假装采到)');
+			}
+			missing.push('interaction-breakdown:单次交互内部"输入延迟 / 处理 / 呈现"的拆分 —— 页面内没有 API,这里只有端到端时长与 processingStart/End');
+			howToAdd.push('要拆交互的三段:DevTools → Performance 录制,Hover 到 Interactions 轨道上那一下,看 Input delay / Processing / Presentation');
+			howToAdd.push('DevTools → Performance → 录制(勾 include script source maps)→ Save trace → Perfetto 打开');
+			missing.push('compositor:帧时间到底花在合成 / 光栅 / GPU 的哪一段(这一层只看得到主线程侧)');
+			missing.push('recorder-cost:本记录器自身的开销**没带在这份事故包里**(它每帧跑一次 rAF 采样;面板「记录器自身」与整机导出件的 context.recorder 有 p99 / 峰 / 样本数)');
+			missing.push('baseline:跨机器 / 跨浏览器的对照基线 —— context.sessionBaselines 只来自同一个浏览器 profile,而且只是粗参照');
+			if (incident === null || incident.host === null) {
+				missing.push('host:没有任何宿主快照(宿主半未加载或路由不可达)');
+			} else {
+				missing.push(`host-cpuprofile:宿主进程的 CPU 火焰图**没有自动采** —— 路由已经能采(POST {op:'profileStart', seconds} / {op:'profileGet'},真宿主实测 1 秒 = 292 节点 / 223 采样 / 82KB),但客户端还没接线,要的话手动打一次;而这份宿主快照是${incident.host.snapshotAgeMs >= 0 ? `事故前 ${incident.host.snapshotAgeMs}ms` : `事故**后** ${-incident.host.snapshotAgeMs}ms`}采的(每 10 秒一次),未必覆盖卡顿瞬间;别把它当"宿主没问题"的证据`);
+			}
+			howToAdd.push('零成本、当场可做:chrome://gpu 看是不是落到了软件渲染;DevTools → Rendering 打开 Frame Rendering Stats(FPS 表)与 Paint flashing —— 页面完全静止时帧率是否也上不去');
+			howToAdd.push('判定"主线程之外":Performance 面板录 5 秒,看 Main 轨道自身的忙碌时间是否远小于墙钟 —— 注意 blocking=0 / scripts 为空**不能**当证据(见上面的读取说明),要看 Main 轨道本身');
+			howToAdd.push('宿主火焰图:插件自带路由就能采 —— 带宿主 cookie(见 AGENTS §2.2)POST /api/dsh-perf-hud/host {op:"profileStart", seconds:5},再 POST {op:"profileGet"} 取回标准 .cpuprofile(speedscope 打开);退一步也可以 kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record');
+			return { missing, howToAdd, capabilities: caps };
+		}
+
+		// ───────────────── 可能原因:候选假设 + 支持 / 限制 / 出处 ─────────────────
+		const CAUSE_MAX = 3;
+
+		/** 出处 / 线索强度的文字档位 —— 只给名字,颜色与排版由 UI 那一侧定。 */
+		function provenanceText(kind) {
+			// 逐分支写**字面量**键:logic.mjs 的"死键"断言只认字面量 translate('…'),
+			// 拼出来的键名它看不见,于是会被当成"没人引用"报出来(踩过)。
+			if (kind === 'measured') return translate('provenanceMeasured');
+			if (kind === 'inferred') return translate('provenanceInferred');
+			return translate('provenanceUnknown');
+		}
+
+		function strengthText(level) {
+			if (level === 'strong') return translate('strengthStrong');
+			if (level === 'medium') return translate('strengthMedium');
+			if (level === 'weak') return translate('strengthWeak');
+			return translate('strengthNone');
+		}
+
+		/**
+		 * 候选原因(最多 `CAUSE_MAX` 条)。**这是"可能原因"那一块的唯一生成处**,面板与
+		 * 诊断包读同一份 —— 所以"面板上说 A、导出件里说 B"在结构上不会发生。
+		 *
+		 * 三条不许越界(与 §7 的归因三档同源):
+		 *   ① 每条候选都带 `limits`,而且限制里一定有那句"不等于已定位根因";
+		 *   ② `worstFrameJs === 'none'` 时**不**给节流结论:要么是"更可能"(只有 `suspectedThrottle`
+		 *      成立时),要么就是"证据不足";
+		 *   ③ 每条候选的 `basis` 全部来自**已经采到的字段**,不合成、不推测。
+		 */
+		function causeCandidates(row) {
+			if (row === null || row === undefined) return [];
+			const summary = row.summary ?? {};
+			const out = [];
+			const notRoot = translate('verdictNotRootCause');
+			// ① 脚本 / 包这一支:毫秒是直接测的,包名是推断的
+			const packages = Array.isArray(row.packages) ? row.packages : [];
+			const cov = summary.pkgCoverage ?? { resolved: 0, total: 0 };
+			if (packages.length > 0) {
+				const top = packages[0];
+				const covered = cov.total === 0 ? true : cov.resolved >= cov.total * 0.8;
+				const basis = [`${top.pkg} · ${Math.round(top.ms)}ms · ${top.count}${translate('scriptsUnit')}`,
+					`${translate('pkgNamed')} ${cov.resolved}/${cov.total}`];
+				const limits = [notRoot];
+				if (cov.resolved < cov.total) limits.push(`${cov.total - cov.resolved}${translate('scriptsUnit')}${translate('causeUnresolvedSuffix')}`);
+				out.push({
+					kind: 'script',
+					lead: translate('causeScriptLead'),
+					name: top.pkg,
+					strength: top.ms >= 100 && covered ? 'strong' : 'medium',
+					basis,
+					limits,
+					provenance: 'inferred',
+				});
+			}
+			// ② long task 的四条腿(owner = 调度方包名 / component = 渲染方组件名)
+			const tasks = Array.isArray(row.longTasks) ? row.longTasks : [];
+			const byWho = new Map();
+			for (const task of tasks) {
+				const name = task.component ?? task.owner ?? null;
+				if (name === null || name === undefined) continue;
+				byWho.set(name, round1((byWho.get(name) ?? 0) + (typeof task.ms === 'number' ? task.ms : 0)));
+			}
+			const ranked = [...byWho.entries()].sort((a, b) => b[1] - a[1]);
+			if (ranked.length > 0) {
+				const [name, ms] = ranked[0];
+				out.push({
+					kind: 'longtask',
+					lead: translate('causeLongTaskLead'),
+					name,
+					strength: ms >= 100 ? 'medium' : 'weak',
+					basis: [`${name} · ${ms}ms`, `${translate('cumulative')} ${ranked.length}${translate('times')}`],
+					limits: [notRoot, translate('causeLongTaskLimit')],
+					provenance: 'inferred',
+				});
+			}
+			// ③ 宿主事件循环(有快照才提,快照年龄写在支持证据里)
+			const host = row.host;
+			const loop = host === null || host === undefined ? null : host.eventLoop ?? null;
+			if (loop !== null && typeof loop.p99 === 'number' && loop.p99 > 50) {
+				const age = typeof host.snapshotAgeMs === 'number' ? host.snapshotAgeMs : null;
+				out.push({
+					kind: 'host',
+					lead: translate('causeHostLead'),
+					name: translate('hostShort'),
+					strength: loop.p99 > 200 ? 'strong' : 'medium',
+					basis: [`${translate('causeHostBasis')} ${loop.p50}ms / ${loop.p99}ms`,
+						age === null ? translate('notYet') : `${translate('maxLabel')} ${age >= 0 ? '-' : '+'}${Math.abs(age)}ms`],
+					limits: [notRoot, translate('hostSnapshotNotInstant')],
+					provenance: 'measured',
+				});
+			}
+			// ④ JS 证据缺失那一支:不许把"没证据"写成"浏览器节流"
+			if (summary.worstFrameJs === 'none') {
+				const throttle = summary.suspectedThrottle === true;
+				out.push({
+					kind: 'unknown',
+					lead: translate('causeNoEvidenceLead'),
+					name: null,
+					strength: throttle ? 'weak' : 'none',
+					basis: [throttle ? translate('verdictThrottleText') : translate('verdictUnattributedText')],
+					limits: [translate('jsNo')],
+					provenance: 'unknown',
+				});
+			}
+			return out.slice(0, CAUSE_MAX);
+		}
+
+		// ───────────────────────── 诊断包(给人看,也给 AI 读)─────────────────────────
+		/**
+		 * 包是**数据**,不是界面文案:构建全在这几个纯函数里,UI 只负责下载。
+		 * 好处很直接 —— 摘要、manifest、脱敏都能在离线套件里断言,不用开浏览器;
+		 * 而且以后换界面、加 MCP,这份格式不用跟着动(产品计划 §3.B 要的就是这个解耦)。
+		 *
+		 * ⚠️ 包内**不含**聊天正文、提示词、Cookie、Token、请求头 —— 不是"筛掉了",是本来就没采
+		 * (`capabilities` / `redactionReport` 里都照实写着)。
+		 */
+		const PACK_SCHEMA_VERSION = 1;
+
+		function manifestFor(row, options) {
+			const caps = capabilities();
+			const win = row === null || row === undefined ? null : row.window ?? null;
+			const raw = {
+				schemaVersion: PACK_SCHEMA_VERSION,
+				kind: 'dsh-perf-hud-diagnostic-pack',
+				plugin: PKG,
+				pluginVersion: state.host === null || state.host === undefined ? null : state.host.pluginVersion ?? null,
+				dshVersion: state.host === null || state.host === undefined ? null : state.host.dshVersion ?? null,
+				platform: {
+					page: location.href,
+					userAgent: navigator.userAgent,
+					viewport: `${W.innerWidth}×${W.innerHeight}`,
+					devicePixelRatio: W.devicePixelRatio,
+					hardwareConcurrency: navigator.hardwareConcurrency ?? null,
+					utcOffsetMin: -new Date().getTimezoneOffset(),
+				},
+				captureTier: state.deep === true ? 'deep' : 'watch',
+				instrumented: state.on === true && state.deep === true,
+				language: docLang(),
+				exportedAt: new Date().toISOString(),
+				range: win === null ? null : { from: win.from ?? null, to: win.to ?? null, preMs: win.preMs ?? null, postMs: win.postMs ?? null },
+				incident: row === null || row === undefined ? null : {
+					id: row.id, at: row.at, cause: row.cause, severity: row.severity,
+					frames: Array.isArray(row.frames) ? row.frames.length : 0,
+					loafEntries: Array.isArray(row.loaf) ? row.loaf.length : 0,
+					longTasks: Array.isArray(row.longTasks) ? row.longTasks.length : 0,
+					interactions: Array.isArray(row.interactions) ? row.interactions.length : 0,
+				},
+				tally: tallyReport(),
+				capabilities: caps,
+				// 这份包**不含**什么:与 redactionReport 的 neverCollected 是同一份口径
+				notIncluded: [
+					'聊天正文与提示词(本插件从不读取被测量的 DOM 内容)',
+					'Cookie / Token / 请求头(只读 performance 观察器与自己的宿主路由回执)',
+					'宿主进程的 CPU profile(路由能采,但这份包没有自动采)',
+				],
+				files: ['summary.md', 'manifest.json', 'incident.json', 'README.md'],
+			};
+			const safe = redactExport(raw, options);
+			safe.redaction = redactionReport(options);
+			return safe;
+		}
+
+		/** 摘要的固定形态:摘要 → 假设 → 缺失 → 下一步 → 元信息(产品计划 §4 要求的那六段)。 */
+		function diagnosticSummary(row, options) {
+			const t = translate;
+			const lines = [t('packSummaryTitle'), ''];
+			const verdict = incidentVerdict(row);
+			const owner = incidentOwner(row);
+			const win = row.window ?? {};
+			const span = typeof win.fromMs === 'number' && typeof win.toMs === 'number' ? round1(win.toMs - win.fromMs) : null;
+			lines.push(t('packSecSummary'));
+			lines.push(`- ${t('sevLabel')}:${severityText(severityLevel(row.severity))}(${Math.round(row.severity)}ms)`);
+			lines.push(`- ${t('worstEvent')}:${row.at}${row.note === null || row.note === undefined ? '' : ` · ${row.note}`}`);
+			lines.push(`- ${t('evWindow')}:${span === null ? t('none') : `${Math.round(span)}ms`} · ${Array.isArray(row.frames) ? row.frames.length : 0}${t('framesUnit')}`);
+			lines.push(`- ${t('verdictLabel')}:${t(verdict.level === 'confirmed' ? 'verdictConfirmed' : verdict.level === 'suspected' ? 'verdictSuspected' : 'verdictUnattributed')}`);
+			lines.push('');
+			// 假设
+			const candidates = causeCandidates(row);
+			lines.push(t('packSecCandidates'));
+			if (candidates.length === 0) {
+				lines.push(`- ${t('packNoCandidate')}`);
+			} else {
+				candidates.forEach((item, index) => {
+					lines.push(`### ${t('packCauseLabel')} ${index + 1}:${item.lead}${item.name === null ? '' : ` · ${item.name}`} —— ${strengthText(item.strength)}`);
+					lines.push(`- ${t('packSupport')}:${item.basis.join(' / ')}`);
+					lines.push(`- ${t('packLimits')}:${item.limits.join(' / ')}`);
+					lines.push(`- ${t('packProvenance')}:${provenanceText(item.provenance)}`);
+					lines.push('');
+				});
+			}
+			// 缺失 / 下一步 / 元信息
+			const gaps = capabilityMissing(row);
+			lines.push(t('packSecMissing'));
+			for (const line of gaps.missing) lines.push(`- ${line}`);
+			lines.push('');
+			lines.push(t('packSecNext'));
+			for (const line of gaps.howToAdd) lines.push(`- ${line}`);
+			lines.push('');
+			lines.push(t('packSecMeta'));
+			lines.push(`- plugin:${PKG}${state.host === null || state.host === undefined || state.host.pluginVersion === undefined ? '' : ` v${state.host.pluginVersion}`}`);
+			lines.push(`- ${t('packTier')}:${state.deep === true ? t('deepShort') : t('watch')}`);
+			lines.push(`- exportedAt:${new Date().toISOString()}`);
+			lines.push(`- schemaVersion:${PACK_SCHEMA_VERSION}`);
+			if (owner !== null) lines.push(`- ${t('evOwner')}:${owner.name} · ${Math.round(owner.ms)}ms`);
+			lines.push('');
+			return lines.join('\n');
+		}
+
+		/** 包里的 README:告诉人(和 AI)这份包是什么、怎么读、缺什么。跟着界面语言走。 */
+		function packReadme(options) {
+			const t = translate;
+			return [
+				t('packReadmeTitle'),
+				'',
+				t('packReadmeWhat'),
+				t('packReadmeHow'),
+				t('packReadmePrivacy'),
+				t('packReadmeNotes'),
+				'',
+			].join('\n');
+		}
+
+		/**
+		 * 构建诊断包(不下载)。返回 `{ files, preview }` —— 顺序固定,`manifest.json` 在最前,
+		 * 因为它是"这份包该怎么读"的入口。
+		 */
+		function buildPack(id, options) {
+			const row = pickIncident(id);
+			if (row === null || row === undefined) return null;
+			const opts = options ?? {};
+			const report = incidentReport(id, opts);
+			const files = [
+				{ name: 'manifest.json', text: JSON.stringify(manifestFor(row, opts), null, 2) },
+				{ name: 'summary.md', text: diagnosticSummary(row, opts) },
+				{ name: 'incident.json', text: JSON.stringify(report, null, 2) },
+				{ name: 'README.md', text: packReadme(opts) },
+			];
+			return { files, preview: packPreview(id, opts, files) };
+		}
+
+		/**
+		 * 导出预览:即将包含哪些文件、各多大、脱了什么、哪些证据是缺的。
+		 * `files` 传进来就直接算(避免重复构建),否则只算清单不算内容。
+		 */
+		function packPreview(id, options, files) {
+			const row = pickIncident(id);
+			if (row === null || row === undefined) return null;
+			const opts = options ?? {};
+			const list = files ?? buildPack(id, opts)?.files ?? [];
+			const gaps = capabilityMissing(row);
+			return {
+				incident: { id: row.id, at: row.at, severity: row.severity },
+				tier: state.deep === true ? 'deep' : 'watch',
+				files: list.map((file) => ({
+					name: file.name,
+					bytes: file.text.length,
+				})),
+				includes: [
+					'事故的结构化证据:帧序列 / LoAF / 窗口内 long task / 环境读数',
+					'能力矩阵与缺失声明(哪一层采到了、哪一层没有、为什么)',
+					'发生频次(最近 24 小时的滚动计数)',
+				],
+				excludes: capabilities().unobserved.map((item) => `${item.id}:${item.reason}`),
+				redaction: redactionReport(opts),
+				missingCount: gaps.missing.length,
+				nextStepCount: gaps.howToAdd.length,
+				note: translate('packPreviewNote'),
+			};
+		}
+
+		/**
+		 * 下载整包。**临时实现:P0 阶段逐个文件下载**(浏览器不喜欢一次弹好几个下载,
+		 * 但这里只有 3~4 个小文件);P1 会换成一个 store-only 的 zip,一次点完。
+		 * 返回 false 表示没这个 id(不静默成功)。
+		 */
+		function exportPack(id, options) {
+			const pack = buildPack(id, options);
+			if (pack === null) return false;
+			pack.files.forEach((file, index) => {
+				natives.setTimeout(() => {
+					const blob = new Blob([file.text], { type: file.name.endsWith('.json') ? 'application/json' : 'text/markdown' });
+					const url = URL.createObjectURL(blob);
+					const link = document.createElement('a');
+					link.href = url;
+					link.download = `${incidentFileName(pickIncident(id), pickIncident(id).at).replace(/\.json$/, '')}-${file.name}`;
+					link.click();
+					natives.setTimeout(() => URL.revokeObjectURL(url), 2000);
+				}, index * 400);   // 间隔一下:同时触发多个下载会被浏览器拦掉一部分
+			});
+			return true;
+		}
+
 		// ───────────────────────────── 导出脱敏(离开本机的文件先做减法)─────────────────────────────
 		/**
 		 * 导出件会被交到外部 AI / 同事手里,所以**先做减法,再把减了什么写进 `context.redaction`**。
@@ -3672,6 +4097,8 @@ window.__ModuleLoader__.load({
 					},
 					// 发生频次(跨刷新,最近 24h 滚动窗口)—— 与上面的 store(本次会话)不是同一窗口
 					tally: tallyReport(),
+					// 能力矩阵:哪一层采到了、哪一层没有、为什么 —— 与事故包读同一份函数
+					capabilities: capabilities(),
 					// A2:跨会话基线(每个会话一条,只进导出件)。口径写在 note 里
 					sessionBaselines: sessionBaselines(),
 					thresholds: {
@@ -3817,52 +4244,10 @@ window.__ModuleLoader__.load({
 		function incidentReport(id, options) {
 			const incident = pickIncident(id);
 			if (incident === null || incident === undefined) return null;
-			const missing = [];
-			const howToAdd = [];
-			if (state.watch.loafState !== 'on') {
-				missing.push(`loaf:脚本级归因(这一层唯一的"谁"的来源)—— ${state.watch.loafState}`);
-				howToAdd.push('LoAF 要 Chrome 123+ 且非 dsh-app:// 源;不满足时只能靠既有 longtask 明细与人工 trace');
-			} else if (incident.summary.topScripts.length === 0) {
-				missing.push('loaf-scripts:这一帧没有脚本(<5ms 的脚本不上报;Mac/Windows 桌面端 dsh-app:// 上恒为空)');
-			} else if (incident.summary.pkgCoverage !== undefined && incident.summary.pkgCoverage.resolved < incident.summary.pkgCoverage.total) {
-				// 用完整分布(summary.pkgVia),不要只数 topScripts —— 否则会写出"2/11 没定到(not-plugin×1)"这种自相矛盾的话
-				const all = incident.summary.pkgVia ?? {};
-				const unresolved = Object.entries(all).filter(([key]) => key !== 'url' && key !== 'section');
-				missing.push(`loaf-pkg:${incident.summary.pkgCoverage.total - incident.summary.pkgCoverage.resolved}/${incident.summary.pkgCoverage.total} 条脚本没定到包名(${unresolved.map(([k, v]) => `${k}×${v}`).join(' · ') || '原因见 summary.pkgVia'})`);
-			}
-			if (state.on === false) {
-				missing.push('instrumentation:四条腿的归因(没插桩就没有 DOM 写入与调度点包名)');
-				howToAdd.push('打开 HUD(面板「开启」或 __perfHud.enable())');
-			}
-			if (incident.env.precise === false) {
-				missing.push('precise:合并批次里的单包名 —— 也包含 LoAF 脚本的 scripts[].pkg(需要精确归因,会拉那份 12MB 的 map)');
-				howToAdd.push('面板「深录」(它同时打开精确归因)或 __perfHud.setPrecise(true) —— 只能改善之后抓到的事故,这一条不会重放');
-			}
-			missing.push('devtools-trace:完整的 Chrome trace(页面内录不了)');
-			// A4:交互延迟采到了什么、没采到什么,一律照实写
-			if (state.watch.eventState !== 'on') {
-				missing.push(`interaction-timing:交互延迟(event timing)—— ${state.watch.eventState}`);
-				howToAdd.push('event timing 要 Chrome 96+;装不上时这一层给不出"点了多久才反应"');
-			} else if (incident.summary.interactionsInWindow === 0) {
-				missing.push(`interaction-timing:这个窗口里没有 ≥${WATCH_EVENT_MS}ms 的交互(阈值以下的事件不记;长时间没有真人操作也会是 0)`);
-				howToAdd.push('复现时真的点几下(≥100ms 的交互才会进环形缓冲),再导出');
-			}
-			if (state.watch.elementCount === 0) {
-				missing.push('element-timing:元素渲染时刻 —— `element` timing 只观察带 `elementtiming` 属性的元素,DSH 的 DOM 上没有这个属性,所以这一路恒为 0(照实记,不假装采到)');
-			}
-			missing.push('interaction-breakdown:单次交互内部"输入延迟 / 处理 / 呈现"的拆分 —— 页面内没有 API,这里只有端到端时长与 processingStart/End');
-			howToAdd.push('要拆交互的三段:DevTools → Performance 录制,Hover 到 Interactions 轨道上那一下,看 Input delay / Processing / Presentation');
-			howToAdd.push('DevTools → Performance → 录制(勾 include script source maps)→ Save trace → Perfetto 打开');
-			missing.push('compositor:帧时间到底花在合成 / 光栅 / GPU 的哪一段(这一层只看得到主线程侧)');
-			missing.push('recorder-cost:本记录器自身的开销**没带在这份事故包里**(它每帧跑一次 rAF 采样;面板「记录器自身」与整机导出件的 `context.recorder` 有 p99 / 峰 / 样本数)');
-			// A2 落地之后剩下的缺口是"跨机器 / 跨浏览器",不再是"没有对照基线"
-			missing.push('baseline:跨机器 / 跨浏览器的对照基线 —— context.sessionBaselines 只来自同一个浏览器 profile,而且只是粗参照');
-			missing.push(incident.host === null
-				? 'host:没有任何宿主快照(宿主半未加载或路由不可达)'
-				: `host-cpuprofile:宿主进程的 CPU 火焰图**没有自动采** —— 路由已经能采(POST {op:'profileStart', seconds} / {op:'profileGet'},真宿主实测 1 秒 = 292 节点 / 223 采样 / 82KB),但客户端还没接线,要的话手动打一次;而这份宿主快照是${incident.host.snapshotAgeMs >= 0 ? `事故前 ${incident.host.snapshotAgeMs}ms` : `事故**后** ${-incident.host.snapshotAgeMs}ms`}采的(每 10 秒一次),未必覆盖卡顿瞬间;别把它当"宿主没问题"的证据`);
-			howToAdd.push('零成本、当场可做:chrome://gpu 看是不是落到了软件渲染;DevTools → Rendering 打开 Frame Rendering Stats(FPS 表)与 Paint flashing —— 页面完全静止时帧率是否也上不去');
-			howToAdd.push('判定"主线程之外":Performance 面板录 5 秒,看 Main 轨道自身的忙碌时间是否远小于墙钟 —— 注意 blocking=0 / scripts 为空**不能**当证据(见上面的读取说明),要看 Main 轨道本身');
-			howToAdd.push('宿主火焰图:插件自带路由就能采 —— 带宿主 cookie(见 AGENTS §2.2)POST /api/dsh-perf-hud/host {op:"profileStart", seconds:5},再 POST {op:"profileGet"} 取回标准 .cpuprofile(speedscope 打开);退一步也可以 kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record');
+			// 缺失声明**由能力矩阵推**(唯一事实来源),不再手写一串 if —— 前缀仍是线上断言认的那几个
+			const gaps = capabilityMissing(incident);
+			const missing = gaps.missing;
+			const howToAdd = gaps.howToAdd;
 			const payload = {
 				plugin: PKG,
 				kind: 'perf-hud-incident',
@@ -4498,6 +4883,14 @@ window.__ModuleLoader__.load({
 			/** 事故包:report(id) 拿对象(不下载),exportIncident(id) 触发下载。 */
 			report: incidentReport,
 			exportIncident,
+			/** 能力矩阵:哪一层采到了、哪一层没有、为什么、属于哪一档出处。 */
+			capabilities,
+			/** 可能原因(候选假设):面板与诊断包读同一份,所以两边不会各说各话。 */
+			causes: (id) => causeCandidates(pickIncident(id ?? 'latest')),
+			/** 诊断包:pack(id) 拿对象(不下载)、preview(id) 只看清单、exportPack(id) 逐个文件下载(P1 换 zip)。 */
+			pack: buildPack,
+			preview: (id, options) => packPreview(id, options),
+			exportPack,
 			/** 只清事故,不动别的读数 —— 与 clear() 分开,免得手滑丢掉等了很久的证据。 */
 			clearIncidents() {
 				state.watch.incidents.length = 0;
@@ -5892,6 +6285,23 @@ window.__ModuleLoader__.load({
 				watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回',
 				watchDetected: '检测', watchKept: '已保存现场', watchLost: '丢失', tallyUnit: ' 份',
 				tallyCoalesced: '同串触发', tallyCoalescedHint: '同一串卡顿里被并掉的触发数(密度,不是次数)',
+				// 可能原因(候选假设)与诊断包:线索强度 / 出处三档 / 包的固定形态
+				causeScriptLead: '脚本耗时最高的包', causeLongTaskLead: '长任务归属', causeHostLead: '宿主事件循环', causeNoEvidenceLead: '缺少 JS 阻塞证据',
+				causeUnresolvedSuffix: '没定到包名', causeHostBasis: '事故前后的宿主事件循环', causeLongTaskLimit: '四条腿只覆盖三次调度的回调与 DOM 写入,事件处理器 / Promise / 微任务不在内(所以这是下界)',
+				hostSnapshotNotInstant: '这份宿主快照每 10 秒采一次,未必覆盖卡顿瞬间',
+				strengthStrong: '线索较强', strengthMedium: '线索中等', strengthWeak: '线索较弱', strengthNone: '证据不足',
+				provenanceMeasured: '直接测量', provenanceInferred: '归因推断', provenanceUnknown: '无法确认',
+				packSummaryTitle: '# 性能事故诊断摘要', packSecSummary: '## 1. 摘要',
+				packSecCandidates: '## 2. 最可能的假设(最多 3 条,每条都带支持与限制)', packSecMissing: '## 3. 缺失的证据',
+				packSecNext: '## 4. 下一步验证', packSecMeta: '## 5. 元信息',
+				packCauseLabel: '假设', packSupport: '支持', packLimits: '限制', packProvenance: '出处', packTier: '采集档位',
+				packNoCandidate: '没有足够证据给出候选原因 —— 见下面的缺失与下一步。',
+				packPreviewNote: '导出前先看这份清单:包在本机生成,不上传任何内容;要交给 AI 请你自己主动发出去。',
+				packReadmeTitle: '# 这份诊断包里有什么',
+				packReadmeWhat: 'manifest.json 是入口(格式版本、平台、采集档位、能力矩阵、脱敏说明);summary.md 是给人读的摘要;incident.json 是结构化原始证据;README.md 就是你正在读的这份。',
+				packReadmeHow: '先读 summary.md 的「最可能的假设」:每一条都带支持证据与限制,以及出处(直接测量 / 归因推断 / 无法确认)。「缺失的证据」说明这一层为什么没采到 —— 不要把「没有证据」读成「没有发生」。',
+				packReadmePrivacy: '包内不含聊天正文、提示词、Cookie、Token 与请求头(不是筛掉了,是本来就没采);页面地址只保留 origin + path,用户目录降级成 ~,UA 只留主版本与系统。这是减法,不是匿名化。',
+				packReadmeNotes: '在别的工具里读 incident.json 时:帧的 t 是页面时间轴毫秒,要靠 incident.env.perfOrigin 换成墙钟;loaf 与 frames 是同一信号的两个视图,别相加;blocking 可以是 0 而这一帧仍然很重。',
 				tallyScopeSuffix: '内,同一串卡顿算一次', tallyKeepHint: '受容量限制,不等于检测到', tallyWorst: '最长一次',
 				watchDaily: '当天最差',
 				watchNone: '还没抓到', watchOff: '未开录', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉',
@@ -6027,6 +6437,23 @@ window.__ModuleLoader__.load({
 				watch: 'Night watch', watchCaught: 'caught', watchWorst: 'worst', watchRestored: 'restored',
 				watchDetected: 'seen', watchKept: 'evidence kept', watchLost: 'lost', tallyUnit: '',
 				tallyCoalesced: 'merged triggers', tallyCoalescedHint: 'triggers merged into the same burst (a density, not a count)',
+				// candidate causes / diagnostic pack: lead strength, provenance, fixed pack shape
+				causeScriptLead: 'package with the most script time', causeLongTaskLead: 'long-task attribution', causeHostLead: 'host event loop', causeNoEvidenceLead: 'no JS blocking evidence',
+				causeUnresolvedSuffix: ' not attributed to a package', causeHostBasis: 'host event-loop p99 around the incident', causeLongTaskLimit: 'the four legs only cover the three scheduler callbacks plus DOM writes — event handlers, promises and microtasks are not in them (so this is a lower bound)',
+				hostSnapshotNotInstant: 'the host snapshot is taken every 10s and may not cover the stall itself',
+				strengthStrong: 'strong lead', strengthMedium: 'moderate lead', strengthWeak: 'weak lead', strengthNone: 'not enough evidence',
+				provenanceMeasured: 'measured', provenanceInferred: 'inferred', provenanceUnknown: 'unknown',
+				packSummaryTitle: '# Performance incident summary', packSecSummary: '## 1. Summary',
+				packSecCandidates: '## 2. Most likely hypotheses (up to 3, each with support and limits)', packSecMissing: '## 3. Missing evidence',
+				packSecNext: '## 4. How to verify next', packSecMeta: '## 5. Meta',
+				packCauseLabel: 'hypothesis', packSupport: 'support', packLimits: 'limits', packProvenance: 'provenance', packTier: 'capture tier',
+				packNoCandidate: 'Not enough evidence to name a candidate cause — see the missing evidence and next steps below.',
+				packPreviewNote: 'Read this list before exporting: the pack is built locally and uploads nothing; sharing it with an AI is your own action.',
+				packReadmeTitle: '# What is in this diagnostic pack',
+				packReadmeWhat: 'manifest.json is the entry point (format version, platform, capture tier, capability matrix, redaction note); summary.md is the human-readable digest; incident.json is the structured raw evidence; README.md is what you are reading.',
+				packReadmeHow: 'Start with the hypotheses in summary.md: each carries its supporting evidence, its limits, and its provenance (measured / inferred / unknown). The missing-evidence section says WHY a layer was not captured — do not read "no evidence" as "it did not happen".',
+				packReadmePrivacy: 'The pack contains no chat text, prompts, cookies, tokens or request headers (never collected, not filtered out); page URLs keep origin + path only, home directories become ~, and the UA keeps just the major version and OS. This is subtraction, not anonymisation.',
+				packReadmeNotes: 'When reading incident.json elsewhere: frame t is page-timeline milliseconds and needs incident.env.perfOrigin to become wall clock; loaf and frames are two views of one signal, never add them; blocking can be 0 while the frame is still heavy.',
 				tallyScopeSuffix: ' — one stall counts once', tallyKeepHint: 'capacity-limited, not the number of stalls', tallyWorst: 'longest',
 				watchDaily: 'daily worst',
 				watchNone: 'nothing caught yet', watchOff: 'not recording', watchPersistFailed: 'persist failed', watchTrimmed: 'trimmed',

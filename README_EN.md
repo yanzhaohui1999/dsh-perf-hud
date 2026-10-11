@@ -225,16 +225,42 @@ is expensive in some usage", so do not read it as a causal proof.
    no half-live dead code. **Click interactions are unaffected** (list selection, copying, frame-strip clicks and
    collapsing have all been verified).
 
+## 📦 Diagnostic pack (readable by people and by AI)
+
+`__perfHud.pack(id)` turns one incident into **four files** (nothing downloads; `preview(id)` returns only the
+manifest, `exportPack(id)` downloads them):
+
+| File | What it is |
+|---|---|
+| `manifest.json` | Entry point: format version, platform, capture tier, the **capability matrix** (which layer was captured, which was not, why, and its provenance), the redaction note, and what is **not** included |
+| `summary.md` | Human digest in a fixed five-part shape: summary → most likely hypotheses (each with **support / limits / provenance**) → missing evidence → how to verify next → meta |
+| `incident.json` | Structured raw evidence (the same document as the panel's "export incident") |
+| `README.md` | What the pack is, how to read it, and the privacy stance |
+
+Three calibers, asserted in the offline suites as well:
+
+- **A candidate cause is not a culprit**: candidates come from fields that were actually captured (script time per
+  package / long-task attribution / host event loop); each carries `limits`, and those limits always include
+  "this only narrows it down, it does not locate the root cause". With no JS blocking evidence the verdict is
+  "not enough evidence" — throttling is only suggested when `suspectedThrottle` actually holds.
+- **Provenance in three buckets**: `measured` / `inferred` (URL, sourcemap sections, time overlap, sampling
+  extrapolation) / `unknown`. Every capability leaf and every candidate is tagged.
+- **Missing evidence says why**: `capabilityMissing()` is derived from the capability matrix (not a hand-written
+  chain of `if`s), so "why was this not captured" has exactly one source.
+
+The pack is built by **pure functions** (`buildPack` / `manifestFor` / `diagnosticSummary`) with no DOM dependency, so
+the offline suites assert its shape directly — a future UI rewrite or MCP server will not have to change it.
+
 ## Development
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 489 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 511 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 39 assertions: real index.js driven by a fake ctx
-# 539 offline assertions total, no running DSH required
+# 561 offline assertions total, no running DSH required
 ```
 
-The i18n dictionary now has **290 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
+The i18n dictionary now has **325 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
 

@@ -306,6 +306,19 @@ const sandbox = `
 		maxLabel: '最大', pickNone: '这条事故包里没有帧记录(老包或捕获时没采到):只能看窗口统计,不能逐帧回看',
 		viaNotFetched: '还没预取(只有深录才拉脚本文本)', evidenceBundleLine: '合并脚本行',
 		watchTrimmed: '裁掉',
+		// 可能原因 / 能力矩阵 / 诊断包:断言要看真词
+		causeScriptLead: '脚本耗时最高的包', causeLongTaskLead: '长任务归属', causeHostLead: '宿主事件循环', causeNoEvidenceLead: '缺少 JS 阻塞证据',
+		causeUnresolvedSuffix: '没定到包名', causeHostBasis: '事故前后的宿主事件循环', hostSnapshotNotInstant: '这份宿主快照每 10 秒采一次',
+		causeLongTaskLimit: '四条腿只覆盖三次调度的回调与 DOM 写入,事件处理器 / Promise / 微任务不在内(所以这是下界)',
+		causeLongTaskLimit: '四条腿只覆盖三次调度的回调与 DOM 写入,事件处理器 / Promise / 微任务不在内(所以这是下界)',
+		strengthStrong: '线索较强', strengthMedium: '线索中等', strengthWeak: '线索较弱', strengthNone: '证据不足',
+		provenanceMeasured: '直接测量', provenanceInferred: '归因推断', provenanceUnknown: '无法确认',
+		pkgNamed: '定到包', scriptsUnit: '条脚本', maxLabel: '最大', hostShort: '宿主', cumulative: '累计', blame: '回调归因(耗时·下界)',
+		packSummaryTitle: '# 性能事故诊断摘要', packSecSummary: '## 1. 摘要',
+		packSecCandidates: '## 2. 最可能的假设(最多 3 条,每条都带支持与限制)', packSecMissing: '## 3. 缺失的证据',
+		packSecNext: '## 4. 下一步验证', packSecMeta: '## 5. 元信息',
+		packCauseLabel: '假设', packSupport: '支持', packLimits: '限制', packProvenance: '出处', packTier: '采集档位',
+		packNoCandidate: '没有足够证据给出候选原因。', packPreviewNote: '导出前先看这份清单。',
 		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', needDeep: '要深录', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
@@ -535,6 +548,21 @@ const newPieces = [
 	'function noteTallySeverity(',
 	'function tallyWindow(',
 	'function tallyOfDay(',
+	// 能力矩阵 + 可能原因 + 诊断包(整机导出件 snapshot 会调 capabilities)
+	'const CAUSE_MAX = ',
+	'const PACK_SCHEMA_VERSION = ',
+	'function provenanceOf(',
+	'function capabilities(',
+	'function capabilityMissing(',
+	'function provenanceText(',
+	'function strengthText(',
+	'function causeCandidates(',
+	'function manifestFor(',
+	'function diagnosticSummary(',
+	'function packReadme(',
+	'function buildPack(',
+	'function packPreview(',
+	'function exportPack(',
 	'function tallyReport(',
 	'function markTallyDirty(',
 	'function saveTally(',
@@ -560,7 +588,10 @@ const box = new Function(`${sandbox}\n${newPieces}
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
 		sectionSource, sectionIndex, sectionPath, scriptPosition, viaText, scriptEvidence, evidenceName, evidencePlace, evidenceWhereText, evidenceLine, incidentScriptEvidence, incidentEvidenceAt, incidentEvidenceLines, EVIDENCE_MAX,
 		// 导出脱敏:整机 snapshot 的出口
-		redactExport, redactPageUrl, redactScriptUrl, redactPath, redactUserAgent, scrubParams, redactionReport, SECRET_PARAM, SECRET_PARAM_NAMES } };`)();
+		redactExport, redactPageUrl, redactScriptUrl, redactPath, redactUserAgent, scrubParams, redactionReport, SECRET_PARAM, SECRET_PARAM_NAMES,
+		// 能力矩阵 / 可能原因 / 诊断包
+		capabilities, capabilityMissing, provenanceOf, provenanceText, strengthText, causeCandidates,
+		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview, exportPack, CAUSE_MAX, PACK_SCHEMA_VERSION } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -1673,6 +1704,85 @@ check('端到端:导出件自带 redaction 三问三答(applied / kept / neverCo
 check('端到端:不许把"做减法"说成"已匿名化"(口径要照实)',
 	[/匿名化/.test(exported.context.redaction.rule), /做减法/.test(exported.context.redaction.rule)], [true, true]);
 
+// ═══════════ 能力矩阵 / 可能原因 / 诊断包(P0.2 + P0.3)═══════════════
+// 这一组挡的是:① "哪一层没采到"被写成一句没人能核的话;② 把"耗时最高的包"说成根因;
+// ③ 诊断包与面板各说各话(所以两边读的是同一批纯函数)。
+const causeRow = {
+	id: 'i9', at: '2026-10-11T15:00:00.000Z', cause: 'frame', severity: 326.5, note: null, kept: 'kept',
+	window: { fromMs: 1000, toMs: 14000, preMs: 10000, postMs: 3000, from: '2026-10-11T14:59:57.000Z', to: '2026-10-11T15:00:10.000Z' },
+	summary: {
+		worstFrameMs: 326.5, worstFrameAt: '2026-10-11T15:00:00.000Z', frames: 300, framesOver50Ms: 20, framesOver100Ms: 12,
+		hiddenGaps: 0, loafEntries: 5, blockingMs: 0, pkgCoverage: { resolved: 3, total: 4 },
+		pkgVia: { section: 3, 'text-pending': 1 }, longTasksInWindow: 1, interactionsInWindow: 0,
+		topScripts: [{ at: 1200, u: 0, ms: 180, fn: null, invoker: 'setTimeout', pkg: 'dsh-x', pkgVia: 'section', file: '/plugins/dsh-x/client.js', line: 40, lineScope: 'bundle' }],
+		p50: 16.7, p90: 40, p99: 326.5, worstFrameJs: 'js', worstFrameNeighboursMs: 16.7, suspectedThrottle: false,
+		streaming: false, visibility: 'visible',
+	},
+	urls: ['http://127.0.0.1:3080/plugins/??dsh-x/client.js&rev=1'],
+	packages: [{ pkg: 'dsh-x', ms: 180, count: 3 }],
+	frames: [{ t: 1200, ms: 326.5, gap: false }],
+	loaf: [{ t: 1200, dur: 300, blocking: 0, scripts: [{ u: 0, ms: 180, fn: null, invoker: 'setTimeout' }] }],
+	longTasks: [{ at: 1200, ms: 180, owner: 'dsh-x', component: 'ChatView', source: 'scheduler+render' }],
+	interactions: [],
+	host: { at: '2026-10-11T14:59:56.000Z', snapshotAgeMs: -4000, eventLoop: { p50: 1.2, p99: 9.9, max: 60 } },
+	env: { precise: true, perfOrigin: '2026-10-11T14:59:00.000Z', utcOffsetMin: 480, viewport: '1600×900' },
+};
+const caps = EX.capabilities();
+const capLeaves = [];
+for (const group of ['renderer', 'host', 'link']) for (const [name, leaf] of Object.entries(caps[group])) capLeaves.push([`${group}.${name}`, leaf]);
+check('能力矩阵:每个叶子都有 state / provenance / reason,且取值都在枚举里',
+	capLeaves.every(([, leaf]) => ['on', 'degraded', 'off', 'unsupported'].includes(leaf.state)
+		&& ['measured', 'inferred', 'unknown'].includes(leaf.provenance)
+		&& typeof leaf.reason === 'string' && leaf.reason !== ''), true);
+check('能力矩阵:renderer / host / link 三组齐全,且不观测的那一层单列(不假装有)', (() => {
+	const ids = caps.unobserved.map((item) => item.id);
+	return [capLeaves.length >= 8, ids.includes('electron-main'), ids.includes('gpu-compositor'), caps.schema];
+})(), [true, true, true, 1]);
+check('能力矩阵:没插桩时 DOM 写入是 off 且理由写明"深录没开"',
+	[caps.renderer.domWrites.state, /深录/.test(caps.renderer.domWrites.reason)], ['off', true]);
+check('能力矩阵:element timing 恒 unsupported(DSH 的 DOM 上没有那个属性)',
+	[caps.renderer.elementTiming.state, caps.renderer.elementTiming.provenance], ['unsupported', 'unknown']);
+check('能力矩阵:缺失声明由它推,而且保留了线上断言认的前缀', (() => {
+	const gaps = EX.capabilityMissing(causeRow);
+	const prefixes = ['devtools-trace:', 'interaction-breakdown:', 'compositor:', 'recorder-cost:', 'baseline:'];
+	return [prefixes.every((p) => gaps.missing.some((line) => line.startsWith(p))), gaps.howToAdd.length >= 3,
+		gaps.capabilities.schema === 1];
+})(), [true, true, true]);
+
+// ── 可能原因:候选假设 ──
+const causes = EX.causeCandidates(causeRow);
+check('可能原因:最多 3 条,每条都带非空的支持 / 限制 / 出处三档',
+	[causes.length <= 3, causes.every((item) => item.basis.length > 0 && item.limits.length > 0
+		&& ['measured', 'inferred', 'unknown'].includes(item.provenance))], [true, true]);
+check('可能原因:每条限制里都有"不等于已定位根因"那句(不许把相关写成根因)',
+	causes.every((item) => item.limits.some((line) => line.includes('不等于已定位根因'))), true);
+check('可能原因:耗时最高的包只是"线索",名字与出处照实给;覆盖率高才升到"较强"', (() => {
+	const full = EX.causeCandidates({ ...causeRow, summary: { ...causeRow.summary, pkgCoverage: { resolved: 4, total: 4 } } });
+	return [causes[0].kind, causes[0].name, causes[0].strength, causes[0].provenance, full[0].strength];
+})(), ['script', 'dsh-x', 'medium', 'inferred', 'strong']);
+check('可能原因:覆盖率不到 100% 时把"还有几条没定名"写进限制里',
+	causes[0].limits.some((line) => line.includes('1条脚本没定到包名')), true);
+check('可能原因:宿主事件循环只在真的有快照且 p99 偏高时出现', (() => {
+	const hot = EX.causeCandidates({ ...causeRow, host: { eventLoop: { p50: 3, p99: 180, max: 400 }, snapshotAgeMs: -2000 } });
+	const cool = EX.causeCandidates({ ...causeRow, host: { eventLoop: { p50: 1, p99: 9, max: 30 }, snapshotAgeMs: -2000 } });
+	return [hot.some((item) => item.kind === 'host'), cool.some((item) => item.kind === 'host'),
+		cool.every((item) => item.provenance !== 'unknown')];
+})(), [true, false, true]);
+check('可能原因:没有 JS 证据时给"证据不足",而且**不**顺手写节流结论', (() => {
+	const quiet = { ...causeRow, summary: { ...causeRow.summary, worstFrameJs: 'none', suspectedThrottle: false } };
+	const list = EX.causeCandidates(quiet);
+	const unknown = list.find((item) => item.kind === 'unknown');
+	// "更像…节流"是**结论**的措辞,只有 suspectedThrottle 那一支才允许出现(:非这一支只能说"未观察到")
+	return [unknown.strength, unknown.provenance, /更像/.test(unknown.basis.join('')), /未观察到/.test(unknown.basis.join(''))];
+})(), ['none', 'unknown', false, true]);
+check('可能原因:只有 suspectedThrottle 成立时才提"更像 rAF 挂起或浏览器节流"', (() => {
+	const throttled = { ...causeRow, summary: { ...causeRow.summary, worstFrameJs: 'none', suspectedThrottle: true } };
+	const list = EX.causeCandidates(throttled);
+	const unknown = list.find((item) => item.kind === 'unknown');
+	return [unknown.strength, /更像/.test(unknown.basis.join(''))];
+})(), ['weak', true]);
+check('可能原因:没有事故就返回空数组(不造候选)', [EX.causeCandidates(null), EX.causeCandidates(undefined)], [[], []]);
+
 // ── G:守夜层(帧环 / 触发 / 留存 / 时间对齐 / 窗口切片)──────────────────
 
 // 抽的是 client.js 里的真函数与真常量(连阈值一起抽,免得测试自己抄一份默认值)。
@@ -1834,6 +1944,26 @@ const watchPieces = [
 	extract(source, 'function saveTally('),
 	extract(source, 'function restoreTally('),
 	extract(source, 'function clearTally('),
+	// 能力矩阵(事故包的缺失声明由它推)
+	line('const MUT_SAMPLE'),
+	line('const CAUSE_MAX'),
+	line('const PACK_SCHEMA_VERSION'),
+	extract(source, 'function severityLevel('),
+	extract(source, 'function severityText('),
+	extract(source, 'function docLang('),
+	extract(source, 'function provenanceText('),
+	extract(source, 'function strengthText('),
+	extract(source, 'function causeCandidates('),
+	extract(source, 'function manifestFor('),
+	extract(source, 'function diagnosticSummary('),
+	extract(source, 'function packReadme('),
+	extract(source, 'function buildPack('),
+	extract(source, 'function packPreview('),
+	// capabilities() 会遍历 bundleMaps(导出盒的 sandbox 里已经有这个桩)
+	'const bundleMaps = new Map();',
+	extract(source, 'function provenanceOf('),
+	extract(source, 'function capabilities('),
+	extract(source, 'function capabilityMissing('),
 	extract(source, 'function scrubParams('),
 	extract(source, 'function redactPageUrl('),
 	extract(source, 'function redactScriptUrl('),
@@ -1895,6 +2025,11 @@ const watchBox = new Function(`
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉', times: ' 次',
 		// 捕获计数(与留存分离)的文案:断言要看到真词,而不是 key
 		watchDetected: '检测', watchKept: '已保存现场', watchLost: '丢失', tallyUnit: ' 份',
+		causeScriptLead: '脚本耗时最高的包', causeLongTaskLead: '长任务归属', causeHostLead: '宿主事件循环', causeNoEvidenceLead: '缺少 JS 阻塞证据',
+		causeUnresolvedSuffix: '条脚本没定到包名', causeHostBasis: '事故前后的宿主事件循环', hostSnapshotNotInstant: '这份宿主快照每 10 秒采一次',
+		strengthStrong: '线索较强', strengthMedium: '线索中等', strengthWeak: '线索较弱', strengthNone: '证据不足',
+		provenanceMeasured: '直接测量', provenanceInferred: '归因推断', provenanceUnknown: '无法确认',
+		pkgNamed: '定到包', scriptsUnit: '条脚本', maxLabel: '最大', hostShort: '宿主', cumulative: '累计', blame: '回调归因(耗时·下界)',
 		tallyCoalesced: '同串触发', tallyCoalescedHint: '同一串卡顿里被并掉的触发数(密度,不是次数)',
 		tallyScopeSuffix: '内,同一串卡顿算一次', tallyKeepHint: '受容量限制,不等于检测到', tallyWorst: '最长一次',
 		evidenceLabel: '可疑脚本', evidenceScopeIncident: '事故', evidenceWindowPrefix: '窗口内', pkgNamed: '定到包', evidenceBundleLine: '合并脚本行',
@@ -1911,6 +2046,15 @@ const watchBox = new Function(`
 		crossNone: '没有可交叉的脚本', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', rest: '其余',
 		hourUnit: '小时', minUnit: '分', secUnit: '秒', framesUnit: ' 帧',
 		replayGaps: 'rAF 挂起', replayNoLoaf: '这一帧附近没有长动画帧记录(窗口里没有 LoAF)',
+		// 诊断包那一段用到的词条(缺了会退回 key,断言就看不到真词)
+		packSummaryTitle: '# 性能事故诊断摘要', packSecSummary: '## 1. 摘要',
+		packSecCandidates: '## 2. 最可能的假设(最多 3 条,每条都带支持与限制)', packSecMissing: '## 3. 缺失的证据',
+		packSecNext: '## 4. 下一步验证', packSecMeta: '## 5. 元信息',
+		packCauseLabel: '假设', packSupport: '支持', packLimits: '限制', packProvenance: '出处', packTier: '采集档位',
+		packNoCandidate: '没有足够证据给出候选原因。', packPreviewNote: '导出前先看这份清单。',
+		packReadmeTitle: '# 这份诊断包里有什么', packReadmeWhat: 'w', packReadmeHow: 'h', packReadmePrivacy: 'p', packReadmeNotes: 'n',
+		sevLabel: '严重度', worstEvent: '最差事件', evWindow: '窗口', evOwner: '主要归属', deepShort: '深录', watch: '守夜', none: '无',
+		verdictLabel: '归因状态', verdictConfirmed: '已确认', verdictSuspected: '可疑', verdictUnattributed: '未归因',
 		ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧', notYet: '未采集',
 		sevBad: '严重', sevWarn: '警告', sevOk: '低于线', verdictLabel: '归因状态',
 		verdictConfirmed: '已确认', verdictSuspected: '可疑', verdictUnattributed: '未归因',
@@ -1970,6 +2114,9 @@ const watchBox = new Function(`
 		// 导出脱敏(直接测这几个纯函数,而不是绕过它们去测 snapshot)
 		redactExport, redactPageUrl, redactScriptUrl, redactPath, redactUserAgent, scrubParams, redactionReport,
 		SECRET_PARAM, SECRET_PARAM_NAMES,
+		// 能力矩阵(事故包的缺失声明由它推)
+		capabilities, capabilityMissing, causeCandidates,
+		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview,
 		// 捕获计数(与留存分离):桶 / 窗口 / 落盘
 		tallyWindow, tallyOfDay, tallyText, tallyTitle, tallyReport, bumpTally, noteTallySeverity, pruneTally,
 		saveTally, restoreTally, clearTally, tallyDayKey, tallySum, TALLY_FIELDS, TALLY_MINUTES, TALLY_BUCKET_MS, TALLY_DAYS, LS_TALLY,
@@ -3378,6 +3525,49 @@ check('A4:环形上限到了丢最早的(留最近 200 条)', (() => {
 	const rows = watch.state.watch.interactions;
 	return [rows.length, rows[0].at, rows[rows.length - 1].at];
 })(), [200, 505, 704]);
+
+// ── 诊断包 ──
+watch.state.watch.incidents.length = 0;
+watch.state.watch.incidents.push(causeRow);
+const pack = watch.buildPack('i9');
+check('诊断包:四个文件按固定顺序给出来(manifest 在最前,它是入口)',
+	[watch.buildPack('nope'), pack.files.map((file) => file.name)],
+	[null, ['manifest.json', 'summary.md', 'incident.json', 'README.md']]);
+check('诊断包:manifest 带 schemaVersion / 能力矩阵 / 缺口清单 / 脱敏声明 / 范围', (() => {
+	const manifest = JSON.parse(pack.files[0].text);
+	return [manifest.schemaVersion, manifest.kind, manifest.capabilities.schema,
+		manifest.notIncluded.length, manifest.redaction.applied.length > 0,
+		manifest.range.fromMs === undefined ? manifest.range.from !== undefined : true,
+		manifest.captureTier];
+})(), [1, 'dsh-perf-hud-diagnostic-pack', 1, 3, true, true, 'watch']);
+check('诊断包:manifest 与事故包**都不含**凭据(端到端:真 location 里塞过 token)',
+	[/SECRET_TOKEN_VALUE/.test(pack.files[0].text), /SECRET_KEY_VALUE/.test(pack.files[2].text), /tester/.test(pack.files[2].text)],
+	[false, false, false]);
+check('诊断包:摘要按固定形态给五段(摘要 / 假设 / 缺失 / 下一步 / 元信息)',
+	['## 1. 摘要', '## 2. 最可能的假设', '## 3. 缺失的证据', '## 4. 下一步验证', '## 5. 元信息']
+		.every((head) => pack.files[1].text.includes(head)), true);
+check('诊断包:摘要里每条假设都给支持 / 限制 / 出处三行',
+	[pack.files[1].text.includes('- 支持:'), pack.files[1].text.includes('- 限制:'), pack.files[1].text.includes('- 出处:')],
+	[true, true, true]);
+check('诊断包:摘要每条假设的出处只能是三档之一(直接测量 / 归因推断 / 无法确认)',
+	(() => {
+		const found = pack.files[1].text.split(String.fromCharCode(10)).filter((line) => line.startsWith('- 出处:'));
+		// 这份桩只有脚本 + 长任务两支候选(宿主 p99=9.9 不高、worstFrameJs='js' 不走"证据不足"那一支)
+		return [found.length, found.every((line) => /直接测量|归因推断|无法确认/.test(line))];
+	})(), [2, true]);
+check('诊断包:预览把文件体积 / 包含什么 / 排除了什么 / 脱敏都摊出来', (() => {
+	const preview = pack.preview;
+	return [preview.files.length, preview.files.every((file) => file.bytes > 0), preview.includes.length,
+		preview.excludes.length >= 3, preview.redaction.applied.length > 0, preview.missingCount >= 3, preview.note.length > 0];
+})(), [4, true, 3, true, true, true, true]);
+check('诊断包:自由文本走 dropFreeText 时 manifest 里也留标记', (() => {
+	const dropped = watch.buildPack('i9', { dropFreeText: true });
+	const manifest = JSON.parse(dropped.files[0].text);
+	const incident = JSON.parse(dropped.files[2].text);
+	return [manifest.redaction.freeText.length, incident.incident.noteDropped];
+})(), [0, true]);
+check('诊断包:不存在的 id 返回 null(不静默成功)', [watch.buildPack('nope'), watch.packPreview('nope')], [null, null]);
+watch.state.watch.incidents.length = 0;
 
 // ═══════════ 捕获计数:与"留存了几份详细现场"彻底分开 ═══════════
 // 挡的是这一类事故:留存清单受容量限制(最差 10 + 每天 1),却拿它的条数回答"发生了多少次卡顿"

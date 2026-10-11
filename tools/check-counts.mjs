@@ -93,6 +93,42 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	check('计数落盘了(不是只在内存里)', after.storedBuckets >= 1 && after.storedCaptured >= 1, true);
 	console.log(`     检测到 ${after.detected}(triggered ${after.triggered} · 切成现场 ${after.captured} · 同串触发 ${after.coalesced})· 已保存现场 ${after.kept} · 丢失 ${after.lost}`);
 
+	// ── 诊断包:能力矩阵 / 候选原因 / 四个文件,而且凭据进不去 ──
+	const pack = await evaluate(`(() => {
+		const list = window.__perfHud.incidents();
+		if (list.length === 0) return { none: true };
+		const id = list[0].id;
+		history.replaceState({}, '', '/?token=LEAK_PROBE_12345&api_key=LEAK_KEY_67890');
+		const built = window.__perfHud.pack(id);
+		const preview = window.__perfHud.preview(id);
+		const text = built.files.map((file) => file.text).join(String.fromCharCode(10));
+		const manifest = JSON.parse(built.files.find((file) => file.name === 'manifest.json').text);
+		const causes = window.__perfHud.causes(id);
+		history.replaceState({}, '', '/');
+		return {
+			files: built.files.map((file) => file.name),
+			hasSecret: text.includes('LEAK_PROBE_12345') || text.includes('LEAK_KEY_67890'),
+			sections: ['## 1. 摘要', '## 2. 最可能的假设', '## 3. 缺失的证据', '## 4. 下一步验证', '## 5. 元信息']
+				.filter((head) => built.files[1].text.includes(head)).length,
+			manifest: [manifest.schemaVersion, manifest.capabilities.schema, manifest.redaction.applied.length > 0, manifest.notIncluded.length],
+			capLeaves: Object.keys(manifest.capabilities.renderer).length,
+			previewFiles: preview.files.length,
+			previewExcludes: preview.excludes.length,
+			causeLeads: causes.map((item) => item.kind),
+			causeShape: causes.every((item) => item.basis.length > 0 && item.limits.length > 0
+				&& ['measured', 'inferred', 'unknown'].includes(item.provenance)),
+		};
+	})()`);
+	check('诊断包:四个文件按固定顺序给出来', pack.files, ['manifest.json', 'summary.md', 'incident.json', 'README.md']);
+	check('诊断包:凭据进不去(真 location 里塞了 token / api_key)', pack.hasSecret, false);
+	check('诊断包:摘要五段齐全', pack.sections, 5);
+	check('诊断包:manifest 带 schemaVersion / 能力矩阵 / 脱敏 / 不含清单',
+		[pack.manifest[0], pack.manifest[1], pack.manifest[2], pack.manifest[3] > 0], [1, 1, true, true]);
+	check('诊断包:能力矩阵 renderer 一组齐全(>= 6 个叶子)', pack.capLeaves >= 6, true);
+	check('诊断包:预览列出文件与排除项', [pack.previewFiles, pack.previewExcludes >= 3], [4, true]);
+	check('诊断包:候选原因每条都带支持与限制、出处三档', pack.causeShape, true);
+	console.log(`     包 = ${pack.files.join(' / ')} · 候选 ${JSON.stringify(pack.causeLeads)}`);
+
 	// ── 活过刷新:以**落盘的那份**为基准(活页面读数会继续涨) ──
 	await reload();
 	const revived = await evaluate(`(() => {
