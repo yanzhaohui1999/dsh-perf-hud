@@ -73,8 +73,31 @@ jobs:
             [ "$found" -gt 0 ] || { echo "目录 $dir 里没有文件可核 —— package.json#files 是不是漏了这个目录?"; exit 1; }
           done
 
-      - name: Publish
+      # 首发只能手工做(OIDC 发不了第一个版本:Trusted Publisher 要在包已经存在之后才能配,
+      # 见 npm/cli#8544)。所以这个工作流必须对"该版本已经在 npm 上"幂等:否则给那个 tag
+      # 建 Release 时,这一步会因为重复发布而当掉,红的是一次本该成功的发布。
+      # 查询失败不许猜结果(网络抖动 != 没发过),照实报错退出。
+      - name: Check whether this version is already on the registry
+        id: registry
         if: github.event_name == 'release' || inputs.dry_run == false
+        run: |
+          pkg="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if out="$(npm view "$pkg@$version" version 2>&1)"; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$pkg@$version 已经在 npm 上 —— 跳过发布。"
+            printf 'registry 回执:%s\n' "$out"
+          elif printf '%s' "$out" | grep -q 'E404'; then
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$pkg@$version 不在 npm 上 —— 继续发布。"
+          else
+            echo "查询 registry 失败,不猜结果:"
+            printf '%s\n' "$out"
+            exit 1
+          fi
+
+      - name: Publish
+        if: (github.event_name == 'release' || inputs.dry_run == false) && steps.registry.outputs.published == 'false'
         run: |
           version="$(node -p "require('./package.json').version")"
           case "$version" in
