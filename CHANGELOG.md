@@ -27,7 +27,8 @@
 ### 测试
 
 - **新增 `tools/check-incident.mjs`(真页面验收器,和 `check-panel` 一样不是离线门禁)**:清事故 → 同步烧 400ms 造一条真达线帧 → 等守夜自动切片 → 按「看这一帧」进历史上下文 → 断言上下文标题 / 时间轴在场 / 点柱子换帧 / 下一帧上一帧 / 下一异常帧落在达线帧上 / 走到最后一帧后「下一帧」禁用 / **刷新后仍停在同一帧** / 「回到实时」把实时帧条换回来 / 全程 `errors: 0`。**ALL PASS**。
-- 离线断言 **458 → 490** 条(attribution 11 / logic **440** / host 39),`.github/workflows/ci.yml` 的 `-eq 490` 门禁与两处 `Offline suites (…)` 标题、README / README_EN / AGENTS / REVIEW 里的数字同步改。新增断言:上下文隔离(历史那一支不吃实时帧、实时那一支不吃事故)、历史帧列表跳过 gap、选中帧 `t` 找不到就退回自动、四个方向的导航与禁用态、帧条"每列取最差且一定是真实帧 + 缺口留白 + 900 帧只画 ≤240 列"、包名用存下来的(刷新后仍定得到名)、这一帧没有 LoAF 时证据退回窗口切片并标 `missing`、long task 只给重叠的、三档归因状态、`LS_WATCHUI` 落盘/读回与失效退回、零证据分母范围三档、以及"`frameNearestIncident` 这条就近定位老路已删掉"。
+- 离线断言 **458 → 490** 条(attribution 11 / logic **440** / host 39):上下文隔离(历史那一支不吃实时帧、实时那一支不吃事故)、历史帧列表跳过 gap、选中帧 `t` 找不到就退回自动、四个方向的导航与禁用态、帧条"每列取最差且一定是真实帧 + 缺口留白 + 900 帧只画 ≤240 列"、包名用存下来的(刷新后仍定得到名)、这一帧没有 LoAF 时证据退回窗口切片并标 `missing`、long task 只给重叠的、三档归因状态、`LS_WATCHUI` 落盘/读回与失效退回,以及"`frameNearestIncident` 这条就近定位老路已删掉";`.github/workflows/ci.yml` 的 `-eq 490` 门禁与两处 `Offline suites (…)` 标题、README / README_EN / AGENTS / REVIEW 里的数字同步改。
+- 随后再补 **490 → 494** 条(logic 440 → 444):一条**零证据分母范围**的口径断言(历史帧 / 本帧 / 窗口内三档,不许一律写"窗口内"),以及**三条结构性静态检查** —— ① 上下文只在 `detailContext()` 一处分流;② `incidentDetail` 的函数体里不出现任何实时读数(`pickedLoaf` / `scriptPkgTally` / `framePkgTally` / `worstSecond` / `recorderText` / `unexplainedFrame` / `frameRing`);③ 新加的渲染辅助函数(定义在 `function PerfHud(` **之前**,旧的"渲染区裸调用"检查盖不到)单独跑同一条未声明引用分析。后两条的**牙齿**是用副本验过的:往 `incidentDetail` 里塞一个 `pickedLoaf()`、往 `timelineBlock` 里塞一个未声明的裸调用,断言都会 FAIL。`ci.yml` / `release.yml` 的 `-eq` 门禁与 README / README_EN / AGENTS / REVIEW 里的总数随之同步到 **494**。
 - 真页面四件套:`check-panel` / `check-storage` / `check-interaction` / `check-incident` **ALL PASS**;另外用 CDP 真实鼠标扫过展开的面板 644 个点,断言条目仍活着、`errors: 0`、悬停边框解析到交互蓝 token —— 这是纯 CSS,没有任何 JS 鼠标状态。
 
 ### 文档
