@@ -134,8 +134,9 @@ process.exitCode = failed === 0 ? 0 : 1;
 	}
 	const GLOBALS = new Set(['Math', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Date', 'Error', 'Set', 'Map', 'WeakMap', 'Promise', 'Symbol', 'BigInt', 'Reflect', 'Proxy', 'RegExp', 'Function', 'Intl', 'fetch', 'setTimeout', 'setInterval', 'clearInterval', 'clearTimeout', 'requestAnimationFrame', 'cancelAnimationFrame', 'performance', 'document', 'window', 'location', 'localStorage', 'navigator', 'console', 'URL', 'Blob', 'Response', 'Request', 'Headers', 'Node', 'Element', 'MutationObserver', 'PerformanceObserver', 'parseInt', 'parseFloat', 'isFinite', 'isNaN', 'require', 'super', 'globalThis', 'structuredClone', 'queueMicrotask', 'TextEncoder', 'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'new', 'await', 'of', 'in', 'function', 'delete', 'void', 'do', 'else', 'case', 'throw', 'yield', 'get', 'set', 'async']);
 
-	// 样式字符串里的 CSS 函数(var(--x)/rgba(...))不是 JS 调用
-	const CSS_FUNCS = new Set(['var', 'rgb', 'rgba', 'hsl', 'hsla', 'calc', 'clamp', 'minmax', 'color-mix', 'linear-gradient', 'radial-gradient', 'url']);
+	// 样式字符串里的 CSS 函数(var(--x)/rgba(...))不是 JS 调用。`not` 也是 CSS 伪类函数:
+	// 面板的 `installStyle()` 里有一条 `button:hover:not(:disabled)`。
+	const CSS_FUNCS = new Set(['var', 'rgb', 'rgba', 'hsl', 'hsla', 'calc', 'clamp', 'minmax', 'color-mix', 'linear-gradient', 'radial-gradient', 'url', 'not']);
 	const components = [...new Set([...source.matchAll(/\bh\(\s*([A-Z][\w$]*)/g)].map((m) => m[1]))];
 	check('h() 引用的组件都声明了(PerfHudStress 事故回归)',
 		components.filter((name) => !declared.has(name)), []);
@@ -200,6 +201,30 @@ process.exitCode = failed === 0 ? 0 : 1;
 			render.includes('slot entry crashed'), true);
 	}
 
+	// ── 本轮:取证明细的**双上下文隔离**(结构性的,不是靠人记性)──────────────────
+	// 诊断上下文只在 detailContext() 一处分流,渲染那侧只读它的返回值 —— 这条断言钉住"没有第二处
+	// 偷偷去拿实时帧"的可能(那正是这次要修的病:上面历史事故、下面另一条实时帧的编号与饼图)。
+	check('取证明细:上下文只在 detailContext 一处分流(渲染只读 detail.kind)',
+		/const detail = detailContext\(\);/.test(source) && /detail\.kind === 'incident'/.test(source), true);
+	{
+		const incidentDetailText = extract(source, 'function incidentDetail(');
+		const leaks = ['pickedLoaf(', 'scriptPkgTally(', 'framePkgTally(', 'worstSecond(', 'recorderText(', 'unexplainedFrame(', 'frameRing']
+			.filter((needle) => incidentDetailText.includes(needle));
+		check('取证明细:历史事故那一支不出现任何实时读数(pickedLoaf / 窗口聚合 / 记录器 / 帧环)', leaks, []);
+	}
+	{
+		// 新加的那几个渲染辅助函数定义在 `function PerfHud(` **之前**,所以旧的"渲染区裸调用"静态检查
+		// 盖不到它们 —— 这里对它们单独跑同一条分析(§8 第 7 条那类事故的回归)。
+		const helpers = ['function contextBar(', 'function ringBlock(', 'function scriptBreakdownRows(', 'function evidenceBlock(',
+			'function crossBlock(', 'function liveFramePickRow(', 'function timelineBlock(', 'function longTaskBlock(',
+			'function verdictBlock(', 'function incidentDetail(', 'function liveDetail('];
+		const text = helpers.map((header) => extract(source, header)).join('\n');
+		const code = text.replace(/'(?:[^'\\]|\\.)*'/g, "''").replace(/"(?:[^"\\]|\\.)*"/g, '""');
+		const bare = [...new Set([...code.matchAll(/(?<![.\w$-])([a-z_$][\w$]*)\s*\(/g)].map((match) => match[1]))];
+		check('取证明细的渲染辅助函数里没有未声明的裸调用(与渲染区同一条规矩)',
+			bare.filter((name) => !declared.has(name) && !GLOBALS.has(name) && !CSS_FUNCS.has(name)), []);
+	}
+
 	// A4:交互延迟这一层"只进导出件",而且必须两个导出件都带(事故包只带窗口内的)
 	check('A4:交互延迟进两个导出件(事故包按窗口过滤)',
 		[/interactionsInWindow: interactions\.length/, /const interactions = \(state\.watch\.interactions \?\? \[\]\)\.filter/, /records: state\.watch\.interactions,/].every((re) => re.test(source)), true);
@@ -246,7 +271,18 @@ const sandbox = `
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchManualNote: '手动标记', domWritesShort: 'DOM 写入',
 		// P0/P1:严重度必须是**文字**(不能只靠颜色)+ 「最差事件」块那三行的口径词
 		sevBad: '严重', sevWarn: '警告', sevOk: '低于线', sevLabel: '严重度',
-		jsEvidence: 'JS 证据', jsYes: '有(longtask/LoAF 与它重叠)', jsNo: '无(更像 rAF 被节流)',
+		ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧',
+		groupDetail: '取证明细',
+		jsEvidence: 'JS 证据', jsYes: '有(longtask/LoAF 与它重叠)', jsNo: '无(longtask/LoAF 都不与它重叠)',
+		// 归因状态三档(§五):文字 + 档位色两样一起给
+		verdictLabel: '归因状态', verdictConfirmed: '已确认', verdictSuspected: '可疑', verdictUnattributed: '未归因',
+		verdictConfirmedText: '该帧有直接测量到的 JS 阻塞证据(longtask / LoAF 与它重叠),窗口内主要归属',
+		verdictNotRootCause: '这只缩小到"哪个包",不等于已定位根因',
+		verdictSuspectedJsNoPkg: '有 JS 阻塞证据,但窗口里的脚本没能定到包名',
+		verdictThrottleText: '没有观察到足以解释该帧的 JS 阻塞,而它又明显长于前后帧:更像 rAF 被挂起或浏览器节流,需结合前后帧与时间间隙确认',
+		verdictNeighbours: '前后帧中位',
+		verdictUnattributedText: '未观察到足以解释该帧的 JS 阻塞证据;请结合前后帧和时间间隙检查 rAF 挂起或浏览器节流',
+		handoffFrameNoEvidence: '这一帧在事故包里没有脚本记录(只有帧间隔)',
 		evOwner: '主要归属', evWindow: '窗口', framesUnit: ' 帧', byPkg: '按包',
 		copied: '已复制', copyFailed: '复制失败', copyNoApi: '这个环境没有剪贴板 API',
 		// 证据 → 代码(面板与交接件共用):这几个词条要给人看,不能只回 key
@@ -256,7 +292,7 @@ const sandbox = `
 		evidenceCaliberPlain: '口径:函数名与毫秒由 LoAF 直接测量;包 / 文件 / 行号由 URL 与 sourcemap 分段推断。',
 		evidenceMissingPlain: '缺:原始源码行号与调用栈。',
 		handoffInteractions: '窗口内 ≥100ms 的交互', handoffInteractionsScope: '(端到端时长,不是帧内拆分)',
-		maxLabel: '最大', pickNone: '帧环里没有这条事故附近的帧(跨会话读回的事故无法定位到当前帧环):上面那条仍是自动/手选的那帧',
+		maxLabel: '最大', pickNone: '这条事故包里没有帧记录(老包或捕获时没采到):只能看窗口统计,不能逐帧回看',
 		viaNotFetched: '还没预取(只有深录才拉脚本文本)', evidenceBundleLine: '合并脚本行',
 		watchTrimmed: '裁掉',
 		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', needDeep: '要深录', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
@@ -301,6 +337,7 @@ const newPieces = [
 	'function bundleLabel(',
 	'const WATCH_INCIDENT_MAX = ',
 	'const WATCH_TRIGGER_MS = ',
+	'const PICK_MIN_MS = ',
 	'const WATCH_PRE_MS = ',
 	'const WATCH_POST_MS = ',
 	'const WATCH_DAILY_DAYS = ',
@@ -406,7 +443,37 @@ const newPieces = [
 	'function selectedIncident(',
 	'function selectIncident(',
 	'function setIncidentScope(',
-	'function frameNearestIncident(',
+	'const LS_WATCHUI = ',
+	'function saveWatchUI(',
+	'function restoreWatchUI(',
+	'function diagMode(',
+	'function incidentFrameRows(',
+	'function incidentLoafAt(',
+	'function incidentWorstFrame(',
+	'function selectedIncidentFrame(',
+	'function incidentFrameLevel(',
+	'function incidentFrameHot(',
+	'function incidentFrameNav(',
+	'function selectIncidentFrame(',
+	'function incidentFrameStep(',
+	'function incidentFrameBadStep(',
+	'function showLiveMode(',
+	'function incidentVerdict(',
+	'function verdictColor(',
+	'function eventVerdictText(',
+	'function incidentWallClock(',
+	'function replayColumns(',
+	'function replayCellTitle(',
+	'function incidentScriptOf(',
+	'function incidentFrameTally(',
+	'const incidentTallyCache = ',
+	'function incidentWindowTally(',
+	'function incidentFrameEvidenceRows(',
+	'function incidentLongTasksAt(',
+	'function incidentFrameHeadingText(',
+	'function liveFrameHeadingText(',
+	'function detailContext(',
+	'function detailGroupLabel(',
 	'function revealIncident(',
 	'function eventTitleText(',
 	'function eventEvidenceText(',
@@ -442,7 +509,7 @@ const box = new Function(`${sandbox}\n${newPieces}
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_KEEP_MAX,
 		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
-		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, frameNearestIncident, revealIncident, eventTitleText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
+		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentFrameBadStep, incidentVerdict, verdictColor, eventVerdictText, eventTitleText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
 		sectionSource, sectionIndex, sectionPath, scriptPosition, viaText, scriptEvidence, evidenceName, evidencePlace, evidenceWhereText, evidenceLine, incidentScriptEvidence, incidentEvidenceAt, incidentEvidenceLines, EVIDENCE_MAX } };`)();
 const EX = box.EX;
@@ -917,25 +984,53 @@ check('最差事件标题行:id · 原因 · 发生时刻(「最差」不是「�
 	EX.eventTitleText(incidentRow), 'i84 · frame · 14:48:03');
 check('最差事件标题行:时间戳读不出来时不编造时间',
 	EX.eventTitleText({ id: 'i1', cause: 'manual', at: 'not-a-date' }), 'i1 · manual');
-check('最差事件证据行:有无 JS 证据 + 主要归属(带毫秒)',
-	EX.eventEvidenceText(incidentRow), 'JS 证据 有(longtask/LoAF 与它重叠) · 主要归属 dsh-status-rotator 210ms');
-check('最差事件证据行:没有 JS 证据时不说成"没问题"',
-	EX.eventEvidenceText({ ...incidentRow, summary: { ...incidentRow.summary, worstFrameJs: 'none' } }).includes('无(更像 rAF 被节流)'), true);
+check('最差事件证据行:归因状态(文字档位)+ 主要归属(带毫秒)',
+	EX.eventEvidenceText(incidentRow), '归因状态 已确认 · 主要归属 dsh-status-rotator 210ms');
+// §五:没有 JS 证据**不许**说成"浏览器节流" —— 那只是其中一种可能,要挂条件(下面三条钉住)
+check('归因状态:有 JS 证据 + 定到包 → 已确认,而且写明"这只缩小到包、不等于根因"',
+	(() => { const v = EX.incidentVerdict(incidentRow); return [v.level, v.label, v.detail.includes('dsh-status-rotator 210ms'), v.detail.includes('不等于已定位根因')]; })(),
+	['confirmed', '已确认', true, true]);
+check('归因状态:有 JS 证据但没定到包 → 可疑(要深录才能再缩小)',
+	(() => {
+		const row = { ...incidentRow, packages: [], summary: { ...incidentRow.summary, topScripts: [], worstFrameJs: 'js' } };
+		const v = EX.incidentVerdict(row);
+		return [v.level, v.detail.includes('没能定到包名')];
+	})(), ['suspected', true]);
+check('归因状态:没有 JS 证据 + 满足节流判据 → 可疑,并写成"更像…"而不是结论',
+	(() => {
+		const row = { ...incidentRow, packages: [], summary: { ...incidentRow.summary, worstFrameJs: 'none', suspectedThrottle: true, worstFrameNeighboursMs: 16.7 } };
+		const v = EX.incidentVerdict(row);
+		return [v.level, v.detail.includes('更像 rAF 被挂起或浏览器节流'), v.detail.includes('未观察到足以解释')];
+	})(), ['suspected', true, false]);
+check('归因状态:没有 JS 证据、也不满足节流判据 → 未归因,给的是那句"请结合前后帧与时间间隙检查"',
+	(() => {
+		const row = { ...incidentRow, packages: [], summary: { ...incidentRow.summary, worstFrameJs: 'none', suspectedThrottle: false } };
+		const v = EX.incidentVerdict(row);
+		return [v.level, v.label, v.detail];
+	})(), ['unattributed', '未归因', '未观察到足以解释该帧的 JS 阻塞证据;请结合前后帧和时间间隙检查 rAF 挂起或浏览器节流']);
+check('归因状态:档位色也一起给(文字永远在,不只靠颜色)',
+	['confirmed', 'suspected', 'unattributed'].map((level) => EX.verdictColor(level)),
+	['var(--dsw-alias-state-success-primary)', 'var(--dsw-alias-state-warn-primary)', 'var(--dsw-alias-label-secondary)']);
+check('最差事件说明行:把"凭什么"摊开(未归因时就是那句校准过的说明)',
+	EX.eventVerdictText({ ...incidentRow, packages: [], summary: { ...incidentRow.summary, worstFrameJs: 'none' } }).startsWith('未归因:未观察到足以解释该帧的 JS 阻塞证据'),
+	true);
+check('jsNo 文案里不再出现"更像 rAF 被节流"这种把可能性写成结论的说法',
+	/无\(longtask\/LoAF 都不与它重叠\)/.test(source) && source.includes("jsNo: '无(更像 rAF 被节流)'") === false, true);
 check('最差事件窗口行:单帧 / 累计的分母都写出来(帧数 · LoAF 条数 · 按包覆盖率)',
 	EX.eventWindowText(incidentRow), '窗口 12 帧 · LoAF 3 · 按包 4/6');
 // 这两行是 S.sub(允许换行),所以上限只是"防跑飞";真正必须一行的是上面那个标题行。
 check('最差事件标题行长度(必须一行放得下)',
 	EX.eventTitleText(incidentRow).length <= 30, true);
 check('最差事件证据/窗口行长度上限(可换行,防跑飞)',
-	[EX.eventEvidenceText(incidentRow).length <= 60, EX.eventWindowText(incidentRow).length <= 40], [true, true]);
+	[EX.eventEvidenceText(incidentRow).length <= 60, EX.eventVerdictText(incidentRow).length <= 130, EX.eventWindowText(incidentRow).length <= 40], [true, true, true]);
 check('最差事件三行:没有事故时标题行照实说还没抓到,证据/窗口行给空串(不摆 0)',
 	[EX.eventTitleText(null), EX.eventEvidenceText(null), EX.eventWindowText(null)], ['还没抓到', '', '']);
 
 check('复制摘要:带结论与口径(严重度文字 / JS 证据 / 归属 / 窗口分母)+ 口径与缺口两行',
 	(() => {
 		const text = EX.incidentSummaryText(incidentRow);
-		return [text.split('\n').length, text.includes('dsh-status-rotator 210ms'), text.includes('严重'), text.includes('按包 4/6'), text.includes('口径:'), text.includes('缺:')];
-	})(), [6, true, true, true, true, true]);
+		return [text.split('\n').length, text.includes('dsh-status-rotator 210ms'), text.includes('严重'), text.includes('按包 4/6'), text.includes('口径:'), text.includes('缺:'), text.includes('归因状态 已确认')];
+	})(), [7, true, true, true, true, true, true]);
 check('复制摘要:事故里有脚本时带上「可疑脚本」证据行(交给别的 AI 能接着查,而不只是一句结论)',
 	(() => {
 		const row = {
@@ -1127,68 +1222,118 @@ check('恢复默认布局:再清掉翻帧钉住与事故选中(真正回到干�
 		return [JSON.stringify(box.state.groups), box.state.watch.pickT, box.state.watch.selId, box.state.copyNote, box.state.pickNote];
 	})(), ['{"detail":false,"cross":false,"dom":false,"host":false,"tools":false}', null, null, null, null]);
 
-// ── 事故 ⇒ 帧:就近定位(事故切片里的帧与面板帧环不是同一份数据) ──
-check('就近定位:取 t 离事故开始时刻最近的那条 LoAF',
-	(() => {
-		box.state.watch.loaf = [{ t: 100 }, { t: 900 }, { t: 1500 }];
-		const hit = EX.frameNearestIncident({ atPerfMs: 880 });
-		box.state.watch.loaf = [];
-		return hit.t;
-	})(), 900);
-check('就近定位:事故窗口**之外**的帧不算(跨会话读回的事故离当前帧环几百秒,那是无关帧)',
-	(() => {
-		box.state.watch.loaf = [{ t: 900000 }];
-		const hit = EX.frameNearestIncident({ atPerfMs: 880, window: { fromMs: 0, toMs: 13000 } });
-		box.state.watch.loaf = [];
-		return hit;
-	})(), null);
+// ── 事故 ⇒ 历史帧:切到历史事故上下文,选中这条事故里最差的那一帧 ──────────────
+// 以前这里走的是"在当前帧环里找一条离事故最近、且落在窗口内的帧"(就近定位)—— 那条路
+// 在跨会话读回时只能给 null,而且会把实时帧环里的另一条帧当成这条事故的证据。现在帧来自
+// 事故包自己(`incident.frames`),所以不再需要那个距离启发式(函数已删,有断言钉着)。
+check('就近定位那条老路已经删掉(事故包自带的帧才是证据,不再从帧环里猜)',
+	/frameNearestIncident/.test(source), false);
 check('宿主 event-loop:p50/p99/**max** 三个都给(max 才看得出偶发的秒级停顿)',
 	[EX.hostLoopText({ p50: 1.28, p99: 1.79, max: 610.5 }), EX.hostLoopText({ p50: 1.28, p99: 1.79 }), EX.hostLoopText(null)],
 	['p50 1.28ms · p99 1.79ms · 最大 610.5ms', 'p50 1.28ms · p99 1.79ms', '未采集']);
-check('「看这一帧」定位不到时留下**如实说明**(不能点了像没反应)',
+const revealRow = {
+	id: 'i84', cause: 'frame', severity: 326, at: incidentAt.toISOString(),
+	window: { fromMs: 0, toMs: 13000 },
+	frames: [{ t: 1000, ms: 16.7, gap: false }, { t: 1100, ms: 320, gap: false }, { t: 1200, ms: 21, gap: false }],
+	loaf: [], summary: { topScripts: [], pkgCoverage: { resolved: 0, total: 0 } },
+};
+check('「看这一帧」:切到历史事故上下文 + 展开取证明细 + 选中事故里最差的那一帧;实时那一侧的选中**不动**',
 	(() => {
 		box.state.watch.incidents.length = 0;
-		box.state.watch.incidents.push(incidentRow);
-		box.state.watch.loaf = [];
+		box.state.watch.incidents.push(revealRow);
+		box.state.watch.mode = 'live';
+		box.state.watch.frameT = null;
+		box.state.watch.pickT = 999;
 		box.state.watch.selId = null;
 		box.state.groups.detail = false;
-		box.state.pickNote = null;
-		EX.revealIncident('i84');
-		const note = box.state.pickNote;
-		box.state.watch.incidents.length = 0;
-		box.state.groups.detail = false;
-		box.state.pickNote = null;
-		box.state.watch.selId = null;
-		return [typeof note, note.includes('帧环里没有')];
-	})(), ['string', true]);
-check('就近定位:帧环里没有 LoAF 时返回 null(不假装取证明细里那条就是它)',
-	[EX.frameNearestIncident({ atPerfMs: 880 }), EX.frameNearestIncident({}), EX.frameNearestIncident(null)], [null, null, null]);
-check('「看这一帧」:选中 + 展开取证明细 + 把翻帧钉到最近那条(三处同一个上下文)',
-	(() => {
-		box.state.watch.incidents.length = 0;
-		box.state.watch.incidents.push(incidentRow);
-		box.state.watch.loaf = [{ t: 100 }, { t: 900 }];
-		box.state.groups.detail = false;
-		box.state.watch.pickT = null;
-		box.state.watch.selId = null;
+		box.state.pickNote = 'stale';
 		const ok = EX.revealIncident('i84');
-		const result = [ok, box.state.watch.selId, box.state.groups.detail, box.state.watch.pickT];
-		box.state.watch.loaf = [];
+		const result = [ok, box.state.watch.mode, box.state.watch.selId, box.state.groups.detail,
+			box.state.watch.frameT, box.state.watch.pickT, EX.selectedIncidentFrame(box.state.watch.incidents[0]).t, box.state.pickNote];
 		box.state.watch.incidents.length = 0;
 		box.state.groups.detail = false;
+		box.state.watch.mode = 'live';
 		box.state.watch.pickT = null;
 		box.state.watch.selId = null;
+		box.state.pickNote = null;
 		return result;
-	})(), [true, 'i84', true, 900]);
+	})(), [true, 'incident', 'i84', true, null, 999, 1100, null]);
+check('「看这一帧」:包里一条帧记录都没有(老包)时留一句**如实说明**,不假装有帧可看',
+	(() => {
+		box.state.watch.incidents.length = 0;
+		box.state.watch.incidents.push({ ...incidentRow, frames: [], loaf: [] });
+		box.state.pickNote = null;
+		box.state.groups.detail = false;
+		const ok = EX.revealIncident('i84');
+		const note = box.state.pickNote;
+		const result = [ok, typeof note, note.includes('没有帧记录'), EX.selectedIncidentFrame({ ...incidentRow, frames: [] })];
+		box.state.watch.incidents.length = 0;
+		box.state.pickNote = null;
+		box.state.groups.detail = false;
+		return result;
+	})(), [true, 'string', true, null]);
+check('回到实时:只切模式,实时采集与历史那一侧的选中都不动',
+	(() => {
+		box.state.watch.mode = 'incident';
+		box.state.watch.frameT = 1100;
+		box.state.copyNote = '已复制';
+		box.state.pickNote = 'x';
+		EX.showLiveMode();
+		const result = [box.state.watch.mode, box.state.watch.frameT, box.state.copyNote, box.state.pickNote];
+		box.state.watch.frameT = null;
+		return result;
+	})(), ['live', 1100, null, null]);
 check('「看这一帧」:事故不在留存清单里时什么都不改,返回 false',
 	(() => {
 		box.state.watch.selId = null;
+		box.state.watch.mode = 'live';
 		box.state.groups.detail = false;
 		const ok = EX.revealIncident('nope');
-		const result = [ok, box.state.watch.selId, box.state.groups.detail];
+		const result = [ok, box.state.watch.selId, box.state.groups.detail, box.state.watch.mode];
 		box.state.groups.detail = false;
 		return result;
-	})(), [false, null, false]);
+	})(), [false, null, false, 'live']);
+check('详情区的上下文标题:历史事故与实时两种模式**各自写明自己是哪一个**(不许有歧义)',
+	[
+		EX.incidentFrameHeadingText({ id: 'i12' }, { t: 3000, ms: 984 }, { index: 3, count: 305 }),
+		EX.incidentFrameHeadingText({ id: 'i12' }, null, { index: 0, count: 0 }),
+		EX.liveFrameHeadingText({ t: 1, dur: 21 }),
+	],
+	['历史事故 i12 · 历史帧 3/305', '历史事故 i12 · 历史帧', '实时监控 · 当前帧']);
+check('折叠摘要也带上下文:历史事故模式下给的是历史帧的序号与耗时',
+	(() => {
+		const saved = box.state.watch.incidents.slice();
+		const savedMode = box.state.watch.mode;
+		const savedSel = box.state.watch.selId;
+		box.state.watch.incidents.length = 0;
+		box.state.watch.incidents.push(revealRow);
+		box.state.watch.mode = 'incident';
+		box.state.watch.selId = 'i84';
+		box.state.watch.frameT = 1100;
+		const text = EX.detailSummary();
+		box.state.watch.incidents.length = 0;
+		for (const row of saved) box.state.watch.incidents.push(row);
+		box.state.watch.mode = savedMode;
+		box.state.watch.selId = savedSel;
+		box.state.watch.frameT = null;
+		return text;
+	})(), '历史帧 2/3 · 320ms');
+check('折叠组标题:历史事故模式下带上事故 id(折叠着也能看出在看哪一条)',
+	(() => {
+		const saved = box.state.watch.incidents.slice();
+		const savedMode = box.state.watch.mode;
+		const savedSel = box.state.watch.selId;
+		box.state.watch.incidents.length = 0;
+		box.state.watch.incidents.push(revealRow);
+		box.state.watch.mode = 'incident';
+		box.state.watch.selId = 'i84';
+		const text = EX.detailGroupLabel();
+		box.state.watch.incidents.length = 0;
+		for (const row of saved) box.state.watch.incidents.push(row);
+		box.state.watch.mode = savedMode;
+		box.state.watch.selId = savedSel;
+		return text;
+	})(), '取证明细 · i84');
 
 // ── D:链路分位与"疑似链路"判定 ─────────────────────────────────────
 box.state.link = [
@@ -1496,6 +1641,7 @@ const watchPieces = [
 	extract(source, 'function evidenceFooter('),
 	extract(source, 'function watchPanelText('),
 	// 事故"选中的那条"这条上下文:文本函数跟的是 selectedIncident(),不是硬编码 incidents[0]
+	extract(source, 'function incidentOwner('),
 	extract(source, 'function selectedIncident('),
 	extract(source, 'function watchSelectedText('),
 	extract(source, 'function watchFlagText('),
@@ -1521,6 +1667,37 @@ const watchPieces = [
 	extract(source, 'function incidentFileName('),
 	extract(source, 'function incidentReport('),
 	extract(source, 'function round1('),
+	// 诊断上下文 + 历史帧数据层(实时 / 历史两支的分流点)
+	source.slice(source.indexOf('const LS_WATCHUI'), source.indexOf('\n', source.indexOf('const LS_WATCHUI'))),
+	extract(source, 'function saveWatchUI('),
+	extract(source, 'function restoreWatchUI('),
+	extract(source, 'function diagMode('),
+	extract(source, 'function incidentFrameRows('),
+	extract(source, 'function incidentLoafAt('),
+	extract(source, 'function incidentWorstFrame('),
+	extract(source, 'function selectedIncidentFrame('),
+	extract(source, 'function incidentFrameLevel('),
+	extract(source, 'function incidentFrameHot('),
+	extract(source, 'function incidentFrameNav('),
+	extract(source, 'function selectIncidentFrame('),
+	extract(source, 'function incidentFrameStep('),
+	extract(source, 'function incidentFrameBadStep('),
+	extract(source, 'function showLiveMode('),
+	extract(source, 'function incidentWallClock('),
+	extract(source, 'function replayColumns('),
+	extract(source, 'function replayCellTitle('),
+	extract(source, 'function incidentScriptOf('),
+	extract(source, 'function incidentFrameTally('),
+	`${extract(source, 'const incidentTallyCache = ')};`,
+	extract(source, 'function incidentWindowTally('),
+	extract(source, 'function incidentFrameEvidenceRows('),
+	extract(source, 'function incidentLongTasksAt('),
+	extract(source, 'function incidentFrameHeadingText('),
+	extract(source, 'function liveFrameHeadingText('),
+	extract(source, 'function incidentVerdict('),
+	extract(source, 'function verdictColor('),
+	extract(source, 'function eventVerdictText('),
+	extract(source, 'function detailContext('),
 ].join('\n');
 const watchBox = new Function(`
 	${watchPieces}
@@ -1587,6 +1764,15 @@ const watchBox = new Function(`
 		crossNone: '没有可交叉的脚本', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', rest: '其余',
 		hourUnit: '小时', minUnit: '分', secUnit: '秒', framesUnit: ' 帧',
 		replayGaps: 'rAF 挂起', replayNoLoaf: '这一帧附近没有长动画帧记录(窗口里没有 LoAF)',
+		ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧', notYet: '未采集',
+		sevBad: '严重', sevWarn: '警告', sevOk: '低于线', verdictLabel: '归因状态',
+		verdictConfirmed: '已确认', verdictSuspected: '可疑', verdictUnattributed: '未归因',
+		verdictConfirmedText: '该帧有直接测量到的 JS 阻塞证据,窗口内主要归属', verdictNotRootCause: '这只缩小到哪个包,不等于已定位根因',
+		verdictSuspectedJsNoPkg: '有 JS 阻塞证据但没定到包名', verdictThrottleText: '更像 rAF 被挂起或浏览器节流', verdictNeighbours: '前后帧中位',
+		verdictUnattributedText: '未观察到足以解释该帧的 JS 阻塞证据;请结合前后帧和时间间隙检查 rAF 挂起或浏览器节流',
+		replayGapCell: '这段时间没有帧记录', replayCellPick: '点它 → 选中这一帧', replayCellCount: '这一格',
+		pkgStoredHint: '存下来的包名', incidentWindowScopeHint: '事故窗口累计', pkgIncidentWindowHint: '事故窗口按包',
+		evidenceMissing: '缺:原始源码行号与调用栈', evidenceCaliber: '口径:x', frameEvidenceMissing: '这一帧没有脚本记录',
 		splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 	})[key] ?? key;
 	// 面板渲染区那两个文案函数用到的短名(真实实现里是 short():去掉 scope 前缀)
@@ -1607,7 +1793,7 @@ const watchBox = new Function(`
 		dom: { total: 1234 },
 		bundleKeys: new Set(),
 		longTasks: [],
-		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', pickT: null, selId: null, scope: 'worst', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
+		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', pickT: null, selId: null, mode: 'live', frameT: null, scope: 'worst', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
 			// A4:交互计时的状态位(eventObserver 由 startInteractions 自己写)
 			eventObserver: null, eventState: 'not-started', eventSupported: [], interactions: [], eventCount: 0, elementCount: 0 },
 	};
@@ -1619,8 +1805,11 @@ const watchBox = new Function(`
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
 		tallyScripts, framePkgTally, pkgWhoText, whoRows, barSegments, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
 		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident, selectIncident, setIncidentScope, evidenceScope, evidenceFooter, evidenceZeroText, incidentScriptEvidence, incidentEvidenceAt, evidenceWhereText, evidenceLine, evidenceName, evidencePlace, replayScope, replayX, replaySummaryText, replaySplitText, evidenceCalls: () => evidenceCalls,
+		// 诊断上下文 + 历史帧数据层(逐帧回放)
+		diagMode, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, incidentFrameLevel, selectIncidentFrame, incidentFrameStep, incidentFrameBadStep, showLiveMode, replayColumns, replayCellTitle, incidentWallClock, incidentFrameTally, incidentWindowTally, incidentFrameEvidenceRows, incidentLongTasksAt, incidentVerdict, verdictColor, incidentScriptOf, detailContext, incidentFrameHeadingText, liveFrameHeadingText, saveWatchUI, restoreWatchUI, LS_WATCHUI,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
+		replayCols: REPLAY_COLS,
 		setNow: (value) => { nowMs = value; },
 		startInteractions, watchInteraction, WATCH_EVENT_MAX,
 		setEntryTypes: (types) => { FakeObserver.supportedEntryTypes = types; },
@@ -1838,6 +2027,328 @@ check('事故回放横轴按**时间**放:起点 0、终点满宽、中间按比
 check('事故回放:没有 LoAF 重叠时照实说,不给假的时间分解',
 	watch.replaySplitText({ split: null }), '这一帧附近没有长动画帧记录(窗口里没有 LoAF)');
 
+// ── 历史事故的**逐帧**上下文:上下文隔离 / 帧条映射 / 四个方向的翻帧 ─────────────
+// 这份 fixture 就是"事故包"该有的样子:frames(含一个 gap)、loaf(带存下来的 pkg/file/line)、
+// longTasks、urls、env.perfOrigin(墙钟要靠它,不能用当前页面的 timeOrigin)。
+const frameRow = {
+	id: 'i12', cause: 'frame', severity: 984, at: '2026-10-12T15:33:35.000Z',
+	env: { perfOrigin: new Date(1700000000000).toISOString() },
+	window: { fromMs: 1000, toMs: 14000, from: 'x', to: 'y' },
+	urls: ['http://h/plugins/dsh-a/client.js', 'http://h/plugins/dsh-b/client.js'],
+	summary: {
+		worstFrameMs: 984, frames: 5, loafEntries: 2, p50: 20, p99: 984, blockingMs: 130,
+		worstFrameJs: 'js', worstFrameNeighboursMs: 21, pkgCoverage: { resolved: 2, total: 3 },
+		topScripts: [{ u: 0, ms: 40, fn: 'run', pkg: 'dsh-a', pkgVia: 'url', file: '/plugins/dsh-a/client.js', line: 3, lineVia: 'text', lineScope: 'file' }],
+	},
+	frames: [
+		{ t: 1000, ms: 16.7, gap: false },
+		{ t: 2000, ms: 21, gap: false },
+		{ t: 3000, ms: 984, gap: false },
+		{ t: 4000, ms: 9000, gap: true },
+		{ t: 13000, ms: 150, gap: false },
+		{ t: 13500, ms: 60, gap: false },
+	],
+	loaf: [
+		{
+			t: 3000, dur: 984, blocking: 120, renderStart: 3100, styleAndLayoutStart: 3200,
+			scripts: [{
+				u: 1, ms: 300, forcedMs: 0, pauseMs: 0, fn: 'onmessage', charPos: 10,
+				invoker: 'DOMWebSocket.onmessage', invokerType: 'user-callback',
+				pkg: 'dsh-b', pkgVia: 'url', file: '/plugins/dsh-b/client.js', line: 12, lineVia: 'text', lineScope: 'file',
+			}],
+		},
+		{ t: 13000, dur: 150, blocking: 10, renderStart: 13100, styleAndLayoutStart: 13150, scripts: [] },
+	],
+	longTasks: [{ at: 2500, t: Date.now(), ms: 600, owner: 'dsh-a', component: 'ChatView', source: 'scheduler+render' }],
+};
+
+const withIncident = (fn) => {
+	const saved = watch.state.watch.incidents.slice();
+	const savedLoaf = watch.state.watch.loaf.slice();
+	const savedMode = watch.state.watch.mode;
+	const savedFrameT = watch.state.watch.frameT;
+	const savedSel = watch.state.watch.selId;
+	watch.state.watch.incidents.length = 0;
+	watch.state.watch.incidents.push(frameRow);
+	watch.state.watch.mode = 'incident';
+	watch.state.watch.selId = frameRow.id;
+	watch.state.watch.frameT = null;
+	const result = fn();
+	watch.state.watch.incidents.length = 0;
+	for (const row of saved) watch.state.watch.incidents.push(row);
+	watch.state.watch.loaf.length = 0;
+	for (const row of savedLoaf) watch.state.watch.loaf.push(row);
+	watch.state.watch.mode = savedMode;
+	watch.state.watch.frameT = savedFrameT;
+	watch.state.watch.selId = savedSel;
+	return result;
+};
+
+check('历史帧:gap(整段 rAF 被挂起)不算帧 —— 不参与序号、选中与翻帧',
+	watch.incidentFrameRows(frameRow).map((frame) => frame.t), [1000, 2000, 3000, 13000, 13500]);
+check('历史帧:默认选中最差那一帧(帧间隔口径,与事故严重度同一条)', watch.incidentWorstFrame(frameRow).t, 3000);
+check('历史帧:选中的 t 在包内找不到 → 退回自动,不指着一个不存在的帧',
+	(() => {
+		watch.state.watch.frameT = 999999;
+		const hit = watch.selectedIncidentFrame(frameRow);
+		const cleared = watch.state.watch.frameT;
+		watch.state.watch.frameT = null;
+		return [hit.t, cleared];
+	})(), [3000, null]);
+check('历史帧:钉住之后就是那一帧(存 t 不存下标)', (() => {
+	watch.state.watch.frameT = 2000;
+	const hit = watch.selectedIncidentFrame(frameRow);
+	watch.state.watch.frameT = null;
+	return hit.t;
+})(), 2000);
+check('历史帧 ↔ LoAF:按**时间重叠**取那一条(这一帧没有重叠就是 null,不借别帧的)',
+	[watch.incidentLoafAt(frameRow, { t: 3000, ms: 984 }).dur, watch.incidentLoafAt(frameRow, { t: 2000, ms: 21 }), watch.incidentLoafAt(frameRow, { t: 13500, ms: 60 })],
+	[984, null, null]);
+check('历史帧导航:序号 / 总数 / 四个方向有没有下一条(没有就禁用,不留假按钮)',
+	(() => {
+		const nav = watch.incidentFrameNav(frameRow, { t: 3000, ms: 984 });
+		const last = watch.incidentFrameNav(frameRow, { t: 13500, ms: 60 });
+		return [nav.index, nav.count, nav.hasPrev, nav.hasNext, nav.hasPrevBad, nav.hasNextBad, last.hasNext, last.hasPrevBad];
+	})(),
+	[3, 5, true, true, false, true, false, true]);
+check('历史帧翻帧:按**时间序**走一步(与帧条从左到右同一个方向),到头停住',
+	withIncident(() => {
+		const seq = [];
+		watch.state.watch.frameT = 3000;
+		watch.incidentFrameStep(1); seq.push(watch.state.watch.frameT);
+		watch.incidentFrameStep(1); seq.push(watch.state.watch.frameT);
+		watch.incidentFrameStep(1); seq.push(watch.state.watch.frameT);   // 已是最后一帧:不动
+		watch.incidentFrameStep(-1); seq.push(watch.state.watch.frameT);
+		return seq;
+	}), [13000, 13500, 13500, 13000]);
+check('上一/下一异常帧:帧间隔 ≥ 守夜触发线才算异常帧(到不了就什么都不做)',
+	withIncident(() => {
+		watch.state.watch.frameT = 2000;
+		watch.incidentFrameBadStep(1); const next = watch.state.watch.frameT;
+		watch.incidentFrameBadStep(1); const second = watch.state.watch.frameT;   // 下一异常帧:13000
+		watch.incidentFrameBadStep(1); const none = watch.state.watch.frameT;      // 已是最后一个异常帧:不动
+		watch.incidentFrameBadStep(-1); const back = watch.state.watch.frameT;  // 回到 t=3000 那一条
+		return [next, second, none, back];
+	}), [3000, 13000, 13000, 3000]);
+check('事件横轴的墙钟:用**事故包自带的 perfOrigin**,不是当前页面的 timeOrigin(跨会话读回才算得对)',
+	watch.incidentWallClock(frameRow, 3000), 1700000000000 + 3000);
+
+// ── 上下文隔离:两个上下文各自吃自己那份数据(这次改版的核心)────────────────
+check('诊断上下文:实时模式下即使选着一条事故,取证明细也只吃实时帧(不许"上面历史、下面实时"反过来)',
+	(() => {
+		watch.state.watch.mode = 'live';
+		watch.state.watch.loaf.length = 0;
+		watch.state.watch.loaf.push({ t: 9999, dur: 500, blocking: 50, scripts: [{ url: 'http://h/plugins/dsh-live/client.js', ms: 400, charPos: 0, fn: 'liveFn' }] });
+		const saved = watch.state.watch.incidents.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.incidents.push(frameRow);
+		const detail = watch.detailContext();
+		watch.state.watch.incidents.length = 0;
+		for (const row of saved) watch.state.watch.incidents.push(row);
+		watch.state.watch.loaf.length = 0;
+		return [detail.kind, detail.frame.t, detail.split.total];
+	})(), ['live', 9999, 500]);
+check('诊断上下文:历史事故模式下的帧 / 分解 / 证据全部来自事故包 —— 实时帧环里更大的那一帧一个字段都不进来',
+	withIncident(() => {
+		watch.state.watch.loaf.length = 0;
+		watch.state.watch.loaf.push({ t: 9999, dur: 500, blocking: 50, scripts: [{ url: 'http://h/plugins/dsh-live/client.js', ms: 400, charPos: 0, fn: 'liveFn' }] });
+		watch.state.watch.frameT = 3000;
+		const detail = watch.detailContext();
+		watch.state.watch.loaf.length = 0;
+		return [
+			detail.kind, detail.row.id, detail.frame.t, detail.nav.index, detail.nav.count,
+			detail.split.total, detail.split.js,
+			detail.evidence.label.includes('i12'), detail.evidence.label.includes('历史帧'),
+			detail.evidence.rows.map((row) => row.fn),
+			detail.evidence.rows.some((row) => row.fn === 'liveFn'),
+		];
+	}),
+	['incident', 'i12', 3000, 3, 5, 984, 100, true, true, ['onmessage'], false]);
+check('诊断上下文:没有可看的事故时不进历史模式(那样只会是一片缺失状态)',
+	(() => {
+		const saved = watch.state.watch.incidents.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.mode = 'incident';
+		watch.state.watch.selId = 'i12';
+		const mode = watch.diagMode();
+		watch.state.watch.incidents.length = 0;
+		for (const row of saved) watch.state.watch.incidents.push(row);
+		watch.state.watch.mode = 'live';
+		watch.state.watch.selId = null;
+		return mode;
+	})(), 'live');
+
+// ── 历史帧条:按时间放、缺口留白、点击映射回**真实记录** ──────────────────────
+check('帧条:几何按**时间**算(不是序号)—— 同一列里有多帧时留最差的那一帧,而且它一定是原数组里真实的帧',
+	(() => {
+		const columns = watch.replayColumns(frameRow);
+		const withFrame = columns.cols.filter((cell) => cell !== null && cell.frame !== null);
+		const gapOnly = columns.cols.filter((cell) => cell !== null && cell.frame === null);
+		return [
+			columns.liveCount, columns.gapCount,
+			withFrame.every((cell) => frameRow.frames.includes(cell.frame)),
+			// 那一格里面不是"合成"的一帧,而是 t=3000 那条(984ms)
+			columns.cols.map((cell) => (cell === null || cell.frame === null ? null : cell.frame.t)).filter((t) => t !== null).slice(0, 3),
+			gapOnly.length > 0,
+			gapOnly.every((cell) => cell.level === 'gap'),
+		];
+	})(),
+	[5, 1, true, [1000, 2000, 3000], true, true]);
+check('帧条:rAF 挂起那一段**留白**(那一列没有可点的帧),不补桩成一根柱子',
+	(() => {
+		const columns = watch.replayColumns(frameRow);
+		const index = watch.replayX(4000, columns.from, columns.span, watch.replayCols);
+		const cell = columns.cols[index];
+		return [cell === null || cell.frame === null, cell === null ? null : cell.level];
+	})(), [true, 'gap']);
+check('帧条:点得动的格子都能映射回真实帧;悬停给这一格那一帧的编号与耗时',
+	(() => {
+		const columns = watch.replayColumns(frameRow);
+		const nav = watch.incidentFrameNav(frameRow, { t: 3000, ms: 984 });
+		const cell = columns.cols.find((item) => item !== null && item.frame !== null && item.frame.t === 3000);
+		return [cell.frame.t === 3000, watch.replayCellTitle(frameRow, cell, nav).includes('984ms'), watch.replayCellTitle(frameRow, cell, nav).includes('3/5')];
+	})(), [true, true, true]);
+check('帧条:绘制量有上限(一列最多一个 DOM 节点),真实帧数再多也不会把面板压垮',
+	(() => {
+		const many = { ...frameRow, frames: Array.from({ length: 900 }, (_, i) => ({ t: 1000 + i * 14, ms: 16.7, gap: false })) };
+		const columns = watch.replayColumns(many);
+		return [columns.cols.length <= watch.replayCols, columns.liveCount, columns.cols.filter((cell) => cell !== null).length <= watch.replayCols];
+	})(), [true, 900, true]);
+
+// ── 事故包的脚本聚合:用**存下来的** pkg(刷新之后仍然定得到名) ────────────────
+check('历史帧的脚本聚合:按来源 / 按包都覆盖这一帧自己的脚本(与实时同一套 tallyScripts)',
+	(() => {
+		const frame = watch.incidentFrameTally(frameRow, { t: 3000, ms: 984 });
+		const window = watch.incidentWindowTally(frameRow);
+		return [frame.js, frame.byInvoker[0][0], frame.top[0][0], window.js, window.count];
+	})(),
+	[300, 'DOMWebSocket.onmessage', 'dsh-b', 300, 2]);
+check('刷新(当前会话的 sourcemap 解析缓存全空)之后:历史事故的包名仍然是捕获时存下来的那个',
+	withIncident(() => {
+		watch.pkgByUrl.clear();
+		watch.state.precise = false;
+		const window = watch.incidentWindowTally(frameRow);
+		const scope = watch.evidenceScope();
+		return [window.top.map(([name]) => name), scope.rows[0].pkg, scope.rows[0].file, scope.rows[0].line];
+	}),
+	[['dsh-b'], 'dsh-b', '/plugins/dsh-b/client.js', 12]);
+check('历史帧的证据:这一帧没有 LoAF 记录时退回**事故窗口内**的切片,并标明"不是这一帧的"(混入实时数据是不允许的)',
+	withIncident(() => {
+		watch.state.watch.frameT = 1000;      // 这一帧没有 LoAF
+		watch.state.watch.loaf.length = 0;
+		watch.state.watch.loaf.push({ t: 9999, dur: 500, scripts: [{ url: 'http://h/plugins/dsh-live/client.js', ms: 400, fn: 'liveFn' }] });
+		const scope = watch.evidenceScope();
+		const result = [scope.label.includes('窗口内'), scope.missing, scope.rows.map((row) => row.fn), scope.total];
+		watch.state.watch.loaf.length = 0;
+		return result;
+	}),
+	[true, true, ['run'], 3]);
+check('与这一帧重叠的 long task:只给时间上真的重叠的那几条(窗口里有、但不重叠的要排除)',
+	(() => {
+		const hit = watch.incidentLongTasksAt(frameRow, { t: 3000, ms: 984 });
+		const miss = watch.incidentLongTasksAt(frameRow, { t: 13500, ms: 60 });
+		return [hit.map((task) => task.owner), miss.length];
+	})(), [['dsh-a'], 0]);
+check('归因状态:事故包里的字段直接决定档位(有 JS 重叠 + 定到包 → 已确认)',
+	(() => { const v = watch.incidentVerdict(frameRow); return [v.level, v.label]; })(), ['confirmed', '已确认']);
+
+// ── 零证据那一行的分母范围:三种上下文各说各的,不许一律写成"窗口内" ────────────
+check('零证据那一行的分母范围:历史帧说"历史帧"、实时帧说"本帧"、事故窗口切片说"窗口内"',
+	(() => {
+		const bare = {
+			id: 'i9', frames: [{ t: 100, ms: 150, gap: false }],
+			loaf: [{ t: 100, dur: 150, blocking: 0, scripts: [{ u: -1, ms: 20, charPos: null }] }],
+			urls: [], summary: { topScripts: [], pkgCoverage: { resolved: 0, total: 1 } },
+		};
+		const saved = watch.state.watch.incidents.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.incidents.push(bare);
+		watch.state.watch.mode = 'incident';
+		watch.state.watch.selId = 'i9';
+		watch.state.watch.frameT = null;
+		const history = watch.evidenceZeroText(watch.evidenceScope());
+		watch.state.watch.incidents.length = 0;
+		for (const row of saved) watch.state.watch.incidents.push(row);
+		watch.state.watch.mode = 'live';
+		watch.state.watch.selId = null;
+		return [
+			history,
+			watch.evidenceZeroText({ scopeKind: 'frame', frame: true, total: 3 }),
+			watch.evidenceZeroText({ scopeKind: 'window', frame: false, total: 3 }),
+		];
+	})(),
+	[
+		'可疑脚本:0 条定到名(历史帧 1条脚本)· 要深录',
+		'可疑脚本:0 条定到名(本帧 3条脚本)· 要深录',
+		'可疑脚本:0 条定到名(窗口内 3条脚本)· 要深录',
+	]);
+
+// ── 诊断上下文落盘:刷新之后还能打开同一条事故的同一帧 ────────────────────────
+check('上下文落盘/读回:模式 + 事故 id + 历史帧 t 原样回来(刷新后仍能逐帧回看)',
+	(() => {
+		watch.store.clear();
+		watch.state.watch.mode = 'incident';
+		watch.state.watch.selId = 'i12';
+		watch.state.watch.frameT = 3000;
+		watch.state.watch.scope = 'latest';
+		watch.saveWatchUI();
+		watch.state.watch.mode = 'live';
+		watch.state.watch.selId = null;
+		watch.state.watch.frameT = null;
+		watch.state.watch.scope = 'worst';
+		const saved = watch.state.watch.incidents.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.incidents.push(frameRow);
+		watch.restoreWatchUI();
+		const result = [watch.state.watch.mode, watch.state.watch.selId, watch.state.watch.frameT, watch.state.watch.scope];
+		watch.state.watch.incidents.length = 0;
+		for (const row of saved) watch.state.watch.incidents.push(row);
+		watch.state.watch.mode = 'live';
+		watch.state.watch.selId = null;
+		watch.state.watch.frameT = null;
+		watch.state.watch.scope = 'worst';
+		watch.store.clear();
+		return result;
+	})(), ['incident', 'i12', 3000, 'latest']);
+check('上下文落盘/读回:落盘的那条事故已经不在留存清单里 → 退回实时,不指着一个不存在的事故',
+	(() => {
+		watch.store.clear();
+		watch.store.set(watch.LS_WATCHUI, JSON.stringify({ v: 1, mode: 'incident', selId: 'i-gone', frameT: 3000, scope: 'worst' }));
+		watch.state.watch.mode = 'live';
+		watch.state.watch.selId = null;
+		watch.state.watch.frameT = null;
+		const saved = watch.state.watch.incidents.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.incidents.push(frameRow);
+		watch.restoreWatchUI();
+		const result = [watch.state.watch.mode, watch.state.watch.selId, watch.state.watch.frameT];
+		watch.state.watch.incidents.length = 0;
+		for (const row of saved) watch.state.watch.incidents.push(row);
+		watch.store.clear();
+		return result;
+	})(), ['live', null, null]);
+check('选中事故 = 进入历史事故上下文;切「最差/最近」时历史帧的选择退回收起',
+	(() => {
+		const saved = watch.state.watch.incidents.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.incidents.push(frameRow);
+		watch.state.watch.mode = 'live';
+		watch.state.watch.selId = null;
+		watch.state.watch.frameT = 3000;
+		const ok = watch.selectIncident('i12');
+		const afterSelect = [ok, watch.state.watch.mode, watch.state.watch.frameT];
+		watch.state.watch.frameT = 3000;
+		watch.setIncidentScope('latest');
+		const afterScope = [watch.state.watch.mode, watch.state.watch.frameT, watch.state.watch.selId];
+		watch.state.watch.incidents.length = 0;
+		for (const row of saved) watch.state.watch.incidents.push(row);
+		watch.state.watch.mode = 'live';
+		watch.state.watch.selId = null;
+		watch.state.watch.frameT = null;
+		watch.state.watch.scope = 'worst';
+		return [afterSelect, afterScope];
+	})(), [[true, 'incident', null], ['incident', null, null]]);
+
 // ── 可疑脚本那一块吃什么 + 底下的分母 ─────────────────────────────
 // ── 历史事故的证据:存下来的优先(刷新生效),面板与复制摘要同一份 ─────────────
 check('历史事故:live 缓存全空(模拟刷新)时,仍然用捕获时存下来的 pkg/file/line',
@@ -1849,6 +2360,8 @@ check('历史事故:live 缓存全空(模拟刷新)时,仍然用捕获时存下�
 		watch.state.watch.loaf.length = 0;      // 刷新后 live 帧环是空的
 		watch.state.precise = false;            // 刷新后精确归因没开
 		watch.pkgByUrl.clear();                 // 解析缓存也空了
+		watch.state.watch.mode = 'incident';    // 这条断言说的是**历史事故上下文**那一支
+		watch.state.watch.selId = 'i77';
 		watch.state.watch.incidents.push({
 			id: 'i77', severity: 300, at: '2026-10-12T10:00:00.000Z', cause: 'frame',
 			urls: ['http://h/plugins/??a/client.js,b/client.js&rev=1'],
@@ -1872,6 +2385,8 @@ check('历史事故:live 缓存全空(模拟刷新)时,仍然用捕获时存下�
 		watch.state.watch.loaf.length = 0;
 		for (const r of savedLoaf) watch.state.watch.loaf.push(r);
 		watch.state.precise = savedPrecise;
+		watch.state.watch.mode = 'live';
+		watch.state.watch.selId = null;
 		return result;
 	})(),
 	[1, 'dsh-b', '/plugins/dsh-b/client.js', 25580, 'bundle', 'run', true,
@@ -1882,6 +2397,8 @@ check('老事故包(没有 file/line 字段):才回退现算 —— 就算现算
 		watch.state.watch.incidents.length = 0;
 		watch.pkgByUrl.clear();
 		watch.pkgByUrl.set('http://h/plugins/dsh-old/client.js', { pkg: 'dsh-old', via: 'url' });
+		watch.state.watch.mode = 'incident';
+		watch.state.watch.selId = 'i78';
 		watch.state.watch.incidents.push({
 			id: 'i78', severity: 200, at: '2026-10-12T11:00:00.000Z', cause: 'frame',
 			urls: ['http://h/plugins/dsh-old/client.js'],
@@ -1893,6 +2410,8 @@ check('老事故包(没有 file/line 字段):才回退现算 —— 就算现算
 		watch.state.watch.incidents.length = 0;
 		for (const r of savedIncidents) watch.state.watch.incidents.push(r);
 		watch.pkgByUrl.clear();
+		watch.state.watch.mode = 'live';
+		watch.state.watch.selId = null;
 		return result;
 	})(),
 	['old', 'dsh-old', '/plugins/stub/client.js', 7, 'stub-text', 'file']);
@@ -1903,6 +2422,8 @@ check('可疑脚本:事故优先(窗口内切片,跨会话读回仍在),范围�
 		watch.state.watch.incidents.length = 0;
 		watch.pkgByUrl.clear();
 		watch.pkgByUrl.set('http://h/plugins/dsh-x/client.js', { pkg: 'dsh-x', via: 'url' });
+		watch.state.watch.mode = 'incident';
+		watch.state.watch.selId = 'i9';
 		watch.state.watch.incidents.push({
 			id: 'i9', severity: 300, at: '2026-10-11T10:00:00.000Z', cause: 'frame', urls: ['http://h/plugins/dsh-x/client.js'],
 			summary: { topScripts: [{ u: 0, ms: 40, fn: 'run', charPos: 0 }], pkgCoverage: { resolved: 1, total: 3 } },
@@ -1915,6 +2436,8 @@ check('可疑脚本:事故优先(窗口内切片,跨会话读回仍在),范围�
 		watch.state.watch.loaf.length = 0;
 		for (const row of savedLoaf) watch.state.watch.loaf.push(row);
 		watch.pkgByUrl.clear();
+		watch.state.watch.mode = 'live';
+		watch.state.watch.selId = null;
 		return [scope.label.includes('i9'), scope.label.includes('窗口内'), scope.rows.length, scope.total, scope.named, footer.includes('1/3'), footer.includes('定到包 1/3'), watch.evidenceZeroText(scope)];
 	})(),
 	[true, true, 1, 3, 1, true, true, '可疑脚本:0 条定到名(窗口内 3条脚本)· 要深录']);
