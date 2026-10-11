@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ⬜ 仓库已建(私有),待转公开、加 topic |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,而且 **`tools/` 与 `locale/` 按目录核**(以后加验证器或加语言文件不会漏检),显式清单 + 目录共覆盖包内全部 **18** 个文件(含 `package.json`),漏一份就失败 |
-| 6 | 门禁全绿 | ✅ 364 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ 365 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
 | 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
 
@@ -34,7 +34,7 @@
 
 | 判据 | 怎么验 | 最新实测 |
 |---|---|---|
-| 离线断言全绿 | `npm test` | **364** 条(attribution 11 / logic 314 / host 39) |
+| 离线断言全绿 | `npm test` | **365** 条(attribution 11 / logic 315 / host 39) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 守夜默认**零插桩** | `snapshot().instrumented` 在三种模式下的取值 | 面板打开、HUD 开着:`instrumented: false / deep: false`;点「深录」→ `true / true`;点回去 → `false / false`,`errors` 全程 0 |

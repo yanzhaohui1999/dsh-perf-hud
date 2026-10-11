@@ -3481,6 +3481,14 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * 一个包名都没定到时那一行:**必须留下分母** —— 直接不显示会让人以为"按包"被删了
+		 * (实测被这么问过)。给不出占比是因为没有名字就没有排行,不是没采。
+		 */
+		function pkgZeroText(frameScripts, windowScripts) {
+			return `${translate('byPkg')}:${translate('pkgZeroNamed')}(${translate('scopeFrame')} ${frameScripts} · ${translate('windowScope')} ${windowScripts} ${translate('scriptsUnit')})· ${translate('needDeep')}`;
+		}
+
+		/**
 		 * 一条脚本"是谁调起来的" —— LoAF 的 `invoker` 是一句 devtools 风格的调用点描述。
 		 * 真页面抓到的形态(2026-10-08,一份 24 条脚本的事故):
 		 *   `DOMWebSocket.onmessage`      ×19   会话事件流的消息处理器
@@ -3868,7 +3876,7 @@ window.__ModuleLoader__.load({
 				forcedHint: 'LoAF 的 forcedStyleAndLayoutDuration:读布局 / 写样式逼出来的同步布局。它**已经算在**脚本耗时里,来源却是样式而不是业务逻辑 —— 分不清"这块是 JS 慢还是样式慢"时看这一行。这一行是**窗口**聚合',
 				splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', scopeFrame: '本帧',
-				bySource: '按来源', byPkg: '按包', pkgAllUnnamed: '一个名都没定到(要深录)', needDeep: '要深录', invokerUnknown: '来源未记录',
+				bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本', needDeep: '要深录', invokerUnknown: '来源未记录',
 				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
 				hourUnit: '小时', minUnit: '分', secUnit: '秒',
 				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
@@ -3933,7 +3941,7 @@ window.__ModuleLoader__.load({
 				forcedHint: 'LoAF forcedStyleAndLayoutDuration: synchronous layout forced by reading layout or writing style. It is **already inside** script time, but it comes from styling rather than business logic — read this row when you cannot tell whether the script side is slow because of JS or because of style. This row is the **window** aggregate',
 				splitScript: 'script', splitTask: 'task', splitRender: 'render', splitTail: 'style+layout+paint',
 				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', scopeFrame: 'this frame',
-				bySource: 'by source', byPkg: 'by package', pkgAllUnnamed: 'nothing resolved (needs deep)', needDeep: 'needs deep', invokerUnknown: 'source not recorded',
+				bySource: 'by source', byPkg: 'by package', pkgZeroNamed: '0 resolved', scriptsUnit: 'scripts', needDeep: 'needs deep', invokerUnknown: 'source not recorded',
 				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
 				hourUnit: 'h', minUnit: 'm', secUnit: 's',
 				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',
@@ -4394,8 +4402,14 @@ window.__ModuleLoader__.load({
 							rows.push(line('win-js', t('splitJs'), t('forcedHint'), jsBreakdownText(window)));
 							if (window.top.length > 0) rows.push(line('win-pkg', t('byPkg'), t('pkgHint'), pkgWhoText(window)));
 							// 一个包名都没定到:按包这一层现在没有信息,但也不能装作它不存在
-							if (window.top.length === 0) rows.push(h('div', { key: 'pkg-none', style: S.sub, title: t('pkgHint') }, `${t('byPkg')}:${t('pkgAllUnnamed')}`));
+							// 一个包名都没定到:这一层给不出占比(没有名字就没有排行),但**必须留下分母** ——
+							// 直接不显示会让人以为"按包"被删了(实测被这么问过)。
+							if (window.top.length === 0) {
+								rows.push(h('div', { key: 'pkg-none', style: S.sub, title: t('pkgHint') },
+									pkgZeroText(frame === null || framePkgs === null ? 0 : framePkgs.unresolved, window.unresolved)));
+							}
 						}
+						return rows.length === 0 ? null : h('div', null, rows);
 					})(),
 					// 60 秒迷你时间条:一格一秒、格值取格里最差那帧,阈值与导出件 ASCII 条带一致
 					h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },

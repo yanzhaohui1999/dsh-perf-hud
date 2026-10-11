@@ -1029,6 +1029,7 @@ const watchPieces = [
 	extract(source, 'function tallyScripts('),
 	extract(source, 'function scriptPkgTally('),
 	extract(source, 'function framePkgTally('),
+	extract(source, 'function pkgZeroText('),
 	extract(source, 'function pkgWhoText('),
 	extract(source, 'function invokerWhoText('),
 	extract(source, 'function jsBreakdownText('),
@@ -1098,7 +1099,7 @@ const watchBox = new Function(`
 		splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 		jsExec: '纯执行', forcedShort: '强制', jsPause: '暂停',
 		windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
-		needDeep: '要深录', scopeFrame: '本帧', bySource: '按来源', byPkg: '按包', pkgAllUnnamed: '一个名都没定到(要深录)',
+		needDeep: '要深录', scopeFrame: '本帧', bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本',
 		hit: '命中', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名', peak: '峰',
 		hourUnit: '小时', minUnit: '分', secUnit: '秒',
 	})[key] ?? key;
@@ -1128,7 +1129,7 @@ const watchBox = new Function(`
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
-		tallyScripts, framePkgTally, pkgWhoText, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
+		tallyScripts, framePkgTally, pkgWhoText, pkgZeroText, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1642,6 +1643,9 @@ check('D5:"是谁"那一段文案:Top3 + 其余 + 定不到包的条数',
 		];
 	})(),
 	['dsh-a 60ms · dsh-b 30ms · dsh-c 20ms · 其余 1', '未定名(未归因 2)', 'dsh-a 200ms · 未定名 1']);
+check('一个包名都没定到时「按包」收敛成一行,但**留下分母**(否则像是功能被删了)',
+	watch.pkgZeroText(1, 461),
+	'按包:0 条定到名(本帧 1 · 窗口 461 条脚本)· 要深录');
 check('"命中"只列非零的腿(没插桩时子树 / DOM写入 / 包名恒为 0,列出来只是噪声)',
 	(() => {
 		watch.state.ltBlamed = 245;
