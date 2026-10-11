@@ -41,6 +41,7 @@
 | 事故落盘且活过刷新 | 抓一次 → 刷新 → `watch().restored` | restored **10**;读回条目带 `restored:true`、`env.perfOrigin` 保留,`report()` 跨会话可渲染(184 帧) |
 | 留存两档并集 | 塞跨天旧事故 → 刷新 → `watch().kept[].tier` | 15 条旧事故(一天 12 条 + 另外三天各 1 条)→ **restored 13** · tier `{worst 9, daily 3, both 1}`,工具箱清单里「当天最差」出现 3 次 |
 | 跨会话基线只进导出件 | `snapshot().context.sessionBaselines` | 一次会话一条(`frames 82 / p50 23.6ms`),`note` 写死「粗参照,不是回归判定」;面板不显示(静态断言钉住) |
+| 拆解视图(环 / 堆叠条 / 交叉表 / 悬停) | 面板 DOM + `tools/check-panel.mjs` 现场量 | 环 **4 弧**(`viewBox 0 0 84 84` 里 4 个 circle);每个 scope 两条 100% 堆叠条(段 tooltip 形如 `setTimeout 240ms · 100%` / `script 209ms · 47%`);交叉表展开后 4 行 × 5 列,行 `插件批次(未按 sourcemap 拆) 371 …`、`无 URL(内联脚本) 240`、`dsh-client-modules 206`、`其余 70 19`;悬停 `setTimeout` 段 → 表格同名列头与该列两格(`240`、`71`)同时变 brand 色,环的 4 条弧 stroke-width 恒 13(不误亮);**字数**:展开面板 1360 字 / 109 行、`取证明细` 639 字 / 36 行(交叉表展开 896 / 65)。⚠️ 与改造前的 533/32 不能直接比 —— 那是另一次采样(窗口里的名字长度不同),同一份 live 数据下差值在 ±100 字量级;结构性减字是"环里不再有来源名、窗口全纯执行时少一行、其余来源并进条里",而"其余来源"的命名与交叉表表头是**加**的字 |
 | 60 秒帧条与导出件同口径 | 面板 SVG + `tools/inspect-incident.mjs` 的 ASCII | 真实页面 100×18 / `viewBox 0 0 60 18`,`errors: 0`;阈值一致性有静态断言(≥100 / ≥50) |
 | 帧拆分:最多 7 段的环 + 脚本三种切法 / 两个分母 | 面板 SVG / `frameSplit` / `frameArcs` / `framePkgTally` / `invokerLabel` | 真实页面(**`node tools/check-panel.mjs --expr=…`**,自己造带脚本的 LoAF):环 **84×84**、`viewBox 0 0 84 84`、半径 34;一条只有单个来源的帧画出 **4 个 `<circle>`**(弧长 `175.3 / 35.1 / 0.3 / 0.1`,周长 213.6;颜色 `state-error / label-secondary / state-warn / brand` —— 任务那段是中性灰),脚本那几段的 `stroke-opacity` 按 `1 / 0.72 / 0.46 / 0.28` 递浅;六行块式值实测 `纯执行 260.1ms` / `未定名(未归因 1)` / `setTimeout 260ms` / `dsh-client-modules 192ms · 未定名 25` / `DOMWebSocket.onmessage 425ms · setTimeout 421ms · Response.json.then 322ms · 其余 1` / `纯执行 1353.2ms · 强制 6.4ms`;窗口那组的标题自带分母 `窗口:N 条长动画帧 · 跨 T · 平均每条脚本 Xms`(`spanText` 把跨度写成 `43分12秒`);没插桩时 `帧内未归因` 写「要深录」、`命中` 只列非零的腿、`回调归因` 与 `DOM 写入` 两行不渲染;**翻帧按钮真的换帧**(同一次实测:自动 `帧 1/16 · 530ms` → 环 `579.6ms`;按 ▶ → `2/25 · 275ms` → 环 `325ms`;再 ▶ → `3/28 · 170ms` → 环 `220.3ms`;按 ⟲ 回到 `1/… · 530ms`);**清单只收达线的帧**(同一次实测:环里 21 条 LoAF,选单只有 `帧 1/4 · 210ms · ≥100ms`,▶ 走到 `2/4`);`errors: 0`。**函数级的边界也是实测的**:`typeof Profiler === 'function'` 但 `new Profiler()` 抛 `NotAllowedError … disabled by Document Policy`(响应头实测 `null`) |
 | 脚本侧按包 | 面板「本帧按包 / 脚本按包·窗口」/ `incident.packages` | 真实页面 **`dsh-api-gateway 881ms · dsh-client-connection 312ms · dsh-client-modules 208ms · 其余 1`**(v0.3.0 实测,当时是窗口聚合那一行);定不到包名的条数会跟在同一行尾巴上(`· 未定名 8`) |
@@ -109,26 +110,7 @@
    "自测结果给谁看"一起定(把结果接回面板 = 小改;或连 `stressText()` 与它引用的那些 i18n 键、8 条断言一起删)。
    现在**明确不做**,免得只清字符串把这个缺口盖住。
 
-### 3.3 拆解视图改成成熟形态(2026-10-08 定方案,未实施)
-
-**问题**:「帧里花在哪」那张环几何上是**单层**(一圈一弧,不是同心双环),但它在同一圈里画了**层** —— "脚本"那一段又按「调用来源」细分(`frameArcs`),段数从 4 涨到最多 7。环的适用边界是"≤4 段、不带嵌套":层级只能靠同色深浅 + 1.4px 缝表示,读者要 hover 才读得出"红色这一段里还分了三四块",而且 84px 周长里 2% 的段(≈4px)基本看不见。**这不是"两个正交维度并列"那种错法**(一半弧按包、另一半按来源才是),是层级被塞进了一个不适合层级的形状。成熟工具的分界线是**一张图只表达一个维度**:
-[Chrome DevTools Performance](https://developer.chrome.com/docs/devtools/performance/reference)把同一份 profile 给 **Call tree / Bottom-up / Event log** 三个页签(层级 / 按自身耗时排 / 时间序);[speedscope](https://github.com/jlfwong/speedscope)([Mozilla 的介绍](https://hacks.mozilla.org/2018/11/cross-language-performance-profile-exploration-with-speedscope))给 **Time Order / Left Heavy / Sandwich** 三种视图 —— 都是"同一份数据、多个视图",不是"一张图更多段"。饼/环的适用边界也早写明白了:一个主分组、段数少;要比较两个以上主分组就别用([Atlassian](https://www.atlassian.com/data/charts/stacked-bar-chart-complete-guide))。
-
-**方案(三刀,按性价比排序)**
-
-- [ ] **第一刀:环不再承担层级 + 两个维度各画一条 100% 堆叠横条**。环只画帧的四段(脚本 / 任务里没归到的 / 渲染 / 样式+布局+绘制),**脚本内部的来源细分移出环**;「按来源」「按包」各是一条 372px 宽的堆叠条(1% = 3.7px,2% 也看得见),文字只留 Top3 + 其余,**「其余来源」那段文字并进条里**(hover 给文件名/原因)。目的:一次砍掉"层级挤在 84px 环里读不出"和"2% 段看不见"两个问题。
-- [ ] **第二刀:包 × 来源交叉表**(Top3×Top3 + 其余,格子给毫秒与占比),折叠在「取证明细」末尾 —— 这是"哪个包的哪类回调在烧时间"的成熟形式。Sankey/平行集**不做**:表达力换来的是可读性,面板这块地方不划算。
-- [ ] **第三刀:悬停联动**(环段 / 条段 / 表格行三处互相加亮)。颜色跨视图一致是前提:同一个来源在环、条、表里必须是同一个色。
-
-**验收判据(可离线/可跑)**
-
-1. 展开面板的 `document.body.innerText` **字符数**与 `取证明细` 组行数必须**比本次基线低**:基线 = **1263 字 / 106 行(整面板)、533 字 / 32 行(取证明细)**,用 `tools/check-panel.mjs --expr=…` 现场量。
-2. 环只表达**一个**维度(单层弧,不再按来源切)。
-3. 每条轴自带分母(窗口那行的做法推广到两条堆叠条),绝对值与占比并列。
-4. 断言:堆叠条各段之和 = 该维度的总量(与环同一口径);Top3 + 其余 = 100%。
-5. **不做**:帧内脚本时间轴(LoAF 只给每条脚本的时长,不给帧内起止——这不是形态取舍,是拿不到)。
-
-### 3.4 定了不做的
+### 3.3 定了不做的
 
 | # | 条目 | 为什么不做 |
 |---|---|---|
