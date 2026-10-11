@@ -3584,6 +3584,7 @@ window.__ModuleLoader__.load({
 		 */
 		function tallyScripts(rows) {
 			const byPkg = new Map();
+			const byOther = new Map();
 			const byInvoker = new Map();
 			let js = 0;
 			let forced = 0;
@@ -3598,7 +3599,13 @@ window.__ModuleLoader__.load({
 					const label = invokerLabel(script);
 					byInvoker.set(label, (byInvoker.get(label) ?? 0) + (script.ms ?? 0));
 					const resolved = packageOfScript(script.url, script.charPos);
-					if (resolved.pkg === null) { unresolved += 1; unresolvedMs += script.ms ?? 0; continue; }
+					if (resolved.pkg === null) {
+						unresolved += 1;
+						unresolvedMs += script.ms ?? 0;
+						const fallback = unresolvedLabel(script);
+						byOther.set(fallback, (byOther.get(fallback) ?? 0) + (script.ms ?? 0));
+						continue;
+					}
 					byPkg.set(resolved.pkg, (byPkg.get(resolved.pkg) ?? 0) + (script.ms ?? 0));
 				}
 			}
@@ -3609,6 +3616,8 @@ window.__ModuleLoader__.load({
 				count: rows.length,
 				spanMs: rows.length === 0 ? 0 : Math.round(rows[rows.length - 1].t - rows[0].t),
 				top: [...byPkg.entries()].sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
+				// 定不到插件包名的那部分:按**原因 / 文件名**汇总(不是笼统的"未定名")
+				byOther: [...byOther.entries()].filter(([, ms]) => ms > 0).sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
 				// ms 为 0 的来源不进榜:它们没占时间,列出来只是噪声
 				byInvoker: [...byInvoker.entries()].filter(([, ms]) => ms > 0).sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
 			};
@@ -3677,17 +3686,38 @@ window.__ModuleLoader__.load({
 		 * 定不到包名时也要说 —— 只报"有名字的那部分"会让人把 200ms 当成这一层的全部
 		 * (实测:窗口里 1116.8ms 脚本只有 200ms 定到了包,旧文案只写 `dsh-client-modules 200ms`)。
 		 */
+		/**
+		 * 定不到**插件包名**时,尽量给一个认得出的名字 —— 统一写"未定名"是把已知信息丢掉:
+		 *   · URL 为空(`no-url`)→ 真不知道:内联 / 动态构造的处理器;
+		 *   · URL 在 `plugins/` 下但还没拆开(`precise-off` / 脚本文本或 map 还在拉)→ "插件批次",
+		 *     它不是"没名字",只是还没按 sourcemap 分段还原;
+		 *   · 其余(有 URL、但不是 plugins 路径)→ **多半是应用自己的外壳 bundle**
+		 *     (实测 `/assets/index-<hash>.js` —— React 根容器上的事件处理器就来自它)。
+		 *     直接用文件名标出来,比"未定名"有用得多。
+		 */
+		function unresolvedLabel(script) {
+			const url = typeof script.url === 'string' ? script.url : '';
+			if (url === '') return translate('srcNoUrl');
+			if (ownerOfUrl(url) !== null) return translate('srcBatch');
+			const parts = url.split('?')[0].split('/');
+			const file = parts[parts.length - 1] === '' ? url : parts[parts.length - 1];
+			return file.length > 28 ? `${file.slice(0, 27)}…` : file;
+		}
+
 		function pkgWhoText(tally) {
+			const others = tally.byOther ?? [];
 			const top = tally.top.slice(0, 3);
 			const rest = tally.top.length - top.length;
 			if (top.length === 0) {
 				return `${translate('pkgNone')}${tally.unresolved === 0 ? '' : `(${translate('unblamed')} ${tally.unresolved})`}`;
 			}
-			// 未定名那段**必须带毫秒**:只写条数会和同一行里的 ms 混单位 ——
-			// 实测被读成"按包这一层只有 16ms"(实际那条没定名的脚本占了 234ms)。
+			// 定不到插件包名的那部分:能说出是什么就说(外壳文件名 / 无 URL / 插件批次)——
+			// 只写"未定名 + 条数"既丢了已知信息,又和同一行里的 ms 混单位。
 			return top.map(([name, ms]) => `${short(name)} ${Math.round(ms)}ms`).join(' · ')
 				+ (rest > 0 ? ` · ${translate('rest')} ${rest}` : '')
-				+ (tally.unresolved > 0 ? ` · ${translate('pkgNone')} ${Math.round(tally.unresolvedMs)}ms(${tally.unresolved} ${translate('scriptsUnit')})` : '');
+				+ (others.length === 0 ? '' : ` · ${translate('otherSources')} `
+					+ others.slice(0, 2).map(([name, ms]) => `${name} ${Math.round(ms)}ms`).join(' · ')
+					+ (others.length > 2 ? ` · ${translate('rest')} ${others.length - 2}` : ''));
 		}
 
 		/**
@@ -3939,6 +3969,7 @@ window.__ModuleLoader__.load({
 				splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', scopeFrame: '本帧',
 				bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本', needDeep: '要深录', invokerUnknown: '来源未记录',
+				otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
 				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
 				hourUnit: '小时', minUnit: '分', secUnit: '秒',
 				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
@@ -4008,6 +4039,7 @@ window.__ModuleLoader__.load({
 				splitScript: 'script', splitTask: 'task', splitRender: 'render', splitTail: 'style+layout+paint',
 				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', scopeFrame: 'this frame',
 				bySource: 'by source', byPkg: 'by package', pkgZeroNamed: '0 resolved', scriptsUnit: 'scripts', needDeep: 'needs deep', invokerUnknown: 'source not recorded',
+				otherSources: 'other sources', srcNoUrl: 'no URL (inline)', srcBatch: 'plugin batch (not split)',
 				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
 				hourUnit: 'h', minUnit: 'm', secUnit: 's',
 				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',

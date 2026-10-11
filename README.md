@@ -80,7 +80,7 @@ __perfHud.clearIncidents()    // 只清事故;clear() 刻意不动它
 
 - **「本帧」**= 上面那张饼的**同一帧**(数字能和饼对着看);**「窗口」**= 最近 200 条 LoAF 的累计,范围就写在小标题上:`窗口:200 条长动画帧 · 跨 43分12秒 · 平均每条脚本 108.1ms`。范围写在标题上,行标签就不用每行重复"本帧 / ·窗口"。
 - **按来源**(LoAF 的 `invoker`):这条脚本**是谁调起来的** —— `setTimeout`、`DOMWebSocket.onmessage`(会话事件流的消息处理器,实测最常见)、`Response.json.then`(Promise 回调)、`script`(脚本加载)…… 覆盖全部脚本,所以合计 = 脚本耗时。
-- **按包**:单包 URL 直接读出来,合并批按 sourcemap 分段还原(与事故包 `incident.packages` 同一条路)。**只覆盖"定得到包名"的脚本**,所以合计 ≤ 脚本耗时;名字后面会跟一段 `未定名 234ms(1 条脚本)` —— 那就是定不到名的部分(内联 / 动态脚本没有 URL,或者那条脚本本来就不属于任何插件,比如应用自己的 `assets/index-*.js`)。**先看未定名那段有多少毫秒,再读排行。**
+- **按包**:单包 URL 直接读出来,合并批按 sourcemap 分段还原(与事故包 `incident.packages` 同一条路)。**只覆盖"定得到包名"的脚本**,所以合计 ≤ 脚本耗时;名字后面会跟一段 **「其余来源」**,那是定不到插件包名的部分,而且**按原因给名字**:`无 URL(内联脚本)`(内联 / 动态构造的处理器)、`插件批次(未按 sourcemap 拆)`(URL 在 `plugins/` 下但还没拆)、或者**直接就是文件名**(比如 `index-5SrrfWpU.js` —— 那是应用自己的外壳 bundle,React 根容器上的事件处理器就来自它,它本来不属于任何插件)。**先看「其余来源」那段有多少毫秒,再读排行。**
 - 这一层只回答"**哪一类调用**",不回答"函数里面慢在哪":函数级要 Chrome trace(JS Self-Profiling 被 `Document-Policy` 挡着,页面内没有采样器,实测 `new Profiler()` 直接抛 `NotAllowedError`)。
 
 **只有"平均每条脚本"那一栏和饼可比**(饼是单帧);`纯执行 21623.8ms` 这种是 200 条各百来毫秒攒出来的累计,不是某一次执行花了 21 秒 —— 跨度越久累计越大。值超过一行时按块式换行(左对齐),不挤标签。
@@ -220,9 +220,9 @@ dsh plugin --profile web add "$PWD"
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 318 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 319 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 39 条:用假 ctx 驱动真实 index.js
-# 合计 368 条断言,离线,无需 DSH 在跑
+# 合计 369 条断言,离线,无需 DSH 在跑
 ```
 
 线上验证(需要先换 cookie,步骤见 [AGENTS.md](AGENTS.md) §2.2):

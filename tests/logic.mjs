@@ -1030,6 +1030,10 @@ const watchPieces = [
 	extract(source, 'function scriptPkgTally('),
 	extract(source, 'function framePkgTally('),
 	extract(source, 'function pkgZeroText('),
+		source.slice(source.indexOf('const BUNDLE_PREFIX'), source.indexOf('\n', source.indexOf('const BUNDLE_PREFIX'))),
+		source.slice(source.indexOf('const PLUGIN_URL'), source.indexOf('\n', source.indexOf('const PLUGIN_URL'))),
+	extract(source, 'function ownerOfUrl('),
+	extract(source, 'function unresolvedLabel('),
 	extract(source, 'function pkgWhoText('),
 	extract(source, 'function invokerWhoText('),
 	extract(source, 'function jsBreakdownText('),
@@ -1109,6 +1113,7 @@ const watchBox = new Function(`
 		windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
 		needDeep: '要深录', scopeFrame: '本帧', bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本',
 		hit: '命中', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名', peak: '峰', framePickFiltered: '值得回看的帧',
+		otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
 		hourUnit: '小时', minUnit: '分', secUnit: '秒',
 	})[key] ?? key;
 	// 面板渲染区那两个文案函数用到的短名(真实实现里是 short():去掉 scope 前缀)
@@ -1127,6 +1132,7 @@ const watchBox = new Function(`
 		samplesLength: 1,
 		on: true, precise: false, streaming: true, heap: 1048576, host: null, hostAt: 0,
 		dom: { total: 1234 },
+		bundleKeys: new Set(),
 		longTasks: [],
 		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', pickT: null, incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
 			// A4:交互计时的状态位(eventObserver 由 startInteractions 自己写)
@@ -1135,7 +1141,7 @@ const watchBox = new Function(`
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
-		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, PICK_MIN_MS,
+		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, PICK_MIN_MS, unresolvedLabel,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
 		tallyScripts, framePkgTally, pkgWhoText, pkgZeroText, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
@@ -1704,10 +1710,18 @@ check('D5:"是谁"那一段文案:Top3 + 其余 + 定不到包的条数',
 			watch.pkgWhoText(watch.tallyScripts([{ scripts: [{ url: 'u-a', ms: 200 }, { url: 'u-zz', ms: 900 }] }])),
 		];
 	})(),
-	['dsh-a 60ms · dsh-b 30ms · dsh-c 20ms · 其余 1', '未定名(未归因 2)', 'dsh-a 200ms · 未定名 900ms(1 条脚本)']);
+	['dsh-a 60ms · dsh-b 30ms · dsh-c 20ms · 其余 1', '未定名(未归因 2)', 'dsh-a 200ms · 其余来源 u-zz 900ms']);
 check('一个包名都没定到时「按包」收敛成一行,但**留下分母**(否则像是功能被删了)',
 	watch.pkgZeroText(1, 461),
 	'按包:0 条定到名(本帧 1 · 窗口 461 条脚本)· 要深录');
+check('定不到插件包名的脚本按原因给名字(而不是笼统的"未定名")',
+	[
+		watch.unresolvedLabel({ url: '' }),
+		watch.unresolvedLabel({ url: 'http://h/plugins/??a/client.js,b/client.js&rev=1' }),
+		watch.unresolvedLabel({ url: 'http://h/assets/index-5SrrfWpU.js' }),
+		watch.unresolvedLabel({ url: 'http://h/x/' + 'y'.repeat(40) + '.js' }),
+	],
+	['无 URL(内联脚本)', '插件批次(未按 sourcemap 拆)', 'index-5SrrfWpU.js', 'y'.repeat(27) + '…']);
 check('"命中"只列非零的腿(没插桩时子树 / DOM写入 / 包名恒为 0,列出来只是噪声)',
 	(() => {
 		watch.state.ltBlamed = 245;
