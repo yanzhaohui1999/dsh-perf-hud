@@ -2,7 +2,20 @@
 
 > 输入:`dsh-perf-hud-next-phase-product-plan.md`(产品计划)+ `dsh_perf_hud_ui_overview.png`(UI 概念图)。
 > 本文件是**给代码 AI 的实施计划与文件清单**(产品计划 §8 要的那一份),不是新需求文档。
-> 基线:`main` @ 0.4.0,三套件 **497** 条全绿(attribution 11 / logic 447 / host 39),`DICT.zh` = `DICT.en` = 283 键。
+> 基线(写这份计划时):`main` @ 0.4.0,三套件 **497** 条全绿(attribution 11 / logic 447 / host 39),`DICT.zh` = `DICT.en` = 283 键。
+
+### 本轮进度(2026-10-12)
+
+| 落地 | 提交 | 证据 |
+|---|---|---|
+| 导出脱敏(最优先:凭据不进导出件) | `fd0a23b` | 断言 497 → 514;真页面把 `token` / `api_key` 塞进真 `location` 后四个文件拼起来一个都不含 |
+| P0.1 捕获频次独立于留存 | `1e1f1a8` | 断言 514 → 539;真页面现场 `检测到 3(triggered 3 · 切成现场 2 · 同串触发 29)· 已保存现场 2 · 丢失 1` |
+| P0.2 能力矩阵 + P0.3 诊断包 | `c970042` | 断言 539 → **561**;真页面 `pack()` 四文件 / 五段摘要 / manifest 带能力矩阵 |
+| 计划文档 | `b28cb54` | 本文件 |
+
+**本轮做出来的口径**(已在代码、断言与文档三处一致):`检测到 = triggered`、`同串触发 = coalesced`(密度不是次数)、`已保存现场 = incidents.length`、`丢失 = (triggered − captured) + dropped + trimmed + failed`;`capabilities()` 是能力状态的唯一事实来源;`causeCandidates()` 是"可能原因"的唯一生成处。
+
+**下一轮(P0.4–P0.6,已确认的方案 1)**:整屏切换的主界面 / 卡顿详情 / 开发者详情(5 个标签页)/ 设置;数据接口已经稳定,界面只需读这四个纯函数(`capabilities` / `causes` / `tally` / `buildPack`)。P1 的自研 store-only zip 与可移植 Agent Skill 排在 UI 之后。
 
 ---
 
