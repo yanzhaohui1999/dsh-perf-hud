@@ -94,7 +94,7 @@ The panel is layered: only "is it smooth + whose fault" is always visible; the o
 | **FPS / worst frame** | Its own rAF loop, 1s rolling window. Combined colouring: FPS ≤50 or worst frame ≥120ms → yellow; ≤30 or ≥200ms → red |
 | **Long tasks** | `PerformanceObserver({entryTypes:['longtask']})` over the last 60s; hit ratio = long tasks with a name from any leg / total |
 | **Unattributed per frame** | The part of the frame gap not explained by instrumented callbacks (style recalc, paint, vsync wait). **CSS animations only show up here** — they never touch the JS scheduler |
-| **frame N/M ◀ ▶ ⟲** | Which long animation frame the panel is looking at: the last 200, worst (blocking) first. Auto follows the worst (it does not change unless something worse arrives); picking pins it, ⟲ returns to auto; a pinned frame falls back once it leaves the 200-frame ring |
+| **frame N/M ◀ ▶ ⟲** | Which long animation frame the panel is looking at: out of the last 200, only those with **blocking ≥ 100ms** (the same line the night watch triggers on; borderline frames below it never enter the list, and when nothing reaches it the list falls back to all), worst first. Auto follows the worst (it does not change unless something worse arrives); picking pins it, ⟲ returns to auto; a pinned frame falls back once it leaves the 200-frame ring |
 | **Where the frame went** (donut, up to 7 arcs) | The worst long animation frame split by LoAF's three timestamps: script (split again by invoker into up to 4 pieces, one red family dark→light) / the unattributed rest of the task (neutral grey) / render (rAF callback) / style+layout+paint. Arcs are separated by a 1.4px gap (slices too small to afford it keep their full length). **Paint and compositing cannot be separated** — that needs a Chrome trace — so the last slice is "everything else", **not** a style-layout percentage |
 | **Script split** | Script time split into exec / forced style+layout / paused; **the three sum to script time** (partitions, not additions). "this frame" is the same frame as the donut above, "window" aggregates the last 200 LoAF entries — same definition, **two denominators** |
 | **The window sub-heading** | `window: N long frames · over T · avg script per frame Xms`. The three window rows are a **cumulative** sum (script time across 200 long frames), not the duration of any frame; a longer span means a bigger total, so do not read it as "getting slower". **Only the per-frame average is comparable to the donut** |
@@ -177,7 +177,7 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 317 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 318 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 39 assertions: real index.js driven by a fake ctx
 # 358 offline assertions total, no running DSH required
 ```

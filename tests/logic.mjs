@@ -1061,6 +1061,7 @@ const watchPieces = [
 	extract(source, 'function frameArcs('),
 	extract(source, 'function worstLoaf('),
 	extract(source, 'function loafRanks('),
+	extract(source, 'function pickList('),
 	extract(source, 'function pickedLoaf('),
 	extract(source, 'function pickStep('),
 	extract(source, 'function pickAuto('),
@@ -1107,7 +1108,7 @@ const watchBox = new Function(`
 		jsExec: '纯执行', forcedShort: '强制', jsPause: '暂停',
 		windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
 		needDeep: '要深录', scopeFrame: '本帧', bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本',
-		hit: '命中', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名', peak: '峰',
+		hit: '命中', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名', peak: '峰', framePickFiltered: '值得回看的帧',
 		hourUnit: '小时', minUnit: '分', secUnit: '秒',
 	})[key] ?? key;
 	// 面板渲染区那两个文案函数用到的短名(真实实现里是 short():去掉 scope 前缀)
@@ -1134,7 +1135,7 @@ const watchBox = new Function(`
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
-		loafRanks, pickedLoaf, pickStep, pickAuto,
+		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, PICK_MIN_MS,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
 		tallyScripts, framePkgTally, pkgWhoText, pkgZeroText, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
@@ -1380,27 +1381,41 @@ check('翻帧:默认看最差那条;钉住后看钉住的那条;选中的被挤�
 		return [auto, pinned, evicted];
 	})(),
 	[200, 100, [200, null]]);
-check('翻帧:清单按 blocking 降序,◀ ▶ 到头就停住,⟲ 回到自动',
+check('翻帧清单:只收 blocking ≥ 100ms 的(与守夜触发线同一条),其余不进榜',
 	(() => {
 		const saved = watch.state.watch.loaf.slice();
 		watch.state.watch.loaf.length = 0;
-		watch.state.watch.loaf.push({ t: 1, blocking: 10 }, { t: 2, blocking: 300 }, { t: 3, blocking: 90 });
-		const ranks = watch.loafRanks().map((row) => row.t);
+		watch.state.watch.loaf.push({ t: 1, blocking: 10 }, { t: 2, blocking: 300 }, { t: 3, blocking: 250 }, { t: 4, blocking: 90 });
+		const list = watch.pickList();
+		const hot = [list.filtered, list.rows.map((row) => row.t)];
+		// 一条都不到线:退回全部,并说明"没过滤"
+		watch.state.watch.loaf.forEach((row) => { row.blocking = 40; });
+		const cold = watch.pickList();
+		const fallback = [cold.filtered, cold.rows.length];
+		watch.state.watch.loaf.length = 0;
+		for (const row of saved) watch.state.watch.loaf.push(row);
+		return [hot, fallback, watch.PICK_MIN_MS];
+	})(),
+	[[true, [2, 3]], [false, 4], 100]);
+check('翻帧:◀ ▶ 按 blocking 降序走(只看上榜的帧),到头停住,⟲ 回到自动',
+	(() => {
+		const saved = watch.state.watch.loaf.slice();
+		watch.state.watch.loaf.length = 0;
+		watch.state.watch.loaf.push({ t: 1, blocking: 10 }, { t: 2, blocking: 300 }, { t: 3, blocking: 250 }, { t: 4, blocking: 90 });
+		const ranks = watch.pickList().rows.map((row) => row.t);
 		watch.pickStep(1);                                 // 自动(t2 = 最差)→ 下一条 t3
 		const step1 = watch.state.watch.pickT;
-		watch.pickStep(1);                                 // 到头:停在 t1
+		watch.pickStep(1);                                 // 到头(只上榜两条):停在 t3
 		const step2 = watch.state.watch.pickT;
-		watch.pickStep(1);
-		const clamped = watch.state.watch.pickT;
-		watch.pickStep(-1);                                // 往回一条 = t3
+		watch.pickStep(-1);                                // 往回 = t2
 		const back = watch.state.watch.pickT;
 		watch.pickAuto();
 		const auto = watch.state.watch.pickT;
 		watch.state.watch.loaf.length = 0;
 		for (const row of saved) watch.state.watch.loaf.push(row);
-		return [ranks, step1, step2, clamped, back, auto];
+		return [ranks, step1, step2, back, auto];
 	})(),
-	[[2, 3, 1], 3, 1, 1, 3, null]);
+	[[2, 3], 3, 3, 2, null]);
 check('圆环分段:脚本按来源切细(同一族红,由深到浅),各段之和 = 整帧',
 	(() => {
 		const arcs = watch.frameArcs(

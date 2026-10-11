@@ -76,6 +76,7 @@ window.__ModuleLoader__.load({
 		const WATCH_PRE_MS = 10000;            // 前摇:事件发生前的 10 秒
 		const WATCH_POST_MS = 3000;            // 后摇:事件发生后再等 3 秒才切片
 		const WATCH_TRIGGER_MS = 100;          // 帧间隔 / blockingDuration 越过它就起一次捕获
+		const PICK_MIN_MS = WATCH_TRIGGER_MS;   // 翻帧清单的下限:blocking ≥ 它才值得回看(与守夜触发线同一条)
 		const WATCH_GAP_MS = 1000;             // 帧间隔超过它视为 rAF 挂起:是间隙,不是卡顿
 		const WATCH_REACTION_MS = 3000;        // 手动标记时回退的"人的反应时间"
 		// A4:交互延迟(event timing)。只收 ≥100ms 的 —— 与守夜同一条线,而且要的不是全量事件流
@@ -3446,9 +3447,22 @@ window.__ModuleLoader__.load({
 			return best;
 		}
 
-		/** 按 blocking 降序的帧清单(最差的排第一)—— 翻帧用的就是这个次序。 */
+		/** 按 blocking 降序的帧清单(最差的排第一)。 */
 		function loafRanks() {
 			return state.watch.loaf.slice().sort((a, b) => (b.blocking ?? 0) - (a.blocking ?? 0));
+		}
+
+		/**
+		 * 翻帧的清单:**只收值得回看的帧**(blocking ≥ `PICK_MIN_MS`)。
+		 * 200 条里绝大多数是刚过 50ms 的边角帧,全列出来 ◀ ▶ 就成了体力活(实测 68 条里
+		 * 真正想看的往往是个位数)。阈值取守夜那条触发线(`WATCH_TRIGGER_MS`),这样
+		 * 「翻帧翻得到的」和「守夜留得下的」是同一批帧。
+		 * 一条都不到线时**退回全部**(否则按钮点了像坏的),此时 `filtered:false`,面板不显示阈值。
+		 */
+		function pickList() {
+			const all = loafRanks();
+			const hot = all.filter((row) => (row.blocking ?? 0) >= PICK_MIN_MS);
+			return hot.length === 0 ? { rows: all, filtered: false } : { rows: hot, filtered: true };
 		}
 
 		/**
@@ -3469,7 +3483,7 @@ window.__ModuleLoader__.load({
 
 		/** ◀ ▶:在按 blocking 降序的清单里走一步(到头就停住)。 */
 		function pickStep(delta) {
-			const ranks = loafRanks();
+			const ranks = pickList().rows;
 			if (ranks.length === 0) return;
 			const current = pickedLoaf();
 			const at = current === null ? -1 : ranks.findIndex((row) => row.t === current.t);
@@ -3911,7 +3925,8 @@ window.__ModuleLoader__.load({
 				split: '帧里花在哪', splitTotal: '这段长动画帧共', splitWorst: '最差那条',
 				framePick: '帧', framePinned: '已钉住(点 ⟲ 回到自动)', framePickAuto: '自动:跟着最差那条走',
 				frameAutoHint: '回到自动(跟着最差那条走)',
-				framePickHint: '最近 200 条长动画帧,按 blocking 降序(最差的在前)。◀ ▶ 换一条,⟲ 回到自动。选中的那条被挤出 200 条之后会自动退回',
+				framePickHint: '最近 200 条长动画帧里**值得回看的那些**(blocking ≥ 100ms,与守夜触发线同一条),按 blocking 降序、最差的在前。◀ ▶ 换一条,⟲ 回到自动;选中的那条被挤出 200 条之后会自动退回。一条都不到 100ms 时这里退回显示全部',
+				framePickFiltered: '值得回看的帧',
 				spark: '60 秒帧条',
 				sparkHint: '最近 60 秒,一格一秒:高度 = 那一秒里最差那一帧的间隔,颜色与导出件的 ASCII 帧条带用同一组阈值(≥100ms 红 / ≥50ms 黄 / 其余正常)。整格都是 rAF 挂起的那一秒画成最矮的灰柱 —— 那是间隙,不是卡顿;空白 = 那一秒没采到',
 				pkgNone: '未定名',
@@ -3979,7 +3994,8 @@ window.__ModuleLoader__.load({
 				split: 'where the frame went', splitTotal: 'long frame total', splitWorst: 'worst',
 				framePick: 'frame', framePinned: 'pinned (⟲ returns to auto)', framePickAuto: 'auto: follows the worst',
 				frameAutoHint: 'back to auto (follow the worst)',
-				framePickHint: 'The last 200 long animation frames, worst (blocking) first. ◀ ▶ flips through them, ⟲ returns to auto. A pinned frame falls back automatically once it leaves the 200-frame ring',
+				framePickHint: 'Out of the last 200 long animation frames, only the ones **worth reviewing** (blocking ≥ 100ms, the same line the night watch triggers on), worst first. ◀ ▶ flips through them, ⟲ returns to auto; a pinned frame falls back once it leaves the 200-frame ring. When nothing reaches 100ms this falls back to showing all of them',
+				framePickFiltered: 'frames above the line',
 				spark: '60s frame strip',
 				sparkHint: 'Last 60 seconds, one bar per second: height = the worst frame interval in that second, and the colours use the same thresholds as the ASCII frame strip in the export (>=100ms red / >=50ms yellow / otherwise normal). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall; blank = nothing sampled in that second',
 				pkgNone: 'unnamed',
@@ -4373,15 +4389,19 @@ window.__ModuleLoader__.load({
 					// 翻帧:最近 200 条长动画帧按 blocking 降序(最差的在前),◀ ▶ 换一条、⟲ 回到自动。
 					// 面板默认跟着"最差那条"走 —— 只有出现更差的才会换,所以常常同一条挂很久。
 					(() => {
-						const ranks = loafRanks();
-						if (ranks.length === 0) return null;
+						const list = pickList();
+						if (list.rows.length === 0) return null;
 						const current = pickedLoaf();
-						const at = ranks.findIndex((row) => row.t === current.t) + 1;
+						const at = list.rows.findIndex((row) => row.t === current.t) + 1;
 						const auto = state.watch.pickT === null;
-						const title = `${t('framePick')} ${at}/${ranks.length} · blocking ${Math.round(current.blocking ?? 0)}ms · ${clock(current.t)}`
-							+ `\n${auto ? t('framePickAuto') : t('framePinned')}\n${t('framePickHint')}`;
+						const shown = list.filtered ? list.rows.length : 0;
+						const title = `${t('framePick')} ${at}/${list.rows.length}${list.filtered ? `(≥${PICK_MIN_MS}ms)` : ''}`
+							+ ` · blocking ${Math.round(current.blocking ?? 0)}ms · ${clock(current.t)}`
+							+ `\n${auto ? t('framePickAuto') : t('framePinned')}`
+							+ (shown === 0 ? '' : `\n${translate('framePickFiltered')} ${shown}${translate('times')}`)
+							+ `\n${t('framePickHint')}`;
 						return h('div', { style: { ...S.row, alignItems: 'center' }, title },
-							h('span', { style: S.label }, `${t('framePick')} ${at}/${ranks.length} · ${Math.round(current.blocking ?? 0)}ms`),
+							h('span', { style: S.label }, `${t('framePick')} ${at}/${list.rows.length} · ${Math.round(current.blocking ?? 0)}ms${list.filtered ? ` · ≥${PICK_MIN_MS}ms` : ''}`),
 							h('span', { style: { flex: '0 0 auto', display: 'flex', gap: 6 } },
 								h('button', { type: 'button', style: S.btn, title: t('framePickHint'), onClick: () => pickStep(-1) }, '◀'),
 								h('button', { type: 'button', style: S.btn, title: t('framePickHint'), onClick: () => pickStep(1) }, '▶'),

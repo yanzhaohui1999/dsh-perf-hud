@@ -118,7 +118,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 317 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 318 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 39 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -234,6 +234,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **场景标签**(标题栏 `流式` / `空闲 Ns`)是解读所有数字的前提;空闲基线要 60 秒净增为 0 才算真的空闲。
 - **命中 a/b** = 四条腿任一给出名字的长任务数 / 长任务总数。**它会被 DOM 腿抬高**(流式时写入窗口内几乎必然有写入),必须配合「归属 Top」分布读。
 - **帧内未归因**(2026-10-07 起在「取证明细」组里,不在常显):`idle = 帧间隔 − 插桩回调耗时`,所以**没插桩时它退化成平均帧间隔**(实测 16.7ms 被当成未归因)—— 那时面板直接写「要深录」,连"该帧几乎无 JS 解释"的结论也不报(`unexplainedFrame` 先要求 `state.deep === true`;不要求的话这条结论在**每一条**长帧上都成立,等于恒报)。插桩后:峰值 ≈ 最差帧(≥95%)时给结论,并提示用 Rendering 面板的 Paint flashing 交叉验证。**CSS 动画只在这里现形**(它不经 JS 调度器)。
+- **翻帧清单只收达线的帧(`pickList`)**:`blocking ≥ PICK_MIN_MS`(取 `WATCH_TRIGGER_MS` = 100ms,和守夜触发线同一条)—— 200 条里绝大多数是刚过 50ms 的边角帧,全列出来 ◀ ▶ 就成了体力活(实测 21 条里只有 4 条达线)。**一条都不到线时退回全部**(`filtered:false`,标签上不显示 `≥100ms`),否则按钮点了像坏的。
 - **看的是哪一帧(`pickedLoaf`)**:面板默认看 `worstLoaf()`(最近 `WATCH_LOAF_MAX` 条里 blocking 最大的那条)—— **它不是按时间刷新的,而是被更差的一条顶掉才换**,所以同一条常常挂很久。上面那行 `帧 N/M ◀ ▶ ⟲` 让人翻别的帧:`loafRanks()` 按 blocking 降序出清单,`pickStep(±1)` 走一步(到头停住),`pickAuto()` 清掉选择回到自动。⚠️ 存的是**选中的 `t` 而不是下标** —— 帧环会追加新的、挤掉老的,下标会悄悄指到另一条帧上;选中的那条一旦不在环里(`pickedLoaf` 查不到 `t`),就清掉选择退回自动,不指着一个不存在的帧。翻帧会写 `state.watch.pickT` 并 `bump()` 重绘;环与「本帧」那组都吃 `pickedLoaf()`,所以它们永远说的是同一条帧。
 - **帧里花在哪 / 脚本细拆 / 按包 / 按来源(一个环 + 六行,都在「取证明细」)**:环只用 LoAF 给的三个时间点(`t` / `renderStart` / `styleAndLayoutStart`),**最多 7 段**(`frameArcs`):脚本那一段再按「调用来源」切细(同一族红 `1 / 0.72 / 0.46 / 0.28`,由深到浅 = 耗时降序,顺序与「本帧按来源」那行一致)、任务里没归到的画**中性灰**、再是渲染与尾部。三条硬性:① **只做分区**,各段之和恒 = `total`(`其余` 那段用减法补足);② 脚本那段的按来源求和**可能大于**它(frameSplit 把 js 夹到了 ≤ 任务段,而渲染阶段跑的脚本也算在 `scripts[]` 里)—— 按比例缩,保持分区(不然弧会互相盖住);③ 环上不出现 CSS:颜色只给名字,由渲染那侧映射 token。**尺寸是量出来的**:48px 的环周长 126px(1% ≈ 1.3px),段一多就分不出来 → 84px、`r = 34`、`stroke-width 13`、段间 **1.4px 缝**(扣除规则:`raw > 2×缝` 才扣,小段保原长;推进量按原始长度走,缝才落在段与段之间)。**单帧里 >5ms 的脚本通常只有 1~2 条**(实测:一个任务里连着做 timer + 事件 + 微任务,LoAF 仍然只报一条 `setTimeout`),所以"块多不多"由这条帧里有几条脚本决定;真正的多来源在「·窗口」那几行。
 - **任务那一段再按 `scripts[].duration` 分成"被 LoAF 归到脚本的"与"没归到的"(后者是**差值**:短于上报阈值的脚本 + 事件派发 / 微任务 / GC),脚本那一段再按 `forcedStyleAndLayoutDuration` / `pauseDuration` 分成 纯执行 / 强制样式布局 / 暂停(**三者是 `duration` 的分区,相加 = 脚本耗时**;为 0 的两项不显示,免得把行挤成两行)。**绘制与合成分不开**(页面内没有 API,那一层在缺失声明里),所以最后一段是"剩下的都在这儿",不能读成"样式布局占比"。
@@ -317,7 +318,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 
 **v0.3.0 之后落在 `main` 上的改动**(还没 bump 版本、没打 tag):「帧里花在哪」从三段饼改成四段饼
 (脚本 / 任务里没归到脚本的 / 渲染 / 样式+布局+绘制),脚本侧再拆三层并分成**本帧与窗口两个分母**;
-`npm test` 现在 **367** 条(attribution 11 / logic 317 / host 39),真页面 `check-panel` 验过(见 REVIEW §2)。
+`npm test` 现在 **368** 条(attribution 11 / logic 318 / host 39),真页面 `check-panel` 验过(见 REVIEW §2)。
 
 **卡在哪**:`npm publish` 需要 npm 凭据,本机没有(`ENEEDAUTH`)—— 这一步等用户解锁。两条路(本机 `npm login` 后发,
 或 npmjs.com 建包 + 配 Trusted Publisher 后由 Release 触发 `release.yml`)写在 [REVIEW.md](REVIEW.md) §3.1。
