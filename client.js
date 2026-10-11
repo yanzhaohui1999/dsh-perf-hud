@@ -3413,31 +3413,18 @@ window.__ModuleLoader__.load({
 		 *      而渲染阶段跑的脚本也算在 `scripts[]` 里)—— 那种情况下按比例缩一下,保持分区;
 		 *   ③ 颜色只给名字(`error` / `warn` / `brand` / `neutral`),token 由渲染那侧映射。
 		 */
-		function frameArcs(split, sources) {
-			const rows = sources ?? [];
-			const sum = rows.reduce((acc, [, ms]) => acc + ms, 0);
-			const scale = sum > split.js && sum > 0 ? split.js / sum : 1;
-			const shades = [1, 0.72, 0.46];
-			const arcs = [];
-			if (split.js > 0) {
-				if (rows.length === 0) {
-					arcs.push({ ms: split.js, color: 'error', opacity: 1 });
-				} else {
-					let used = 0;
-					rows.slice(0, shades.length).forEach(([, ms], index) => {
-						const value = round1(ms * scale);
-						used += value;
-						arcs.push({ ms: value, color: 'error', opacity: shades[index] });
-					});
-					const rest = round1(split.js - used);
-					if (rest > 0) arcs.push({ ms: rest, color: 'error', opacity: 0.28 });
-				}
-			}
-			// 任务里没归到脚本的那部分用中性灰:它现在和"脚本的四个红"同处一环,再用红会分不清
-			arcs.push({ ms: split.taskOther, color: 'neutral', opacity: 1 });
-			arcs.push({ ms: split.render, color: 'warn', opacity: 1 });
-			arcs.push({ ms: split.tail, color: 'brand', opacity: 1 });
-			return arcs;
+		/**
+		 * 环的四段 = **一个维度**:脚本 / 任务里没归到的 / 渲染 / 样式+布局+绘制(相加恒等于整帧)。
+		 * 脚本内部的「来源」细分**不在这里** —— 层级挤在环里读不出来(见 AGENTS §7 的拆解铁律),
+		 * 那件事交给 `barSegments` 的堆叠条。
+		 */
+		function frameArcs(split) {
+			return [
+				{ ms: split.js, color: 'error', opacity: 1 },
+				{ ms: split.taskOther, color: 'neutral', opacity: 1 },
+				{ ms: split.render, color: 'warn', opacity: 1 },
+				{ ms: split.tail, color: 'brand', opacity: 1 },
+			];
 		}
 
 		/** 最近那条 blocking 最大的长动画帧(面板的饼图默认看的就是它)。 */
@@ -3702,6 +3689,25 @@ window.__ModuleLoader__.load({
 			const parts = url.split('?')[0].split('/');
 			const file = parts[parts.length - 1] === '' ? url : parts[parts.length - 1];
 			return file.length > 28 ? `${file.slice(0, 27)}…` : file;
+		}
+
+		/** "谁"的两类标签合起来(插件包 + 其余来源),按耗时降序 —— 堆叠条与交叉表都用它。 */
+		function whoRows(tally) {
+			return [...tally.top, ...(tally.byOther ?? [])].sort((a, b) => b[1] - a[1]);
+		}
+
+		/**
+		 * 一条 100% 堆叠横条的段:按耗时降序,Top3 + 其余。与环的分工是"环画分几类、条画每类里是谁"。
+		 * 段宽按**这一维度的总量**算(不是段之和),所以条本身恒满格;颜色只给名字(渲染侧映射 token),
+		 * 名次靠由深到浅的透明度 —— 与环当年的做法一致,读者不用记两套配色。
+		 */
+		function barSegments(rows) {
+			const list = (rows ?? []).filter(([, ms]) => ms > 0);
+			const top = list.slice(0, 3);
+			const segs = top.map(([name, ms]) => ({ name, ms: round1(ms) }));
+			const restMs = round1(list.slice(3).reduce((sum, [, ms]) => sum + ms, 0));
+			if (restMs > 0) segs.push({ name: null, ms: restMs });
+			return { segs, total: round1(list.reduce((sum, [, ms]) => sum + ms, 0)) };
 		}
 
 		function pkgWhoText(tally) {
@@ -4442,16 +4448,15 @@ window.__ModuleLoader__.load({
 								h('button', { type: 'button', style: S.btn, title: t('framePickHint'), onClick: () => pickStep(1) }, '▶'),
 								h('button', { type: 'button', style: S.btn, title: t('frameAutoHint'), onClick: pickAuto }, '⟲')));
 					})(),
-					// 长动画帧的时间去向:圆环。脚本那一段再按「来源」切细(最多 7 段),
+					// 长动画帧的时间去向:圆环**只画一个维度**(四段:脚本 / 任务里没归到的 / 渲染 / 尾部)。
 					// 页面内看不到"绘制/合成",最后一段是"剩下的都在这儿" —— 拿它当"样式布局占比"会读错。
+					// 脚本内部的「来源」细分在下面的堆叠条里,不塞进环(层级挤一圈读不出来)。
 					(() => {
 						const current = pickedLoaf();
 						const split = frameSplit(current);
 						if (split === null) return h('div', { style: S.row },
 							h('span', { style: S.label, title: t('splitHint') }, t('split')),
 							h('span', { style: S.num }, t('splitNoLoaf')));
-						const frameTally = framePkgTally(current);
-						const sources = frameTally === null ? [] : frameTally.byInvoker;
 						// 48px 的环只有 126px 周长(1% ≈ 1.3px),段一多就分不出来 —— 放大到 84px,
 						// 并在段与段之间留 1.4px 的缝:同一族的红靠缝才看得出是几块。
 						const R = 34;
@@ -4463,7 +4468,7 @@ window.__ModuleLoader__.load({
 							brand: 'var(--dsw-alias-brand-primary)',
 							neutral: 'var(--dsw-alias-label-secondary)',
 						};
-						const slices = frameArcs(split, sources);
+						const slices = frameArcs(split);
 						let passed = 0;
 						const arcs = [];
 						for (let i = 0; i < slices.length; i += 1) {
@@ -4482,13 +4487,9 @@ window.__ModuleLoader__.load({
 								transform: 'rotate(-90 42 42)',
 							}));
 						}
-						const pctOfJs = (ms) => `${Math.round((ms / (split.js || 1)) * 100)}%`;
-						const srcLine = sources.length === 0
-							? ''
-							: `\n${t('splitInvoker')} ${sources.slice(0, 3).map(([name, ms]) => `${name} ${pctOfJs(ms)}`).join(' · ')}`;
+						// 来源明细不在这一层了(它在下面那条堆叠条里),tooltip 只讲环自己的四段
 						const title = `${t('splitTotal')} ${split.total}ms(${t('splitWorst')} blocking ${split.blocking}ms)\n`
-							+ `${t('splitScript')} ${split.js}ms(${t('jsExec')} ${split.exec} · ${t('forcedLayout')} ${split.forced} · ${t('jsPause')} ${split.pause})`
-							+ `${srcLine}\n`
+							+ `${t('splitScript')} ${split.js}ms(${t('jsExec')} ${split.exec} · ${t('forcedLayout')} ${split.forced} · ${t('jsPause')} ${split.pause})\n`
 							+ `${t('splitTask')} ${split.taskOther}ms\n${t('splitRender')} ${split.render}ms\n${t('splitTail')} ${split.tail}ms`;
 						return h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },
 							h('svg', { width: 84, height: 84, viewBox: '0 0 84 84', style: { flex: '0 0 auto' } }, arcs),
@@ -4509,21 +4510,38 @@ window.__ModuleLoader__.load({
 							h('span', { style: S.blockLabel, title: hint }, label),
 							h('div', { style: S.blockValue }, value));
 						const head = (key, text, hint) => h('div', { key, style: { ...S.blockLabel, marginTop: 8 }, title: hint }, text);
+						// 一条 100% 堆叠横条:上面是"谁 + 毫秒"的文字(绝对值),下面是占比(段宽)。
+						// 段宽按这一维度的总量算,所以条恒满格;名次靠由深到浅(与环同一套读法)。
+						const bar = (key, label, hint, list, token, text) => {
+							const { segs, total } = barSegments(list);
+							if (segs.length === 0 || total <= 0) return null;
+							return h('div', { key, style: { marginTop: 6 } },
+								h('div', { style: { ...S.row, marginTop: 0 } },
+									h('span', { style: S.label, title: hint }, label),
+									h('span', { style: S.num }, text)),
+								h('div', { style: { display: 'flex', height: 10, marginTop: 4, borderRadius: 4, overflow: 'hidden', background: 'var(--dsw-alias-border-l2)' } },
+									segs.map((seg, index) => h('div', {
+										key: `seg-${index}`,
+										title: `${seg.name === null ? translate('rest') : seg.name} ${Math.round(seg.ms)}ms · ${Math.round((seg.ms / total) * 100)}%`,
+										style: { width: `${(seg.ms / total) * 100}%`, background: `var(${token})`, opacity: [1, 0.7, 0.45, 0.28][index] ?? 0.28 },
+									}))));
+						};
 						if (frame !== null && frame.js > 0 && framePkgs !== null) {
 							rows.push(head('frame-head', t('scopeFrame'), t('splitJsHint')));
 							rows.push(line('frame-js', t('splitJs'), t('splitJsHint'), jsBreakdownText(frame)));
-							rows.push(line('frame-src', t('bySource'), t('invokerHint'), invokerWhoText(framePkgs)));
-							if (framePkgs.top.length > 0) rows.push(line('frame-pkg', t('byPkg'), t('pkgHint'), pkgWhoText(framePkgs)));
+							rows.push(bar('frame-src', t('bySource'), t('invokerHint'), framePkgs.byInvoker, '--dsw-alias-brand-primary', invokerWhoText(framePkgs)));
+							rows.push(bar('frame-pkg', t('byPkg'), t('pkgHint'), whoRows(framePkgs), '--dsw-alias-state-success-primary', pkgWhoText(framePkgs)));
 						}
 						if (window.js > 0) {
 							rows.push(head('win-head', windowScopeText(window), t('windowScopeHint')));
-							rows.push(line('win-src', t('bySource'), t('invokerHint'), invokerWhoText(window)));
-							rows.push(line('win-js', t('splitJs'), t('forcedHint'), jsBreakdownText(window)));
-							if (window.top.length > 0) rows.push(line('win-pkg', t('byPkg'), t('pkgHint'), pkgWhoText(window)));
+							rows.push(bar('win-src', t('bySource'), t('invokerHint'), window.byInvoker, '--dsw-alias-brand-primary', invokerWhoText(window)));
+							// 全是纯执行时这一行只是把"脚本总耗时"重复一遍(条上已经看得到),不显示
+							if (window.forced + window.pause > 0) rows.push(line('win-js', t('splitJs'), t('forcedHint'), jsBreakdownText(window)));
+							rows.push(bar('win-pkg', t('byPkg'), t('pkgHint'), whoRows(window), '--dsw-alias-state-success-primary', pkgWhoText(window)));
 							// 一个包名都没定到:按包这一层现在没有信息,但也不能装作它不存在
 							// 一个包名都没定到:这一层给不出占比(没有名字就没有排行),但**必须留下分母** ——
 							// 直接不显示会让人以为"按包"被删了(实测被这么问过)。
-							if (window.top.length === 0) {
+							if (window.top.length === 0 && window.byOther.length === 0) {
 								rows.push(h('div', { key: 'pkg-none', style: S.sub, title: t('pkgHint') },
 									pkgZeroText(frame === null || framePkgs === null ? 0 : framePkgs.unresolved, window.unresolved)));
 							}

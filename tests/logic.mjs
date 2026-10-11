@@ -1063,6 +1063,8 @@ const watchPieces = [
 	extract(source, 'function frameSplit('),
 	extract(source, 'function splitLegend('),
 	extract(source, 'function frameArcs('),
+	extract(source, 'function whoRows('),
+	extract(source, 'function barSegments('),
 	extract(source, 'function worstLoaf('),
 	extract(source, 'function loafRanks('),
 	extract(source, 'function pickList('),
@@ -1144,7 +1146,7 @@ const watchBox = new Function(`
 		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, PICK_MIN_MS, unresolvedLabel,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
-		tallyScripts, framePkgTally, pkgWhoText, pkgZeroText, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
+		tallyScripts, framePkgTally, pkgWhoText, whoRows, barSegments, pkgZeroText, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
 		watchPanelText, watchLatestText, watchRowText,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
@@ -1422,24 +1424,28 @@ check('翻帧:◀ ▶ 按 blocking 降序走(只看上榜的帧),到头停住,�
 		return [ranks, step1, step2, back, auto];
 	})(),
 	[[2, 3], 3, 3, 2, null]);
-check('圆环分段:脚本按来源切细(同一族红,由深到浅),各段之和 = 整帧',
+check('圆环只画一个维度(四段:脚本 / 任务 / 渲染 / 尾部),不再按来源切',
 	(() => {
-		const arcs = watch.frameArcs(
-			{ total: 200, js: 120, taskOther: 30, render: 20, tail: 30, exec: 120, forced: 0, pause: 0 },
-			[['a', 60], ['b', 40], ['c', 10], ['d', 10]],
-		);
-		return [arcs.map((arc) => [arc.ms, arc.color, arc.opacity]), arcs.reduce((acc, arc) => acc + arc.ms, 0)];
+		const arcs = watch.frameArcs({ total: 200, js: 120, taskOther: 30, render: 20, tail: 30, exec: 120, forced: 0, pause: 0 });
+		return [arcs.map((arc) => [arc.ms, arc.color]), arcs.reduce((acc, arc) => acc + arc.ms, 0)];
 	})(),
-	[[[60, 'error', 1], [40, 'error', 0.72], [10, 'error', 0.46], [10, 'error', 0.28], [30, 'neutral', 1], [20, 'warn', 1], [30, 'brand', 1]], 200]);
-check('圆环分段:没有来源证据时脚本仍是一整块;任务那段是中性灰(不再和脚本同色)',
-	watch.frameArcs({ total: 100, js: 50, taskOther: 10, render: 10, tail: 30 }, []).map((arc) => [arc.ms, arc.color]),
-	[[50, 'error'], [10, 'neutral'], [10, 'warn'], [30, 'brand']]);
-check('圆环分段:按来源的求和大于脚本那段时按比例缩(否则弧会互相盖住)',
+	[[[120, 'error'], [30, 'neutral'], [20, 'warn'], [30, 'brand']], 200]);
+check('堆叠条:Top3 + 其余,段宽按这一维度的总量算(恒满格)',
 	(() => {
-		const arcs = watch.frameArcs({ total: 100, js: 40, taskOther: 0, render: 10, tail: 50 }, [['a', 60], ['b', 20]]);
-		return [arcs.map((arc) => arc.ms), arcs.reduce((acc, arc) => acc + arc.ms, 0)];
+		const { segs, total } = watch.barSegments([['a', 60], ['b', 30], ['c', 10], ['d', 10], ['e', 5]]);
+		return [segs.map((seg) => [seg.name, seg.ms]), total, segs.reduce((acc, seg) => acc + seg.ms, 0)];
 	})(),
-	[[30, 10, 0, 10, 50], 100]);
+	[[['a', 60], ['b', 30], ['c', 10], [null, 15]], 115, 115]);
+check('堆叠条:没有其它来源时不留"其余"段;毫秒为 0 的不上榜',
+	(() => {
+		const one = watch.barSegments([['only', 40], ['zero', 0]]);
+		const empty = watch.barSegments([]);
+		return [one.segs.map((seg) => seg.name), one.total, empty.segs.length, empty.total];
+	})(),
+	[['only'], 40, 0, 0]);
+check('"谁"的两类标签合起来排序(插件包 + 其余来源),堆叠条与交叉表共用',
+	watch.whoRows({ top: [['pkg', 10]], byOther: [['index-abc.js', 90], ['无 URL(内联脚本)', 5]] }),
+	[['index-abc.js', 90], ['pkg', 10], ['无 URL(内联脚本)', 5]]);
 check('圆环图例两行的长度预算(zh;396px 面板)', watch.splitLegend({ total: 200, js: 100, taskOther: 20, render: 20, tail: 60 }).every((line) => line.length <= 26), true);
 check('worstLoaf 取 blocking 最大的那条', (() => {
 	const saved = watch.state.watch.loaf.slice();
