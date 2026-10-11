@@ -3,7 +3,7 @@
 > 本文是**发布这件事本身**的长期文档:对外门槛、验收判据与实测证据、还差什么。
 > 装什么怎么用 → [README.md](README.md);开发规则 / 源码级机制 / 已知坑 → [AGENTS.md](AGENTS.md);
 > 变更历史 → [CHANGELOG.md](CHANGELOG.md)。
-> 下面的数字是 2026-10-07 与 2026-10-11 两次当场实测的;带日期的观测只当证据,不当承诺。
+> 下面的数字是 2026-10-07 / 2026-10-11 / 2026-10-12 三次当场实测的;带日期的观测只当证据,不当承诺。
 
 ---
 
@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场(2026-10-11 `gh repo view` 实测 `PUBLIC`) |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,而且 **`tools/` 与 `locale/` 按目录核**(以后加验证器或加语言文件不会漏检),显式清单 + 目录共覆盖包内全部 **18** 个文件(含 `package.json`),漏一份就失败 |
-| 6 | 门禁全绿 | ✅ 458 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ 494 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
 | 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
 
@@ -34,7 +34,7 @@
 
 | 判据 | 怎么验 | 最新实测 |
 |---|---|---|
-| 离线断言全绿 | `npm test` | **458** 条(attribution 11 / logic 408 / host 39) |
+| 离线断言全绿 | `npm test` | **494** 条(attribution 11 / logic 444 / host 39) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 守夜默认**零插桩** | `snapshot().instrumented` 在三种模式下的取值 | 默认(不插桩)档:`precise: false` / `instrumented: false`,`errors: 0` —— 守夜档仍然零插桩;点「深录」→ `true / true`;点回去 → `false / false`,`errors` 全程 0 |
@@ -64,7 +64,7 @@
 | 宿主 event-loop 补 max | 面板 `hostLoopText` | p50/p99/**max** 三个都给(宿主半 `index.js` 早在采 `max`,面板一直没显示);老版本没有 `max` 字段时如实只给 p50/p99,不补 0 |
 | 脚本侧按包 | 面板「本帧按包 / 脚本按包·窗口」/ `incident.packages` | 真实页面 **`dsh-api-gateway 881ms · dsh-client-connection 312ms · dsh-client-modules 208ms · 其余 1`**(v0.3.0 实测,当时是窗口聚合那一行);定不到包名的条数会跟在同一行尾巴上(`· 未定名 8`) |
 | 交互延迟(页面内那一半) | `snapshot().interactions` / CDP 真实输入 | `state: on`(supported = element + event);一次真实点击 **20** 条入库,`pointerover` 那条 `ms 112 / waitMs 0.3 / handlerMs 0.4` —— 端到端长 ≠ 页面反应慢;`element` 恒 0 并解释原因 |
-| 真页面验证可复跑 | `tools/check-panel.mjs` / `check-storage.mjs` / `check-interaction.mjs` | 三条都真跑过并 **ALL PASS**(面板挂上 + 渲染 0 错误 / 写 localStorage → 重新加载 → 读回 / CDP 真实输入 → event timing 交付 22 条交互);`check-panel --expr=false` 会 FAIL 且退出码 1;它们**不是离线门禁**(要真浏览器 + 本机 `dsh web`),CI 只对 `tools/*.mjs` 做 `node --check` |
+| 真页面验证可复跑 | `tools/check-panel.mjs` / `check-storage.mjs` / `check-interaction.mjs` / **`check-incident.mjs`** | 四条都真跑过并 **ALL PASS**(面板挂上 + 渲染 0 错误 / 写 localStorage → 重新加载 → 读回 / CDP 真实输入 → event timing 交付 22 条交互);`check-panel --expr=false` 会 FAIL 且退出码 1;它们**不是离线门禁**(要真浏览器 + 本机 `dsh web`),CI 只对 `tools/*.mjs` 做 `node --check` |
 | 记录器自身不冒充元凶 | 面板「归属 Top」/ `blameText` | 真页面:`PerfHud / PerfHudStress` 那条 224ms 长任务改为归到 **`RootEntry`**(真组件);只有记录器自己是唯一候选时才单列「记录器自身 N×」 |
 | 记录器自己贵不贵 | 面板「记录器自身」/ `context.recorder` | 真页面读数(本轮 P3 复核):`p99 0.1ms · max 0.2ms · samples 113`(它自己的 rAF 回调,最近 600 帧环形缓冲;更早一次是 `p99 0.1ms · 峰 0.1ms · 样本 167`)。机制由断言钉住(`recordSelf` / `selfStats` / 环形上限 600);这条是**自证**口径,不是页面开销 |
 | 压缩名过滤 | `usableComponentName` 断言(传**类**) | `class $c {}` / `class $w {}` → `null`,`class ChatView {}` → 通过,匿名 `class {}` → `null`;`looksLikeInfrastructure('(ChatView)')` 实测 **false**(曾经有"括号名被它挡掉"的错说法,已加断言钉死) |
@@ -82,6 +82,13 @@
 | 隔离实验能恢复 | `isolation.restored.ok` | 4 个候选逐项恢复 ✓;窗口含流式时明确写「不可比」且不给结论 |
 | 插桩可还原 | `disable()` 后原型比对 | `tests/host.mjs` 有断言钉住 |
 | 不碰用户环境 | profile diff / `setBundle` 协议 | 未改 `cordis.patch.yml`;无 `confirm` 的 `setBundle` → **400**,前后快照零变化 |
+| **诊断上下文隔离(本轮核心)** | `detailContext()` 单点分流 + 断言 + `tools/check-incident.mjs` | 历史事故那一支的任何一个数都不来自实时帧环:离线断言拿一份**带 432ms 帧的实时环** + 一条**另一条的**事故包,在 `incident` 模式下 `detailContext()` 给出的是事故包那一帧(`kind: incident` / `frame.t = 3000` / `split.total = 984`,都不是实时那条);`live` 模式下反过来只吃实时帧。真页面:详情区第一行是 `历史事故 i1 · 历史帧 41/46`,实时那一侧的选中值与实时采集全程没被动过 |
+| **历史帧条:真实帧 + 时间间隔 + 缺口留白** | `replayColumns` / `replayX` / `replayCellTitle` + 真页面 DOM | 240 列、**每列取该列最差的那一帧**,断言"每个非空格子的 `frame` 都在 `incident.frames` 里"(不合成帧);gap 那一段取不到帧、该列为 `gap` 档留白;900 帧的窗口只画 ≤240 个节点。真页面:时间轴在场(11 个可点格子)、点最左那一根就把选中从 `41/46` 换到 `1/46` |
+| **逐帧翻帧与禁用态** | `incidentFrameStep` / `incidentFrameBadStep` / `incidentFrameNav` + 真页面点击 | 离线:`上一帧/下一帧` 按时间序、到头停住、`hasPrev/hasNext/hasPrevBad/hasNextBad` 四个方向正确;真页面:`下一帧` 走到 `46/46` 后 **`disabled: true`**(「上一帧」仍可用),`下一异常帧` 落在 `10/46 · 135ms · 警告` 上 |
+| **刷新后仍停在同一帧** | `LS_WATCHUI` + `tools/check-incident.mjs` 的 reload | 离线:`saveWatchUI`/`restoreWatchUI` 原样回 `mode/selId/frameT/scope`,落盘的 id 不在清单里 → 退回实时;真页面:刷新前后上下文标题逐字相同(`历史事故 i1 · 历史帧 63/63`) |
+| **一帧的分解 / 证据只吃那一帧,缺就是缺** | `incidentLoafAt` / `incidentFrameTally` / `incidentFrameEvidenceRows` / `incidentLongTasksAt` | 离线:没有重叠 LoAF 的那一帧 `split === null`、证据退回**事故窗口内**切片并标 `missing`;long task 只给重叠的;刷新(解析缓存清空)后包名仍是存下来的 `dsh-b`。真页面现场:选中帧没有脚本记录时看到 `这一帧没有脚本记录:下面给的是事故窗口内的切片,不是这一帧的` + `可疑脚本 · 事故 i1 · 窗口内` |
+| **归因状态三档(不再把可能写成结论)** | `incidentVerdict` / `verdictColor` / `eventVerdictText` + 断言 | 四条断言:已确认(JS 证据 + 定到包,自带"不等于已定位根因")/ 可疑(JS 证据但没定到包)/ 可疑(满足 `suspectedThrottle` 时写"更像…")/ 未归因(给的是那句校准过的说明);`jsNo` 文案不再出现"更像 rAF 被节流" |
+| **纯 CSS 的 hover/focus/disabled(真实鼠标扫过不炸)** | `installStyle()` + CDP 真实鼠标扫场 | 644 个真实鼠标点扫过展开的面板(含取证明细最重的那一支)之后:条目仍活着、`enabled: true`、`errors: 0`;悬停时按钮边框解析到 `--dsw-alias-state-business-primary`(行内样式优先,所以那三条规则用 `!important`)。这是**纯 CSS**,没有任何 per-element 鼠标状态 |
 
 已知的**能力边界**(不是 bug,写在 README / AGENTS):归因覆盖是下界(事件处理器 / Promise / 微任务不在调度点插桩里);
 命中率会被 DOM 腿抬高,必须配合名字分布读;隔离实验测的是固定开销,不是因果证明。
@@ -158,8 +165,17 @@
 - ~~**`pkgZeroText` 那段「0 条定到名(带分母)」永远不渲染**:它的分支条件与同屏「其余来源」那行互斥 —— 走到那一步时 `byOther` 一定非空,所以面板上看不到这段文案(函数与断言都还在,套件因此是绿的)。~~ → **已删**:确认**不可达**(外层要求 `window.js > 0`,而 `js > 0` 必然有脚本,脚本要么进 `top`、要么进 `byOther` 且 ms>0,两者互斥),死分支与 `pkgZeroText` 一起删掉;断言改成**实际渲染的那份数据**(喂给「按包」堆叠条的是 `whoRows(tally)`,一个包名都没定到时看到的是按原因命名的「其余来源」段,不是一行"0 条定到名"),并加静态断言「全仓不再有 `pkgZeroText`」。证据在 §2。
 - **`tallyScripts` 算出的 `unresolvedMs` 没有运行时读者**:它被算出来并写进 tally,但面板与导出件都没有任何一处读它(只有单测顺手断言了它)。
 - **`stressText` / `pkgWhoText` / `invokerWhoText` 三个函数零调用点**:界面撤下入口后它们只剩单测覆盖着 —— 单测仍绿,但这条路上任何回归都不会影响用户可见行为。
-- ~~**事故的**自己那段窗口**没有在面板里重放**:`incident.frames` / `incident.loaf` 是事故切片里的一份独立数据(与面板那个 `frameRing` 不是同一份),面板只做**就近定位**(`frameNearestIncident` 把翻帧钉到事故窗口内最接近的那条 LoAF)。要看事故那 13 秒的逐帧序列,只有「导出事故包」+ `tools/inspect-incident.mjs` 这一条路 —— 面板里没有"事故回放视图",要做的话得先把切片与帧环的关系定义清楚(它们的 `t` 分属两条时间轴)。~~ → **已还**:新增**事故回放**(见 §2)—— 切片与实时帧环的关系已经定义清楚(两条时间轴,**刻意分开显示**:上面是实时的 60 秒帧条,回放块写明事故 id 与跨度),数据全部来自事故包,所以刷新生效、零新增采集。**仍然成立**的只剩:回放**不排帧内执行顺序**(LoAF 不给每帧内脚本的起止时间),要看**逐帧脚本明细**仍只有「导出事故包」+ `tools/inspect-incident.mjs` 这一条路。
+- ~~**事故的**自己那段窗口**没有在面板里重放**:`incident.frames` / `incident.loaf` 是事故切片里的一份独立数据(与面板那个 `frameRing` 不是同一份),面板只做**就近定位**(`frameNearestIncident` 把翻帧钉到事故窗口内最接近的那条 LoAF)。要看事故那 13 秒的逐帧序列,只有「导出事故包」+ `tools/inspect-incident.mjs` 这一条路 —— 面板里没有"事故回放视图",要做的话得先把切片与帧环的关系定义清楚(它们的 `t` 分属两条时间轴)。~~ → **已还**:新增**事故回放**(见 §2)—— 切片与实时帧环的关系已经定义清楚(两条时间轴,**刻意分开显示**:上面是实时的 60 秒帧条,回放块写明事故 id 与跨度),数据全部来自事故包,所以刷新生效、零新增采集。**仍然成立**的只剩:回放**不排帧内执行顺序**(LoAF 不给每帧内脚本的起止时间),要看**逐帧脚本明细**仍只有「导出事故包」+ `tools/inspect-incident.mjs` 这一条路。→ **2026-10-12 再进一步**:回放从一条窗口帧条升级成**可点、可翻帧的时间轴**(每列映射回真实帧 + 四个方向翻帧 + 选中帧自己的分解 / long task / 脚本证据),所以"面板里没有逐帧回看的路"这句也**不再成立**;上面最后那半句(不排帧内执行顺序)仍是能力边界。
 - **帧条点击只到"秒"这一级**:一格约 6px,一格里可能有多条 LoAF;`sparkPickMap` 只能取格里 `dur` 最大的那条。要逐帧选只能靠 ◀ ▶ / ⟲。
+### 3.5 这一轮(历史事故逐帧诊断)留下的限制(2026-10-12 记,如实)
+
+- **一列里只有一条柱子能被点**:历史帧条按时间切成 240 列,每列**只保留该列最差的那一帧**,所以列里更轻的那些帧**点不到**(但它们仍然是 `incident.frames` 里的真实记录,可以用 ◀ ▶ 逐帧走到)。这是"绘制量有上限"换来的:13 秒窗口在 60fps 下有几百帧,一帧一个 DOM 节点会把"画条子"变成面板自己的开销。
+- **"异常帧"的判据只有帧间隔**:翻帧用的是 `帧间隔 ≥ 100ms`(守夜触发线),没有把 LoAF 的 `blocking` 混进来。所以一条 `blocking` 很大、但帧间隔不到 100ms 的帧,在这里不算异常帧(在实时那一侧的清单里算) —— 两个上下文的严重度口径各自在自己的数据上有定义,刻意不互相借用。`blockingDuration` 在本环境常年偏小(见 AGENTS §8 第 10 条),所以这条限制的代价有限。
+- **一帧的时间分解只取一条 LoAF**:与选中帧时间重叠的 LoAF 若有**多条**,只取时长最大的那条。LoAF 上报的是"帧里的一次长任务",一帧多次时另一条只能靠 `incident.loaf` 原始数据看(导出件里有全部)。
+- **逐帧证据仍然只有 LoAF 给的那一层**:函数名(经常缺失)、毫秒、`invoker` 是直接测量;包 / 文件 / 行号是推断;原始源码行号与调用栈依然拿不到(§3.4 第一条)。所以"逐帧回看"能把范围缩到**帧 → 包 → 文件 → 合并脚本行**,不能直接指出根因。
+- **1400 行以上的事故窗口仍然是"降采样后的形状"**:240 列对超长挂起(几秒的 gap)表现为一整段留白,列的计数(`count`)只在悬停里给 —— 这一层刻意不做密度图(它会把"没在测"画成"卡得很密")。
+- **`installStyle()` 是面板唯一的一处样式表**,而且用 `!important` 覆盖行内样式(面板其余样式全在行内)。它是纯 CSS,没有 JS 鼠标状态;要再加样式优先改行内,别往这张表里堆规则。
+- **验收器依赖两个约定**:根节点 `id="dsh-perf-hud-root"`(样式作用域与选择器)与详情区第一行的 `data-ctx-bar="1"`。它们不是给用户看的,但**改名字会让 `check-incident.mjs` / 悬停扫场失败** —— 改之前先看 `tools/check-incident.mjs`。
 - **第 5 个折叠组「包 × 来源 · 窗口」的摘要没有长度预算断言**:`crossSummary` 输出 `short(包) · short(来源) Nms`,名字与来源都可能很长(`dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms` = **53** 字符),在 396px 里会折行。组数从 4 变 5 时漏了这条预算;补的时候要用真实量级的名字(见 AGENTS §8 第 13 条)。
 
 **时机**:0.4.0 已于 2026-10-11 发到 npm(手工首发,见 §3.1);发布这件事只剩两件:下次发版前配 Trusted Publisher、提收录 PR。

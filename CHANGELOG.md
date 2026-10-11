@@ -4,7 +4,34 @@
 
 ## 未发布
 
+### 新增
+
+- **历史事故逐帧诊断:选中一条事故之后,可以在「同一个诊断上下文」里逐帧回看、看那一帧的耗时分解与真实证据**:「取证明细」现在一次只服务**一个**上下文 —— `live`(实时帧环里的当前帧)或 `incident`(选中事故里的一条**历史帧**),由 `state.watch.mode` 决定,**分流只发生在 `detailContext()` 一处**,渲染那侧只读它的返回值。以前帧条 / 翻帧 / 饼图吃实时 `pickedLoaf()`,而事故卡片与回放吃 `selectedIncident()`,于是"上面是历史事故、下面是另一条实时帧的编号与耗时"必然出现 —— 现在实时与历史**共用视觉组件**(`ringBlock` / `scriptBreakdownRows` / `evidenceBlock` / `crossBlock`),但**不共用一个错误的上下文**。详情区第一行是上下文标题(`实时监控 · 当前帧` / `历史事故 i12 · 历史帧 3/305`),折叠组标题带上事故 id,事故卡片上按「看这一帧」进历史、按「回到实时」回实时;切换**只切数据源**,实时采集与另一侧的选中都不动。
+- **历史帧时间轴:可点的导航器,不是装饰性图表**(`replayColumns` / `replayCellTitle`)。事故窗口按**时间**切成 240 列,每列取该列里**最差的那一帧**,并把**那一帧的引用**留在格子里 —— 点击 / 选中 / 高亮全部映射回 `incident.frames` 里真实存在的记录(断言:每个非空格子的 `frame` 都在原数组里,不合成帧);整段 rAF 被挂起 / 采样缺失的地方**留白**,不补桩。档位与实时帧条共用 `sparkLevel` 与 `SPARK_COLORS`,选中帧是**一条蓝色竖线**(`--dsw-alias-state-business-primary`)。240 列把"一条 13 秒窗口几百帧"的绘制量钉在 ≤240 个 DOM 节点上。
+- **四个方向的逐帧导航 + 真实禁用态**(`incidentFrameNav` / `incidentFrameStep` / `incidentFrameBadStep`):`上一帧 / 下一帧` 按**时间序**走(与帧条方向一致),`上一异常帧 / 下一异常帧` 按守夜触发线(`PICK_MIN_MS`)筛;没有下一条就**禁用**按钮,不留"点了没反应"的动作。选中帧的**序号 / 耗时 / 档位文字**跟着更新。
+- **一帧的分解与证据只吃那一帧**:与选中帧**时间重叠**的 `incident.loaf`(多条取最重)提供时间分解与脚本证据;这一帧没有 LoAF 就写「这一帧没有长动画帧记录」,**不拿最差那一帧、更不拿实时帧顶**;脚本证据退回**事故窗口内**切片时块首写明"不是这一帧的";**与这一帧重叠的 Long Task** 单列一块(owner / component / 来源),窗口内总条数当分母。这一帧的脚本聚合走与实时同一套 `tallyScripts`,但 `pkg` / `pkgVia` **优先用捕获时存下来的** —— 刷新之后当前会话的 sourcemap 缓存是空的,现算会把历史事故的包名全算成"未定名"。
+- **归因状态收敛成三档**(`incidentVerdict` + `verdictColor`):**已确认**(有 JS 阻塞证据且窗口里定到了包,并写明"这只缩小到哪个包,不等于已定位根因")/ **可疑**(有 JS 证据但没定到包;或满足 `suspectedThrottle` 的检测条件)/ **未归因**(给的是校准过的那句:未观察到足以解释该帧的 JS 阻塞证据;请结合前后帧和时间间隙检查 rAF 挂起或浏览器节流)。档位**文字 + 档位色**两样一起给,面板与「复制摘要」读同一个函数。
+
+### 修改
+
+- **诊断上下文落盘(`LS_WATCHUI`,只存 `mode` / `selId` / `frameT` / `scope`,不存数据)**:刷新之后**仍然停在同一条事故的同一帧**;落盘的事故 id 或帧 `t` 找不到就退回自动,没有事故就退回实时。实时那一侧的 `pickT` 在切换上下文时**不动**,切回来还是原来那条。
+- **`jsNo` 不再把可能性写成结论**:文案从「无(更像 rAF 被节流)」改成「无(longtask/LoAF 都不与它重叠)」;"更像 rAF 挂起 / 浏览器节流"只作为**可疑**那一档的说明出现,而且只有 `suspectedThrottle` 真的成立时才提。
+- **零证据那一行的分母范围按上下文说**:历史帧 / 本帧 / 窗口内三档(`evidenceZeroText` 读 `scopeKind`),不再一律写"窗口内";事故窗口那一支的交叉表也给自己的范围说明(`crossIncidentHint`)。
+- **面板补齐控件态样式**:根节点加 `id="dsh-perf-hud-root"`,用一条**纯 CSS**(`installStyle()`)给按钮补 hover / focus-visible / disabled —— 没有 per-element 鼠标状态(那条禁令见 AGENTS §7)。行内样式优先,所以这三条规则用 `!important`。视觉上补齐 8px 圆角卡片、次级背景 `--dsw-alias-bg-layer-2`、18px/600 的"核心耗时"与等宽数字,颜色全部走既有 theme token。
+
+### 修复
+
+- **`h('div', …, hint ?? t('crossHint')})` 那处交叉表范围提示的括号结构**(改 `crossBlock` 参数时引入,`node --check` 当场拦下)。记一笔是因为它正是 AGENTS §8 第 14 条那类"批量替换看起来对、其实断了结构"的同类风险。
+- **`incident.frames` 里的 `gap` 以前会被当成普通帧参与序号与翻帧**:现在 `gap === true` 明确不是帧(整段 rAF 被挂起),不参与序号 / 选中 / 翻帧,只在帧条上留白。
+
+### 测试
+
+- **新增 `tools/check-incident.mjs`(真页面验收器,和 `check-panel` 一样不是离线门禁)**:清事故 → 同步烧 400ms 造一条真达线帧 → 等守夜自动切片 → 按「看这一帧」进历史上下文 → 断言上下文标题 / 时间轴在场 / 点柱子换帧 / 下一帧上一帧 / 下一异常帧落在达线帧上 / 走到最后一帧后「下一帧」禁用 / **刷新后仍停在同一帧** / 「回到实时」把实时帧条换回来 / 全程 `errors: 0`。**ALL PASS**。
+- 离线断言 **458 → 490** 条(attribution 11 / logic **440** / host 39),`.github/workflows/ci.yml` 的 `-eq 490` 门禁与两处 `Offline suites (…)` 标题、README / README_EN / AGENTS / REVIEW 里的数字同步改。新增断言:上下文隔离(历史那一支不吃实时帧、实时那一支不吃事故)、历史帧列表跳过 gap、选中帧 `t` 找不到就退回自动、四个方向的导航与禁用态、帧条"每列取最差且一定是真实帧 + 缺口留白 + 900 帧只画 ≤240 列"、包名用存下来的(刷新后仍定得到名)、这一帧没有 LoAF 时证据退回窗口切片并标 `missing`、long task 只给重叠的、三档归因状态、`LS_WATCHUI` 落盘/读回与失效退回、零证据分母范围三档、以及"`frameNearestIncident` 这条就近定位老路已删掉"。
+- 真页面四件套:`check-panel` / `check-storage` / `check-interaction` / `check-incident` **ALL PASS**;另外用 CDP 真实鼠标扫过展开的面板 644 个点,断言条目仍活着、`errors: 0`、悬停边框解析到交互蓝 token —— 这是纯 CSS,没有任何 JS 鼠标状态。
+
 ### 文档
+
 
 - **首发机制改准(staged publishing,不是直接 `npm publish`)**:0.4.0 实际是先 `npm stage publish`(registry 见状建了占位版本 `0.0.0-stage` 占住包名),再由维护者用 2FA **approve** 上线的 —— 证据是 registry 的 `gitHead` 等于当时的 `main`、`fileCount` 18、线上 tarball 与本机 `npm pack` 逐文件 sha256 全等(字节 shasum 不同只因打包用的 npm 版本不同:线上 11.17.0 / 本机 11.12.1)。REVIEW §3.1 与 AGENTS §10/§11 按这份证据改写,并记下 Trusted Publisher 的 **Allowed actions** 决定以后是否需要每版人工 approve(`npm stage publish` 永远允许;直接 `npm publish` 要显式勾选)。上一版文档写"本机 `npm publish` 首发"是错的。
 
