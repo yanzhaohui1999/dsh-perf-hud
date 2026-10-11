@@ -330,16 +330,18 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 1. bump `package.json.version`,跑完 §3 的门禁并全绿。
 2. 打 tag `vX.Y.Z`(**tag 必须与 `version` 一致**),在 GitHub 建 Release。
 3. `.github/workflows/release.yml` 在该 Release 发布时自动 `npm publish`(用 **npm Trusted Publishing / OIDC**,不配 `NPM_TOKEN`)。它对该版本**幂等**:发布前先 `npm view` 查 registry,查到就跳过发布并写 notice(所以给手工首发那一版建 Release 不会发失败,只会跳过);**查询失败照实报错退出**,不当成"没发过"。
-4. **第一个版本必须手工发**(`npm login` 之后 `npm publish --access public`):OIDC / Trusted Publishing 发不了首版 —— npmjs.com 要到包已经存在之后才能配 Trusted Publisher(上游 [npm/cli#8544](https://github.com/npm/cli/issues/8544) 仍 open)。首发之后再去包设置页配 Trusted Publisher(Provider: GitHub Actions;填 owner / repo / `release.yml`);⚠️ **新建配置必须在 2 天内完成一次成功发布**,否则作废且无法编辑 —— 所以配的时机是"接下来两天真的会发一版",给一个已经在 npm 上的版本建 Release **不算**验证。
+4. **第一个版本**:OIDC **直接** `npm publish` 发不了首版(npmjs.com 要到包已经存在之后才能配 Trusted Publisher,上游 [npm/cli#8544](https://github.com/npm/cli/issues/8544) 仍 open)。0.4.0 实测走的是 **staged publishing**:`npm stage publish`(registry 见到包还不存在,先建一个占位版本 `0.0.0-stage` 把包名占住)→ 维护者在 npmjs.com 的 **Staged Packages** 页点 Approve,或 `npm stage approve <stage-id>`,用 **2FA approve** 之后才公开。
+   ⚠️ **打包/发布用的不是 homebrew 那套 npm**:本机 `/opt/homebrew/bin/npm` 是 11.12.1,**没有 `stage` 子命令**;发布用的是 `/Users/y/tools/node-v24.19.0-darwin-arm64` 里的 npm **11.17.0 / Node 24.19.0**。只有它的 `lib/commands/publish.js` 有 `stage: true` 那条路,`npm publish` 仍然走 `otplease`(当场要 OTP)。同一份内容被两套 npm 打出来的 tarball **字节不同、内容相同** —— 别拿 shasum 不等当"发错东西"的证据,要比逐文件 sha256。
+   首发之后再去包设置页配 Trusted Publisher(Provider: GitHub Actions;填 owner / repo / `release.yml`):⚠️ **Allowed actions** 决定以后怎么走 —— `npm stage publish` 永远允许,而"直接 `npm publish`"要**显式勾选**;只勾 staged 的话 `release.yml` 得改成 `npm stage publish`,而且每版都要人工 approve。⚠️ 新建配置**必须在 2 天内完成一次成功发布**,否则作废且无法编辑(给一个已经在 npm 上的版本建 Release **不算**验证)。
 5. 发布后核对产物:`npm pack --dry-run` 里必须带上 `index.js` / `client.js` / `cordis.patch.yml` / `icon.svg` / `locale/en.json` / `LICENSE`,以及 README 与 AGENTS 链接到的全部文档(`README_EN` / `CONTRIBUTING` / `REVIEW` / `CHANGELOG` / `AGENTS`)与 `tools/`(事故包渲染器 + 三个 CDP 验证器,README 让用户直接跑它们,所以必须进包)—— 漏一份,npm 页面上就是一个死链。`release.yml` 的 Pack and inspect 步骤逐份 grep,漏了就失败。
 
 ---
 
 ## 11. 当前状态
 
-**v0.4.0 已发布到 npm**(2026-10-11 手工首发):`npm test` **458** 条全绿(attribution 11 / logic 408 / host 39)、
-`npm pack --dry-run` **18 个文件**、`tag v0.4.0` 与 `version` 一致且已推 origin。
-**首发只能手工** —— OIDC / Trusted Publishing 发不了第一个版本(npmjs.com 要到包存在之后才能配 Trusted Publisher,上游 [npm/cli#8544](https://github.com/npm/cli/issues/8544) 仍 open);下一个版本起走 Release 触发 `release.yml`。
+**v0.4.0 已发布到 npm**(2026-10-11,`latest → 0.4.0`):`npm test` **458** 条全绿(attribution 11 / logic 408 / host 39)、
+`npm pack --dry-run` **18 个文件**、`tag v0.4.0` == registry 的 `gitHead` == `dbcd8f3`(线上 tarball 与本机 `npm pack` **逐文件 sha256 全等**)。
+首发走的是 **staged publishing**,不是直接 `npm publish`:`npm stage publish`(npm **11.17.0** / Node 24.19.0;registry 先建占位版本 `0.0.0-stage` 占住包名)→ 维护者 2FA **approve**。OIDC **直接** publish 发不了首版(npmjs.com 要到包已存在才能配 Trusted Publisher,上游 [npm/cli#8544](https://github.com/npm/cli/issues/8544) 仍 open);下一个版本起走 Release 触发 `release.yml`,要不要每版人工 approve 取决于 Trusted Publisher 的 **Allowed actions**(见 §10 第 4 条)。
 
 **0.4.0 收进的改动**:「帧里花在哪」从三段饼改成四段饼
 (脚本 / 任务里没归到脚本的 / 渲染 / 样式+布局+绘制),脚本侧再拆三层并分成**本帧与窗口两个分母**;

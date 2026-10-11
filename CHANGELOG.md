@@ -2,6 +2,12 @@
 
 本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/),版本号遵循 SemVer。
 
+## 未发布
+
+### 文档
+
+- **首发机制改准(staged publishing,不是直接 `npm publish`)**:0.4.0 实际是先 `npm stage publish`(registry 见状建了占位版本 `0.0.0-stage` 占住包名),再由维护者用 2FA **approve** 上线的 —— 证据是 registry 的 `gitHead` 等于当时的 `main`、`fileCount` 18、线上 tarball 与本机 `npm pack` 逐文件 sha256 全等(字节 shasum 不同只因打包用的 npm 版本不同:线上 11.17.0 / 本机 11.12.1)。REVIEW §3.1 与 AGENTS §10/§11 按这份证据改写,并记下 Trusted Publisher 的 **Allowed actions** 决定以后是否需要每版人工 approve(`npm stage publish` 永远允许;直接 `npm publish` 要显式勾选)。上一版文档写"本机 `npm publish` 首发"是错的。
+
 ## [0.4.0] - 2026-10-11
 
 ### 新增

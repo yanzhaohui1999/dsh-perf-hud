@@ -106,9 +106,14 @@
 ### 3.1 对外动作
 
 - [x] **仓库转公开 + 加 `dsh-plugin` topic**(§1 #4)—— 已公开,`dsh-plugin` 等 6 个 topic 在场(2026-10-11 实测)。
-- [x] **npm 首发** —— 2026-10-11:`npm login` 之后本机 `npm publish --access public` 发了 **0.4.0**。**首发只能手工做**:OIDC / Trusted Publishing 发不了第一个版本 —— npmjs.com 要到包已经存在之后才能配 Trusted Publisher(上游 [npm/cli#8544](https://github.com/npm/cli/issues/8544) 至今 open)。
-  - **下一次发版前要做的**:npm 包设置页 → Trusted Publishers → Provider `GitHub Actions`,owner `yanzhaohui1999` / repo `dsh-perf-hud` / Workflow filename `release.yml`,Environment 留空。⚠️ 新建配置**必须 2 天内完成一次成功发布**,否则作废且无法编辑 —— 所以配的时机是"接下来两天真的会发一版";给一个**已经在 npm 上**的版本建 Release **不算验证**(工作流会走"跳过发布"那条分支)。
-  - `release.yml` 现在对"该版本已在 npm 上"幂等:发布前查 registry,查到就跳过并写 notice;**查询失败照实报错退出**,不猜成"没发过"。
+- [x] **npm 首发** —— 2026-10-11,`dsh-perf-hud@0.4.0` 上线(`latest → 0.4.0`,`npm view dsh-perf-hud version` = `0.4.0`)。**走的是 staged publishing,不是直接 `npm publish`**(上一版本文档写成"本机 `npm publish` 首发",是错的 —— 按下面的实测证据改准)。
+  - **证据(2026-10-11 当场查 registry)**:`dist.fileCount` = **18**;`gitHead` = `dbcd8f3404b3b8c8674d1ee3502ff37f6eee8237` = 当时的 `main`;把线上 tarball 拉下来与本机 `npm pack` 对比,**18 个文件逐文件 sha256 全等**;`_npmVersion` = 11.17.0 / `_nodeVersion` = 24.19.0(打包者与我的 11.12.1 不是一套,所以 tarball 的**字节** shasum 不同 —— 字节不同、内容相同,别把 shasum 不等读成"发错东西")。
+  - **首发的真实机制(读 npm 11.17.0 的 `lib/commands/publish.js` 得到,不是推测)**:只有 `npm stage publish` 那条路会带 `stage: true` 去发(`if (this.isStage) { … stage: true … }`,成功输出 `+ <id> (staged with id <stageId>)`);`npm publish` 走 `otplease`,会当场要 OTP。而 **stage 一个还不存在的包时,registry 先建一个占位版本 `0.0.0-stage`**(`Temporary package placeholder for staged publishing`,2 文件 / 334B)把包名占住,真版本进 staged 队列,**必须有人用 2FA approve 才公开**([docs](https://docs.npmjs.com/staged-publishing))。所以"首版只能手工"这句要改准:**首版可以自动 stage(stage-only token 都行),但上线前那一次人工 approve 免不了**;**OIDC 直接 `npm publish` 发首版仍然不行**(npmjs.com 要到包已存在才能配 Trusted Publisher,[npm/cli#8544](https://github.com/npm/cli/issues/8544) 仍 open)。`0.0.0-stage` 会一直留在版本列表里(它是 registry 的占位条目,`latest` 已指向 0.4.0,所以不影响安装)。
+  - **下一次发版前要做的**:npm 包设置页 → Trusted Publishers → Provider `GitHub Actions`,owner `yanzhaohui1999` / repo `dsh-perf-hud` / Workflow filename `release.yml`,Environment 留空。⚠️ **Allowed actions** 那一栏决定以后走哪条路(文档原话:`npm stage publish` **永远允许**,要不要**同时允许直接 `npm publish` / `npm dist-tag` 要显式勾选**,两项独立):
+    - **只勾 staged** ⇒ 每次发版都要你点一次 Approve,而且 `release.yml` 现在跑的是 `npm publish`,会被注册表拒(得改成 `npm stage publish`);
+    - **勾上直接 publish** ⇒ 现在的 `release.yml` 原样可用,建 Release 就自动上线。
+    ⚠️ 另外,新建配置**必须 2 天内完成一次成功发布**,否则作废且无法编辑 —— 所以配的时机是"接下来两天真的会发一版";给一个**已经在 npm 上**的版本建 Release **不算验证**(工作流会走"跳过发布"那条分支)。
+  - `release.yml` 现在对"该版本已在 npm 上"幂等:发布前查 registry,查到就跳过并写 notice(**实测**:给首发那版建 Release,v0.4.0 的 `release.yml` 跑绿,`Check whether…` 步骤 success、`Publish` 步骤 **skipped**);**查询失败照实报错退出**,不猜成"没发过"。
 - [ ] **提收录 PR**:只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条(§1 #7)。
 
 ### 3.2 三条尾巴(2026-10-08 新发现)
