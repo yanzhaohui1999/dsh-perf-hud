@@ -37,6 +37,7 @@ window.__ModuleLoader__.load({
 		const LS_UI = 'dsh-perf-hud:collapsed';
 		const RING_MAX = 500;        // 环形缓冲条数(1 条/秒 ≈ 8 分钟)
 		const TOP_N = 3;             // 面板展示的插件条数
+		const EVIDENCE_MAX = 4;      // 「可疑脚本」那一块最多列几条(再多就不是"缩小范围"而是列清单了)
 		const LT_WINDOW_MS = 60000;  // longtask 观察窗口
 		const RECENT_MAX = 256;      // 用于 longtask 归因的最近回调(含仍在执行的)
 		const MUT_SAMPLE = 10;       // DOM 写入归因:每 10 次抓一次栈
@@ -216,7 +217,7 @@ window.__ModuleLoader__.load({
 			const existing = bundleMaps.get(key);
 			if (existing !== undefined) return existing;
 			const scriptUrl = absolutePluginUrl(key.slice(BUNDLE_PREFIX.length));
-			const entry = { state: 'pending', offsets: null, names: null, count: 0, reason: '', source: '' };
+			const entry = { state: 'pending', offsets: null, names: null, paths: null, count: 0, reason: '', source: '' };
 			bundleMaps.set(key, entry);
 			const revMatch = /[?&]rev=([^&#]*)/.exec(scriptUrl);
 			const signature = `v1:${revMatch === null ? 'norev' : revMatch[1]}:${scriptUrl.length}`;
@@ -228,6 +229,8 @@ window.__ModuleLoader__.load({
 				if (parsed !== null && Array.isArray(parsed.offsets) && parsed.offsets.length > 1 && Array.isArray(parsed.names)) {
 					entry.offsets = parsed.offsets;
 					entry.names = parsed.names;
+					// 老缓存(v1,加 paths 之前存的)没有这一项 → 文件路径那一层如实留空
+					entry.paths = Array.isArray(parsed.paths) ? parsed.paths : null;
 					entry.count = parsed.offsets.length;
 					entry.state = 'ready';
 					markResolved();
@@ -253,26 +256,31 @@ window.__ModuleLoader__.load({
 				const document = JSON.parse(await response.text());
 				const sections = Array.isArray(document?.sections) ? document.sections : null;
 				if (sections === null || sections.length === 0) throw new Error('没有 sections');
-				const offsets = [];
-				const names = [];
+				// 一次建成**三列对齐**的表,再一起排序 —— 原来只 sort offsets、names 没跟着动,
+				// 于是 `names[i]` 与 `offsets[i]` 从排序那一刻起就说不上是同一段(没人读过它,
+				// 所以一直没暴露);paths 加上之后这个错位会直接变成"文件路径配错包"。
+				const rows = [];
 				for (const section of sections) {
 					const line = section?.offset?.line;
 					const name = sectionName(section);
 					if (typeof line !== 'number' || name === null) continue;
-					offsets.push([line, name]);
-					names.push(name);
+					rows.push([line, name, sectionSource(section)]);
 				}
-				if (offsets.length === 0) throw new Error('sections 里没有可用边界');
-				offsets.sort((a, b) => a[0] - b[0]);
+				if (rows.length === 0) throw new Error('sections 里没有可用边界');
+				rows.sort((a, b) => a[0] - b[0]);
+				const offsets = rows.map((row) => [row[0], row[1]]);
+				const names = rows.map((row) => row[1]);
+				const paths = rows.map((row) => row[2]);
 				entry.offsets = offsets;
 				entry.names = names;
+				entry.paths = paths;
 				entry.count = offsets.length;
 				entry.state = 'ready';
 				markResolved();
 				entry.source = 'sourcemap';
 				try {
-					// 只留 offsets/names,原始 JSON 立刻丢掉。
-					localStorage.setItem(entry.storageKey, JSON.stringify({ v: 1, offsets, names }));
+					// 只留 offsets/names/paths,原始 JSON 立刻丢掉(58 段时 paths 只多几百字节)。
+					localStorage.setItem(entry.storageKey, JSON.stringify({ v: 1, offsets, names, paths }));
 				} catch (error) { /* 配额不够就只留内存 */ }
 			} catch (error) {
 				entry.reason = error instanceof Error ? error.message : String(error);
@@ -319,6 +327,9 @@ window.__ModuleLoader__.load({
 				}
 				entry.offsets = offsets;
 				entry.names = offsets.map((item) => item[1]);
+				// 兜底路径只认得包 id(靠单包响应的首字节定位边界),**没有**每个 section 的
+				// sources → 文件路径这一层如实留空(面板会写"未还原到分片",不拿包名冒充文件名)。
+				entry.paths = null;
 				entry.count = offsets.length;
 				entry.state = 'ready';
 				markResolved();
@@ -331,9 +342,30 @@ window.__ModuleLoader__.load({
 			}
 		}
 
-		/** V8 行号(1-based)二分到 section(offset 0-based)。 */
-		function sectionOwner(entry, lineNumber) {
-			const offsets = entry.offsets;
+		/**
+		 * section 的**源文件路径**。合并包的 sourcemap 里,每个 section 的 `map.sources[0]`
+		 * 就是那个包的那份文件(`/plugins/<包>/<文件>`)。包名只能回答"是谁",文件才回答
+		 * "打开哪个文件" —— 所以两者都留。拿不到时返回 null(照实说,不猜)。
+		 */
+		function sectionSource(section) {
+			const sources = section?.map?.sources;
+			if (Array.isArray(sources) === false) return null;
+			let fallback = null;
+			for (const source of sources) {
+				if (typeof source !== 'string' || source === '') continue;
+				if (/\/plugins\/[^?#]+/.test(source)) return source;
+				if (fallback === null) fallback = source;
+			}
+			return fallback;
+		}
+
+		/**
+		 * V8 行号(1-based)二分到第几段(offset 0-based)。段表为空 / 行号非法 → -1。
+		 * `sectionOwner`(包名)与 `sectionPath`(文件路径)共用它,免得两处各写一遍二分。
+		 */
+		function sectionIndex(entry, lineNumber) {
+			const offsets = entry?.offsets;
+			if (Array.isArray(offsets) === false || offsets.length === 0) return -1;
 			const line0 = lineNumber - 1;
 			let lo = 0;
 			let hi = offsets.length - 1;
@@ -345,7 +377,26 @@ window.__ModuleLoader__.load({
 					lo = mid + 1;
 				} else hi = mid - 1;
 			}
-			return found === -1 ? null : offsets[found][1];
+			return found;
+		}
+
+		/** V8 行号(1-based)二分到 section(offset 0-based)→ 包名。 */
+		function sectionOwner(entry, lineNumber) {
+			const index = sectionIndex(entry, lineNumber);
+			return index === -1 ? null : entry.offsets[index][1];
+		}
+
+		/**
+		 * 同一段的源文件路径。⚠️ `paths` 是后加的字段:老的 localStorage 缓存(v1)里没有它,
+		 * 那时返回 null —— **不为了补它去重下那份 12MB 的 map**(宁可少一个文件名)。
+		 */
+		function sectionPath(entry, lineNumber) {
+			const index = sectionIndex(entry, lineNumber);
+			if (index === -1) return null;
+			const paths = entry?.paths;
+			if (Array.isArray(paths) === false) return null;
+			const path = paths[index];
+			return typeof path === 'string' && path !== '' ? path : null;
 		}
 
 		/** 把 ownerOfUrl 的结果落成"具体包名";多包 URL 未解析完成时给一行批次标签。 */
@@ -442,6 +493,205 @@ window.__ModuleLoader__.load({
 			if (entry.state !== 'ready') return { pkg: null, via: `map-${entry.state}` };
 			const name = sectionOwner(entry, line);
 			return name === null ? { pkg: null, via: 'out-of-range' } : { pkg: name, via: 'section' };
+		}
+
+		/**
+		 * 脚本里的字符位置 → **这份脚本文本里的行号**(1-based)。返回 `{ line, via }`;
+		 * line 为 null 时 `via` 说明为什么拿不到(照实显示,不猜)。
+		 *
+		 * ⚠️ 口径:这是**脚本文件自己的行号** —— 单包 URL 时就那个文件;合并批里是**合并后的
+		 * 大文件**的行号。**不是**原始源码(TS/TSX)的行号:那要解开 section 内层 `mappings`
+		 * 的 VLQ,本项目没做(见 REVIEW「还剩什么」)。所以它够用来定位"打开哪个文件的哪一段",
+		 * 不够用来"跳到源码某一行"。
+		 */
+		function scriptPosition(url, charPos) {
+			if (typeof url !== 'string' || url === '') return { line: null, via: 'no-url' };
+			if (typeof charPos !== 'number' || charPos < 0) return { line: null, via: 'no-charpos' };
+			const entry = scriptLines.get(url);
+			// ⚠️ 这里**不预取**脚本文本:预取只发生在深录档(`loafScripts` 里判 precise)。
+			// 以前这里顺手 `ensureScriptLines(url)` —— 于是"看一眼面板"会去拉整份合并批脚本文本
+			// (几 MB),破坏了守夜的零成本边界;而且会在**没有包名**的情况下算出一个合并大文件里的
+			// 行号(25580 这种),那不是精度,是误导。没预取就照实说"还没预取"。
+			if (entry === undefined) return { line: null, via: 'text-not-fetched' };
+			if (entry.state === 'failed') return { line: null, via: `text-failed(${entry.reason ?? ''})` };
+			if (entry.state !== 'ready') return { line: null, via: 'text-pending' };
+			const line = scriptLineOf(url, charPos);
+			if (line === null) return { line: null, via: 'no-charpos' };
+			if (line < 1) return { line: null, via: 'out-of-range' };
+			return { line, via: 'text' };
+		}
+
+		/**
+		 * 「这个包名 / 这个行号是从哪来的」压成一句人话。**故意只分五类** —— 面板正文放不下
+		 * 十几个 via 码,而"直接从 URL 读出来的"与"靠 sourcemap 分段推断的"之间**信任度的差别**
+		 * 才是读者要看的。原始 via 码仍然进悬停与导出件(留给分析者核对)。
+		 */
+		function viaText(via) {
+			if (via === 'url' || via === 'text') return translate('viaDirect');
+			if (via === 'section') return translate('viaInferred');
+			if (via === 'not-plugin') return translate('viaNotPlugin');
+			if (via === 'text-not-fetched') return translate('viaNotFetched');
+			if (typeof via === 'string' && (via.startsWith('text-failed') || via.startsWith('map-'))) return translate('viaFailed');
+			return translate('viaUnavailable');
+		}
+
+		/**
+		 * 一条脚本的**证据**:把"函数名 / 哪个包 / 哪个文件 / 第几行 / 花了多久 / 谁调起来的"
+		 * 一次算齐,每一段都带**它是怎么来的**(`pkgVia` / `lineVia`)—— 面板与导出件共用同一份
+		 * 口径,不许把"推断出来的包名"说成"测出来的根因"(直接测量 / 归因推断 / 尚无法确认三者
+		 * 在文案上分开)。
+		 *
+		 * `script` 有两个来源:帧环里的脚本(自带 `url` / `invoker`)或事故包的 `topScripts`
+		 * (url 在 `incident.urls` 表里,由调用方解出来传进来)。
+		 */
+		function scriptEvidence(script, url) {
+			const charPos = script?.charPos;
+			const resolved = packageOfScript(url, charPos);
+			const position = scriptPosition(url, charPos);
+			const owner = typeof url === 'string' && url !== '' ? ownerOfUrl(url) : null;
+			const inBundle = owner !== null && owner.startsWith(BUNDLE_PREFIX);
+			let file = null;
+			if (inBundle === true) {
+				// 合并批:文件名只能从 sourcemap 的 section 拿(probe 兜底过就只剩包名 → null)
+				if (state.precise === true && position.line !== null) {
+					const entry = bundleMap(owner);
+					if (entry.state === 'ready') file = sectionPath(entry, position.line);
+				}
+			} else if (typeof url === 'string' && url !== '') {
+				// 单包 URL / 应用自己的外壳 bundle:URL 的路径部分就是那个文件。
+				// ⚠️ **单包组合**(`plugins/??<包>/client.js`)不能交给 `new URL().pathname` ——
+				// `??` 里第一个 `?` 会被当成查询串的开始,pathname 只剩 `/plugins/`,于是面板会
+				// 把"文件路径"显示成 `/plugins/`(实测踩到)。这类 URL 自己拼:组合里只有一个包,
+				// 等价于 `plugins/<包>/<文件>`。
+				const combo = /\/plugins\/\?\?([^/?&,]+)\/([^?&,]+?\.js)/.exec(url);
+				if (combo !== null) {
+					file = `/plugins/${combo[1]}/${combo[2]}`;
+				} else {
+					try {
+						const path = new URL(url, location.href).pathname;
+						file = path === '' ? null : path;
+					} catch (error) { file = null; }
+				}
+			}
+			return {
+				fn: typeof script?.fn === 'string' && script.fn !== '' ? script.fn : null,
+				ms: typeof script?.ms === 'number' ? script.ms : 0,
+				pkg: resolved.pkg,
+				pkgVia: resolved.via,
+				file,
+				line: position.line,
+				lineVia: position.via,
+				invoker: typeof script?.invoker === 'string' && script.invoker !== '' ? script.invoker : null,
+				invokerType: typeof script?.invokerType === 'string' ? script.invokerType : null,
+				url: typeof url === 'string' && url !== '' ? url : null,
+			};
+		}
+
+		/**
+		 * 那两行小表里的名字:`<函数> @ <包>`,缺什么就照实写缺什么。
+		 * ⚠️ 字段一律用 `== null` 判:**事故包里读回的 topScripts 可能是加这几个字段之前存的**
+		 * (少了 file/line/invoker),那时不能抛错、也不能渲染成 `undefined`。
+		 */
+		function evidenceName(ev) {
+			const who = ev.fn == null || ev.fn === '' ? translate('fnUnknown') : short(ev.fn);
+			const pkg = ev.pkg == null || ev.pkg === '' ? translate('pkgUnresolvedShort') : short(ev.pkg);
+			return `${who} @ ${pkg}`;
+		}
+
+		/** 「文件:行」那一格。文件拿不到就退回脚本名,两个都没有才给 null。 */
+		function evidencePlace(ev) {
+			const file = ev.file == null ? (ev.url == null ? null : ev.url) : ev.file;
+			if (file === null && ev.line == null) return null;
+			const where = file === null ? translate('fileUnresolved') : short(file);
+			return ev.line == null ? where : `${where}:${ev.line}`;
+		}
+
+		/**
+		 * 复制一行时给的文本:自描述、能直接粘给别的 AI。末尾把两个 via 码原样带上 ——
+		 * 读的人不必猜"这个包名是读出来的还是推出来的"。
+		 */
+		function evidenceLine(ev) {
+			const parts = [evidenceName(ev)];
+			const place = evidencePlace(ev);
+			if (place !== null) parts.push(place);
+			parts.push(`${Math.round(typeof ev.ms === 'number' ? ev.ms : 0)}ms`);
+			if (ev.invoker != null && ev.invoker !== '') parts.push(`${translate('evidenceInvoker')} ${ev.invoker}`);
+			parts.push(`pkg=${ev.pkgVia ?? '-'} line=${ev.lineVia ?? '-'}`);
+			return parts.join(' · ');
+		}
+
+		/** 事故包里那几条脚本的证据行(与面板「可疑脚本」同一份口径,同样只取前 EVIDENCE_MAX 条)。 */
+		function incidentEvidenceLines(row) {
+			const summary = row?.summary ?? {};
+			const top = Array.isArray(summary.topScripts) ? summary.topScripts : [];
+			return top.slice(0, EVIDENCE_MAX).map((script) => evidenceLine(script));
+		}
+
+		/**
+		 * 面板上「可疑脚本」那一块吃什么。**事故优先**:事故里的脚本是**窗口内**的切片
+		 * (最多 5 条,而且跨会话读回之后仍然在),帧环里的脚本只在当前页面还在时才有 ——
+		 * 没有事故时才退回"当前选中那一帧"。范围写在标题上,读者不会把两者当同一份数据。
+		 */
+		function evidenceScope() {
+			const selected = selectedIncident();
+			const summary = selected.row === null ? null : selected.row.summary;
+			const top = summary === null || Array.isArray(summary.topScripts) === false ? [] : summary.topScripts;
+			if (selected.row !== null && top.length > 0) {
+				const urls = Array.isArray(selected.row.urls) ? selected.row.urls : [];
+				const rows = top.map((script) => scriptEvidence(script, script.u >= 0 ? (urls[script.u] ?? '') : ''))
+					.sort((a, b) => b.ms - a.ms);
+				const coverage = summary.pkgCoverage ?? { resolved: 0, total: rows.length };
+				return {
+					label: `${translate('evidenceLabel')} · ${translate('evidenceScopeIncident')} ${selected.row.id} · ${translate('evidenceWindowPrefix')}`,
+					rows: locatable(rows).slice(0, EVIDENCE_MAX),
+					total: coverage.total ?? rows.length,
+					named: coverage.resolved ?? 0,
+					titled: rows.filter((row) => row.fn !== null).length,
+				};
+			}
+			const frame = pickedLoaf();
+			const scripts = frame === null || Array.isArray(frame.scripts) === false ? [] : frame.scripts;
+			if (scripts.length === 0) return null;
+			const rows = scripts.map((script) => scriptEvidence(script, script.url)).sort((a, b) => b.ms - a.ms);
+			return {
+				label: `${translate('evidenceLabel')} · ${translate('scopeFrame')}`,
+				rows: locatable(rows).slice(0, EVIDENCE_MAX),
+				total: rows.length,
+				named: rows.filter((row) => row.pkg !== null).length,
+				titled: rows.filter((row) => row.fn !== null).length,
+			};
+		}
+
+		/**
+		 * 一条名字都没有时,不要摆一列 `函数名未记录 @ 包未定名 + 毫秒` —— 那既没缩小范围,
+		 * 又把行数翻了几倍(与「按包:0 条定到名」同一条规矩)。换成**一行带分母 + 要深录**,
+		 * 并说明为什么:合并批的包名要靠 sourcemap 分段(深录才拉),而函数名来自 LoAF 的
+		 * `sourceFunctionName`,压缩/合并后的脚本经常就没有它。
+		 */
+		function evidenceZeroText(scope) {
+			return `${translate('evidenceLabel')}:${translate('pkgZeroNamed')}(${translate('evidenceWindowPrefix')} ${scope.total}${translate('scriptsUnit')})· ${translate('needDeep')}`;
+		}
+
+		/**
+		 * 只留**能定位的**那些行:函数名 / 包名 / 文件 / 行号一个都没有的行,列出来只是"函数名未记录
+		 * @ 包未定名 + 一个毫秒数"——占掉名额还不缩小范围。**分母仍然按全部脚本算**(见
+		 * `evidenceFooter`),所以过滤不会把"没定到名"这件事藏起来。
+		 */
+		function locatable(rows) {
+			// ⚠️ **光有行号不算能定位**:合并批里 charPos → 行号是相对于那个几十包合起来的大文件,
+			// 不知道属于哪个包时,那个数字指不出任何可打开的东西(实测非深录档会出现 line=25580 而
+			// pkg 为 null)。有包名时行号才有意义,而那已经被 pkg != null 覆盖。
+			return rows.filter((row) => row.fn != null || row.pkg != null || row.file != null);
+		}
+
+		/**
+		 * 块底下那两行:先给**这一块的覆盖分母**,再给口径与缺口。
+		 * 分母不能省 —— `定到包 3` 不写"共 N 条"会被读成"全都定到了";而且它按**全部**脚本算,
+		 * 不随上面列出的行数变(列出来的只是"能定位的那几条")。
+		 */
+		function evidenceFooter(scope) {
+			const coverage = `${scope.total}${translate('scriptsUnit')} · ${translate('pkgNamed')} ${scope.named}/${scope.total}`;
+			return `${coverage}\n${translate('evidenceCaliber')}\n${translate('evidenceMissing')}`;
 		}
 
 		/**
@@ -752,10 +1002,14 @@ window.__ModuleLoader__.load({
 				loaf: [],                // 最近的 LoAF 摘要(时间升序)
 				loafObserver: null,
 				pickT: null,             // 用户用 ◀ ▶ 选中的那一帧的 t(null = 自动跟着最差那条)
-				// 用户在事故清单里**选中**的事故 id(null = 自动,跟严重度最差那条)。
+				// 用户在事故清单里**选中**的事故 id(null = 自动,跟 scope 指定的那条)。
 				// 「最差事件」块 / 工具箱清单 / 取证明细的翻帧共享这一个上下文 —— 否则三处各说各的。
 				// 存 id 不存下标:新事故进来会按严重度重排,下标会悄悄指到另一条事故上。
 				selId: null,
+				// 「自动」跟哪一条:worst = 严重度最差(默认,事后回看的重点)、latest = 时刻最新
+				// (刚卡的那一下在哪)。单独一个状态位而不是让 selId 兼管 —— 用户点过具体某条之后
+				// 再切 scope,应该以 scope 为准,不能两个人抢同一个字段。
+				scope: 'worst',
 				loafState: 'not-started',   // not-started / on / stopped / unsupported:… / error:…
 				incidents: [],           // 最差 N 次(severity 降序,取用按索引 0 最差)
 				pending: null,           // 正在等后摇的那一次
@@ -1033,7 +1287,10 @@ window.__ModuleLoader__.load({
 				for (const script of scripts) {
 					if (out.length >= WATCH_SCRIPT_MAX) break;
 					const scriptUrl = typeof script.sourceURL === 'string' ? script.sourceURL : null;
-					if (scriptUrl !== null && state.precise === true && scriptUrl.indexOf(',') !== -1) {
+					// 只要 URL 是**组合**(`plugins/??…`)就预取脚本文本 —— 单包组合
+					// (`??<一个包>/client.js`)也算:它的 charPos 同样要靠文本才能换成行号。
+					// 以前判据是 `indexOf(',') !== -1`(只看多包),单包组合于是永远停在 text-pending。
+					if (scriptUrl !== null && state.precise === true && /\/plugins\/\?\?/.test(scriptUrl)) {
 						// 多包:后台把脚本文本与分段表准备好。这两个请求都是浏览器内存缓存命中,
 						// 但走的是异步,所以只预取、不在这里等。
 						ensureScriptLines(scriptUrl);
@@ -1317,11 +1574,18 @@ window.__ModuleLoader__.load({
 			const pick99 = quantile(0.99);
 			// 每条脚本尽力定包名(拿不到就写清 via),再按包汇总一次 ——
 			// 「是谁」在合并批里原来只能给到那个 58 包的 URL,等于没有答案。
+			// 现在顺手把**文件与行号**也按同一份证据函数算出来(面板与导出件共用这套 via 码):
+			// 面板那一块能定位到"哪个文件的哪一段",事故包离开现场后也还留着这两样。
+			// ⚠️ 切片是**当时**算的:脚本文本 / sourcemap 还没到位时 lineVia 就是 text-pending,
+			// 照实记 —— 不给"事后补算"的假位置(事后补的会与这份包的其它读数不同源)。
 			for (const row of loaf) {
 				for (const script of row.scripts) {
-					const resolved = packageOfScript(script.u >= 0 ? urls[script.u] : '', script.charPos);
-					script.pkg = resolved.pkg;
-					script.pkgVia = resolved.via;
+					const evidence = scriptEvidence(script, script.u >= 0 ? urls[script.u] : '');
+					script.pkg = evidence.pkg;
+					script.pkgVia = evidence.pkgVia;
+					script.file = evidence.file;
+					script.line = evidence.line;
+					script.lineVia = evidence.lineVia;
 				}
 			}
 			const scripts = [];
@@ -1390,8 +1654,12 @@ window.__ModuleLoader__.load({
 					longTasksInWindow: longTasks.length,
 					interactionsInWindow: interactions.length,   // A4:窗口内的交互次数(≥100ms 的那些)
 					topScripts: scripts.slice(0, 5).map((script) => ({
-						at: script.at, u: script.u, ms: script.ms, fn: script.fn, invokerType: script.invokerType, charPos: script.charPos,
+						at: script.at, u: script.u, ms: script.ms, fn: script.fn,
+						invoker: script.invoker, invokerType: script.invokerType, charPos: script.charPos,
+						// 「打开哪个文件、哪一段」:file = 包内那份文件(section 的 sources),
+						// line = **脚本文本自己的行号**(不是原始源码行),两个 via 码说明它们是怎么来的
 						pkg: script.pkg, pkgVia: script.pkgVia,
+						file: script.file, line: script.line, lineVia: script.lineVia,
 					})),
 					// 窗口自己的分位:没有它,howToRead 里那句"拿 summary 和 baseline 比"在
 					// 文件内根本没法执行(实测一位只读文件的读者就卡在这)
@@ -3018,6 +3286,10 @@ window.__ModuleLoader__.load({
 						'summary.worstFrameJs / suspectedThrottle:最差那一帧有没有 longtask / LoAF 与它重叠;若 none 且前后帧都健康(worstFrameNeighboursMs < 100),更像浏览器把 rAF 节流或挂起了一次,不是页面真忙了那么久',
 						'脚本的 URL 不在脚本里:incident.urls 是字符串表,scripts[].u 是它的下标(u=-1 表示没有 URL)—— 抽表是因为同一个 combo URL 会重复几十遍',
 						'scripts[].pkg 是这条脚本归属的包名(合并批里靠"字符位置 → 行号 → sourcemap 分段表"还原);pkg 为 null 时看 scripts[].pkgVia:url(单包 URL 直接读出来)/ section(分段表算出来)/ precise-off(精确归因没开)/ text-pending(脚本文本还在拉)/ not-plugin(宿主自己的 bundle)…',
+						'summary.topScripts[].file / .line 是"打开哪个文件、哪一段":file 是那个包的**源文件路径**(合并批取自 sourcemap section 的 sources;probe 兜底或老缓存时为 null);line 是**脚本文本自己的行号**(单包 = 那个文件;合并批 = 合并后的大文件)。⚠️ 它**不是**原始源码(TS/TSX)的行号 —— 那要解开 section 内层 mappings 的 VLQ,本项目没做;lineVia 说明行号是怎么来的(text / text-pending / out-of-range …)',
+						'scripts[].fn(sourceFunctionName)与 scripts[].ms(sourceCharPosition→duration)是 LoAF **直接给的**(直接测量);pkg / file / line 是由 URL 与分段表**推断的**(归因推断);原始源码行号、调用栈、函数级耗时**都拿不到**(尚无法确认)—— 这条链能缩小到"哪个包的哪个文件哪一段",不能直接指出根因',
+						'summary.topScripts[].invoker 是这条脚本**被谁调起来的**(与面板「按来源」同一份归一规则);事件处理器的 invoker 形如 DOMWebSocket.onmessage,不代表"这一帧的 JS 全部来自它"',
+						'incident.interactions 是窗口内 ≥100ms 的交互(event timing):ms 是**端到端**时长(到下一次渲染更新),waitMs / handlerMs 是推导出来的两段;**它不拆帧内**(输入延迟/处理/呈现要 DevTools Interactions 轨道)',
 						'incident.packages 是按包汇总的脚本耗时(降序),summary.pkgCoverage 是有名字的脚本占比 —— 覆盖率不到 100% 时别把第一行当成全部',
 						'脚本侧再往下拆一层:scripts[].forcedMs(forcedStyleAndLayoutDuration)是脚本耗时里"强制样式布局"那部分 —— **它已经算在 ms 里**,别再相加;它是"来源是样式而不是业务逻辑"的同步布局。面板「取证明细」里那两行(脚本按包 / 纯 JS 与强制布局)就是这两件事',
 						'incident.summary 是上面几块的汇总(含窗口自己的 p50/p90/p99),方便直接和 incident.baseline 比;这一层不做推断,结论请自己下',
@@ -3110,10 +3382,24 @@ window.__ModuleLoader__.load({
 		function selectedIncident() {
 			const list = state.watch.incidents;
 			if (list.length === 0) return { row: null, auto: true };
-			if (state.watch.selId === null) return { row: list[0], auto: true };
+			// 「自动」有两条口径:严重度最差(默认,事后回看的重点)或**时刻最新**(刚卡的那一下)。
+			// 取不到最新(数据形状不对)时退回最差。
+			const auto = state.watch.scope === 'latest' ? (pickIncident('latest') ?? list[0]) : list[0];
+			if (state.watch.selId === null) return { row: auto, auto: true };
 			const found = list.find((row) => row.id === state.watch.selId);
-			if (found === undefined) return { row: list[0], auto: true };
+			if (found === undefined) return { row: auto, auto: true };
 			return { row: found, auto: false };
+		}
+
+		/**
+		 * 切换「自动」跟哪一条:最差 / 最近。**顺带清掉手选** —— 用户按这个按钮的意思就是
+		 * "按这个口径来";手选还压着的话点了会像没反应(不要让两个字段抢同一件事)。
+		 */
+		function setIncidentScope(scope) {
+			state.watch.scope = scope === 'latest' ? 'latest' : 'worst';
+			state.watch.selId = null;
+			state.copyNote = null;
+			bump();
 		}
 
 		/** 选中一条事故(工具箱清单与「最差事件」块共用)。 */
@@ -3198,17 +3484,39 @@ window.__ModuleLoader__.load({
 		 * 「复制摘要」要复制的那段文本。给的是**结论 + 口径**,不是整份事故包
 		 * (整份走「导出事故包」,那是 JSON)。缺数据的地方照实写,不省略成空。
 		 */
+		/**
+		 * 「复制摘要」的那段文本。它的用途是**交给别的 AI / 同事继续查**,所以除了结论与口径,
+		 * 还要带上"缩小到哪个文件哪一段"的证据行与"缺什么" —— 只给一句"最差那条是 X"是查不下去的。
+		 *
+		 * ⚠️ 它会读 `incident.interactions`(交互延迟)。那一层按规矩**不进面板渲染区**
+		 * (见 AGENTS:交互只当端到端时长,不能读成帧内拆分),而这里是给分析者的交接件,
+		 * 所以照实写、并写明"端到端、不拆帧内"。
+		 */
 		function incidentSummaryText(row) {
 			if (row === null || row === undefined) return '';
 			const summary = row.summary ?? {};
 			const owner = incidentOwner(row);
 			const cov = summary.pkgCoverage ?? { resolved: 0, total: 0 };
-			return [
+			const lines = [
 				`${PKG} ${row.id} · ${row.cause} · ${Math.round(row.severity)}ms · ${row.at}`,
 				`${translate('sevLabel')} ${severityText(severityLevel(row.severity))} · ${translate('jsEvidence')} ${summary.worstFrameJs === 'js' ? translate('jsYes') : translate('jsNo')}`,
 				`${translate('evOwner')} ${owner === null ? translate('unblamed') : `${owner.name} ${Math.round(owner.ms)}ms`}`,
 				`${translate('evWindow')} ${summary.frames ?? 0}${translate('framesUnit')} · LoAF ${summary.loafEntries ?? 0} · ${translate('byPkg')} ${cov.resolved}/${cov.total}`,
-			].join('\n');
+			];
+			// 事件来源:窗口里 ≥100ms 的交互(端到端)。没有就整段不写,不摆 0。
+			const interactions = Array.isArray(row.interactions) ? row.interactions : [];
+			if (interactions.length > 0) {
+				const top = interactions.slice().sort((a, b) => (b.ms ?? 0) - (a.ms ?? 0)).slice(0, 2);
+				lines.push(`${translate('handoffInteractions')} ${interactions.length}${translate('times')}: ${top.map((item) => `${item.name ?? item.type ?? '?'} ${Math.round(item.ms ?? 0)}ms`).join(' · ')}${translate('handoffInteractionsScope')}`);
+			}
+			const evidence = incidentEvidenceLines(row);
+			if (evidence.length > 0) {
+				lines.push(`${translate('evidenceLabel')}:`);
+				for (const line of evidence) lines.push(`  - ${line}`);
+			}
+			lines.push(`${translate('evidenceCaliberPlain')}`);
+			lines.push(`${translate('evidenceMissingPlain')}`);
+			return lines.join('\n');
 		}
 
 		/**
@@ -4298,6 +4606,25 @@ window.__ModuleLoader__.load({
 			bump();
 		}
 
+		/** 还有组开着吗(没有的话「全部折叠」就是个点了没反应的按钮)。 */
+		function anyGroupOpen() {
+			for (const key of Object.keys(state.groups)) if (state.groups[key] === true) return true;
+			return false;
+		}
+
+		/**
+		 * 「现在的布局/上下文与默认值不一样吗」—— 界面据此决定要不要露出「恢复默认布局」。
+		 * 默认布局下这个按钮本身没有意义,常驻只会让首屏多一个"点了也没变化"的动作。
+		 */
+		function layoutDirty() {
+			if (anyGroupOpen()) return true;
+			if (state.watch.pickT !== null) return true;
+			if (state.watch.selId !== null) return true;
+			if (state.watch.scope !== 'worst') return true;
+			if (state.copyNote !== null || state.pickNote !== null) return true;
+			return false;
+		}
+
 		/**
 		 * 「恢复默认布局」:回到干净的首屏 —— 组全收起(这是默认值),翻帧回自动,事故选中回自动。
 		 * 面板可能被记成"全部展开"(展开状态是落盘的),这一条就是把它拉回来的一键。
@@ -4306,6 +4633,7 @@ window.__ModuleLoader__.load({
 			for (const key of Object.keys(state.groups)) state.groups[key] = false;
 			state.watch.pickT = null;
 			state.watch.selId = null;
+			state.watch.scope = 'worst';
 			// 两个"一次性说明"也清掉:布局都回到默认了,还挂着一句"帧环里没有…"只会让人以为又出错了
 			state.copyNote = null;
 			state.pickNote = null;
@@ -4393,6 +4721,22 @@ window.__ModuleLoader__.load({
 				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每帧脚本',
 				maxLabel: '最大', sparkGap: '整格 rAF 挂起(间隙,不是卡顿)', sparkNoPick: '这一秒没有长动画帧,点不动', sparkPickHint: '点它 → 翻帧切到这一秒的长动画帧',
 				pickNone: '帧环里没有这条事故附近的帧(跨会话读回的事故无法定位到当前帧环):上面那条仍是自动/手选的那帧',
+				// 证据 → 代码:把「事故 → 帧 → 来源 → 包 → 文件:行」落到个体脚本上。
+				// 直接测量 / 归因推断 / 尚无法确认三者在这几句里分开写。
+				evidenceLabel: '可疑脚本', evidenceScopeIncident: '事故', evidenceWindowPrefix: '窗口内',
+				evidenceHint: '把「事故 → 帧 → 来源 → 包 → 文件:行」落到个体脚本上:上面那几块给的是"时间花在哪个包 / 哪类调用"(排行),这一块给的是"打开哪个文件、哪个函数"(定位)。事故里的脚本是**窗口内**的切片(最多 5 条,跨会话读回之后仍在);没有事故时才退回当前选中那一帧。LoAF 只上报 >5ms 的脚本,所以这一层是**下界**。',
+				evidenceCaliber: '口径:函数名与毫秒是 LoAF **直接给的**;包 / 文件 / 行号是由 URL 与 sourcemap 分段**推断的**(悬停看它属于哪一档);行号是**脚本文件自己的行**,不是原始源码行。',
+				evidenceMissing: '缺:原始源码行号与调用栈 —— 要解 section 内层 mappings(VLQ)或录 Chrome trace,本项目都没做。所以这里能缩小到"哪个包的哪个文件哪一段",不能直接指出根因。',
+				evidenceCopyHint: '点这一行复制「函数 @ 包 · 文件:行 · 耗时 · 来源」',
+				evidenceWhere: '位置', evidenceInvoker: '来源', copyScript: '脚本',
+				evidenceFailed: '可疑脚本这一段算不出来',
+				fnUnknown: '函数名未记录', pkgUnresolvedShort: '包未定名', fileUnresolved: '文件未定名',
+				pkgNamed: '定到包',
+				viaDirect: '直接读出来', viaInferred: '分段推断', viaNotPlugin: '不是插件脚本', viaFailed: '解析失败', viaNotFetched: '还没预取(只有深录才拉脚本文本)', viaUnavailable: '还没到位/拿不到',
+				// 交接件(复制摘要)里那两行:措辞要能让**没看过面板的人**直接用
+				handoffInteractions: '窗口内 ≥100ms 的交互', handoffInteractionsScope: '(端到端时长,不是帧内拆分)',
+				evidenceCaliberPlain: '口径:函数名与毫秒由 LoAF 直接测量;包 / 文件 / 行号由 URL 与 sourcemap 分段推断(pkg= / line= 是原始 via 码);行号是脚本文件自己的行,不是原始源码行。',
+				evidenceMissingPlain: '缺:原始源码行号与调用栈(要解 section 内层 mappings 或录 Chrome trace);交互只有端到端时长,没有输入延迟/处理/呈现的拆分。',
 				hourUnit: '小时', minUnit: '分', secUnit: '秒',
 				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
 				invokerHint: 'LoAF 的 scripts[].invoker:这条脚本是**谁调起来的** —— setTimeout / rAF、某个事件处理器(实测最多的是 `DOMWebSocket.onmessage`,即会话事件流)、Promise 回调、脚本加载。它与「按包」是同一份脚本耗时的两种切法:按来源覆盖全部脚本,按包只覆盖定得到包名的那部分(所以合计不相等是正常的,总数看上面的脚本耗时)。⚠️ 它只回答"哪一类调用",不回答"函数里面慢在哪" —— 函数级要 Chrome trace,页面内没有采样器',
@@ -4430,7 +4774,9 @@ window.__ModuleLoader__.load({
 				sevLabel: '严重度', sevBad: '严重', sevWarn: '警告', sevOk: '低于线',
 				sevBadHint: '≥200ms 记为「严重」:与面板判色的红档同一条线;≥100ms(守夜触发线)记为「警告」',
 				jsEvidence: 'JS 证据', jsYes: '有(longtask/LoAF 与它重叠)', jsNo: '无(更像 rAF 被节流)',
-				evOwner: '主要归属', evWindow: '窗口', framesUnit: ' 帧', evAuto: '自动', evPinned: '已选中',
+				evOwner: '主要归属', evWindow: '窗口', framesUnit: ' 帧', evAutoWorst: '自动·最差', evAutoLatest: '自动·最近', evPinned: '已选中',
+				evWorst: '最差', evLatest: '最近',
+				evScopeHint: '「自动」跟哪一条:最差(严重度最高,默认)或最近(时刻最新)。点具体某一条会变成手选,这个按钮再点一下就回到自动。',
 				viewEvidence: '看这一帧', viewEvidenceHint: '选中这条事故 → 展开「取证明细」→ 把翻帧钉到它开始时刻最近的那条长动画帧。事故切片里的帧与面板那个帧环不是同一份数据,所以这里是**就近定位**,定位不到会如实说。',
 				exportIncidentBtn: '导出事故包', exportIncidentBtnHint: '下载这条事故的完整证据包(帧序列 + LoAF + 窗口内 longtask + 环境与缺失声明),不是整机快照。',
 				copySummary: '复制摘要', copySummaryHint: '把这条事故的结论与口径(严重度 / JS 证据 / 主要归属 / 窗口)作为纯文本复制走。',
@@ -4483,6 +4829,19 @@ window.__ModuleLoader__.load({
 				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
 				maxLabel: 'max', sparkGap: 'whole second was rAF suspension (a gap, not a stall)', sparkNoPick: 'no long animation frame in this second, not clickable', sparkPickHint: 'click it to move the frame picker to this second\'s long animation frame',
 				pickNone: 'no frame near this incident in the frame ring (incidents restored from a previous session cannot be located in the current ring); the row above is still the auto/manual pick',
+				evidenceLabel: 'suspect scripts', evidenceScopeIncident: 'incident', evidenceWindowPrefix: 'in window',
+				evidenceHint: 'Lands the chain "incident -> frame -> invoker -> package -> file:line" on individual scripts: the blocks above say where the time went (ranking), this one says which file and function to open (locating). The incident\'s scripts are the **in-window** slice (at most 5, still there after a reload); only when there is no incident does this fall back to the currently selected frame. LoAF only reports scripts over 5ms, so this layer is a **lower bound**.',
+				evidenceCaliber: 'Scope: the function name and the milliseconds are **measured** by LoAF; the package / file / line are **inferred** from the URL and sourcemap sections (hover shows which); the line is a line in the **script file itself**, not an original-source line.',
+				evidenceMissing: 'Missing: original source line and call stack — that needs the inner section mappings (VLQ) or a Chrome trace, neither of which this project does. So this narrows things to "which package, which file, which region", it cannot point at a root cause.',
+				evidenceCopyHint: 'Click to copy "function @ package · file:line · cost · invoker"',
+				evidenceWhere: 'where', evidenceInvoker: 'invoked by', copyScript: 'script',
+				evidenceFailed: 'the suspect-scripts block could not be computed',
+				fnUnknown: 'no function name', pkgUnresolvedShort: 'package unknown', fileUnresolved: 'file unknown',
+				pkgNamed: 'named',
+				viaDirect: 'read directly', viaInferred: 'inferred from sections', viaNotPlugin: 'not a plugin script', viaFailed: 'resolution failed', viaNotFetched: 'not fetched yet (only deep mode pulls script text)', viaUnavailable: 'not ready / unavailable',
+				handoffInteractions: 'interactions >=100ms in the window', handoffInteractionsScope: ' (end-to-end duration, not a frame breakdown)',
+				evidenceCaliberPlain: 'Scope: the function name and milliseconds are measured by LoAF; the package / file / line are inferred from the URL and sourcemap sections (pkg= / line= are the raw via codes); the line is a line in the script file itself, not an original-source line.',
+				evidenceMissingPlain: 'Missing: original source line and call stack (needs the inner section mappings or a Chrome trace); interactions only give an end-to-end duration, with no input-delay/processing/presentation split.',
 				hourUnit: 'h', minUnit: 'm', secUnit: 's',
 				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',
 				invokerHint: 'LoAF\'s scripts[].invoker: what invoked this script — setTimeout / rAF, an event handler (the most common one here is `DOMWebSocket.onmessage`, the session event stream), a promise callback, a script load. It and "by package" are two slicings of the same script time: "by source" covers every script, "by package" only those whose package could be resolved (so the two totals differ; the total is the script time above). ⚠️ It answers "which kind of call", not "which function inside is slow" — function level needs a Chrome trace, there is no in-page sampler',
@@ -4518,7 +4877,9 @@ window.__ModuleLoader__.load({
 				sevLabel: 'severity', sevBad: 'severe', sevWarn: 'warn', sevOk: 'below line',
 				sevBadHint: '>=200ms reads as severe: the same line as the red level of the panel verdict; >=100ms (the night-watch trigger) reads as warn',
 				jsEvidence: 'JS evidence', jsYes: 'yes (a longtask/LoAF overlaps it)', jsNo: 'none (more like rAF throttling)',
-				evOwner: 'main owner', evWindow: 'window', framesUnit: ' frames', evAuto: 'auto', evPinned: 'selected',
+				evOwner: 'main owner', evWindow: 'window', framesUnit: ' frames', evAutoWorst: 'auto · worst', evAutoLatest: 'auto · latest', evPinned: 'selected',
+				evWorst: 'worst', evLatest: 'latest',
+				evScopeHint: 'Which incident "auto" follows: worst (highest severity, default) or latest (newest by time). Clicking a specific entry makes it a manual pick; clicking this button returns to auto.',
 				viewEvidence: 'Show frame', viewEvidenceHint: 'Select this incident, open forensics, and pin the frame picker to the long animation frame closest to its start. The frames in the incident slice are not the same data as the panel frame ring, so this is **nearest-match navigation**; when it cannot match it says so.',
 				exportIncidentBtn: 'Export incident', exportIncidentBtnHint: 'Download this incident\'s full evidence pack (frame series + LoAF + long tasks in the window + environment and missing-data notes) — not the whole-machine snapshot.',
 				copySummary: 'Copy summary', copySummaryHint: 'Copy this incident\'s conclusions and scope (severity / JS evidence / main owner / window) as plain text.',
@@ -4759,21 +5120,18 @@ window.__ModuleLoader__.load({
 			const [, force] = React.useState(0);
 			const [open, setOpen] = React.useState(state.collapsed === false);
 			const [draft, setDraft] = React.useState('');
-			// ⚠️ 悬停联动**暂时停用**(2026-10-08):实测「鼠标指到交叉表的行标签」会让整个条目被外壳停用 ——
-			// 面板直接消失,而且 `errors` 为空、`window.onerror` 不响、`__perfHud.enabled` 仍是 true
-			// (外壳 overlay 还在,只是这一条不再渲染),说明不是渲染期抛错。原文抓不到之前先让它变成一个
-			// **纯 no-op**:`hot` 恒为 null,于是不触发任何 state 更新、不重绘,三处联动一起静默。
-			// 要恢复:把下面这行换回 `const [hot, setHot] = React.useState(null);`,并先查清上面的原因。
-			const hot = null;
-			const setHot = () => {};
-			const hotProps = (key, extra) => ({
-				...extra,
-				onMouseEnter: () => setHot(key),
-				onMouseLeave: () => setHot(null),
-			});
-			const hotStyle = (key, base) => (hot === key
-				? { ...base, fontWeight: 700, color: 'var(--dsw-alias-brand-primary)' }
-				: base);
+			// ⚠️ 三处悬停联动(环 ↔ 按来源/按包堆叠条 ↔ 交叉表)**整体停用,而且把它那套
+			// 辅助代码删掉了**(`hot` / `setHot` / `hotProps` / `hotStyle` 与各处的 `hot === …`)。
+			// 为什么停用:2026-10-08 实测「鼠标指到交叉表的行标签」会让外壳把**整个条目停用** ——
+			// 面板整块消失,而同期 `errors` 为空、`window.onerror` 不响、`__perfHud.enabled` 仍是 true;
+			// 也就是说**它不经过我们自己的 HudBoundary**(抛点更可能在 `PerfHud()` 的函数体里,
+			// 而 HudBoundary 是它返回的树的一部分),我们连错误原文都拿不到。
+			// 2026-10-11 复核:**在当前代码上复现不出来** —— 真实鼠标依次扫过交叉表内 163 个元素
+			// (外加用 JS 派发 153 次 `mouseover`)全程存活、`errors: 0`、ring 数不变,所以既
+			// 不能证明根因、也不能证明已修好。按"稳定优先于观感"这条,**保持停用**。
+			// 要重新尝试:先按上面那两种走法搭一个可复现的探针(遍历 DOM 顺序 + 装 console.error 钩子,
+			// 注意钩子必须在 reload **之后**装),同时盯外壳日志里有没有 `slot entry crashed in …`;
+			// 复现出来之前不要再往渲染里加 per-element 的鼠标状态。
 			const setRoot = React.useCallback((element) => { state.root = element; }, []);
 			React.useEffect(() => {
 				// 只在"显示值变了"时渲染(兜底至少 2 秒一次):折叠着不动时 HUD 自身开销接近零。
@@ -4875,10 +5233,17 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.sep },
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('worstEventHint') }, t('worstEvent')),
-						h('span', { style: { ...S.num, color: selectedRow === null || state.watch.on === false ? 'var(--dsw-alias-label-secondary)' : severityColor(selectedLevel) }, title: t('sevBadHint') },
-							eventValueText(selectedRow))),
+						h('span', { style: { flex: '1 1 auto', display: 'flex', alignItems: 'baseline', justifyContent: 'flex-end', gap: 6, minWidth: 0 } },
+							h('span', { style: { ...S.num, flex: '0 0 auto', color: selectedRow === null || state.watch.on === false ? 'var(--dsw-alias-label-secondary)' : severityColor(selectedLevel) }, title: t('sevBadHint') },
+								eventValueText(selectedRow)),
+							// 一键在「最差 / 最近」之间切"自动跟着谁":默认最差(事后回看的重点),但
+							// "刚刚那一下卡在哪"同样常问 —— 两个都要够得着,又不要多一张清单。
+							h('button', {
+								type: 'button', style: S.btn, title: t('evScopeHint'), disabled: selectedRow === null,
+								onClick: () => setIncidentScope(state.watch.scope === 'latest' ? 'worst' : 'latest'),
+							}, state.watch.scope === 'latest' ? t('evWorst') : t('evLatest')))),
 					selectedRow === null ? null : h('div', { style: S.sub, title: t('envPickHint') },
-						`${watchSelectedText()} · ${selected.auto ? t('evAuto') : t('evPinned')}`),
+						`${watchSelectedText()} · ${selected.auto ? (state.watch.scope === 'latest' ? t('evAutoLatest') : t('evAutoWorst')) : t('evPinned')}`),
 					selectedRow === null ? null : h('div', { style: S.sub }, eventEvidenceText(selectedRow)),
 					selectedRow === null ? null : h('div', { style: S.sub }, eventWindowText(selectedRow)),
 					selectedRow === null ? null : h('div', { style: S.buttons },
@@ -4911,11 +5276,12 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.label, title: restTitleText(rest) }, `${t('rest')} (${rest.length})`),
 						h('span', { style: S.num }, restValueText(rest)))),
 
-				// ── 布局工具:从"被记成全部展开"的长面板一键回到诊断首页 ──
-				// 放在组之前:它是常显的,收起任何组之后都还够得着。
-				h('div', { style: { ...S.sep, display: 'flex', gap: 6 } },
-					h('button', { type: 'button', style: S.btn, title: t('collapseAllHint'), onClick: collapseAll }, t('collapseAll')),
-					h('button', { type: 'button', style: S.btn, title: t('resetLayoutHint'), onClick: resetLayout }, t('resetLayout'))),
+				// ── 布局工具:**按需出现**。默认布局下「全部折叠」已经没什么可收、「恢复默认布局」
+				// 点了也不会变 —— 常驻两个"点了没反应"的按钮比不显示更糟,所以各自只在有意义时出现;
+				// 两者都没意义时整行不渲染(首屏也就少一行)。
+				(anyGroupOpen() || layoutDirty()) ? h('div', { style: { ...S.sep, display: 'flex', gap: 6 } },
+					anyGroupOpen() ? h('button', { type: 'button', style: S.btn, title: t('collapseAllHint'), onClick: collapseAll }, t('collapseAll')) : null,
+					layoutDirty() ? h('button', { type: 'button', style: S.btn, title: t('resetLayoutHint'), onClick: resetLayout }, t('resetLayout')) : null) : null,
 
 				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
 				// ⚠️ 子节点走**惰性回调**:这一组里全是"算了但不显示"的派生统计(脚本按包 /
@@ -4984,10 +5350,7 @@ window.__ModuleLoader__.load({
 							if (length <= 0.05) continue;
 							arcs.push(h('circle', {
 								key: `slice-${i}`, cx: 42, cy: 42, r: R, fill: 'none',
-								onMouseEnter: () => setHot(`ring:${slices[i].color}`),
-								onMouseLeave: () => setHot(null),
-								style: { cursor: 'default', transition: 'stroke-width 80ms linear' },
-								stroke: COLORS[slices[i].color], strokeWidth: hot === `ring:${slices[i].color}` ? 17 : 13, strokeOpacity: slices[i].opacity,
+								stroke: COLORS[slices[i].color], strokeWidth: 13, strokeOpacity: slices[i].opacity,
 								strokeDasharray: `${length.toFixed(1)} ${(C - length).toFixed(1)}`,
 								strokeDashoffset: (-offset).toFixed(1),
 								transform: 'rotate(-90 42 42)',
@@ -5001,10 +5364,7 @@ window.__ModuleLoader__.load({
 							h('svg', { width: 84, height: 84, viewBox: '0 0 84 84', style: { flex: '0 0 auto' } }, arcs),
 							h('div', { style: { flex: '1 1 auto', textAlign: 'right', lineHeight: 1.5, minWidth: 0 } },
 								h('div', { style: S.num, title }, `${t('split')} ${split.total}ms`),
-								splitLegend(split).map((line, index) => h('div', {
-									key: `legend-${index}`, title,
-									style: hot !== null && hot.startsWith('ring:') ? { ...S.sub, fontWeight: 700 } : S.sub,
-								}, line))));
+								splitLegend(split).map((line, index) => h('div', { key: `legend-${index}`, title, style: S.sub }, line))));
 					})(),
 					// D5:脚本侧往下拆:**两个小标题各管一组**。「本帧」那组与上面那张饼吃同一条
 					// LoAF(数字能对着看);窗口那组是最近 WATCH_LOAF_MAX 条的累计,它的范围写在
@@ -5061,10 +5421,8 @@ window.__ModuleLoader__.load({
 								h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
 									h('div', { style: { flex: '1 1 auto', display: 'flex', height: 8, borderRadius: 3, overflow: 'hidden', background: 'var(--dsw-alias-border-l2)' } },
 										segs.map((seg, index) => {
-											const segKey = seg.name === null ? null : `${kind}:${seg.name}`;
 											return h('div', {
 												key: `seg-${index}`,
-												...hotProps(segKey, {}),
 												title: `${seg.name === null ? translate('rest') : seg.name} ${Math.round(seg.ms)}ms · ${Math.round((seg.ms / total) * 100)}%`,
 												style: {
 													flexGrow: seg.ms, flexShrink: 1, flexBasis: 3,
@@ -5114,6 +5472,43 @@ window.__ModuleLoader__.load({
 								`${t('splitFailed')}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200));
 						}
 					})(),
+					// ⑤ 可疑脚本:把「事故 → 帧 → 来源 → 包 → 文件:行」这条链落到**个体脚本**上。
+					// 上面那三块回答"时间花在哪个包 / 哪类调用"(排行),这一块回答"打开哪个文件、哪个函数"
+					// (定位)。它是**证据**,不是又一个排行榜 —— 所以只列 Top 4,并把每一段的来源与
+					// 拿不到的东西写在同一块里。
+					(() => {
+						try {
+							const scope = evidenceScope();
+							if (scope === null) return null;
+							// 一条**能定位的**都没有(没开深录 / 脚本被压掉函数名)→ 换一行带分母的说明,
+							// 不摆一列 `函数名未记录 @ 包未定名 + 毫秒`(那既没缩小范围又翻了几倍行数)
+							if (scope.rows.length === 0) {
+								return h('div', { style: { ...S.sub, marginTop: 8 }, title: t('evidenceHint') },
+									`${evidenceZeroText(scope)}\n${translate('evidenceMissing')}`);
+							}
+							return h('div', { style: { marginTop: 8 } },
+								h('div', { style: { ...S.blockLabel, marginTop: 8 }, title: t('evidenceHint') }, scope.label),
+								h('div', { style: { marginTop: 2 } }, scope.rows.map((ev, index) => h('div', {
+									key: `ev-${index}`,
+									title: `${evidenceLine(ev)}\n${t('evidenceCopyHint')}`,
+									style: { display: 'flex', gap: 8, alignItems: 'baseline', lineHeight: 1.45, cursor: 'pointer' },
+									onClick: () => copyText(evidenceLine(ev), t('copyScript')),
+								},
+									h('span', {
+										style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' },
+									}, evidenceName(ev)),
+									h('span', {
+										title: evidencePlace(ev) === null ? undefined : `${translate('evidenceWhere')} ${evidencePlace(ev)} · ${viaText(ev.pkgVia)} / ${viaText(ev.lineVia)}`,
+										style: { flex: '0 0 auto', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums' },
+									}, `${Math.round(ev.ms)}ms`)))),
+								h('div', { style: S.sub }, evidenceFooter(scope)));
+						} catch (error) {
+							// 与上面几块同一条安全线:派生统计算炸只降级成一行可见原文,不许带走整块面板
+							recordError(error);
+							return h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-error-primary)' } },
+								`${t('evidenceFailed')}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200));
+						}
+					})(),
 					// D6:包 × 来源**交叉表**(默认收起)。两个正交维度分开看是两张榜单,交叉起来才回答
 					// "哪个包的哪类回调在烧时间";只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),
 					// 四块拼起来恒等于脚本总耗时。格子给毫秒(单位写在末尾),占比放 hover。
@@ -5125,33 +5520,25 @@ window.__ModuleLoader__.load({
 						const cellStyle = { flex: '1 1 0', textAlign: 'right', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums', fontSize: 12 };
 						const nameStyle = { flex: '0 0 84px', color: 'var(--dsw-alias-label-secondary)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
 						// 行 = 包(pkg:)、列 = 来源(src:),与两条堆叠条用同一组 key —— 指哪哪儿亮。
-						const row = (key, label, cells, hotKey) => h('div', { key, style: { display: 'flex', gap: 4, marginTop: 2 } },
-							h('span', {
-								style: hotKey === null ? nameStyle : hotStyle(hotKey, nameStyle),
-								title: label, ...hotProps(hotKey, {}),
-							}, label), cells);
-						const num = (key, ms, who, src, lit) => h('span', {
+						const row = (key, label, cells) => h('div', { key, style: { display: 'flex', gap: 4, marginTop: 2 } },
+							h('span', { style: nameStyle, title: label }, label), cells);
+						const num = (key, ms, who, src) => h('span', {
 							key, title: `${who} · ${src} ${Math.round(ms)}ms · ${pct(ms)}`,
-							style: {
-								...cellStyle,
-								fontWeight: lit ? 700 : undefined,
-								color: lit ? 'var(--dsw-alias-brand-primary)' : (ms > 0 ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)'),
-							},
+							style: { ...cellStyle, color: ms > 0 ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)' },
 						}, ms > 0 ? String(Math.round(ms)) : '·');
 						const kids = [
 							row('cross-head', t('crossCorner'), cross.cols.map((src) => h('span', {
-								key: `h-${src}`, title: src, ...hotProps(`src:${src}`, {}),
-								style: hotStyle(`src:${src}`, { ...nameStyle, flex: '1 1 0', textAlign: 'right' }),
+								key: `h-${src}`, title: src, style: { ...nameStyle, flex: '1 1 0', textAlign: 'right' },
 							}, short(src))).concat([
 								h('span', { key: 'h-rest', style: { ...nameStyle, flex: '1 1 0', textAlign: 'right' } }, translate('rest')),
-							]), null),
+							])),
 						];
 						cross.rows.forEach((who, r) => kids.push(row(`cross-${who}`, short(who),
-							cross.cols.map((src, c) => num(`c-${r}-${c}`, cross.grid[r][c], who, src, hot === `src:${src}` || hot === `pkg:${who}`))
-								.concat([num(`c-${r}-rest`, cross.restCol[r], who, translate('rest'), hot === `pkg:${who}`)])), `pkg:${who}`));
+							cross.cols.map((src, c) => num(`c-${r}-${c}`, cross.grid[r][c], who, src))
+								.concat([num(`c-${r}-rest`, cross.restCol[r], who, translate('rest'))]))));
 						kids.push(row('cross-rest', translate('rest'),
-							cross.cols.map((src, c) => num(`r-rest-${c}`, cross.restRow[c], translate('rest'), src, hot === `src:${src}`))
-								.concat([num('cross-corner-cell', cross.corner, translate('rest'), translate('rest'), false)]), null));
+							cross.cols.map((src, c) => num(`r-rest-${c}`, cross.restRow[c], translate('rest'), src))
+								.concat([num('cross-corner-cell', cross.corner, translate('rest'), translate('rest'))])));
 						kids.push(h('div', { key: 'cross-unit', title: t('crossHint'), style: { ...S.sub, textAlign: 'right' } },
 							`${translate('crossUnit')} · ${translate('crossBiggest')} ${short(cross.top.who)} · ${short(cross.top.src)} ${Math.round(cross.top.ms)}ms`));
 						return group('cross', t('crossTable'), crossSummary(cross), () => kids);

@@ -184,6 +184,19 @@ process.exitCode = failed === 0 ? 0 : 1;
 		&& /forcedMs: script\.forcedMs/.test(source)
 		&& /forced \+= script\.forcedMs \?\? 0/.test(source), true);
 
+	// P1:三处悬停联动**整体停用**,而且辅助代码已删 —— 这条钉住"没有人悄悄把 per-element
+	// 鼠标状态加回渲染里"。历史:2026-10-08 指到交叉表行标签会让外壳停用整个条目(面板消失、
+	// `errors` 为空),2026-10-11 在当前代码上**复现不出来**(163 个元素真实鼠标 + 153 次 JS
+	// 派发 mouseover 全程存活),所以保持停用 + 清理,而不是赌它能用。
+	{
+		const render = source.slice(source.indexOf('function PerfHud('));
+		check('P1:渲染区没有 per-element 鼠标状态(onMouseEnter/Leave)', /onMouse(?:Enter|Leave)/.test(render), false);
+		check('P1:悬停联动那套辅助代码已删除(hotProps / hotStyle / setHot 不再有定义或调用)',
+			[/\bhotProps\s*\(/, /\bhotStyle\s*\(/, /\bsetHot\s*\(/].some((re) => re.test(source)), false);
+		check('P1:停用理由写在渲染区里,并点明去外壳日志里 grep 什么(它不经过我们的 HudBoundary)',
+			render.includes('slot entry crashed'), true);
+	}
+
 	// A4:交互延迟这一层"只进导出件",而且必须两个导出件都带(事故包只带窗口内的)
 	check('A4:交互延迟进两个导出件(事故包按窗口过滤)',
 		[/interactionsInWindow: interactions\.length/, /const interactions = \(state\.watch\.interactions \?\? \[\]\)\.filter/, /records: state\.watch\.interactions,/].every((re) => re.test(source)), true);
@@ -233,7 +246,15 @@ const sandbox = `
 		jsEvidence: 'JS 证据', jsYes: '有(longtask/LoAF 与它重叠)', jsNo: '无(更像 rAF 被节流)',
 		evOwner: '主要归属', evWindow: '窗口', framesUnit: ' 帧', byPkg: '按包',
 		copied: '已复制', copyFailed: '复制失败', copyNoApi: '这个环境没有剪贴板 API',
+		// 证据 → 代码(面板与交接件共用):这几个词条要给人看,不能只回 key
+		evidenceLabel: '可疑脚本', evidenceInvoker: '来源', fnUnknown: '函数名未记录',
+		pkgUnresolvedShort: '包未定名', fileUnresolved: '文件未定名',
+		viaDirect: '直接读出来', viaInferred: '分段推断', viaNotPlugin: '不是插件脚本', viaFailed: '解析失败', viaUnavailable: '还没到位/拿不到',
+		evidenceCaliberPlain: '口径:函数名与毫秒由 LoAF 直接测量;包 / 文件 / 行号由 URL 与 sourcemap 分段推断。',
+		evidenceMissingPlain: '缺:原始源码行号与调用栈。',
+		handoffInteractions: '窗口内 ≥100ms 的交互', handoffInteractionsScope: '(端到端时长,不是帧内拆分)',
 		maxLabel: '最大', pickNone: '帧环里没有这条事故附近的帧(跨会话读回的事故无法定位到当前帧环):上面那条仍是自动/手选的那帧',
+		viaNotFetched: '还没预取(只有深录才拉脚本文本)',
 		watchTrimmed: '裁掉',
 		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', needDeep: '要深录', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
 	})[key] ?? key;
@@ -259,6 +280,17 @@ const newPieces = [
 	'function absolutePluginUrl(',
 	'function mapUrlOf(',
 	'function sectionName(',
+	'function sectionSource(',
+	'function sectionIndex(',
+	'function sectionPath(',
+	'function scriptPosition(',
+	'function viaText(',
+	'function scriptEvidence(',
+	'function evidenceName(',
+	'function evidencePlace(',
+	'function evidenceLine(',
+	'function incidentEvidenceLines(',
+	'const EVIDENCE_MAX = ',
 	'function bundleMetaOf(',
 	'function bundleLabel(',
 	'const WATCH_INCIDENT_MAX = ',
@@ -359,12 +391,15 @@ const newPieces = [
 	'function saveGroups(',
 	'function collapseAll(',
 	'function resetLayout(',
+	'function anyGroupOpen(',
+	'function layoutDirty(',
 	'function severityLevel(',
 	'function severityText(',
 	'function severityColor(',
 	'function incidentOwner(',
 	'function selectedIncident(',
 	'function selectIncident(',
+	'function setIncidentScope(',
 	'function frameNearestIncident(',
 	'function revealIncident(',
 	'function eventTitleText(',
@@ -394,14 +429,16 @@ const newPieces = [
 }).join('\n');
 
 const box = new Function(`${sandbox}\n${newPieces}
-	return { state, changedNodes, bundleMaps, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
+	return { state, changedNodes, bundleMaps, scriptLines, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_KEEP_MAX,
 		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
-		pickIncident, saveGroups, collapseAll, resetLayout, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, frameNearestIncident, revealIncident, eventTitleText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText } };`)();
+		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, frameNearestIncident, revealIncident, eventTitleText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
+		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
+		sectionSource, sectionIndex, sectionPath, scriptPosition, viaText, scriptEvidence, evidenceName, evidencePlace, evidenceLine, incidentEvidenceLines, EVIDENCE_MAX } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -431,6 +468,22 @@ check('sectionOwner(第 11 行) = b(0-based 10 起)', EX.sectionOwner(entry, 11)
 check('sectionOwner(第 25 行) = b', EX.sectionOwner(entry, 25), 'b');
 check('sectionOwner(第 26 行) = c', EX.sectionOwner(entry, 26), 'c');
 check('sectionOwner(第 0 行,非法) = null', EX.sectionOwner(entry, 0), null);
+// 文件路径:与包名看**同一张分段表、同一个二分** —— 两者必须指向同一段,否则会出现"包是 A、
+// 文件却是 B 的"这种自相矛盾的证据(这也正是上一版 names 没跟着 offsets 排序留下的隐患)。
+const entryWithPaths = { offsets: [[0, 'a'], [10, 'b'], [25, 'c']], paths: ['/plugins/a/client.js', '/plugins/b/client.js', '/plugins/c/client.js'] };
+check('sectionPath 与 sectionOwner 同段(包 b → b 的文件)',
+	[EX.sectionOwner(entryWithPaths, 11), EX.sectionPath(entryWithPaths, 11)],
+	['b', '/plugins/b/client.js']);
+check('sectionPath:老缓存(v1)没有 paths → null(不猜,也不为它重下那份 12MB 的 map)', EX.sectionPath(entry, 11), null);
+check('sectionPath:越界行号 → null', EX.sectionPath(entryWithPaths, 0), null);
+check('sectionSource:取 plugins 下那个源(作用域包 / 包内子路径都认),没有就 null',
+	[
+		EX.sectionSource({ map: { sources: ['webpack:///./src/a.ts', '/plugins/@deepseek-ai/dsh-x/src/foo.ts'] } }),
+		EX.sectionSource({ map: { sources: ['/plugins/dsh-x/client.js'] } }),
+		EX.sectionSource({ map: { sources: [] } }),
+		EX.sectionSource(undefined),
+	],
+	['/plugins/@deepseek-ai/dsh-x/src/foo.ts', '/plugins/dsh-x/client.js', null, null]);
 // 断言必须传**类/函数**:usableComponentName 第一行是 `typeof type !== 'function'`,传
 // `{ name: 'ChatView' }` 会全返回 null(上一轮就是这么把一个假绿的提交写出来的)。
 check('B2:$ 开头的压缩名被挡掉;具名组件照旧通过,匿名仍是 null', [
@@ -872,11 +925,146 @@ check('最差事件证据/窗口行长度上限(可换行,防跑飞)',
 check('最差事件三行:没有事故时标题行照实说还没抓到,证据/窗口行给空串(不摆 0)',
 	[EX.eventTitleText(null), EX.eventEvidenceText(null), EX.eventWindowText(null)], ['还没抓到', '', '']);
 
-check('复制摘要:带结论与口径(严重度文字 / JS 证据 / 归属 / 窗口分母)',
+check('复制摘要:带结论与口径(严重度文字 / JS 证据 / 归属 / 窗口分母)+ 口径与缺口两行',
 	(() => {
 		const text = EX.incidentSummaryText(incidentRow);
-		return [text.split('\n').length, text.includes('dsh-status-rotator 210ms'), text.includes('严重'), text.includes('按包 4/6')];
-	})(), [4, true, true, true]);
+		return [text.split('\n').length, text.includes('dsh-status-rotator 210ms'), text.includes('严重'), text.includes('按包 4/6'), text.includes('口径:'), text.includes('缺:')];
+	})(), [6, true, true, true, true, true]);
+check('复制摘要:事故里有脚本时带上「可疑脚本」证据行(交给别的 AI 能接着查,而不只是一句结论)',
+	(() => {
+		const row = {
+			...incidentRow,
+			summary: {
+				...incidentRow.summary,
+				topScripts: [{
+					u: 0, ms: 210, fn: 'renderChat', charPos: 100, pkg: 'dsh-status-rotator', pkgVia: 'section',
+					file: '/plugins/dsh-status-rotator/client.js', line: 7, lineVia: 'text', invoker: 'TimerHandler:setTimeout',
+				}],
+			},
+		};
+		const text = EX.incidentSummaryText(row);
+		return [
+			text.includes('可疑脚本:'), text.includes('renderChat @ dsh-status-rotator'),
+			text.includes('/plugins/dsh-status-rotator/client.js:7'), text.includes('210ms'),
+			text.includes('来源 TimerHandler:setTimeout'), text.includes('pkg=section line=text'),
+		];
+	})(), [true, true, true, true, true, true]);
+check('复制摘要:窗口里有 ≥100ms 交互时写出事件来源(并标明是端到端、不是帧内拆分)',
+	(() => {
+		const row = { ...incidentRow, interactions: [{ type: 'event', name: 'click', ms: 168, waitMs: 7, handlerMs: 160 }] };
+		const text = EX.incidentSummaryText(row);
+		return [text.includes('click 168ms'), text.includes('端到端')];
+	})(), [true, true]);
+check('复制摘要:一次交互都没有时那一行整段不出现(不摆 0)',
+	EX.incidentSummaryText({ ...incidentRow, interactions: [] }).includes('交互'), false);
+
+// ── 证据 → 代码:位置解析与证据行 ─────────────────────────────────────
+// 「行号」是**脚本文本自己的行号**,不是原始源码行 —— 这几条断言把这个口径钉死。
+check('scriptPosition:没预取 / 没字符位置 → null 且写明原因(不猜行号)',
+	(() => {
+		box.state.precise = false;
+		return [EX.scriptPosition('', 10), EX.scriptPosition('http://h/plugins/x/client.js', -1), EX.scriptPosition('http://h/plugins/x/client.js', 10)];
+	})(),
+	[{ line: null, via: 'no-url' }, { line: null, via: 'no-charpos' }, { line: null, via: 'text-not-fetched' }]);
+// 关键成本边界:scriptPosition **不许**自己拉脚本文本 —— 否则"看一眼面板"会去下整份合并批脚本
+// (几 MB),而且会在没有包名时给出一个合并大文件里的行号(虚假精度)。
+check('scriptPosition 不预取脚本文本(预取只属于深录档)', (() => {
+	const before = box.scriptLines.size;
+	EX.scriptPosition('http://h/plugins/never-fetched/client.js', 10);
+	return box.scriptLines.size === before;
+})(), true);
+check('scriptPosition:字符位置 → 行号(1-based),越界给 null + out-of-range',
+	(() => {
+		// 一段三行脚本('aaa','bbb','ccc'):字符 0 在第 1 行、第 5 个字符(0-based 4)在第 2 行
+		box.scriptLines.set('http://h/plugins/x/client.js', { state: 'ready', starts: [0, 4, 8], length: 12 });
+		const hit = EX.scriptPosition('http://h/plugins/x/client.js', 4);
+		const out = EX.scriptPosition('http://h/plugins/x/client.js', 99);
+		box.scriptLines.delete('http://h/plugins/x/client.js');
+		return [hit, out, EX.scriptPosition('http://h/plugins/x/client.js', 4)];
+	})(),
+	[{ line: 2, via: 'text' }, { line: null, via: 'out-of-range' }, { line: null, via: 'text-not-fetched' }]);
+check('viaText:人话分档(直接读 / 分段推断 / 不是插件 / 解析失败 / 没预取 / 还没到位)',
+	['url', 'section', 'not-plugin', 'text-failed(HTTP 500)', 'map-pending', 'text-not-fetched', 'text-pending', 'no-charpos'].map((via) => EX.viaText(via)),
+	['直接读出来', '分段推断', '不是插件脚本', '解析失败', '解析失败', '还没预取(只有深录才拉脚本文本)', '还没到位/拿不到', '还没到位/拿不到']);
+check('scriptEvidence:单包 URL → 包直接读出来、文件就是 URL 的路径、行号来自脚本文本',
+	(() => {
+		const url = 'http://127.0.0.1:3080/plugins/dsh-x/client.js';
+		box.scriptLines.set(url, { state: 'ready', starts: [0, 4, 8], length: 12 });
+		box.state.precise = true;
+		const ev = EX.scriptEvidence({ url, fn: 'render', invoker: 'TimerHandler:setTimeout', charPos: 4, ms: 12.3 }, url);
+		box.scriptLines.delete(url);
+		return [ev.pkg, ev.pkgVia, ev.file, ev.line, ev.lineVia, ev.fn, ev.ms, ev.invoker];
+	})(),
+	['dsh-x', 'url', '/plugins/dsh-x/client.js', 2, 'text', 'render', 12.3, 'TimerHandler:setTimeout']);
+check('scriptEvidence:合并批 → 包名靠分段表推出来,文件也在同一段(有 paths 时)',
+	(() => {
+		const url = 'http://127.0.0.1:3080/plugins/??a/client.js,b/client.js&rev=1';
+		const starts = [];
+		for (let i = 0; i < 20; i += 1) starts.push(i * 4);   // 每行 4 字符:第 12 行从字符 44 起
+		box.scriptLines.set(url, { state: 'ready', starts, length: 200 });
+		box.bundleMaps.set(`bundle:${url}`, { state: 'ready', offsets: [[0, 'a'], [10, 'b']], paths: ['/plugins/a/client.js', '/plugins/b/client.js'], count: 2 });
+		box.state.precise = true;
+		const ev = EX.scriptEvidence({ url, fn: 'run', charPos: 44, ms: 5 }, url);
+		box.scriptLines.delete(url);
+		box.bundleMaps.delete(`bundle:${url}`);
+		return [ev.pkg, ev.pkgVia, ev.file, ev.line, ev.lineVia];
+	})(),
+	['b', 'section', '/plugins/b/client.js', 12, 'text']);
+check('scriptEvidence:合并批 + 老缓存(没有 paths)→ 包名有、文件为 null —— 不拿包名冒充文件名',
+	(() => {
+		const url = 'http://127.0.0.1:3080/plugins/??a/client.js,b/client.js&rev=1';
+		const starts = [];
+		for (let i = 0; i < 20; i += 1) starts.push(i * 4);
+		box.scriptLines.set(url, { state: 'ready', starts, length: 200 });
+		box.bundleMaps.set(`bundle:${url}`, { state: 'ready', offsets: [[0, 'a'], [10, 'b']], paths: null, count: 2 });
+		box.state.precise = true;
+		const ev = EX.scriptEvidence({ url, fn: 'run', charPos: 44, ms: 5 }, url);
+		box.scriptLines.delete(url);
+		box.bundleMaps.delete(`bundle:${url}`);
+		return [ev.pkg, ev.pkgVia, ev.file, ev.line];
+	})(),
+	['b', 'section', null, 12]);
+// ⚠️ 单包组合(`plugins/??<一个包>/client.js`)是个坑:`??` 的第一个 `?` 会被 `new URL` 当成
+// 查询串开始,pathname 只剩 `/plugins/` —— 于是"文件路径"会显示成 `/plugins/`(实测踩到)。
+check('scriptEvidence:单包组合 URL → 文件由正则自己拼(不能交给 new URL().pathname)',
+	(() => {
+		box.state.precise = true;
+		const url = 'http://127.0.0.1:3080/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=03c3';
+		const ev = EX.scriptEvidence({ url, fn: 'run', charPos: 0, ms: 7 }, url);
+		return [ev.pkg, ev.pkgVia, ev.file, new URL(url).pathname];
+	})(),
+	['@deepseek-ai/dsh-client-modules', 'url', '/plugins/@deepseek-ai/dsh-client-modules/client.js', '/plugins/']);
+check('scriptEvidence:非插件脚本(应用自己的外壳 bundle)→ 包名 null + 「不是插件脚本」,文件仍是它自己',
+	(() => {
+		box.state.precise = true;
+		const url = 'http://127.0.0.1:3080/assets/index-abc.js';
+		const ev = EX.scriptEvidence({ url, ms: 3 }, url);
+		return [ev.pkg, ev.pkgVia, ev.file, EX.viaText(ev.pkgVia)];
+	})(),
+	[null, 'not-plugin', '/assets/index-abc.js', '不是插件脚本']);
+check('证据行:自描述、可粘给别人(名字 @ 包 · 文件:行 · 耗时 · 来源 · 两个 via 码)',
+	EX.evidenceLine({ fn: 'renderChat', ms: 210, pkg: 'dsh-status-rotator', pkgVia: 'section', file: '/plugins/dsh-status-rotator/client.js', line: 7, lineVia: 'text', invoker: 'TimerHandler:setTimeout' }),
+	'renderChat @ dsh-status-rotator · /plugins/dsh-status-rotator/client.js:7 · 210ms · 来源 TimerHandler:setTimeout · pkg=section line=text');
+check('证据行:字段缺失不抛错也不渲染 undefined(事故包可能是加这几个字段之前存的)',
+	(() => {
+		const line = EX.evidenceLine({ ms: 12, pkg: 'dsh-x' });
+		return [typeof line, line.includes('undefined'), line.includes('函数名未记录'), line.includes('12ms'), line.includes('pkg=- line=-')];
+	})(), ['string', false, true, true, true]);
+check('证据行:有行号但拿不到文件时,写明「文件未定名」而不是留空(留空会被读成"没有位置")',
+	EX.evidencePlace({ file: null, url: null, line: 5 }), '文件未定名:5');
+check('证据行:<函数> @ <包> 缺哪一半就写哪一半', [
+	EX.evidenceName({ fn: 'render', pkg: 'dsh-x' }), EX.evidenceName({ fn: null, pkg: 'dsh-x' }), EX.evidenceName({ fn: 'render', pkg: null }),
+], ['render @ dsh-x', '函数名未记录 @ dsh-x', 'render @ 包未定名']);
+check('证据行:位置拿不到文件就退回脚本名,两个都没有才 null',
+	[EX.evidencePlace({ file: null, url: 'http://h/a.js', line: null }), EX.evidencePlace({ file: null, url: null, line: null }), EX.evidencePlace({ file: '/p/a.js', line: 3 })],
+	['http://h/a.js', null, '/p/a.js:3']);
+check('事故的证据行只取前 EVIDENCE_MAX 条(面板与交接件同一份口径)',
+	(() => {
+		const top = [];
+		for (let i = 0; i < 9; i += 1) top.push({ ms: i, fn: `f${i}`, pkg: 'dsh-x', file: '/p/a.js', line: i });
+		const lines = EX.incidentEvidenceLines({ summary: { topScripts: top } });
+		return [lines.length, EX.EVIDENCE_MAX, lines[0].includes('f0'), lines[lines.length - 1].includes(`f${EX.EVIDENCE_MAX - 1}`)];
+	})(), [4, 4, true, true]);
 check('复制摘要:不在留存清单里的 id → 选不中,返回 false(不静默成功)',
 	(() => { box.state.watch.incidents.length = 0; const ok = EX.selectIncident('i84'); return ok; })(), false);
 check('复制失败要如实说:环境没有剪贴板 API 时 copyNote 写的是失败原文(不是"已复制")',
@@ -1231,6 +1419,8 @@ const watchPieces = [
 	extract(source, 'function watchInteraction('),
 	extract(source, 'function startInteractions('),
 	`${extract(source, 'const scriptTallyCache = ')};`,
+	// 可疑脚本那一块最多列几条 —— 守夜盒的 evidenceScope 要用
+	source.slice(source.indexOf('const EVIDENCE_MAX'), source.indexOf('\n', source.indexOf('const EVIDENCE_MAX'))),
 	extract(source, 'function invokerLabel('),
 	extract(source, 'function tallyScripts('),
 	extract(source, 'function scriptPkgTally('),
@@ -1260,6 +1450,12 @@ const watchPieces = [
 	extract(source, 'function assembleIncident('),
 	extract(source, 'function captureNow('),
 	extract(source, 'function watchStatus('),
+	extract(source, 'function selectIncident('),
+	extract(source, 'function setIncidentScope('),
+	extract(source, 'function locatable('),
+	extract(source, 'function evidenceScope('),
+	extract(source, 'function evidenceZeroText('),
+	extract(source, 'function evidenceFooter('),
 	extract(source, 'function watchPanelText('),
 	// 事故"选中的那条"这条上下文:文本函数跟的是 selectedIncident(),不是硬编码 incidents[0]
 	extract(source, 'function selectedIncident('),
@@ -1307,6 +1503,21 @@ const watchBox = new Function(`
 	// 按 URL 查表 —— D5 的"脚本按包"要能给出不同的包名
 	const pkgByUrl = new Map();
 	const packageOfScript = (url) => pkgByUrl.get(url) ?? { pkg: null, via: 'stub' };
+	// assembleIncident 现在用 scriptEvidence 算「文件 / 行号」;真函数(以及它依赖的 scriptPosition /
+	// sectionPath / bundleMap)在导出盒里有断言,这里按同一条约定给个**桩** —— 只验证
+	// "切片时会调用它,并把 file / line / lineVia 三个字段落到 summary.topScripts 上"这个契约。
+	let evidenceCalls = 0;
+	const scriptEvidence = (script, url) => {
+		evidenceCalls += 1;
+		const resolved = pkgByUrl.get(url) ?? { pkg: null, via: 'stub' };
+		return {
+			fn: script?.fn ?? null, ms: script?.ms ?? 0,
+			pkg: resolved.pkg, pkgVia: resolved.via,
+			file: url === '' ? null : '/plugins/stub/client.js', line: 7, lineVia: 'stub-text',
+			invoker: script?.invoker ?? null, invokerType: script?.invokerType ?? null,
+			url: url === '' ? null : url,
+		};
+	};
 	const location = { href: 'http://127.0.0.1:3080/' };
 	const navigator = { userAgent: 'test-agent', hardwareConcurrency: 10 };
 	const W = { innerWidth: 1600, innerHeight: 900, devicePixelRatio: 2 };
@@ -1324,12 +1535,13 @@ const watchBox = new Function(`
 	// 面板文案用的两个桩:断言只检查"人看到的字",key 兜底返回 key 本身
 	const translate = (key) => ({
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉', times: ' 次',
+		evidenceLabel: '可疑脚本', evidenceScopeIncident: '事故', evidenceWindowPrefix: '窗口内', pkgNamed: '定到包',
 		worstOne: '最差那条', sparkGap: '整格 rAF 挂起(间隙,不是卡顿)', sparkNoPick: '这一秒没有长动画帧,点不动', sparkPickHint: '点它 → 翻帧切到这一秒的长动画帧',
 		pkgNone: '未定名', unblamed: '未归因', rest: '其余', none: '无', invokerUnknown: '来源未记录', notYet: '未采集',
 		splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 		jsExec: '纯执行', forcedShort: '强制', jsPause: '暂停',
 		windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
-		needDeep: '要深录', scopeFrame: '本帧', bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本',
+		needDeep: '要深录', scopeFrame: '本帧', bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本', pkgNamed: '定到包',
 		hit: '命中', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名', peak: '峰', framePickFiltered: '值得回看的帧',
 		otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
 		crossNone: '没有可交叉的脚本', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', rest: '其余',
@@ -1353,7 +1565,7 @@ const watchBox = new Function(`
 		dom: { total: 1234 },
 		bundleKeys: new Set(),
 		longTasks: [],
-		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', pickT: null, selId: null, incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
+		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', pickT: null, selId: null, scope: 'worst', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
 			// A4:交互计时的状态位(eventObserver 由 startInteractions 自己写)
 			eventObserver: null, eventState: 'not-started', eventSupported: [], interactions: [], eventCount: 0, elementCount: 0 },
 	};
@@ -1364,7 +1576,7 @@ const watchBox = new Function(`
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT, sparkPickMap, sparkCellTitle, markResolved,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
 		tallyScripts, framePkgTally, pkgWhoText, whoRows, barSegments, pkgZeroText, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
-		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident,
+		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident, selectIncident, setIncidentScope, evidenceScope, evidenceFooter, evidenceZeroText, evidenceCalls: () => evidenceCalls,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
 		setNow: (value) => { nowMs = value; },
@@ -1533,6 +1745,124 @@ check('事故选择:默认自动跟严重度最差那条(incidents 由 keepIncid
 	(() => { const pick = watch.selectedIncident(); return [pick.auto, pick.row.id]; })(), [true, watch.state.watch.incidents[0].id]);
 check('事故选择:选中之后跟的是那一条,auto=false',
 	(() => { watch.state.watch.selId = watch.state.watch.incidents[1].id; const pick = watch.selectedIncident(); watch.state.watch.selId = null; return [pick.auto, pick.row.id === watch.state.watch.incidents[1].id]; })(), [false, true]);
+// ── 可疑脚本那一块吃什么 + 底下的分母 ─────────────────────────────
+check('可疑脚本:事故优先(窗口内切片,跨会话读回仍在),范围写在标题上',
+	(() => {
+		const savedIncident = watch.state.watch.incidents.slice();
+		const savedLoaf = watch.state.watch.loaf.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.pkgByUrl.clear();
+		watch.pkgByUrl.set('http://h/plugins/dsh-x/client.js', { pkg: 'dsh-x', via: 'url' });
+		watch.state.watch.incidents.push({
+			id: 'i9', severity: 300, at: '2026-10-11T10:00:00.000Z', cause: 'frame', urls: ['http://h/plugins/dsh-x/client.js'],
+			summary: { topScripts: [{ u: 0, ms: 40, fn: 'run', charPos: 0 }], pkgCoverage: { resolved: 1, total: 3 } },
+		});
+		watch.state.watch.loaf.push({ t: 1, dur: 200, blocking: 10, scripts: [{ url: 'http://h/plugins/dsh-y/client.js', ms: 9, charPos: 0 }] });
+		const scope = watch.evidenceScope();
+		const footer = watch.evidenceFooter(scope);
+		watch.state.watch.incidents.length = 0;
+		for (const row of savedIncident) watch.state.watch.incidents.push(row);
+		watch.state.watch.loaf.length = 0;
+		for (const row of savedLoaf) watch.state.watch.loaf.push(row);
+		watch.pkgByUrl.clear();
+		return [scope.label.includes('i9'), scope.label.includes('窗口内'), scope.rows.length, scope.total, scope.named, footer.includes('1/3'), footer.includes('定到包 1/3'), watch.evidenceZeroText(scope)];
+	})(),
+	[true, true, 1, 3, 1, true, true, '可疑脚本:0 条定到名(窗口内 3条脚本)· 要深录']);
+// 这一帧有 2 条脚本,但只有 1 条能定位(另一条 URL 为空、也没有函数名)→ **列 1 条,分母仍是 2**
+check('可疑脚本:没有事故时退回「当前选中那一帧」;不能定位的行不占名额但算进分母',
+	(() => {
+		const savedIncident = watch.state.watch.incidents.slice();
+		const savedLoaf = watch.state.watch.loaf.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.loaf.length = 0;
+		watch.state.watch.pickT = null;
+		watch.pkgByUrl.clear();
+		watch.pkgByUrl.set('http://h/plugins/dsh-y/client.js', { pkg: 'dsh-y', via: 'url' });
+		watch.state.watch.loaf.push({ t: 1, dur: 200, blocking: 10, scripts: [{ url: 'http://h/plugins/dsh-y/client.js', ms: 9, charPos: 0 }, { url: '', ms: 3, charPos: null }] });
+		const scope = watch.evidenceScope();
+		watch.state.watch.incidents.length = 0;
+		for (const row of savedIncident) watch.state.watch.incidents.push(row);
+		watch.state.watch.loaf.length = 0;
+		for (const row of savedLoaf) watch.state.watch.loaf.push(row);
+		watch.pkgByUrl.clear();
+		return [scope.label.includes('本帧'), scope.rows.length, scope.total, scope.named];
+	})(),
+	[true, 1, 2, 1]);
+check('可疑脚本:既没有事故的脚本、帧里也没有脚本 → 整块不渲染(null,不摆空表)',
+	(() => {
+		const savedIncident = watch.state.watch.incidents.slice();
+		const savedLoaf = watch.state.watch.loaf.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.loaf.length = 0;
+		const scope = watch.evidenceScope();
+		watch.state.watch.incidents.length = 0;
+		for (const row of savedIncident) watch.state.watch.incidents.push(row);
+		watch.state.watch.loaf.length = 0;
+		for (const row of savedLoaf) watch.state.watch.loaf.push(row);
+		return scope;
+	})(),
+	null);
+// 切片时必须真的把 file / line / lineVia 落到 topScripts 上(契约:面板与事故包同一份依据)
+check('事故切片:topScripts 带上 file / line / lineVia(证据链落到包内文件与行号)',
+	(() => {
+		const saved = watch.state.watch.incidents.slice();
+		const savedLoaf = watch.state.watch.loaf.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.loaf.length = 0;
+		watch.pkgByUrl.clear();
+		watch.pkgByUrl.set('http://h/plugins/dsh-x/client.js', { pkg: 'dsh-x', via: 'url' });
+		watch.state.watch.loaf.push({ t: 1, dur: 200, blocking: 10, lo: null, scripts: [{ url: 'http://h/plugins/dsh-x/client.js', ms: 9, charPos: 0, fn: 'run' }] });
+		const before = watch.evidenceCalls();
+		const incident = watch.assembleIncident({ at: 1, until: 2000, cause: 'manual', note: null, severity: 200 });
+		const script = incident.summary.topScripts[0];
+		watch.state.watch.incidents.length = 0;
+		for (const row of saved) watch.state.watch.incidents.push(row);
+		watch.state.watch.loaf.length = 0;
+		for (const row of savedLoaf) watch.state.watch.loaf.push(row);
+		watch.pkgByUrl.clear();
+		return [watch.evidenceCalls() > before, script.file, script.line, script.lineVia];
+	})(),
+	[true, '/plugins/stub/client.js', 7, 'stub-text']);
+// 「自动」跟哪一条:最差(默认)还是最近 —— 两个都要够得着,又不许多一张清单
+check('事故 scope:默认跟最差;切到「最近」之后跟时刻最新那条,并且清掉手选',
+	(() => {
+		const saved = watch.state.watch.incidents.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.incidents.push(
+			{ id: 'a', severity: 300, at: '2026-10-11T10:00:00.000Z', cause: 'frame', summary: { topScripts: [] } },
+			{ id: 'b', severity: 120, at: '2026-10-11T12:00:00.000Z', cause: 'frame', summary: { topScripts: [] } });
+		watch.state.watch.selId = null;
+		watch.state.watch.scope = 'worst';
+		const worst = watch.selectedIncident().row.id;
+		watch.setIncidentScope('latest');
+		const latest = watch.selectedIncident().row.id;
+		const cleared = watch.state.watch.selId;
+		const auto = watch.selectedIncident().auto;
+		watch.setIncidentScope('worst');
+		watch.state.watch.incidents.length = 0;
+		for (const row of saved) watch.state.watch.incidents.push(row);
+		return [worst, latest, cleared, auto];
+	})(),
+	['a', 'b', null, true]);
+check('事故 scope:手选压过 scope;切 scope 时手选让位(同一个字段不许两个人抢)',
+	(() => {
+		const saved = watch.state.watch.incidents.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.incidents.push(
+			{ id: 'a', severity: 300, at: '2026-10-11T10:00:00.000Z', cause: 'frame', summary: { topScripts: [] } },
+			{ id: 'b', severity: 120, at: '2026-10-11T12:00:00.000Z', cause: 'frame', summary: { topScripts: [] } });
+		watch.state.watch.scope = 'worst';
+		watch.state.watch.selId = null;
+		watch.selectIncident('b');
+		const manual = [watch.selectedIncident().row.id, watch.selectedIncident().auto];
+		watch.setIncidentScope('latest');
+		const after = [watch.selectedIncident().row.id, watch.selectedIncident().auto];
+		watch.setIncidentScope('worst');
+		watch.state.watch.incidents.length = 0;
+		for (const row of saved) watch.state.watch.incidents.push(row);
+		return [manual, after];
+	})(),
+	[['b', false], ['b', true]]);
 check('事故选择:选中的那条被挤出清单 → 退回自动,不返回 null/不指空条目',
 	(() => { watch.state.watch.selId = 'gone'; const pick = watch.selectedIncident(); watch.state.watch.selId = null; return [pick.auto, pick.row === null]; })(), [true, false]);
 // 「最差事件」块底下那行:只在还有话要说时才出现(抓到几次/最差多少上面已经说过)
