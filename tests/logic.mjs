@@ -1118,7 +1118,7 @@ const watchBox = new Function(`
 		needDeep: '要深录', scopeFrame: '本帧', bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本',
 		hit: '命中', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名', peak: '峰', framePickFiltered: '值得回看的帧',
 		otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
-		crossNone: '没有可交叉的脚本', rest: '其余',
+		crossNone: '没有可交叉的脚本', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', rest: '其余',
 		hourUnit: '小时', minUnit: '分', secUnit: '秒',
 	})[key] ?? key;
 	// 面板渲染区那两个文案函数用到的短名(真实实现里是 short():去掉 scope 前缀)
@@ -1469,6 +1469,15 @@ check('交叉表:没有可交叉的数据时返回 null(不画空表)',
 	[watch.crossTable({ js: 0, top: [], byOther: [], byInvoker: [], byPair: {} }),
 		watch.crossSummary(null), watch.crossSummary({ top: { who: '@a/dsh-x', src: 'setTimeout', ms: 240 } })],
 	[null, '没有可交叉的脚本', 'dsh-x · setTimeout 240ms']);
+check('交叉表:Top3 之间一格交集都没有时不留 null(摘要不能抛,要写"没有交集")',
+	(() => {
+		// 行/列都有量,但两两组合全是 0:最大的包住在第 4 名来源里 —— 曾经的写法在这里 `null.replace` 抛错
+		const cross = watch.crossTable({
+			js: 100, top: [['A', 60], ['B', 40]], byOther: [], byInvoker: [['s1', 55], ['s2', 45]], byPair: {},
+		});
+		return [cross.top.who, cross.top.src, cross.top.ms, watch.crossSummary(cross)];
+	})(),
+	['A', 's1', 0, 'Top3 之间没有交集']);
 check('"谁"的两类标签合起来排序(插件包 + 其余来源),堆叠条与交叉表共用',
 	watch.whoRows({ top: [['pkg', 10]], byOther: [['index-abc.js', 90], ['无 URL(内联脚本)', 5]] }),
 	[['index-abc.js', 90], ['pkg', 10], ['无 URL(内联脚本)', 5]]);

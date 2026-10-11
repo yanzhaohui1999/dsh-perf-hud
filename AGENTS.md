@@ -118,7 +118,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 322 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 323 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 39 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -323,7 +323,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 
 **v0.3.0 之后落在 `main` 上的改动**(还没 bump 版本、没打 tag):「帧里花在哪」从三段饼改成四段饼
 (脚本 / 任务里没归到脚本的 / 渲染 / 样式+布局+绘制),脚本侧再拆三层并分成**本帧与窗口两个分母**;
-`npm test` 现在 **372** 条(attribution 11 / logic 322 / host 39),真页面 `check-panel` 验过(见 REVIEW §2)。
+`npm test` 现在 **373** 条(attribution 11 / logic 323 / host 39),真页面 `check-panel` 验过(见 REVIEW §2)。
 
 **卡在哪**:`npm publish` 需要 npm 凭据,本机没有(`ENEEDAUTH`)—— 这一步等用户解锁。两条路(本机 `npm login` 后发,
 或 npmjs.com 建包 + 配 Trusted Publisher 后由 Release 触发 `release.yml`)写在 [REVIEW.md](REVIEW.md) §3.1。

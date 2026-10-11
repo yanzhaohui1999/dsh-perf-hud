@@ -3726,9 +3726,9 @@ window.__ModuleLoader__.load({
 		 */
 		/** 交叉表折叠起来时的摘要:最重的那一格(它就是这张表存在的理由)。 */
 		function crossSummary(cross) {
-			return cross === null
-				? translate('crossNone')
-				: `${short(cross.top.who)} · ${short(cross.top.src)} ${Math.round(cross.top.ms)}ms`;
+			if (cross === null) return translate('crossNone');
+			if (cross.top.who === null || cross.top.ms === 0) return translate('crossNoOverlap');
+			return `${short(cross.top.who)} · ${short(cross.top.src)} ${Math.round(cross.top.ms)}ms`;
 		}
 
 		function crossTable(tally) {
@@ -3748,6 +3748,9 @@ window.__ModuleLoader__.load({
 					+ grid.reduce((sum, row) => sum + row.reduce((a, b) => a + b, 0), 0)));
 			let best = { who: null, src: null, ms: 0 };
 			rows.forEach((w, r) => cols.forEach((s, c) => { if (grid[r][c] > best.ms) best = { who: w, src: s, ms: grid[r][c] }; }));
+			// Top3 之间可能**一格交集都没有**(最大的包住在第 4 名的来源里):这时不能把 top 留成 null,
+			// 否则摘要那行拿到 null 去格式化。退回"最大的那一行 × 最大的那一列",并让 ms = 0 说明是空的。
+			if (best.who === null) best = { who: rows[0], src: cols[0], ms: 0 };
 			return { rows, cols, grid, restCol, restRow, corner, js, top: best };
 		}
 
@@ -4017,7 +4020,7 @@ window.__ModuleLoader__.load({
 				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', scopeFrame: '本帧',
 				bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本', needDeep: '要深录', invokerUnknown: '来源未记录',
 				otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
-				crossTable: '包 × 来源', crossCorner: '包 \\ 来源', crossUnit: '格内毫秒', crossBiggest: '最重', crossNone: '没有可交叉的脚本', crossHint: '两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间"。只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 脚本总耗时;格内是毫秒,把鼠标放上去看占比。',
+				crossTable: '包 × 来源', crossCorner: '包 \\ 来源', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', crossUnit: '格内毫秒', crossBiggest: '最重', crossNone: '没有可交叉的脚本', crossHint: '两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间"。只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 脚本总耗时;格内是毫秒,把鼠标放上去看占比。',
 				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
 				hourUnit: '小时', minUnit: '分', secUnit: '秒',
 				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
@@ -4088,7 +4091,7 @@ window.__ModuleLoader__.load({
 				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', scopeFrame: 'this frame',
 				bySource: 'by source', byPkg: 'by package', pkgZeroNamed: '0 resolved', scriptsUnit: 'scripts', needDeep: 'needs deep', invokerUnknown: 'source not recorded',
 				otherSources: 'other sources', srcNoUrl: 'no URL (inline)', srcBatch: 'plugin batch (not split)',
-				crossTable: 'pkg × source', crossCorner: 'pkg \\ src', crossUnit: 'ms per cell', crossBiggest: 'heaviest', crossNone: 'nothing to cross-tabulate', crossHint: 'The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time". Top3 × Top3 is expanded, the rest is folded into the "rest" row/column (by subtraction) and the four blocks add up to the script total. Cells are milliseconds; hover for the share.',
+				crossTable: 'pkg × source', crossCorner: 'pkg \\ src', crossNoOverlap: 'no overlap between the top 3', crossFailed: 'cross table failed', crossUnit: 'ms per cell', crossBiggest: 'heaviest', crossNone: 'nothing to cross-tabulate', crossHint: 'The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time". Top3 × Top3 is expanded, the rest is folded into the "rest" row/column (by subtraction) and the four blocks add up to the script total. Cells are milliseconds; hover for the share.',
 				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
 				hourUnit: 'h', minUnit: 'm', secUnit: 's',
 				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',
@@ -4310,7 +4313,9 @@ window.__ModuleLoader__.load({
 		 * 放不下就换行(面板宽度 + overflowWrap 已经接得住)。
 		 */
 		function short(id) {
-			return id.replace(/^@[^/]+\//, '');
+			// ⚠️ 必须防 null/undefined:id 来自"谁是最大那一格"这类推导,可能一个都没有 ——
+			// 老写法 `id.replace(...)` 在这种情况下直接抛,把整块面板打成错误边界(实测被报"闪退")。
+			return typeof id === 'string' ? id.replace(/^@[^/]+\//, '') : '';
 		}
 
 		const rateText = (series) => {
@@ -4622,6 +4627,7 @@ window.__ModuleLoader__.load({
 					// "哪个包的哪类回调在烧时间";只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),
 					// 四块拼起来恒等于脚本总耗时。格子给毫秒(单位写在末尾),占比放 hover。
 					(() => {
+						try {
 						const cross = crossTable(scriptPkgTally());
 						if (cross === null) return null;
 						const pct = (ms) => `${Math.round((ms / (cross.js || 1)) * 100)}%`;
@@ -4658,6 +4664,14 @@ window.__ModuleLoader__.load({
 						kids.push(h('div', { key: 'cross-unit', title: t('crossHint'), style: { ...S.sub, textAlign: 'right' } },
 							`${translate('crossUnit')} · ${translate('crossBiggest')} ${short(cross.top.who)} · ${short(cross.top.src)} ${Math.round(cross.top.ms)}ms`));
 						return group('cross', t('crossTable'), crossSummary(cross), ...kids);
+						} catch (error) {
+							// 交叉表是**派生统计**:它自己算炸了不该把整块取证面板带走(实测被报"点开就闪退":
+							// `short(null)` 抛错 → 面板渲染抛错 → 外壳停用条目,面板整块消失)。降级成一行**可见**的
+							// 错误原文,并把错误记进导出件 —— 不静默吞(§1「不许假装成功」)。
+							recordError(error);
+							return h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-error-primary)' } },
+								`${t('crossFailed')}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200));
+						}
 					})(),
 					// 60 秒迷你时间条:一格一秒、格值取格里最差那帧,阈值与导出件 ASCII 条带一致
 					h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },
