@@ -519,6 +519,27 @@ const newPieces = [
 	'const FREE_TEXT_KEYS = ',
 	'function redactExport(',
 	'function redactionReport(',
+	// 捕获计数:snapshot() 会调 tallyReport()(导出件里的 24h 滚动窗口)
+	'const TALLY_FIELDS = {',
+	'const TALLY_BUCKET_MS = ',
+	'const TALLY_MINUTES = ',
+	'const TALLY_DAYS = ',
+	'const TALLY_SAVE_DELAY_MS = ',
+	'const LS_TALLY = ',
+	'function tallyDayKey(',
+	'function tallyBlank(',
+	'function tallyBucketOf(',
+	'function tallySum(',
+	'function pruneTally(',
+	'function bumpTally(',
+	'function noteTallySeverity(',
+	'function tallyWindow(',
+	'function tallyOfDay(',
+	'function tallyReport(',
+	'function markTallyDirty(',
+	'function saveTally(',
+	'function restoreTally(',
+	'function clearTally(',
 ].map((header) => {
 	if (header.startsWith('const ') && header.endsWith('{') === false) {
 		return source.slice(source.indexOf(header), source.indexOf('\n', source.indexOf(header)));
@@ -1795,6 +1816,24 @@ const watchPieces = [
 	line('const PAGE_KEYS'),
 	line('const SCRIPT_URL_KEYS'),
 	line('const FREE_TEXT_KEYS'),
+	// 捕获计数:triggerCapture / settleCapture / keepIncident / saveIncidents 都会调它
+	// (桶常量 TALLY_* / LS_TALLY 在 watchSource 那一段里,随 slice 一起进来)
+	extract(source, 'function tallyDayKey('),
+	extract(source, 'function tallyBlank('),
+	extract(source, 'function tallyBucketOf('),
+	extract(source, 'function tallySum('),
+	extract(source, 'function pruneTally('),
+	extract(source, 'function bumpTally('),
+	extract(source, 'function noteTallySeverity('),
+	extract(source, 'function tallyWindow('),
+	extract(source, 'function tallyOfDay('),
+	extract(source, 'function tallyText('),
+	extract(source, 'function tallyTitle('),
+	extract(source, 'function tallyReport('),
+	extract(source, 'function markTallyDirty('),
+	extract(source, 'function saveTally('),
+	extract(source, 'function restoreTally('),
+	extract(source, 'function clearTally('),
 	extract(source, 'function scrubParams('),
 	extract(source, 'function redactPageUrl('),
 	extract(source, 'function redactScriptUrl('),
@@ -1854,6 +1893,10 @@ const watchBox = new Function(`
 	// 面板文案用的两个桩:断言只检查"人看到的字",key 兜底返回 key 本身
 	const translate = (key) => ({
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉', times: ' 次',
+		// 捕获计数(与留存分离)的文案:断言要看到真词,而不是 key
+		watchDetected: '检测', watchKept: '已保存现场', watchLost: '丢失', tallyUnit: ' 份',
+		tallyCoalesced: '同串触发', tallyCoalescedHint: '同一串卡顿里被并掉的触发数(密度,不是次数)',
+		tallyScopeSuffix: '内,同一串卡顿算一次', tallyKeepHint: '受容量限制,不等于检测到', tallyWorst: '最长一次',
 		evidenceLabel: '可疑脚本', evidenceScopeIncident: '事故', evidenceWindowPrefix: '窗口内', pkgNamed: '定到包', evidenceBundleLine: '合并脚本行',
 		evidenceInvoker: '来源', evidenceWhere: '位置', fnUnknown: '函数名未记录', pkgUnresolvedShort: '包未定名', fileUnresolved: '文件未定名',
 		viaDirect: '直接读出来', viaInferred: '分段推断', viaNotPlugin: '不是插件脚本', viaFailed: '解析失败', viaUnavailable: '还没到位/拿不到', viaNotFetched: '还没预取(只有深录才拉脚本文本)',
@@ -1898,6 +1941,8 @@ const watchBox = new Function(`
 		dom: { total: 1234 },
 		bundleKeys: new Set(),
 		longTasks: [],
+		// 捕获计数的时间桶(与 client.js 的 state.tally 同形;手写桩,加字段要同步)
+		tally: { minute: new Map(), day: new Map(), expiredBuckets: 0, expiredDays: 0, prunedMinute: -1, loadError: null, savedAt: 0, dirty: false, timer: 0 },
 		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', pickT: null, selId: null, mode: 'live', frameT: null, scope: 'worst', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
 			// A4:交互计时的状态位(eventObserver 由 startInteractions 自己写)
 			eventObserver: null, eventState: 'not-started', eventSupported: [], interactions: [], eventCount: 0, elementCount: 0 },
@@ -1925,6 +1970,9 @@ const watchBox = new Function(`
 		// 导出脱敏(直接测这几个纯函数,而不是绕过它们去测 snapshot)
 		redactExport, redactPageUrl, redactScriptUrl, redactPath, redactUserAgent, scrubParams, redactionReport,
 		SECRET_PARAM, SECRET_PARAM_NAMES,
+		// 捕获计数(与留存分离):桶 / 窗口 / 落盘
+		tallyWindow, tallyOfDay, tallyText, tallyTitle, tallyReport, bumpTally, noteTallySeverity, pruneTally,
+		saveTally, restoreTally, clearTally, tallyDayKey, tallySum, TALLY_FIELDS, TALLY_MINUTES, TALLY_BUCKET_MS, TALLY_DAYS, LS_TALLY,
 	};
 `)();
 const watch = watchBox;
@@ -3330,6 +3378,178 @@ check('A4:环形上限到了丢最早的(留最近 200 条)', (() => {
 	const rows = watch.state.watch.interactions;
 	return [rows.length, rows[0].at, rows[rows.length - 1].at];
 })(), [200, 505, 704]);
+
+// ═══════════ 捕获计数:与"留存了几份详细现场"彻底分开 ═══════════
+// 挡的是这一类事故:留存清单受容量限制(最差 10 + 每天 1),却拿它的条数回答"发生了多少次卡顿"
+// —— 被挤掉的卡顿不是没发生,那样回答会系统性少报。所以:计数进时间桶、跨刷新、口径写成断言。
+// ⚠️ 另一头也踩过:把"检测到"写成 `captured + coalesced`,真页面上一次卡顿在后摇窗口里
+// 每帧都会触发一次,于是一次停顿被记成 18 次 —— 所以**检测到 = triggered**,coalesced 是密度。
+const savedTallyIncidents = watch.state.watch.incidents.slice();
+watch.state.watch.incidents.length = 0;
+watch.clearTally();
+// 固定基准时刻,而且**能被 60000 整除** —— 窗口边界落在分钟桶上,用真实时钟会让断言飘
+const tallyBase = 1700000040000;
+
+// ── 口径 ──
+watch.bumpTally('triggered', tallyBase);
+watch.bumpTally('captured', tallyBase + 500);
+for (let i = 0; i < 5; i += 1) watch.bumpTally('coalesced', tallyBase + 1000);
+watch.bumpTally('dropped', tallyBase + 2000);
+watch.noteTallySeverity(tallyBase + 1000, 120);
+watch.noteTallySeverity(tallyBase + 20000, 326.5);
+watch.noteTallySeverity(tallyBase + 30000, 210);
+const tallyA = watch.tallyWindow(3600000, tallyBase + 40000);
+check('计数:检测到 = triggered(一次卡顿一串触发只算一次)',
+	[tallyA.triggered, tallyA.detected, tallyA.coalesced, tallyA.buckets], [1, 1, 5, 1]);
+check('计数:coalesced 不是次数 —— 把两者相加会把**一次**停顿记成 6 次',
+	[tallyA.detected === tallyA.triggered, tallyA.detected === tallyA.captured + tallyA.coalesced], [true, false]);
+check('计数:最长一次取 max 不是求和(累计和 656.5 不许出现在这里)', tallyA.worstMs, 326.5);
+check('计数:抓到了但没留存下来是另一个数(丢失 ▸ dropped),不混进检测到',
+	[tallyA.dropped, tallyA.lost, tallyA.detected], [1, 1, 1]);
+check('计数:留存份数单独给出来,而且这里就该是 0(证据数与发生数不是一个东西)',
+	[tallyA.kept, watch.state.tally.minute.size], [0, 1]);
+check('计数:一次 coalesce 连加 N 次只落在一个分钟桶里(不是 N 个桶)',
+	watch.tallySum(watch.state.tally.minute.get(Math.floor(tallyBase / 60000))).coalesced, 5);
+check('计数:起过捕获却没切成现场的那部分单列(unsettled),并计入丢失', (() => {
+	watch.clearTally();
+	watch.bumpTally('triggered', tallyBase);
+	watch.bumpTally('triggered', tallyBase);
+	watch.bumpTally('triggered', tallyBase);
+	watch.bumpTally('captured', tallyBase);
+	const row = watch.tallyWindow(3600000, tallyBase);
+	return [row.triggered, row.captured, row.detected, row.unsettled, row.lost];
+})(), [3, 1, 3, 2, 2]);
+
+// ── 窗口按分钟桶切,而且实际范围照实给出来 ──
+watch.clearTally();
+watch.bumpTally('triggered', tallyBase - 2 * 3600000);
+watch.bumpTally('triggered', tallyBase - 30 * 60000);
+const tallyH1 = watch.tallyWindow(3600000, tallyBase);
+const tallyH24 = watch.tallyWindow(24 * 3600000, tallyBase);
+check('计数:1 小时窗口只收 30 分钟前那次,24 小时窗口两次都在',
+	[tallyH1.detected, tallyH24.detected], [1, 2]);
+check('计数:窗口的实际覆盖范围照实给出来(不吹成"正好 24 小时")',
+	[tallyH24.coveredFromMs <= tallyBase - 24 * 3600000 + 60000, tallyH24.coveredToMs >= tallyBase + 1,
+		tallyH24.windowMs], [true, true, 24 * 3600000]);
+
+// ── 裁剪与日汇总 ──
+watch.clearTally();
+watch.bumpTally('triggered', tallyBase - 25 * 3600000);   // 先记 25 小时前的
+watch.bumpTally('triggered', tallyBase - 60000);
+watch.bumpTally('triggered', tallyBase - 60000);
+watch.bumpTally('coalesced', tallyBase - 60000);
+const tallyDay = watch.tallyOfDay(watch.tallyDayKey(tallyBase - 60000));
+check('计数:日汇总与分钟桶同一口径(2 次检测到 + 1 次同串归并)',
+	[tallyDay.triggered, tallyDay.coalesced, tallyDay.detected, tallyDay.exists], [2, 1, 2, true]);
+check('计数:24 小时之外的分钟桶被丢掉,而且被丢掉这件事有计数(不静默)',
+	[watch.state.tally.expiredBuckets >= 1,
+		watch.state.tally.minute.has(Math.floor((tallyBase - 25 * 3600000) / 60000))],
+	[true, false]);
+check('计数:不存在的日期如实说 exists:false 且全 0,不补造数字',
+	(() => { const row = watch.tallyOfDay('1999-01-01'); return [row.exists, row.detected, row.captured, row.worstMs]; })(),
+	[false, 0, 0, 0]);
+const tallyKeyA = watch.tallyDayKey(tallyBase - 60000);
+const tallyKeyB = watch.tallyDayKey(tallyBase - 120000);
+watch.bumpTally('triggered', tallyBase - 120000);
+check('计数:跨分钟的同一天会合并到同一条日汇总(键相同则两读都是 3)',
+	[watch.tallyOfDay(tallyKeyA).triggered, watch.tallyOfDay(tallyKeyB).triggered],
+	tallyKeyA === tallyKeyB ? [3, 3] : [2, 1]);
+
+// ── 落盘 / 读回 / 坏数据 ──
+watch.clearTally();
+watch.bumpTally('triggered', tallyBase - 60000);
+watch.bumpTally('captured', tallyBase - 60000);
+watch.bumpTally('coalesced', tallyBase - 60000);
+watch.noteTallySeverity(tallyBase - 60000, 250);
+const tallyBefore = watch.tallyWindow(24 * 3600000, tallyBase);
+check('计数:落盘成功,而且体积很小(稀疏桶 —— 空转近乎 0 字节)', (() => {
+	const ok = watch.saveTally();
+	return [ok, String(watch.store.get(watch.LS_TALLY)).length < 512];
+})(), [true, true]);
+// 模拟"刷新":只清内存,不动落盘那份
+watch.state.tally.minute.clear();
+watch.state.tally.day.clear();
+watch.state.tally.prunedMinute = -1;
+watch.state.tally.loadError = null;
+watch.restoreTally();
+const tallyAfter = watch.tallyWindow(24 * 3600000, tallyBase);
+check('计数:读回之后窗口读数与落盘前一致(刷新后"最近一小时几次"还答得出来)',
+	[tallyAfter.detected, tallyAfter.captured, tallyAfter.coalesced, tallyAfter.worstMs],
+	[tallyBefore.detected, tallyBefore.captured, tallyBefore.coalesced, tallyBefore.worstMs]);
+watch.store.set(watch.LS_TALLY, '{not json');
+watch.state.tally.minute.clear();
+check('计数:落盘坏了照实记原因,不伪装成"读回 0 条"',
+	(() => { watch.restoreTally(); return [/^parse:/.test(watch.state.tally.loadError ?? ''), watch.state.tally.minute.size]; })(),
+	[true, 0]);
+check('计数:形状不对的桶整桶丢掉并记原因,好桶照常读回(不静默变 0,也不静默吞掉)',
+	(() => {
+		// 合法桶是 7 元(triggered/captured/coalesced/dropped/failed/worstMs/trimmed);第 2 条少了一个字段
+		watch.store.set(watch.LS_TALLY, JSON.stringify({ v: 1, savedAt: 5, minute: { 100: [1, 1, 0, 0, 0, 50, 0], 101: [1, 2] }, day: {} }));
+		watch.state.tally.minute.clear();
+		watch.state.tally.loadError = null;
+		watch.restoreTally();
+		return [watch.state.tally.minute.size, watch.state.tally.loadError, watch.state.tally.savedAt];
+	})(), [1, 'shape:1', 5]);
+check('计数:认不出的 kind 不静默记到别的地方去', watch.bumpTally('nope', tallyBase), null);
+check('计数:清频次是单独一条路(要清得明说)', typeof watch.clearTally, 'function');
+
+// ── 真路径接线:触发 / 归并 / 结算都真写进桶 ──
+watch.clearTally();
+watch.state.watch.pending = null;
+watch.state.watch.pendingTimer = 0;
+watch.state.watch.coveredUntil = 0;
+watch.state.watch.on = true;
+watch.setNow(0);
+watch.triggerCapture('frame', 100000, 150);        // 起一次 pending(后摇 3 秒还没到)
+watch.triggerCapture('frame', 101000, 150);        // 被并进 pending → coalesced
+const tallyTriggered = watch.tallyWindow(24 * 3600000);
+const tallySettleIndex = watch.timers.length - 1;
+const tallySettled = (() => {
+	watch.runTimer(tallySettleIndex);              // 后摇到点 → settleCapture → captured
+	return watch.tallyWindow(24 * 3600000);
+})();
+check('计数:触发(检测到 1 · 同串归并 1)与结算(切成 1 份现场)都真进了桶',
+	[tallyTriggered.detected, tallyTriggered.coalesced, tallyTriggered.captured,
+		tallySettled.detected, tallySettled.coalesced, tallySettled.captured],
+	[1, 1, 0, 1, 1, 1]);
+
+// ── 文案与静态约束 ──
+watch.clearTally();
+watch.bumpTally('triggered', tallyBase - 120000);
+watch.bumpTally('coalesced', tallyBase - 120000);
+watch.noteTallySeverity(tallyBase - 120000, 326.5);
+check('计数:药丸那一行说的是"检测 N 次",不是留存份数,也不是 coalesced',
+	watch.tallyText(24 * 3600000, tallyBase), '检测 1 次');
+check('计数:悬停把四个数各自的名字与口径都写出来(同串触发不是次数 / 留存受容量限制 / 最长一次)',
+	(() => {
+		const lines = watch.tallyTitle(24 * 3600000, tallyBase).split(String.fromCharCode(10));
+		return [lines.length, lines[0].includes('检测 1 次'), lines[0].includes('同一串卡顿算一次'),
+			lines[1].includes('同串触发 1'), lines[1].includes('密度,不是次数'),
+			lines[2].includes('已保存现场'), lines[2].includes('不等于检测到'), lines[3].includes('丢失'), lines[4].includes('327')];
+	})(), [5, true, true, true, true, true, true, true, true]);
+check('计数:导出件里那一份带窗口范围与两句口径(不是事故窗口 / 别和会话计数相加)',
+	(() => {
+		const row = watch.tallyReport(tallyBase);
+		return [row.detected, row.coalesced, typeof row.coveredFrom, /不是同一个窗口/.test(row.sessionCounters),
+			/detected = triggered/.test(row.scope), /密度,不是次数/.test(row.scope), row.worstMs];
+	})(), [1, 1, 'string', true, true, true, 326.5]);
+check('计数:折叠药丸不再拿留存份数当发生次数(静态)', (() => {
+	const at = source.indexOf('const pillTally = tallyWindow(');
+	if (at === -1) return [false, false];
+	const seg = source.slice(at, source.indexOf("h('button'", at));
+	return [true, seg.includes('incidents.length') === false];
+})(), [true, true]);
+check('计数:清事故不动计数桶(清掉的是证据,不是事实)', (() => {
+	const from = source.indexOf('clearIncidents() {');
+	const to = source.indexOf('clear() {', from);
+	const body = source.slice(from, to);
+	return [from !== -1, to !== -1, body.includes('tally') === false];
+})(), [true, true, true]);
+
+// 这一段动过真事故数组,收尾还原,别影响别的断言
+watch.state.watch.incidents.length = 0;
+for (const row of savedTallyIncidents) watch.state.watch.incidents.push(row);
+watch.clearTally();
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;

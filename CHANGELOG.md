@@ -5,9 +5,11 @@
 ## 未发布
 
 ### 新增
+- **捕获频次:跨刷新的时间桶,与"留存了几份现场"彻底分开**(`state.tally` / `LS_TALLY` = `dsh-perf-hud:tally:v1`)。留存清单受容量限制(最差 10 + 每天 1),**它的条数不能回答"最近卡了几次"** —— 被挤掉的卡顿不是没发生(实测一次会话里 `captured 40 · dropped 38`)。现在每分钟一个 7 元桶、只留最近 24 小时,再按天汇总 30 天;落盘走 2 秒合并定时器(`markTallyDirty`:后摇窗口里每帧都会触发,不能每帧写盘),读回时形状不对的桶**整桶丢掉**并把原因记进 `tally.loadError`。四个数各有各的名字,面板悬停与导出件(`context.tally`)都写全:**检测到 = `triggered`**(起过几次捕获)**/ 同串触发 = `coalesced`**(同一串里被并掉的触发数,是密度不是次数)**/ 已保存现场 = `incidents.length` / 丢失 = (triggered − captured) + dropped + trimmed + failed**。折叠药丸那一格从"留存份数"改成"最近 24 小时检测到几次"(它原来把 `incidents.length` 显示成"抓到 N 次",正是产品计划 §3.A 要拆开的那个混淆)。`clearIncidents()` **不清**计数桶(清掉的是证据,不是事实),要清频次得显式 `clearTally()`。
 
 - **导出脱敏:任何离开本机的导出件先做一遍减法,并把它减了什么写进文件**(`redactExport()` / `redactionReport()`,**导出件只有这一个出口**,以后加字段不会漏)。四条规则:① `page` / `href` 只保留 `origin + path`、**查询串整段丢弃**;② `url` / `urls` / `sourceURL` 去掉协议与主机、保留路径与 `rev`,而 `token` / `accessToken` / `api_key` / `secret` / `password` / `signature` / `code` 等键的**值**换成 `<redacted>`(键名保留 —— 读的人要知道这里本来有什么);③ 其余字符串里的 `/Users/<用户名>`、`/home/<用户名>`、`C:\Users\<用户名>` 统一换成 `~`(所以错误原文、组件栈、宿主 profile 路径这些"顺手带出来的东西"也被一并覆盖);④ `userAgent` 只留浏览器主版本 + 系统。"其余字符串一律过一遍"这一条是刻意的:按字段名逐个加规则一定会漏,而漏一个就是一次泄漏。文件里 `context.redaction` 给三问三答 —— `applied`(做了什么)/ `kept`(留了什么)/ `neverCollected`(本来就没采:聊天正文、提示词、Cookie、Token、请求头),口径写明**这是减法不是匿名化**。`incidentReport(id, { dropFreeText: true })` 把用户手敲的自由文本(事故 `note`、场景标记)置空并标 `noteDropped: true`,默认(本机调试件)原样保留。
 
+- **"检测到"一开始被写成 `captured + coalesced`,真页面上把一次停顿记成 18 次**:同一串卡顿在 3 秒的后摇窗口里**每帧都会触发一次**,于是 `coalesced` 能到两位数 —— 两者相加得到的数"看着挺忙",却答不了"卡了几次"。现在 `detected = triggered`(`triggerCapture` 起一次新 pending 才 +1),`coalesced` 单独作为"这一串有多密"给出。这条是**先在真页面上量出来**才发现的:离线盒子里两种写法都能算出一个数,只有真页面的触发密度能暴露它。
 ### 修复
 
 - **`snapshot().page` 与 `incidentReport().context.page` 原来直接写 `location.href`**:DSH 首屏是 `http://127.0.0.1:3080/?token=…` 进来的,于是**一次导出就可能把会话 token 一起带出去**,而这份文件正是准备交给外部 AI 的那份。现在按上面那条脱敏规则处理,并有端到端断言:往真实状态里塞 `?token=SECRET_TOKEN_VALUE`、`/Users/tester/…`、`api_key=SECRET_KEY_VALUE`,断言序列化后的导出件里这三个字符串一个都不剩。
@@ -30,6 +32,11 @@
 - **`h('div', …, hint ?? t('crossHint')})` 那处交叉表范围提示的括号结构**(改 `crossBlock` 参数时引入,`node --check` 当场拦下)。记一笔是因为它正是 AGENTS §8 第 14 条那类"批量替换看起来对、其实断了结构"的同类风险。
 - **`incident.frames` 里的 `gap` 以前会被当成普通帧参与序号与翻帧**:现在 `gap === true` 明确不是帧(整段 rAF 被挂起),不参与序号 / 选中 / 翻帧,只在帧条上留白。
 
+
+### 测试
+
+- 离线断言 **497 → 539** 条(attribution 11 / logic **489** / host 39):捕获计数的口径(窗口边界按分钟桶切、`coveredFrom/To` 照实给、日汇总与当日分钟桶同一口径、24h 外裁剪有计数、`worstMs` 取 max 不求和、跨刷新读回、坏 JSON 与形状不对的桶不静默变 0、`bumpTally` 认不出的 kind 不静默记错、起过捕获没切成现场单列 `unsettled`、清事故不动计数桶、药丸文案不再拿留存份数当次数)+ 导出脱敏(丢查询串 / 留 rev / 只换值不换键 / `~` 降级 / UA 降级 / 数组走脚本规则 / `dropFreeText` 留 `noteDropped` 标记)。`ci.yml` 的 `-eq` 门禁与 README / README_EN / AGENTS / REVIEW 的数字同步。
+- **新增 `tools/check-counts.mjs`(真页面验收器,和 `check-panel` 一样不是离线门禁)**:用 `history.replaceState` 把凭据**塞进真的 `location`** 再断言导出件里一个都不剩(离线盒子的 `location` 是桩,这条在那里是空断言);清桶 → 手动标记一次真捕获 → 断言 `detected = triggered`、`detected !== captured + coalesced`、`kept ≤ detected`、落盘两拍之后读得回来;刷新后计数还在;折叠药丸上出现「检测 N 次」。**ALL PASS**,现场读数:`检测到 3(triggered 3 · 切成现场 2 · 同串触发 29)· 已保存现场 2 · 丢失 1` —— 旧口径会把这次记成 32 次。
 ### 测试
 
 - **新增 `tools/check-incident.mjs`(真页面验收器,和 `check-panel` 一样不是离线门禁)**:清事故 → 同步烧 400ms 造一条真达线帧 → 等守夜自动切片 → 按「看这一帧」进历史上下文 → 断言上下文标题 / 时间轴在场 / 点柱子换帧 / 下一帧上一帧 / 下一异常帧落在达线帧上 / 走到最后一帧后「下一帧」禁用 / **刷新后仍停在同一帧** / 「回到实时」把实时帧条换回来 / 全程 `errors: 0`。**ALL PASS**。

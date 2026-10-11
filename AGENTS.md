@@ -107,6 +107,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
    node tools/check-storage.mjs                   # 写 localStorage → 重新加载 → 读回(落盘/跨会话基线)
    node tools/check-interaction.mjs               # CDP 发真实输入 → 验 event timing 真的交付
    node tools/check-incident.mjs                  # 抓一条真事故 → 逐帧回看 / 切回实时 / 刷新后仍能打开
+   node tools/check-counts.mjs                    # 计数跨刷新 + 口径不虚报 + 导出件里没有凭据(真 location 里塞 token)
    ```
 
    **什么时候必须跑 `check-incident.mjs`**:改完**历史事故回放 / 取证明细的上下文切换**就跑它 —— 它挡的是"上面历史事故、下面另一条实时帧"和"刷新后历史事故打不开"这类离线套件结构上盖不到的事故。它依赖两个 DOM 约定:根节点 `id="dsh-perf-hud-root"`(控件态样式的作用域)与详情区第一行的 `data-ctx-bar="1"`(验收器靠它读"现在是哪个上下文")—— **改这两个名字等于改验收器**,改之前先看 `tools/check-incident.mjs`。
@@ -121,7 +122,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 464 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 489 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 39 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -181,7 +182,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **折叠组默认不做昂贵分析,现在由 `group()` 的 thunk 保证**:`group(key, label, summary, ...children)` 支持"唯一一个 child 且是个函数"的形式,折叠时**连函数体都不进**;五个调用点(`detail` / `cross` / `dom` / `host` / `tools`)全传 thunk,所以「取证明细」收起时脚本按包 / 交叉表 / 帧条一次都不算。代价要记住:`cross` 那一层仍嵌套在「取证明细」的 thunk 里 —— 一展开「取证明细」,调用方就先构造 `crossTable(scriptPkgTally())` 与 `kids` 数组(4×5 格,代价低),所以窗口聚合那份缓存不能省。
 - **可点 / 不可点的界线(不要做假按钮)**:可点 = 「按来源 / 按包」小表的**具名行**(→ `copyText` 复制「名字 + 毫秒」,成功/失败都照实写进 `state.copyNote`)、工具箱事故清单行(→ 选中)、帧条**有 LoAF 的格子**(→ 钉住那一帧)、组头(→ 折叠)、**可疑脚本的每一行**(→ 复制那条证据行);**不可点** = 堆叠条的**色段**本身(`cursor` 是 `default`)、「其余」那一行(它是合计数,没有单个名字可复制)。
 - **按钮按需出现,不留"点了没反应"的动作**:「全部折叠」只在**有组开着**时渲染(`anyGroupOpen()`),「恢复默认布局」只在 `layoutDirty()` 为真时渲染(有组开着 / 翻帧被钉住 / 手选了事故 / `scope` 不是 `worst` / 挂着一次性说明);两者都无意义时整行不渲染。新加"布局类"按钮前先问:默认状态下点它会发生什么?什么都不会发生就别显示。
-- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键(现在中英各 **283** 键)—— 两条断言钉住这件事(logic.mjs):**键集合必须一致**、**每个键都得有人引用**(撤下界面时留下的死键会被报出来;死键那条只认字面量 `t('…')` / `translate('…')`,真要加动态取键得先放宽它)。**兜底策略跟文档语言**:locale 服务不在时按 `document.documentElement.lang`(取不到退 `navigator.language`)选那本字典,不是中文就用英文 —— 写死中文会让英文用户看到中文,简单反转(`DICT.en ?? key`)又会让中文用户看到英文,两种都错。
+- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键(现在中英各 **290** 键)—— 两条断言钉住这件事(logic.mjs):**键集合必须一致**、**每个键都得有人引用**(撤下界面时留下的死键会被报出来;死键那条只认字面量 `t('…')` / `translate('…')`,真要加动态取键得先放宽它)。**兜底策略跟文档语言**:locale 服务不在时按 `document.documentElement.lang`(取不到退 `navigator.language`)选那本字典,不是中文就用英文 —— 写死中文会让英文用户看到中文,简单反转(`DICT.en ?? key`)又会让中文用户看到英文,两种都错。
 - **插桩必须可还原**:包装 `setTimeout/setInterval/rAF` 与 `appendChild/insertBefore/setAttribute` 时,保存原生引用、只在"当前仍是我们那个 wrapper"时才还原(避免踩掉别人的包装)。
 - **改 `client.js` 一律用带锚点的小批次**:一次替换一个可唯一匹配的片段,失败即整批作废。本项目有**两次**"整段替换吞掉相邻声明"的事故(§8 第 7 条)。
 
@@ -238,6 +239,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 完整表见 [README.md](README.md) 的「面板怎么读」;开发时最容易搞错的几条(面板 hover 里也有同一份):
 
 - **场景标签**(标题栏 `流式` / `空闲 Ns`)是解读所有数字的前提;空闲基线要 60 秒净增为 0 才算真的空闲。
+- **发生频次与留存份数是两套数据(2026-10-12 起)**:`state.watch.captured/coalesced/dropped/trimmedByBytes/deduped` 是**本次会话**的计数器(刷新即归零,只进导出件的 `context.store` / `watch`);`state.tally` 是**跨刷新**的时间桶(`LS_TALLY` = `dsh-perf-hud:tally:v1`,分钟桶 `TALLY_MINUTES`=1440 ≈ 24h + 日汇总 `TALLY_DAYS`=30,桶是 `TALLY_FIELDS` 那 7 元数组)。口径只有一个:**检测到 = triggered**(一次卡顿一串触发只算一次;被 `triggerCapture` 并进 pending、或落在 `coveredUntil` 里的触发**不算新的一次**)/ **coalesced 是同串密度,不是次数**(把两者相加会把一次停顿记成十几次,实测踩过)/ **已保存现场 = `incidents.length`** / **丢失 = (triggered − captured) + dropped + trimmed + failed**。为什么必须两套:留存清单受容量限制(最差 10 + 每天 1),拿它回答"最近一小时几次"会系统性少报 —— 被挤掉的卡顿不是没发生。三条不许越界:① 折叠药丸那一格说的是**检测到**(24h、跨刷新),不是留存份数;② `clearIncidents()` **不清**计数桶(清掉的是证据,不是事实),要清频次得显式 `clearTally()`;③ 窗口边界落在**分钟桶**上,`tallyWindow()` 把 `coveredFromMs/coveredToMs` 一起给出来,写范围时用它,不许吹成"正好 24 小时"。落盘走 2 秒合并定时器(`markTallyDirty`):一次卡顿里 `coalesced` 每帧都会加,不能每帧写盘;读回时形状不对的桶**整桶丢掉**并把原因记进 `tally.loadError`,不静默当成 0。
 - **命中 a/b** = 四条腿任一给出名字的长任务数 / 长任务总数。**它会被 DOM 腿抬高**(流式时写入窗口内几乎必然有写入),必须配合「归属 Top」分布读。
 - **帧内未归因**(2026-10-07 起在「取证明细」组里,不在常显):`idle = 帧间隔 − 插桩回调耗时`,所以**没插桩时它退化成平均帧间隔**(实测 16.7ms 被当成未归因)—— 那时面板直接写「要深录」,连"该帧几乎无 JS 解释"的结论也不报(`unexplainedFrame` 先要求 `state.deep === true`;不要求的话这条结论在**每一条**长帧上都成立,等于恒报)。插桩后:峰值 ≈ 最差帧(≥95%)时给结论,并提示用 Rendering 面板的 Paint flashing 交叉验证。**CSS 动画只在这里现形**(它不经 JS 调度器)。
 - **帧严重度只有一个口径:`frameSeverity(row) = max(blocking, 帧时长)`** —— 判据、排序、标签**同一个函数**(以前 `worstLoaf` / `loafRanks` 只看 `blocking`、`pickList` 看 `max`,于是"自动选中的那条"可能不在清单里,标签显示 `帧 0/N`)。⚠️ **不能只看 `blocking`**:实测一次 45 帧的会话里 `blocking` **全部 < 100ms**(最大值 92ms),只看它会让清单退回"全部",而"帧时长"才是面板自己的严重度口径(判色 120/200ms、圆环上 `帧里花在哪` 也是它)。
@@ -368,7 +370,7 @@ DOM 写入挪进「DOM 与堆」、`回调归因` 未插桩时降级成一行 `�
 分流点只有 `detailContext()` 一处;历史帧条是**导航器**(240 列,每列取该列最差的一帧,点击映射回 `incident.frames` 里的真实记录,
 rAF 挂起的区间留白),四个方向翻帧(没有下一条就禁用),选中帧的分解 / 脚本 / long task / 证据全部只吃那一帧(缺就是缺,不回退);
 归因状态收敛成**已确认 / 可疑 / 未归因**三档并去掉"更像 rAF 被节流"这类把可能写成结论的说法;诊断上下文落盘 `LS_WATCHUI`,
-刷新后仍停在同一条事故的同一帧。`npm test` 现在 **514** 条(attribution 11 / logic 464 / host 39),CI 门禁与文档同步成 `-eq 514`;
+刷新后仍停在同一条事故的同一帧。`npm test` 现在 **539** 条(attribution 11 / logic 489 / host 39),CI 门禁与文档同步成 `-eq 539`;
 真页面验收:`check-panel` / `check-storage` / `check-interaction` / **新增 `tools/check-incident.mjs`** 四个验证器 **ALL PASS**(见 REVIEW §2)。
 
 **仍然存在的债(套件是绿的 ≠ 它们没问题)**:

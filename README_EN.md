@@ -32,8 +32,24 @@ one `PerformanceObserver` (LoAF, Chrome 123+):
 - kept incidents are persisted (localStorage, 2MB cap) and survive a reload; `watch().restored` says how many came back;
 - stalls that were captured but not good enough to keep are counted
   separately (`dropped`) from stalls never captured;
+- **"how often it happened" and "how many scenes were kept" are two different numbers** (product plan §3.A): the
+  retention list is capacity-limited, so **its length cannot answer "how many stalls lately"** — a stall pushed out
+  was still a stall. So there is a separate lightweight counter: one bucket per minute kept for the last 24 hours,
+  plus a 30-day daily rollup, persisted across reloads. Three names, all spelled out in the panel's hover:
+  - **seen = triggered** — how many captures were started. One stall is usually a burst of triggers, and **the whole
+    burst counts once**; the triggers merged into the same pending capture (or falling inside an already-covered
+    window) are **not** a new one;
+  - **merged triggers (coalesced)** — how many triggers were merged into that burst. It is a **density, not a
+    count**: adding the two together turns a single stall into a dozen (measured on a real page: a 3-second
+    post-window triggers on every frame);
+  - **evidence kept = the length of the retention list** — capacity-limited (worst 10 + one per day), **not** the
+    number of stalls;
+  - **lost = (triggered − captured) + dropped + trimmed + failed** — captures that never became a scene / captured
+    but not worth keeping / dropped by the byte cap / failed to persist; listed separately, never folded into "seen".
+  The collapsed pill's `seen N` cell is the **last 24 hours** (persisted), not the retention count.
 - multi-second "gaps" from a hidden tab are **not** stalls (rAF was suspended) and are marked `gap`;
-- `__perfHud.watch()` · `incidents()` · `report(0)` · `exportIncident(0)` · `capture(note)` · `clearIncidents()`.
+- `__perfHud.watch()` · `incidents()` · `report(0)` · `exportIncident(0)` · `capture(note)` · `clearIncidents()` ·
+  `tally(ms?)` · `tallyOfDay(day)` · `clearTally()`.
 
 An incident pack carries `context.missing` — what this capture does **not** contain (no DevTools trace,
 no host CPU profile, platforms without LoAF) and how to get it — and it does no attribution inference.
@@ -213,12 +229,12 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 464 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 489 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 39 assertions: real index.js driven by a fake ctx
-# 514 offline assertions total, no running DSH required
+# 539 offline assertions total, no running DSH required
 ```
 
-The i18n dictionary now has **283 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
+The i18n dictionary now has **290 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
 

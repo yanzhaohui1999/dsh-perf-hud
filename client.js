@@ -94,6 +94,20 @@ window.__ModuleLoader__.load({
 		// (mousemove/keydown 那种量级会把环形缓冲冲掉)。element timing 走同一个观察器。
 		const WATCH_EVENT_MS = 100;
 		const WATCH_EVENT_MAX = 200;           // 交互计时的环形上限
+		// ── 捕获计数(与"留存了几份详细现场"是两件事,所以两套数据)──────────────
+		// 留存清单受容量限制(最差 10 条 + 每天 1 条),它的条数**不能**当"发生了多少次卡顿";
+		// 所以另起一份轻量计数:每分钟一个 6 元数组的桶,只留最近 24 小时,再按天汇总 30 天。
+		// 七个计数在桶里的下标(数组比对象省一半体积:24h 最多 1440 个桶)。
+		// `triggered` = 起过几次捕获(一串触发只算一次);`captured` = 切成了几份现场;
+		// `coalesced` = 被并进同一串的触发数(**不是次数,是这一串有多密**)—— 三者的区别见 tallySum。
+		// ⚠️ 实测踩过:一开始把"检测到"写成 `captured + coalesced`,真页面上一次卡顿在后摇窗口里
+		// 每帧都会触发一次,于是**一次停顿被记成 18 次**,连"卡了几次"都答不了。
+		const TALLY_FIELDS = { triggered: 0, captured: 1, coalesced: 2, dropped: 3, failed: 4, worstMs: 5, trimmed: 6 };
+		const TALLY_BUCKET_MS = 60000;         // 桶的粒度:一分钟
+		const TALLY_MINUTES = 1440;            // 分钟桶只留最近 24 小时
+		const TALLY_DAYS = 30;                 // 按天汇总留最近 30 天
+		const TALLY_SAVE_DELAY_MS = 2000;      // 一次卡顿里 coalesced 会被连加很多次,落盘要合并
+		const LS_TALLY = 'dsh-perf-hud:tally:v1';
 		const WATCH_PERSIST_MAX_BYTES = 2097152;  // 事故落盘的字节上限(超了丢最弱的);512KB 时实测只装得下 8 条
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
 		const REACT_INTERNAL = new Set(['Fragment', 'Suspense', 'StrictMode', 'Profiler', 'ForwardRef', 'Memo', 'Provider', 'Consumer', 'Root', 'Anonymous']);
@@ -1157,6 +1171,19 @@ window.__ModuleLoader__.load({
 				persistError: null,      // 落盘失败的原因(失败就照实说,不假装存下来了)
 				coveredUntil: 0,         // 最近一份事故窗口的结束时刻(perf ms):这段不再另立事故
 			},
+			// 捕获计数:与"留存了几份详细现场"分开的轻量时间桶(见 §捕获计数)。
+			// minute / day 的桶都是 TALLY_FIELDS 那个 6 元数组。
+			tally: {
+				minute: new Map(),       // 分钟下标(floor(epochMs/60000))-> 6 元数组
+				day: new Map(),          // 'YYYY-MM-DD'(本地日期)-> 6 元数组
+				expiredBuckets: 0,       // 超出 24h 被丢掉的分钟桶数(照实记,不静默)
+				expiredDays: 0,          // 超出 30 天被丢掉的日汇总数
+				prunedMinute: -1,        // 上次裁剪到了哪一分钟(免得每帧都扫 1440 个桶)
+				loadError: null,         // 读回落盘计数失败的原因(照实记)
+				savedAt: 0,
+				dirty: false,
+				timer: 0,                // 合并落盘的定时器:一次卡顿里 coalesced 会连加很多次
+			},
 			requestRender: null,     // 面板挂载时注册:用户动作要立刻重渲染,不能等 0.5 秒的定时器
 			displayKey: '',          // 面板显示值的指纹:没变就跳过这次 tick 的渲染
 			copyNote: null,          // 「复制摘要」的结果:成功/失败**原文**都照实显示,失败不许假装成功
@@ -1564,15 +1591,18 @@ window.__ModuleLoader__.load({
 		function triggerCapture(cause, at, severity, note) {
 			const watch = state.watch;
 			if (watch.on === false) return null;
-			if (watch.pending !== null) { watch.coalesced += 1; return null; }
+			if (watch.pending !== null) { watch.coalesced += 1; bumpTally('coalesced', Date.now()); return null; }
 			// 这个时刻已经被上一份事故的窗口覆盖了(证据就在那份包里),别再另立一份 ——
 			// 实测过一次卡顿裂成两份(第二份其实只是又碰了一下同一段窗口)。
 			// 手动标记例外:那是明确意图,哪怕落在窗口里也收。
 			if (cause !== 'manual' && watch.coveredUntil > 0 && at <= watch.coveredUntil) {
 				watch.coalesced += 1;
+				bumpTally('coalesced', Date.now());
 				return null;
 			}
 			watch.pending = { cause, at, severity: round1(severity), note: note ?? null, until: at + WATCH_POST_MS };
+			// 起一次新捕获 = 检测到一次卡顿(同一串里的后续触发会走上面的 coalesced,不重复计)
+			bumpTally('triggered', Date.now());
 			const delay = Math.max(0, watch.pending.until - performance.now());
 			if (delay <= 0) return settleCapture();
 			watch.pendingTimer = natives.setTimeout(settleCapture, Math.ceil(delay));
@@ -1595,7 +1625,7 @@ window.__ModuleLoader__.load({
 			const displaced = previous.some((row) => kept.indexOf(row) === -1);
 			list.length = 0;
 			for (const row of kept) list.push(row);
-			if (survived === false) { watch.dropped += 1; return 'dropped'; }
+			if (survived === false) { watch.dropped += 1; bumpTally('dropped', Date.now()); return 'dropped'; }
 			return displaced ? 'replaced' : 'kept';
 		}
 
@@ -1843,6 +1873,10 @@ window.__ModuleLoader__.load({
 			if (pending === null) return null;
 			const incident = assembleIncident(pending);
 			watch.captured += 1;
+			// 计数与留存分开记:上面那个 captured 是**本次会话**的计数,下面这份是跨刷新的时间桶
+			const now = Date.now();
+			bumpTally('captured', now);
+			noteTallySeverity(now, incident.severity);
 			incident.kept = keepIncident(incident);
 			watch.coveredUntil = pending.until;   // 这段窗口已经有主了,见 triggerCapture 的去重
 			saveIncidents();
@@ -1877,6 +1911,7 @@ window.__ModuleLoader__.load({
 					payload = JSON.stringify({ v: 1, savedAt: Date.now(), incidents: list });
 				} catch (error) {
 					watch.persistError = `serialize:${error instanceof Error ? error.message : String(error)}`;
+					bumpTally('failed', Date.now());
 					return false;
 				}
 				if (payload.length > WATCH_PERSIST_MAX_BYTES && list.length > 1) {
@@ -1893,14 +1928,20 @@ window.__ModuleLoader__.load({
 						watch.incidents.length = 0;
 						for (const row of list) watch.incidents.push(row);
 					}
-					watch.trimmedByBytes += Math.max(0, afterDedupe - list.length);
+					// 裁掉的那部分进计数桶(单列成 trimmed,不混进 dropped:一个是"没比留存更好",
+					// 一个是"字节装不下",原因不同,读数的人要能分辨)
+					const trimmedNow = Math.max(0, afterDedupe - list.length);
+					watch.trimmedByBytes += trimmedNow;
+					if (trimmedNow > 0) bumpTally('trimmed', Date.now(), trimmedNow);
 					return true;
 				} catch (error) {
 					watch.persistError = error instanceof Error ? error.message : String(error);
 					if (list.length > 1) { list.length = Math.ceil(list.length / 2); continue; }
+					bumpTally('failed', Date.now());
 					return false;
 				}
 			}
+			bumpTally('failed', Date.now());
 			return false;
 		}
 
@@ -1988,6 +2029,273 @@ window.__ModuleLoader__.load({
 					reactionMs: WATCH_REACTION_MS,
 				},
 			};
+		}
+
+		// ───────────────────────── 捕获计数(与留存分离)─────────────────────────
+		/**
+		 * 口径写在这里,也写进导出件(`context.tally`),有断言钉住:
+		 *   **检测到 = captured + coalesced** —— 同一串卡顿里被并掉的触发**也算检测到**(它确实发生了);
+		 *   **已保存现场 = incidents.length** —— 受容量限制(最差 10 次 + 每天 1 条),**不等于**检测到;
+		 *   **丢失 = dropped + trimmed + failed** —— 抓到了但没留下来的那部分,单列,不混进检测到。
+		 * 为什么必须分开:留存清单是**证据**(受容量限制),计数回答的是**发生频次**。
+		 * 拿前者回答后者会系统性少报 —— 被挤掉的卡顿不是没发生,这条正是产品计划 §3.A 要拆的东西。
+		 * 时间戳用**墙上时间**(`Date.now`),因为用户问的是"什么时候",不是页面开了多久。
+		 */
+		function tallyDayKey(atMs) {
+			const d = new Date(atMs);
+			const p = (n) => (String(n).length < 2 ? `0${n}` : String(n));
+			return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+		}
+
+		function tallyBlank() {
+			// 桶长度跟着 TALLY_FIELDS 走:加字段时不用记着改两个地方(读回的形状校验也用这个长度)
+			return new Array(Object.keys(TALLY_FIELDS).length).fill(0);
+		}
+
+		function tallyBucketOf(store, key) {
+			const found = store.get(key);
+			if (found !== undefined) return found;
+			const fresh = tallyBlank();
+			store.set(key, fresh);
+			return fresh;
+		}
+
+		/** 一个桶 → 可读字段(所有聚合都走这一个函数,口径只写一次)。 */
+		function tallySum(bucket) {
+			const row = { triggered: 0, captured: 0, coalesced: 0, dropped: 0, failed: 0, trimmed: 0, worstMs: 0 };
+			if (bucket !== undefined && bucket !== null) {
+				row.triggered = bucket[TALLY_FIELDS.triggered];
+				row.captured = bucket[TALLY_FIELDS.captured];
+				row.coalesced = bucket[TALLY_FIELDS.coalesced];
+				row.dropped = bucket[TALLY_FIELDS.dropped];
+				row.failed = bucket[TALLY_FIELDS.failed];
+				row.trimmed = bucket[TALLY_FIELDS.trimmed];
+				row.worstMs = bucket[TALLY_FIELDS.worstMs];
+			}
+			// ⚠️ 口径的定义处,只有这一份:
+			//   检测到 = triggered  —— **一次卡顿一串触发只算一次**(被并进 pending / coveredUntil 的那些
+			//     触发不算新的一次,它们就是同一串)。所以 `coalesced` **不是**次数,是"这一串有多密";
+			//     把两者相加会把一次停顿记成十几次(实测踩过)。
+			//   已保存现场 = kept —— 受容量限制,来自留存清单,不是发生次数。
+			//   丢失 = (检测到但没切成现场) + dropped + trimmed + failed。
+			row.detected = row.triggered;
+			row.unsettled = Math.max(0, row.triggered - row.captured);
+			row.lost = row.unsettled + row.dropped + row.trimmed + row.failed;
+			return row;
+		}
+
+		/** 丢超出窗口的桶。只在**分钟边界**上扫一次,不是每次 bump 都扫 1440 个桶。 */
+		function pruneTally(atMs) {
+			const tally = state.tally;
+			const nowMinute = Math.floor(atMs / TALLY_BUCKET_MS);
+			if (tally.prunedMinute >= nowMinute) return tally.prunedMinute;
+			tally.prunedMinute = nowMinute;
+			const oldest = nowMinute - TALLY_MINUTES + 1;
+			for (const key of [...tally.minute.keys()]) {
+				if (key < oldest) { tally.minute.delete(key); tally.expiredBuckets += 1; }
+			}
+			const days = [...tally.day.keys()].sort();
+			while (days.length > TALLY_DAYS) {
+				tally.day.delete(days.shift());
+				tally.expiredDays += 1;
+			}
+			return tally.prunedMinute;
+		}
+
+		/** 记一笔计数。`kind` 见 TALLY_FIELDS;认不出来就返回 null(不静默记错地方)。 */
+		function bumpTally(kind, atMs, n) {
+			const tally = state.tally;
+			const index = TALLY_FIELDS[kind];
+			if (index === undefined) return null;
+			const at = typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now();
+			const value = typeof n === 'number' && n > 0 ? n : 1;
+			pruneTally(at);
+			tallyBucketOf(tally.minute, Math.floor(at / TALLY_BUCKET_MS))[index] += value;
+			tallyBucketOf(tally.day, tallyDayKey(at))[index] += value;
+			markTallyDirty();
+			return value;
+		}
+
+		/** 这个分钟/这一天里**最差的一次**——取 max 不是求和("最长一次"不是累计)。 */
+		function noteTallySeverity(atMs, ms) {
+			const tally = state.tally;
+			if (typeof ms !== 'number' || Number.isFinite(ms) === false || ms <= 0) return null;
+			const at = typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now();
+			const minute = tallyBucketOf(tally.minute, Math.floor(at / TALLY_BUCKET_MS));
+			const day = tallyBucketOf(tally.day, tallyDayKey(at));
+			minute[TALLY_FIELDS.worstMs] = Math.max(minute[TALLY_FIELDS.worstMs], ms);
+			day[TALLY_FIELDS.worstMs] = Math.max(day[TALLY_FIELDS.worstMs], ms);
+			markTallyDirty();
+			return ms;
+		}
+
+		/**
+		 * 窗口聚合。窗口边界落在**分钟桶**上,所以实际覆盖范围是"从 now−ms 之后开始的那一分钟起" ——
+		 * `coveredFromMs` / `coveredToMs` 一起给出来,让调用方能照实写范围,不用猜、也不用补造。
+		 */
+		function tallyWindow(ms, atMs) {
+			const tally = state.tally;
+			const span = typeof ms === 'number' && ms > 0 ? ms : TALLY_MINUTES * TALLY_BUCKET_MS;
+			const at = typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now();
+			const nowMinute = Math.floor(at / TALLY_BUCKET_MS);
+			const oldest = Math.max(nowMinute - Math.floor(span / TALLY_BUCKET_MS) + 1, nowMinute - TALLY_MINUTES + 1);
+			const bucket = tallyBlank();
+			let worst = 0;
+			let buckets = 0;
+			for (let key = oldest; key <= nowMinute; key += 1) {
+				const found = tally.minute.get(key);
+				if (found === undefined) continue;
+				buckets += 1;
+				bucket[TALLY_FIELDS.triggered] += found[TALLY_FIELDS.triggered];
+				bucket[TALLY_FIELDS.captured] += found[TALLY_FIELDS.captured];
+				bucket[TALLY_FIELDS.coalesced] += found[TALLY_FIELDS.coalesced];
+				bucket[TALLY_FIELDS.dropped] += found[TALLY_FIELDS.dropped];
+				bucket[TALLY_FIELDS.failed] += found[TALLY_FIELDS.failed];
+				bucket[TALLY_FIELDS.trimmed] += found[TALLY_FIELDS.trimmed];
+				worst = Math.max(worst, found[TALLY_FIELDS.worstMs]);
+			}
+			bucket[TALLY_FIELDS.worstMs] = worst;
+			const row = tallySum(bucket);
+			row.buckets = buckets;
+			row.kept = state.watch.incidents.length;      // 留存证据数 —— 和 detected 不是一个东西
+			row.windowMs = span;
+			row.coveredFromMs = oldest * TALLY_BUCKET_MS;
+			row.coveredToMs = (nowMinute + 1) * TALLY_BUCKET_MS;
+			return row;
+		}
+
+		/** 某一天的汇总(**本地日期**)。没有就是全 0 且 `exists:false`,不补造数字。 */
+		function tallyOfDay(dayKey) {
+			const row = tallySum(state.tally.day.get(dayKey));
+			row.day = dayKey;
+			row.exists = state.tally.day.has(dayKey);
+			return row;
+		}
+
+		/** 面板/摘要用的一行人话:只给"检测到几次"。留存与丢失走 `tallyTitle`。 */
+		function tallyText(ms, atMs) {
+			const row = tallyWindow(ms, atMs);
+			return `${translate('watchDetected')} ${row.detected}${translate('times')}`;
+		}
+
+		/** 悬停给完整口径:四个数各有各的名字,并写清"同一串算一次"与"留存受容量限制"。 */
+		function tallyTitle(ms, atMs) {
+			const row = tallyWindow(ms, atMs);
+			const lines = [
+				`${translate('watchDetected')} ${row.detected}${translate('times')}(${spanText(row.windowMs)}${translate('tallyScopeSuffix')})`,
+				`${translate('tallyCoalesced')} ${row.coalesced}${translate('times')} —— ${translate('tallyCoalescedHint')}`,
+				`${translate('watchKept')} ${row.kept}${translate('tallyUnit')} —— ${translate('tallyKeepHint')}`,
+				`${translate('watchLost')} ${row.lost}${translate('tallyUnit')}`,
+			];
+			if (row.worstMs > 0) lines.push(`${translate('tallyWorst')} ${Math.round(row.worstMs)}ms`);
+			return lines.join('\n');
+		}
+
+		/** 导出件里的那一份(整机导出与事故包共用):三个数与口径一起给出来。 */
+		function tallyReport(atMs) {
+			const at = typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now();
+			const row = tallyWindow(TALLY_MINUTES * TALLY_BUCKET_MS, at);
+			return {
+				at: new Date(at).toISOString(),
+				windowMs: row.windowMs,
+				coveredFrom: new Date(row.coveredFromMs).toISOString(),
+				coveredTo: new Date(row.coveredToMs).toISOString(),
+				detected: row.detected,
+				triggered: row.triggered,
+				captured: row.captured,
+				coalesced: row.coalesced,
+				unsettled: row.unsettled,
+				kept: row.kept,
+				lost: row.lost,
+				dropped: row.dropped,
+				trimmed: row.trimmed,
+				failed: row.failed,
+				worstMs: round1(row.worstMs),
+				buckets: row.buckets,
+				expiredBuckets: state.tally.expiredBuckets,
+				expiredDays: state.tally.expiredDays,
+				loadError: state.tally.loadError,
+				savedAt: state.tally.savedAt > 0 ? new Date(state.tally.savedAt).toISOString() : null,
+				scope: 'detected = triggered:一次卡顿一串触发只算一次;coalesced 是同串里被并掉的触发数(密度,不是次数);captured = 切成了几份现场;kept 是留存证据份数,受容量限制,不等于 detected;lost = (triggered - captured) + dropped + trimmed + failed;窗口边界落在分钟桶上,实际范围以 coveredFrom / coveredTo 为准',
+				sessionCounters: '这是导出时刻的滚动 24h 计数;本次会话的计数在 watch.captured 等字段里 —— 两者不是同一个窗口,别相加',
+			};
+		}
+
+		/** 合并落盘:一次卡顿里 `coalesced` 会被连加很多次(每帧一次触发),不能每次都写盘。 */
+		function markTallyDirty() {
+			const tally = state.tally;
+			tally.dirty = true;
+			if (tally.timer !== 0) return;
+			tally.timer = natives.setTimeout(() => { tally.timer = 0; saveTally(); }, TALLY_SAVE_DELAY_MS);
+		}
+
+		/** 落盘。体积很小(稀疏桶),但写失败照实记 —— 计数丢了要在面板上说得出原因。 */
+		function saveTally() {
+			const tally = state.tally;
+			if (tally.dirty === false) return true;
+			const payload = {
+				v: 1,
+				savedAt: Date.now(),
+				expiredBuckets: tally.expiredBuckets,
+				expiredDays: tally.expiredDays,
+				minute: {},
+				day: {},
+			};
+			for (const [key, value] of tally.minute) payload.minute[key] = value;
+			for (const [key, value] of tally.day) payload.day[key] = value;
+			try {
+				localStorage.setItem(LS_TALLY, JSON.stringify(payload));
+				tally.dirty = false;
+				tally.savedAt = payload.savedAt;
+				tally.loadError = null;
+				return true;
+			} catch (error) {
+				tally.loadError = `save:${error instanceof Error ? error.message : String(error)}`;
+				return false;
+			}
+		}
+
+		/** 读回。形状不对的**整桶丢掉**并记原因 —— 不把坏数据当成 0 混进统计里。 */
+		function restoreTally() {
+			const tally = state.tally;
+			let parsed = null;
+			try { parsed = JSON.parse(localStorage.getItem(LS_TALLY) ?? 'null'); } catch (error) {
+				tally.loadError = `parse:${error instanceof Error ? error.message : String(error)}`;
+				return null;
+			}
+			if (parsed === null || typeof parsed !== 'object') return null;
+			const pick = (source, target, asNumber) => {
+				if (source === null || typeof source !== 'object') return 0;
+				let rejected = 0;
+				for (const key of Object.keys(source)) {
+					const raw = source[key];
+					if (Array.isArray(raw) === false || raw.length !== tallyBlank().length) { rejected += 1; continue; }
+					if (raw.every((value) => typeof value === 'number' && Number.isFinite(value)) === false) { rejected += 1; continue; }
+					target.set(asNumber === true ? Number(key) : key, raw.slice());
+				}
+				return rejected;
+			};
+			const badMinutes = pick(parsed.minute, tally.minute, true);
+			const badDays = pick(parsed.day, tally.day, false);
+			if (typeof parsed.expiredBuckets === 'number') tally.expiredBuckets = parsed.expiredBuckets;
+			if (typeof parsed.expiredDays === 'number') tally.expiredDays = parsed.expiredDays;
+			tally.savedAt = typeof parsed.savedAt === 'number' ? parsed.savedAt : 0;
+			tally.prunedMinute = -1;   // 让下一次 bump 重扫一遍窗口
+			if (badMinutes + badDays > 0) tally.loadError = `shape:${badMinutes + badDays}`;
+			return tally.savedAt;
+		}
+
+		/** 只清计数(与"清事故"、"清读数"都分开:三个问题不一样)。 */
+		function clearTally() {
+			const tally = state.tally;
+			tally.minute.clear();
+			tally.day.clear();
+			tally.expiredBuckets = 0;
+			tally.expiredDays = 0;
+			tally.prunedMinute = -1;
+			tally.dirty = true;
+			saveTally();
+			return true;
 		}
 
 		// ───────────────────────────── FPS:1 秒滚动窗口 ─────────────────────────────
@@ -2369,10 +2677,14 @@ window.__ModuleLoader__.load({
 				if (Array.isArray(parsed)) state.marks = parsed.slice(-100);
 			} catch (error) { /* 标记坏了就算了 */ }
 			restoreIncidents();
+			restoreTally();
 			restoreWatchUI();
 		}
 
 		function flush(force) {
+			// 计数有自己的 dirty 标记:强制落盘(页面隐藏/关闭)时一并写,平时由 markTallyDirty 的
+			// 定时器合并写(一次卡顿里 coalesced 每帧都会加,不能每帧写盘)
+			if (force === true) saveTally();
 			if (dirty === false && force !== true) return;
 			dirty = false;
 			try {
@@ -3358,6 +3670,8 @@ window.__ModuleLoader__.load({
 						captured: state.watch.captured,          // 一共捕获过几次
 						dropped: state.watch.dropped,            // 抓到了但没留存下来的次数
 					},
+					// 发生频次(跨刷新,最近 24h 滚动窗口)—— 与上面的 store(本次会话)不是同一窗口
+					tally: tallyReport(),
 					// A2:跨会话基线(每个会话一条,只进导出件)。口径写在 note 里
 					sessionBaselines: sessionBaselines(),
 					thresholds: {
@@ -3559,6 +3873,9 @@ window.__ModuleLoader__.load({
 					userAgent: navigator.userAgent,
 					scenario: state.streaming ? 'streaming' : 'idle',
 					watch: watchStatus(),
+					// 导出时刻的滚动 24h 计数(跨刷新)。它**不属于事故窗口** —— 用途是回答
+					// "最近是偶发还是变频繁了";scope / sessionCounters 里写明别当这一条的统计口径
+					tally: tallyReport(),
 					// A2:跨会话基线(只进导出件)。readonly 参照,别当回归判定
 					sessionBaselines: sessionBaselines(),
 					thresholds: {
@@ -4168,6 +4485,11 @@ window.__ModuleLoader__.load({
 			// 守夜层(见 §G):watch 给状态,incidents 给摘要(按严重度降序,索引 0 最差),
 			// incident(id 或索引)给完整事件包,capture 手动标记"刚刚卡了一下"。
 			watch: watchStatus,
+			/** 发生频次(跨刷新的时间桶):tally(ms?) 给窗口内的检测到 / 已保存 / 丢失三个数。 */
+			tally: (ms) => tallyWindow(ms, Date.now()),
+			tallyOfDay,
+			tallyTitle,
+			clearTally,
 			incidents: () => state.watch.incidents.map((row) => ({
 				id: row.id, severity: row.severity, cause: row.cause, at: row.at, note: row.note, kept: row.kept, summary: row.summary,
 			})),
@@ -4185,6 +4507,8 @@ window.__ModuleLoader__.load({
 				state.watch.restored = 0;
 				state.watch.trimmedByBytes = 0;
 				state.watch.deduped = 0;
+				// ⚠️ **计数桶不清**:那些卡顿确实发生过,清掉的是证据,不是事实 ——
+				// 把频次一起清掉等于让"最近一小时几次"这件事凭空消失。要清用 clearTally()。
 				saveIncidents();   // 落盘的那份也要清掉,否则刷新又"复活"
 				return true;
 			},
@@ -5566,6 +5890,9 @@ window.__ModuleLoader__.load({
 				unattrShort: '未归因', markPlaceholder: '备注(可选)',
 				// 守夜层(默认常开、不插桩):面板上只露一行状态 + 工具箱里的清单与两个按钮
 				watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回',
+				watchDetected: '检测', watchKept: '已保存现场', watchLost: '丢失', tallyUnit: ' 份',
+				tallyCoalesced: '同串触发', tallyCoalescedHint: '同一串卡顿里被并掉的触发数(密度,不是次数)',
+				tallyScopeSuffix: '内,同一串卡顿算一次', tallyKeepHint: '受容量限制,不等于检测到', tallyWorst: '最长一次',
 				watchDaily: '当天最差',
 				watchNone: '还没抓到', watchOff: '未开录', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉',
 				watchHint: '默认常开、不插桩:一个 rAF 循环 + 一个 LoAF 观察器。帧间隔(或 LoAF 的 blockingDuration)超过 100ms 就自动抓「前 10 秒 + 后 3 秒」原样切片,留存取**两档并集**:全局最差 10 次 + 每天最差 1 条(最多最近 7 天,清单里标「当天最差」),刷新后还在;落盘另有 2MB 上限,超了就裁掉最弱的并在这一行标出「裁掉 N」。要抓偶发卡顿就让它一直开着 —— 出事后用「导出最近一次」把证据包交给分析者。',
@@ -5698,6 +6025,9 @@ window.__ModuleLoader__.load({
 				via: 'channel', viaRemote: 'ctx.remote (client remote)', viaRoute: 'host route /api/dsh-perf-hud/host',
 				unattrShort: 'unattr', markPlaceholder: 'note (optional)',
 				watch: 'Night watch', watchCaught: 'caught', watchWorst: 'worst', watchRestored: 'restored',
+				watchDetected: 'seen', watchKept: 'evidence kept', watchLost: 'lost', tallyUnit: '',
+				tallyCoalesced: 'merged triggers', tallyCoalescedHint: 'triggers merged into the same burst (a density, not a count)',
+				tallyScopeSuffix: ' — one stall counts once', tallyKeepHint: 'capacity-limited, not the number of stalls', tallyWorst: 'longest',
 				watchDaily: 'daily worst',
 				watchNone: 'nothing caught yet', watchOff: 'not recording', watchPersistFailed: 'persist failed', watchTrimmed: 'trimmed',
 				watchHint: 'On by default and it patches nothing: one rAF loop plus one LoAF observer. When a frame interval (or LoAF blockingDuration) crosses 100ms it captures the 10s before and 3s after verbatim and keeps the **union of two tiers**: the worst 10 overall plus one worst-per-day (at most the last 7 days, marked "daily worst" in the list); they survive a reload. Persistence has a 2MB byte cap; when it trims, the count shows up as "trimmed N". Leave it running to catch intermittent stalls; after one, hand the evidence pack to an analyst with "Export latest".',
@@ -6537,6 +6867,12 @@ window.__ModuleLoader__.load({
 
 			if (open === false) {
 				// 折叠不是"看不见":至少留下 fps / 最差帧 / 最差 longtask 三个读数。
+				//
+				// 「抓到 N 次」这一格原来写的是 `state.watch.incidents.length` —— 那是**留存了几份
+				// 详细现场**,受容量限制(最差 10 次 + 每天 1 条)。把它当"发生了多少次卡顿"会系统性
+				// 少报:被挤掉的卡顿不是没发生。现在这一格给的是**跨刷新的 24 小时检测次数**
+				// (`tallyWindow`),留存数 / 丢失数放进悬停(`tallyTitle`)—— 三个数各有各的名字。
+				const pillTally = tallyWindow(TALLY_MINUTES * TALLY_BUCKET_MS);
 				return h('div', { ref: setRoot, id: ROOT_ID, style: S.root(false) },
 					h('div', { style: S.head },
 						h('span', { style: S.brand }, t('title')),
@@ -6544,7 +6880,7 @@ window.__ModuleLoader__.load({
 						h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(0)} fps`),
 						h('span', { style: S.label }, `${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms`),
 						worst === null ? null : h('span', { style: S.label }, `LT ${worst.ms.toFixed(0)}ms`),
-						state.watch.incidents.length === 0 ? null : h('span', { style: S.label, title: t('watchHint') }, `${t('watchCaught')} ${state.watch.incidents.length}${t('times')}`),
+						pillTally.detected === 0 ? null : h('span', { style: S.label, title: tallyTitle(TALLY_MINUTES * TALLY_BUCKET_MS) }, `${t('watchDetected')} ${pillTally.detected}${t('times')}`),
 						h('button', { type: 'button', style: S.btn, title: t('expand'), onClick: toggle }, '+'),
 						h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff'))));
 			}
