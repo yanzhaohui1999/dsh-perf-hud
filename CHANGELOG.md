@@ -2,7 +2,7 @@
 
 本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/),版本号遵循 SemVer。
 
-## 未发布
+## [0.4.0] - 2026-10-11
 
 ### 新增
 
@@ -207,4 +207,5 @@
   [AGENTS.md](AGENTS.md) §0.1,`LANDSCAPE.md`(生态与撞车矩阵)并进 [AGENTS.md](AGENTS.md) §12 —— 三份带日期的
   记录文档删除,git 历史里还在
 
+[0.4.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.4.0
 [0.2.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.2.0
