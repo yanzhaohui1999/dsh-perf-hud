@@ -17,7 +17,7 @@
   - 顺带修掉饼图 tooltip 里硬编码的 `脚本 ${js}ms`(en 用户会看到中文),改用 `splitScript` 键。
   - **函数级那一层实测走不通**:页面内唯一的采样剖析器是 JS Self-Profiling —— `typeof Profiler === 'function'`,但 `new Profiler({sampleInterval:10})` 抛 `NotAllowedError: JS profiling is disabled by Document Policy.`,因为 HTML 响应**没有** `Document-Policy` 头(实测 `null`),而那个头由 DSH 服务的 HTML 决定(动它就越过项目边界)。→ 函数级只剩 CDP / DevTools Performance(`missing` 里的 `devtools-trace`);宿主进程的函数级另有 A5 的 `node:inspector`。
   - **窗口那三行补上分母**(`windowScopeText`):它们是**累计**,`纯执行 21623.8ms` 这种数不写分母会被读成"某一次执行花了 21 秒"(实测被这么质疑过)。现在窗口行前面单独一行:`窗口:200 条长动画帧 · 跨 43分12秒 · 平均每条脚本 108.1ms` —— 条数与跨度回答"这段时间卡了多少次",**平均每条那一栏才和上面那张饼可比**(饼是单帧)。跨度越久累计越大,所以 hover 里明写"别拿它当越来越慢"。`tallyScripts` 因此多带 `count` 与 `spanMs`(最后一条 t − 第一条 t),`spanText(ms)` 把它写成人读的 `43分12秒`。
-  - 测试:374 条离线断言(attribution 11 / logic 324 / host 39),真页面 `tools/check-panel.mjs` 验过(4 个 `<circle>`、`本帧按来源 setTimeout 260ms`、`errors: 0`)。
+  - 测试:375 条离线断言(attribution 11 / logic 325 / host 39),真页面 `tools/check-panel.mjs` 验过(4 个 `<circle>`、`本帧按来源 setTimeout 260ms`、`errors: 0`)。
 
 ### 新增
 
@@ -34,6 +34,8 @@
   参考的先例是查证过的:[Chrome DevTools Performance](https://developer.chrome.com/docs/devtools/performance/reference) 把同一份 profile 给 Call tree / Bottom-up / Event log 三个页签,[speedscope](https://github.com/jlfwong/speedscope) 给 Time Order / Left Heavy / Sandwich 三种视图 —— **"多个角度"在成熟工具里是"多个视图",不是"一张图更多段"**;饼/环只在"一个主分组、段数少"时用([Atlassian 的堆叠条指南](https://www.atlassian.com/data/charts/stacked-bar-chart-complete-guide))。Sankey / 平行集**不做**(表达力换来的是可读性)。帧内脚本时间轴**做不了**:LoAF 只给每条脚本的时长,不给它在帧内的起止。
 
 ### 修复
+
+- **`clear()` 漏清帧环**:它清了帧间隔环、longTasks、DOM 写入、各类序列,但 `state.watch.loaf`(最近 200 条长动画帧)**没清** —— 于是"清读数"之后翻帧清单的 `帧 1/128` 与「窗口:… 跨 3分」纹丝不动,而屏幕上的时间明明已经重置。现在连 `watch.pickT`(翻帧选择)一起清,并加一条静态断言钉住(改回就红)。顺带确认一条硬事实:`t = entry.startTime` 是**页面时间轴**,所以跨度的上界就是"页面已打开多久" —— 跨度不可能超过它。
 
 - **翻帧清单的判据从 `blocking` 改成 `max(blocking, 帧时长)`,标签也改显示帧时长**:实测一次会话里 **45 帧的 `blocking` 全部 < 100ms**(最大 92ms),于是"只收达线的帧"直接退回"全部",而标签上的 `92ms` 又和圆环的 `帧里花在哪 154.4ms` 对不上 —— 两个读数都在指向同一个困惑。现在:判据用 `max(blocking, dur)`(帧时长才是面板自己的严重度口径:判色 120/200ms、圆环显示的就是它),标签显示帧时长,`blocking` 留在 tooltip。实测同一份数据:清单从"45/45"收到 **3/13**,标签 `帧 1/3 · 242ms · ≥100ms` 与圆环一致。
 

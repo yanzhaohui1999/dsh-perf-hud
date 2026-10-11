@@ -140,6 +140,9 @@ process.exitCode = failed === 0 ? 0 : 1;
 	check('h() 引用的组件都声明了(PerfHudStress 事故回归)',
 		components.filter((name) => !declared.has(name)), []);
 
+	// clear() 漏清帧环的回归:清了之后「窗口:… 跨 …」纹丝不动(实测被问"我清了怎么还是跨 3 分")
+	check('clear() 也要清帧环(它也是读数)',
+		/clear\(\) \{[\s\S]{0,600}?watch\.loaf\.length = 0/.test(source), true);
 	const renderRegion = source.slice(source.indexOf('function PerfHud('));
 	// 单/双引号字符串里的内容不是 JS 调用(SVG/CSS 的 `transform: 'rotate(-90 24 24)'` 就是典型);
 	// 模板字符串**要留着** —— `${t('x')}` 里的调用是真调用,不能一起丢掉。

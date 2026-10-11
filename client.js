@@ -3159,6 +3159,10 @@ window.__ModuleLoader__.load({
 				// 注意:守夜层留存的事故**不在这里清** —— 那是等了很久才抓到的东西,
 				// 清读数的手滑不该把它带走。要清用 clearIncidents()。
 				ring.length = 0;
+				// ⚠️ 帧环(`watch.loaf`)也是**读数**,原来漏了它 —— 于是 `clear()` 之后翻帧清单
+				// 与「窗口:… 跨 …」纹丝不动("我清了怎么还是跨 3 分"的根因)。顺带把翻帧选择也退回自动。
+				state.watch.loaf.length = 0;
+				state.watch.pickT = null;
 				state.longTasks.length = 0;
 				state.plugins.clear();
 				state.domWrites.clear();
