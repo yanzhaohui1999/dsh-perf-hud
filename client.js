@@ -734,6 +734,7 @@ window.__ModuleLoader__.load({
 				on: false,
 				loaf: [],                // 最近的 LoAF 摘要(时间升序)
 				loafObserver: null,
+				pickT: null,             // 用户用 ◀ ▶ 选中的那一帧的 t(null = 自动跟着最差那条)
 				loafState: 'not-started',   // not-started / on / stopped / unsupported:… / error:…
 				incidents: [],           // 最差 N 次(severity 降序,取用按索引 0 最差)
 				pending: null,           // 正在等后摇的那一次
@@ -3438,11 +3439,51 @@ window.__ModuleLoader__.load({
 			return arcs;
 		}
 
-		/** 最近那条 blocking 最大的长动画帧(面板的饼图看的就是它)。 */
+		/** 最近那条 blocking 最大的长动画帧(面板的饼图默认看的就是它)。 */
 		function worstLoaf() {
 			let best = null;
 			for (const row of state.watch.loaf) if (best === null || (row.blocking ?? 0) > (best.blocking ?? 0)) best = row;
 			return best;
+		}
+
+		/** 按 blocking 降序的帧清单(最差的排第一)—— 翻帧用的就是这个次序。 */
+		function loafRanks() {
+			return state.watch.loaf.slice().sort((a, b) => (b.blocking ?? 0) - (a.blocking ?? 0));
+		}
+
+		/**
+		 * 面板**正在看**的那一条长动画帧:默认自动跟着最差那条走;用 ◀ ▶ 选过之后就钉住。
+		 * 记的是 `t` 不是下标 —— 帧环会追加新的、挤掉老的,下标会指到别的帧上。
+		 * 选中的那条被挤出 200 条之外就退回自动(并清掉选择),不指着一个不存在的帧。
+		 */
+		function pickedLoaf() {
+			const rows = state.watch.loaf;
+			if (rows.length === 0) return null;
+			if (state.watch.pickT !== null) {
+				const hit = rows.find((row) => row.t === state.watch.pickT);
+				if (hit !== undefined) return hit;
+				state.watch.pickT = null;
+			}
+			return worstLoaf();
+		}
+
+		/** ◀ ▶:在按 blocking 降序的清单里走一步(到头就停住)。 */
+		function pickStep(delta) {
+			const ranks = loafRanks();
+			if (ranks.length === 0) return;
+			const current = pickedLoaf();
+			const at = current === null ? -1 : ranks.findIndex((row) => row.t === current.t);
+			const next = Math.min(ranks.length - 1, Math.max(0, (at === -1 ? 0 : at) + delta));
+			state.watch.pickT = ranks[next].t;
+			dirty = true;
+			bump();
+		}
+
+		/** 回到自动(跟着最差那条走)。 */
+		function pickAuto() {
+			state.watch.pickT = null;
+			dirty = true;
+			bump();
 		}
 
 		// 面板上的 60 秒帧条:一格一秒。导出件那条 ASCII 条带是按事故窗口分格,这里按整秒 ——
@@ -3868,6 +3909,9 @@ window.__ModuleLoader__.load({
 				deepShort: '深录', deepHint: '深录(= 插桩 + 精确归因):装上调度点与 DOM 写入的包装,并拉那份 12MB 的 sourcemap。默认关着 —— 守夜与现场都不插桩',
 				recorder: '记录器自身', recorderHint: '每帧给这个 HUD 自己的 rAF 回调计时:测量工具必须自证没有明显改变被测对象。p99 取最近 600 帧',
 				split: '帧里花在哪', splitTotal: '这段长动画帧共', splitWorst: '最差那条',
+				framePick: '帧', framePinned: '已钉住(点 ⟲ 回到自动)', framePickAuto: '自动:跟着最差那条走',
+				frameAutoHint: '回到自动(跟着最差那条走)',
+				framePickHint: '最近 200 条长动画帧,按 blocking 降序(最差的在前)。◀ ▶ 换一条,⟲ 回到自动。选中的那条被挤出 200 条之后会自动退回',
 				spark: '60 秒帧条',
 				sparkHint: '最近 60 秒,一格一秒:高度 = 那一秒里最差那一帧的间隔,颜色与导出件的 ASCII 帧条带用同一组阈值(≥100ms 红 / ≥50ms 黄 / 其余正常)。整格都是 rAF 挂起的那一秒画成最矮的灰柱 —— 那是间隙,不是卡顿;空白 = 那一秒没采到',
 				pkgNone: '未定名',
@@ -3933,6 +3977,9 @@ window.__ModuleLoader__.load({
 				deepShort: 'deep', deepHint: 'Deep = instrumentation + precise attribution: wraps scheduling points and DOM writes and fetches the 12MB sourcemap. Off by default',
 				recorder: 'HUD itself', recorderHint: 'Times this HUD own rAF callback: a measuring tool must prove it does not change what it measures. p99 over the last 600 frames',
 				split: 'where the frame went', splitTotal: 'long frame total', splitWorst: 'worst',
+				framePick: 'frame', framePinned: 'pinned (⟲ returns to auto)', framePickAuto: 'auto: follows the worst',
+				frameAutoHint: 'back to auto (follow the worst)',
+				framePickHint: 'The last 200 long animation frames, worst (blocking) first. ◀ ▶ flips through them, ⟲ returns to auto. A pinned frame falls back automatically once it leaves the 200-frame ring',
 				spark: '60s frame strip',
 				sparkHint: 'Last 60 seconds, one bar per second: height = the worst frame interval in that second, and the colours use the same thresholds as the ASCII frame strip in the export (>=100ms red / >=50ms yellow / otherwise normal). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall; blank = nothing sampled in that second',
 				pkgNone: 'unnamed',
@@ -4323,15 +4370,32 @@ window.__ModuleLoader__.load({
 
 				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
 				group('detail', t('groupDetail'), detailSummary(),
+					// 翻帧:最近 200 条长动画帧按 blocking 降序(最差的在前),◀ ▶ 换一条、⟲ 回到自动。
+					// 面板默认跟着"最差那条"走 —— 只有出现更差的才会换,所以常常同一条挂很久。
+					(() => {
+						const ranks = loafRanks();
+						if (ranks.length === 0) return null;
+						const current = pickedLoaf();
+						const at = ranks.findIndex((row) => row.t === current.t) + 1;
+						const auto = state.watch.pickT === null;
+						const title = `${t('framePick')} ${at}/${ranks.length} · blocking ${Math.round(current.blocking ?? 0)}ms · ${clock(current.t)}`
+							+ `\n${auto ? t('framePickAuto') : t('framePinned')}\n${t('framePickHint')}`;
+						return h('div', { style: { ...S.row, alignItems: 'center' }, title },
+							h('span', { style: S.label }, `${t('framePick')} ${at}/${ranks.length} · ${Math.round(current.blocking ?? 0)}ms`),
+							h('span', { style: { flex: '0 0 auto', display: 'flex', gap: 6 } },
+								h('button', { type: 'button', style: S.btn, title: t('framePickHint'), onClick: () => pickStep(-1) }, '◀'),
+								h('button', { type: 'button', style: S.btn, title: t('framePickHint'), onClick: () => pickStep(1) }, '▶'),
+								h('button', { type: 'button', style: S.btn, title: t('frameAutoHint'), onClick: pickAuto }, '⟲')));
+					})(),
 					// 长动画帧的时间去向:圆环。脚本那一段再按「来源」切细(最多 7 段),
 					// 页面内看不到"绘制/合成",最后一段是"剩下的都在这儿" —— 拿它当"样式布局占比"会读错。
 					(() => {
-						const worst = worstLoaf();
-						const split = frameSplit(worst);
+						const current = pickedLoaf();
+						const split = frameSplit(current);
 						if (split === null) return h('div', { style: S.row },
 							h('span', { style: S.label, title: t('splitHint') }, t('split')),
 							h('span', { style: S.num }, t('splitNoLoaf')));
-						const frameTally = framePkgTally(worst);
+						const frameTally = framePkgTally(current);
 						const sources = frameTally === null ? [] : frameTally.byInvoker;
 						// 48px 的环只有 126px 周长(1% ≈ 1.3px),段一多就分不出来 —— 放大到 84px,
 						// 并在段与段之间留 1.4px 的缝:同一族的红靠缝才看得出是几块。
@@ -4382,8 +4446,8 @@ window.__ModuleLoader__.load({
 					// 小标题上 —— 行标签就不用再重复一遍"本帧 / ·窗口",省掉一大截字。
 					// 按包那几行只在**真定到包名**时才出现:一个名都没定到时它只是噪声,换成一行说明。
 					(() => {
-						const frame = frameSplit(worstLoaf());
-						const framePkgs = framePkgTally(worstLoaf());
+						const frame = frameSplit(pickedLoaf());
+						const framePkgs = framePkgTally(pickedLoaf());
 						const window = scriptPkgTally();
 						const rows = [];
 						const line = (key, label, hint, value) => h('div', { key, style: S.block },

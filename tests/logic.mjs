@@ -1060,6 +1060,10 @@ const watchPieces = [
 	extract(source, 'function splitLegend('),
 	extract(source, 'function frameArcs('),
 	extract(source, 'function worstLoaf('),
+	extract(source, 'function loafRanks('),
+	extract(source, 'function pickedLoaf('),
+	extract(source, 'function pickStep('),
+	extract(source, 'function pickAuto('),
 	extract(source, 'function pickIncident('),
 	extract(source, 'function incidentFileName('),
 	extract(source, 'function incidentReport('),
@@ -1092,6 +1096,9 @@ const watchBox = new Function(`
 	FakeObserver.prototype.disconnect = function () { this.disconnected = true; };
 	FakeObserver.supportedEntryTypes = ['event', 'element'];
 	W.PerformanceObserver = FakeObserver;
+	// 翻帧那两个函数会请求重绘:盒子里给一个不会抛的桩
+	let dirty = false;
+	const bump = () => {};
 	// 面板文案用的两个桩:断言只检查"人看到的字",key 兜底返回 key 本身
 	const translate = (key) => ({
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉', times: ' 次',
@@ -1120,13 +1127,14 @@ const watchBox = new Function(`
 		on: true, precise: false, streaming: true, heap: 1048576, host: null, hostAt: 0,
 		dom: { total: 1234 },
 		longTasks: [],
-		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
+		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', pickT: null, incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
 			// A4:交互计时的状态位(eventObserver 由 startInteractions 自己写)
 			eventObserver: null, eventState: 'not-started', eventSupported: [], interactions: [], eventCount: 0, elementCount: 0 },
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
+		loafRanks, pickedLoaf, pickStep, pickAuto,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
 		tallyScripts, framePkgTally, pkgWhoText, pkgZeroText, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
@@ -1354,6 +1362,45 @@ check('帧拆分:脏数据返回 null', [watch.frameSplit(null), watch.frameSpli
 check('圆环图例:两行、每行两段(四个百分比挤一行会折行);顺序与圆环一致',
 	watch.splitLegend({ total: 200, js: 100, taskOther: 20, render: 20, tail: 60 }),
 	['脚本 50% · 任务 10%', '渲染 10% · 样式+布局+绘制 30%']);
+check('翻帧:默认看最差那条;钉住后看钉住的那条;选中的被挤出环外自动退回',
+	(() => {
+		const saved = watch.state.watch.loaf.slice();
+		watch.state.watch.loaf.length = 0;
+		watch.state.watch.loaf.push(
+			{ t: 100, dur: 50, blocking: 10, scripts: [] },
+			{ t: 200, dur: 50, blocking: 300, scripts: [] },
+			{ t: 300, dur: 50, blocking: 90, scripts: [] });
+		const auto = watch.pickedLoaf().t;
+		watch.state.watch.pickT = 100;
+		const pinned = watch.pickedLoaf().t;
+		watch.state.watch.pickT = 999;                    // 已经不在环里了
+		const evicted = [watch.pickedLoaf().t, watch.state.watch.pickT];
+		watch.state.watch.loaf.length = 0;
+		for (const row of saved) watch.state.watch.loaf.push(row);
+		return [auto, pinned, evicted];
+	})(),
+	[200, 100, [200, null]]);
+check('翻帧:清单按 blocking 降序,◀ ▶ 到头就停住,⟲ 回到自动',
+	(() => {
+		const saved = watch.state.watch.loaf.slice();
+		watch.state.watch.loaf.length = 0;
+		watch.state.watch.loaf.push({ t: 1, blocking: 10 }, { t: 2, blocking: 300 }, { t: 3, blocking: 90 });
+		const ranks = watch.loafRanks().map((row) => row.t);
+		watch.pickStep(1);                                 // 自动(t2 = 最差)→ 下一条 t3
+		const step1 = watch.state.watch.pickT;
+		watch.pickStep(1);                                 // 到头:停在 t1
+		const step2 = watch.state.watch.pickT;
+		watch.pickStep(1);
+		const clamped = watch.state.watch.pickT;
+		watch.pickStep(-1);                                // 往回一条 = t3
+		const back = watch.state.watch.pickT;
+		watch.pickAuto();
+		const auto = watch.state.watch.pickT;
+		watch.state.watch.loaf.length = 0;
+		for (const row of saved) watch.state.watch.loaf.push(row);
+		return [ranks, step1, step2, clamped, back, auto];
+	})(),
+	[[2, 3, 1], 3, 1, 1, 3, null]);
 check('圆环分段:脚本按来源切细(同一族红,由深到浅),各段之和 = 整帧',
 	(() => {
 		const arcs = watch.frameArcs(
