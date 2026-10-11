@@ -4594,14 +4594,30 @@ window.__ModuleLoader__.load({
 						// `rgb(34,197,94)`,满不透明就是一块发光色块,"占比"读不出来;
 						// ② 段用 `flexGrow: 毫秒` + `flexBasis: 3px`:小段也占得住 3px(以前 6% 只有 21px × 0.28);
 						// ③ 顶段 ≥ 80% 时在条右边内联一个占比 —— 比例严重偏斜时,"几乎全在一桶"要用数字说出来。
-						const bar = (key, label, hint, list, token, text, kind) => {
+						// 每项一行的小表:名字左(超长省略,title 给全名)、毫秒右(等宽)。
+						// 原来是"一整块右对齐长文本",折行会折在名字中间(实测 `ResizeObserverCallback` /
+						// `index-5SrrfWpU.js` 都被劈成两半),读起来要先把断行拼回去。
+						const bar = (key, label, hint, list, token, kind) => {
 							const { segs, total } = barSegments(list);
 							if (segs.length === 0 || total <= 0) return null;
 							const topShare = segs[0].ms / total;
+							const restCount = Math.max(0, (list ?? []).length - 3);
 							return h('div', { key, style: { marginTop: 6 } },
-								h('div', { style: { ...S.row, marginTop: 0 } },
-									h('span', { style: S.label, title: hint }, label),
-									h('span', { style: S.num }, text)),
+								h('span', { style: S.blockLabel, title: hint }, label),
+								h('div', { style: { marginTop: 2 } },
+									segs.map((seg, index) => h('div', {
+										key: `row-${index}`,
+										style: { display: 'flex', gap: 8, alignItems: 'baseline', lineHeight: 1.45 },
+									},
+										h('span', {
+											title: seg.name === null ? translate('rest') : seg.name,
+											style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' },
+										}, seg.name === null
+											? `${translate('rest')}${restCount > 1 ? ` ${restCount}${translate('times')}` : ''}`
+											: short(seg.name)),
+										h('span', {
+											style: { flex: '0 0 auto', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums' },
+										}, `${Math.round(seg.ms)}ms`)))),
 								h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
 									h('div', { style: { flex: '1 1 auto', display: 'flex', height: 8, borderRadius: 3, overflow: 'hidden', background: 'var(--dsw-alias-border-l2)' } },
 										segs.map((seg, index) => {
@@ -4612,9 +4628,6 @@ window.__ModuleLoader__.load({
 												title: `${seg.name === null ? translate('rest') : seg.name} ${Math.round(seg.ms)}ms · ${Math.round((seg.ms / total) * 100)}%`,
 												style: {
 													flexGrow: seg.ms, flexShrink: 1, flexBasis: 3,
-													// 填充**不透明**,名次靠"压暗"而不是"变透明":token 本身在这个主题里是近白/纯绿,
-													// 降不透明度只会让整条发灰(实测被吐槽"更淡了");压亮度则保留色相 —— 绿还是绿,
-													// 只是不再荧光。用一个黑色渐变盖在上面,任何浏览器都认(不需要 color-mix)。
 													background: `var(${token})`,
 													backgroundImage: `linear-gradient(rgba(0, 0, 0, ${[0.32, 0.46, 0.58, 0.68][index] ?? 0.68}), rgba(0, 0, 0, ${[0.32, 0.46, 0.58, 0.68][index] ?? 0.68}))`,
 													boxShadow: index === 0 ? undefined : 'inset 1px 0 0 0 rgba(0, 0, 0, 0.6)',
@@ -4632,15 +4645,15 @@ window.__ModuleLoader__.load({
 						if (frame !== null && frame.js > 0 && framePkgs !== null) {
 							rows.push(head('frame-head', t('scopeFrame'), t('splitJsHint')));
 							rows.push(line('frame-js', t('splitJs'), t('splitJsHint'), jsBreakdownText(frame)));
-							rows.push(bar('frame-src', t('bySource'), t('invokerHint'), framePkgs.byInvoker, '--dsw-alias-brand-primary', invokerWhoText(framePkgs), 'src'));
-							rows.push(bar('frame-pkg', t('byPkg'), t('pkgHint'), whoRows(framePkgs), '--dsw-alias-state-success-primary', pkgWhoText(framePkgs), 'pkg'));
+							rows.push(bar('frame-src', t('bySource'), t('invokerHint'), framePkgs.byInvoker, '--dsw-alias-brand-primary', 'src'));
+							rows.push(bar('frame-pkg', t('byPkg'), t('pkgHint'), whoRows(framePkgs), '--dsw-alias-state-success-primary', 'pkg'));
 						}
 						if (window.js > 0) {
 							rows.push(head('win-head', windowScopeText(window), t('windowScopeHint')));
-							rows.push(bar('win-src', t('bySource'), t('invokerHint'), window.byInvoker, '--dsw-alias-brand-primary', invokerWhoText(window), 'src'));
+							rows.push(bar('win-src', t('bySource'), t('invokerHint'), window.byInvoker, '--dsw-alias-brand-primary', 'src'));
 							// 全是纯执行时这一行只是把"脚本总耗时"重复一遍(条上已经看得到),不显示
 							if (window.forced + window.pause > 0) rows.push(line('win-js', t('splitJs'), t('forcedHint'), jsBreakdownText(window)));
-							rows.push(bar('win-pkg', t('byPkg'), t('pkgHint'), whoRows(window), '--dsw-alias-state-success-primary', pkgWhoText(window), 'pkg'));
+							rows.push(bar('win-pkg', t('byPkg'), t('pkgHint'), whoRows(window), '--dsw-alias-state-success-primary', 'pkg'));
 							// 一个包名都没定到:按包这一层现在没有信息,但也不能装作它不存在
 							// 一个包名都没定到:这一层给不出占比(没有名字就没有排行),但**必须留下分母** ——
 							// 直接不显示会让人以为"按包"被删了(实测被这么问过)。
