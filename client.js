@@ -3448,7 +3448,10 @@ window.__ModuleLoader__.load({
 		 */
 		function pickList() {
 			const all = loafRanks();
-			const hot = all.filter((row) => (row.blocking ?? 0) >= PICK_MIN_MS);
+			// 用 `max(blocking, dur)`:LoAF 的 blocking 在这个环境里常年偏小(实测 45 帧的 blocking 全 < 100,
+			// 于是清单退回"全部",而它们的时长其实都过了线);「帧时长」才是面板自己的严重度口径
+			// (判色用 120/200ms,圆环上的 `帧里花在哪` 显示的也是它),标签也改用它。
+			const hot = all.filter((row) => Math.max(row.blocking ?? 0, row.dur ?? 0) >= PICK_MIN_MS);
 			return hot.length === 0 ? { rows: all, filtered: false } : { rows: hot, filtered: true };
 		}
 
@@ -4507,12 +4510,12 @@ window.__ModuleLoader__.load({
 						const auto = state.watch.pickT === null;
 						const shown = list.filtered ? list.rows.length : 0;
 						const title = `${t('framePick')} ${at}/${list.rows.length}${list.filtered ? `(≥${PICK_MIN_MS}ms)` : ''}`
-							+ ` · blocking ${Math.round(current.blocking ?? 0)}ms · ${clock(current.t)}`
+							+ ` · ${t('splitTotal')} ${Math.round(current.dur ?? 0)}ms · blocking ${Math.round(current.blocking ?? 0)}ms · ${clock(current.t)}`
 							+ `\n${auto ? t('framePickAuto') : t('framePinned')}`
 							+ (shown === 0 ? '' : `\n${translate('framePickFiltered')} ${shown}${translate('times')}`)
 							+ `\n${t('framePickHint')}`;
 						return h('div', { style: { ...S.row, alignItems: 'center' }, title },
-							h('span', { style: S.label }, `${t('framePick')} ${at}/${list.rows.length} · ${Math.round(current.blocking ?? 0)}ms${list.filtered ? ` · ≥${PICK_MIN_MS}ms` : ''}`),
+							h('span', { style: S.label }, `${t('framePick')} ${at}/${list.rows.length} · ${Math.round(current.dur ?? 0)}ms${list.filtered ? ` · ≥${PICK_MIN_MS}ms` : ''}`),
 							h('span', { style: { flex: '0 0 auto', display: 'flex', gap: 6 } },
 								h('button', { type: 'button', style: S.btn, title: t('framePickHint'), onClick: () => pickStep(-1) }, '◀'),
 								h('button', { type: 'button', style: S.btn, title: t('framePickHint'), onClick: () => pickStep(1) }, '▶'),

@@ -1394,15 +1394,17 @@ check('翻帧:默认看最差那条;钉住后看钉住的那条;选中的被挤�
 		return [auto, pinned, evicted];
 	})(),
 	[200, 100, [200, null]]);
-check('翻帧清单:只收 blocking ≥ 100ms 的(与守夜触发线同一条),其余不进榜',
+check('翻帧清单:只收 max(blocking, 帧时长) ≥ 100ms 的,其余不进榜',
 	(() => {
 		const saved = watch.state.watch.loaf.slice();
 		watch.state.watch.loaf.length = 0;
-		watch.state.watch.loaf.push({ t: 1, blocking: 10 }, { t: 2, blocking: 300 }, { t: 3, blocking: 250 }, { t: 4, blocking: 90 });
+		watch.state.watch.loaf.push(
+			{ t: 1, blocking: 10, dur: 60 }, { t: 2, blocking: 300, dur: 320 },
+			{ t: 3, blocking: 250, dur: 260 }, { t: 4, blocking: 90, dur: 95 });
 		const list = watch.pickList();
 		const hot = [list.filtered, list.rows.map((row) => row.t)];
 		// 一条都不到线:退回全部,并说明"没过滤"
-		watch.state.watch.loaf.forEach((row) => { row.blocking = 40; });
+		watch.state.watch.loaf.forEach((row) => { row.blocking = 40; row.dur = 70; });
 		const cold = watch.pickList();
 		const fallback = [cold.filtered, cold.rows.length];
 		watch.state.watch.loaf.length = 0;
@@ -1414,7 +1416,9 @@ check('翻帧:◀ ▶ 按 blocking 降序走(只看上榜的帧),到头停住,�
 	(() => {
 		const saved = watch.state.watch.loaf.slice();
 		watch.state.watch.loaf.length = 0;
-		watch.state.watch.loaf.push({ t: 1, blocking: 10 }, { t: 2, blocking: 300 }, { t: 3, blocking: 250 }, { t: 4, blocking: 90 });
+		watch.state.watch.loaf.push(
+			{ t: 1, blocking: 10, dur: 60 }, { t: 2, blocking: 300, dur: 320 },
+			{ t: 3, blocking: 250, dur: 260 }, { t: 4, blocking: 90, dur: 95 });
 		const ranks = watch.pickList().rows.map((row) => row.t);
 		watch.pickStep(1);                                 // 自动(t2 = 最差)→ 下一条 t3
 		const step1 = watch.state.watch.pickT;
