@@ -4351,6 +4351,17 @@ window.__ModuleLoader__.load({
 			const [, force] = React.useState(0);
 			const [open, setOpen] = React.useState(state.collapsed === false);
 			const [draft, setDraft] = React.useState('');
+			// 悬停联动:一个共享的 key(环段 / 来源段 / 包段),同一个维度在**几处视图**里同时加亮 ——
+			// 这是"跨视图一致"的一半(另一半是配色):鼠标指到哪,别处的同一个东西也亮起来。
+			const [hot, setHot] = React.useState(null);
+			const hotProps = (key, extra) => ({
+				...extra,
+				onMouseEnter: () => setHot(key),
+				onMouseLeave: () => setHot(null),
+			});
+			const hotStyle = (key, base) => (hot === key
+				? { ...base, fontWeight: 700, color: 'var(--dsw-alias-brand-primary)' }
+				: base);
 			const setRoot = React.useCallback((element) => { state.root = element; }, []);
 			React.useEffect(() => {
 				// 只在"显示值变了"时渲染(兜底至少 2 秒一次):折叠着不动时 HUD 自身开销接近零。
@@ -4524,7 +4535,10 @@ window.__ModuleLoader__.load({
 							if (length <= 0.05) continue;
 							arcs.push(h('circle', {
 								key: `slice-${i}`, cx: 42, cy: 42, r: R, fill: 'none',
-								stroke: COLORS[slices[i].color], strokeWidth: 13, strokeOpacity: slices[i].opacity,
+								onMouseEnter: () => setHot(`ring:${slices[i].color}`),
+								onMouseLeave: () => setHot(null),
+								style: { cursor: 'default', transition: 'stroke-width 80ms linear' },
+								stroke: COLORS[slices[i].color], strokeWidth: hot === `ring:${slices[i].color}` ? 17 : 13, strokeOpacity: slices[i].opacity,
 								strokeDasharray: `${length.toFixed(1)} ${(C - length).toFixed(1)}`,
 								strokeDashoffset: (-offset).toFixed(1),
 								transform: 'rotate(-90 42 42)',
@@ -4538,7 +4552,10 @@ window.__ModuleLoader__.load({
 							h('svg', { width: 84, height: 84, viewBox: '0 0 84 84', style: { flex: '0 0 auto' } }, arcs),
 							h('div', { style: { flex: '1 1 auto', textAlign: 'right', lineHeight: 1.5, minWidth: 0 } },
 								h('div', { style: S.num, title }, `${t('split')} ${split.total}ms`),
-								splitLegend(split).map((line, index) => h('div', { key: `legend-${index}`, style: S.sub, title }, line))));
+								splitLegend(split).map((line, index) => h('div', {
+									key: `legend-${index}`, title,
+									style: hot !== null && hot.startsWith('ring:') ? { ...S.sub, fontWeight: 700 } : S.sub,
+								}, line))));
 					})(),
 					// D5:脚本侧往下拆:**两个小标题各管一组**。「本帧」那组与上面那张饼吃同一条
 					// LoAF(数字能对着看);窗口那组是最近 WATCH_LOAF_MAX 条的累计,它的范围写在
@@ -4555,7 +4572,7 @@ window.__ModuleLoader__.load({
 						const head = (key, text, hint) => h('div', { key, style: { ...S.blockLabel, marginTop: 8 }, title: hint }, text);
 						// 一条 100% 堆叠横条:上面是"谁 + 毫秒"的文字(绝对值),下面是占比(段宽)。
 						// 段宽按这一维度的总量算,所以条恒满格;名次靠由深到浅(与环同一套读法)。
-						const bar = (key, label, hint, list, token, text) => {
+						const bar = (key, label, hint, list, token, text, kind) => {
 							const { segs, total } = barSegments(list);
 							if (segs.length === 0 || total <= 0) return null;
 							return h('div', { key, style: { marginTop: 6 } },
@@ -4563,24 +4580,34 @@ window.__ModuleLoader__.load({
 									h('span', { style: S.label, title: hint }, label),
 									h('span', { style: S.num }, text)),
 								h('div', { style: { display: 'flex', height: 10, marginTop: 4, borderRadius: 4, overflow: 'hidden', background: 'var(--dsw-alias-border-l2)' } },
-									segs.map((seg, index) => h('div', {
-										key: `seg-${index}`,
-										title: `${seg.name === null ? translate('rest') : seg.name} ${Math.round(seg.ms)}ms · ${Math.round((seg.ms / total) * 100)}%`,
-										style: { width: `${(seg.ms / total) * 100}%`, background: `var(${token})`, opacity: [1, 0.7, 0.45, 0.28][index] ?? 0.28 },
-									}))));
+									segs.map((seg, index) => {
+										const segKey = seg.name === null ? null : `${kind}:${seg.name}`;
+										const lit = segKey !== null && hot === segKey;
+										return h('div', {
+											key: `seg-${index}`,
+											...hotProps(segKey, {}),
+											title: `${seg.name === null ? translate('rest') : seg.name} ${Math.round(seg.ms)}ms · ${Math.round((seg.ms / total) * 100)}%`,
+											style: {
+												width: `${(seg.ms / total) * 100}%`, background: `var(${token})`,
+												// 被指到的那一段提到最亮,其余压暗一档 —— 同一维度在表格里也同时亮
+												opacity: lit ? 1 : ([1, 0.7, 0.45, 0.28][index] ?? 0.28) * (hot === null ? 1 : 0.55),
+												cursor: segKey === null ? 'default' : 'pointer',
+											},
+										});
+									})));
 						};
 						if (frame !== null && frame.js > 0 && framePkgs !== null) {
 							rows.push(head('frame-head', t('scopeFrame'), t('splitJsHint')));
 							rows.push(line('frame-js', t('splitJs'), t('splitJsHint'), jsBreakdownText(frame)));
-							rows.push(bar('frame-src', t('bySource'), t('invokerHint'), framePkgs.byInvoker, '--dsw-alias-brand-primary', invokerWhoText(framePkgs)));
-							rows.push(bar('frame-pkg', t('byPkg'), t('pkgHint'), whoRows(framePkgs), '--dsw-alias-state-success-primary', pkgWhoText(framePkgs)));
+							rows.push(bar('frame-src', t('bySource'), t('invokerHint'), framePkgs.byInvoker, '--dsw-alias-brand-primary', invokerWhoText(framePkgs), 'src'));
+							rows.push(bar('frame-pkg', t('byPkg'), t('pkgHint'), whoRows(framePkgs), '--dsw-alias-state-success-primary', pkgWhoText(framePkgs), 'pkg'));
 						}
 						if (window.js > 0) {
 							rows.push(head('win-head', windowScopeText(window), t('windowScopeHint')));
-							rows.push(bar('win-src', t('bySource'), t('invokerHint'), window.byInvoker, '--dsw-alias-brand-primary', invokerWhoText(window)));
+							rows.push(bar('win-src', t('bySource'), t('invokerHint'), window.byInvoker, '--dsw-alias-brand-primary', invokerWhoText(window), 'src'));
 							// 全是纯执行时这一行只是把"脚本总耗时"重复一遍(条上已经看得到),不显示
 							if (window.forced + window.pause > 0) rows.push(line('win-js', t('splitJs'), t('forcedHint'), jsBreakdownText(window)));
-							rows.push(bar('win-pkg', t('byPkg'), t('pkgHint'), whoRows(window), '--dsw-alias-state-success-primary', pkgWhoText(window)));
+							rows.push(bar('win-pkg', t('byPkg'), t('pkgHint'), whoRows(window), '--dsw-alias-state-success-primary', pkgWhoText(window), 'pkg'));
 							// 一个包名都没定到:按包这一层现在没有信息,但也不能装作它不存在
 							// 一个包名都没定到:这一层给不出占比(没有名字就没有排行),但**必须留下分母** ——
 							// 直接不显示会让人以为"按包"被删了(实测被这么问过)。
@@ -4600,22 +4627,34 @@ window.__ModuleLoader__.load({
 						const pct = (ms) => `${Math.round((ms / (cross.js || 1)) * 100)}%`;
 						const cellStyle = { flex: '1 1 0', textAlign: 'right', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums', fontSize: 12 };
 						const nameStyle = { flex: '0 0 84px', color: 'var(--dsw-alias-label-secondary)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
-						const row = (key, label, cells) => h('div', { key, style: { display: 'flex', gap: 4, marginTop: 2 } },
-							h('span', { style: nameStyle, title: label }, label), cells);
-						const num = (key, ms, who, src) => h('span', {
+						// 行 = 包(pkg:)、列 = 来源(src:),与两条堆叠条用同一组 key —— 指哪哪儿亮。
+						const row = (key, label, cells, hotKey) => h('div', { key, style: { display: 'flex', gap: 4, marginTop: 2 } },
+							h('span', {
+								style: hotKey === null ? nameStyle : hotStyle(hotKey, nameStyle),
+								title: label, ...hotProps(hotKey, {}),
+							}, label), cells);
+						const num = (key, ms, who, src, lit) => h('span', {
 							key, title: `${who} · ${src} ${Math.round(ms)}ms · ${pct(ms)}`,
-							style: { ...cellStyle, color: ms > 0 ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)' },
+							style: {
+								...cellStyle,
+								fontWeight: lit ? 700 : undefined,
+								color: lit ? 'var(--dsw-alias-brand-primary)' : (ms > 0 ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)'),
+							},
 						}, ms > 0 ? String(Math.round(ms)) : '·');
 						const kids = [
-							row('cross-head', t('crossCorner'), cross.cols.map((src) => h('span', { key: `h-${src}`, title: src, style: { ...nameStyle, flex: '1 1 0', textAlign: 'right' } }, short(src)))
-								.concat([h('span', { key: 'h-rest', style: { ...nameStyle, flex: '1 1 0', textAlign: 'right' } }, translate('rest'))])),
+							row('cross-head', t('crossCorner'), cross.cols.map((src) => h('span', {
+								key: `h-${src}`, title: src, ...hotProps(`src:${src}`, {}),
+								style: hotStyle(`src:${src}`, { ...nameStyle, flex: '1 1 0', textAlign: 'right' }),
+							}, short(src))).concat([
+								h('span', { key: 'h-rest', style: { ...nameStyle, flex: '1 1 0', textAlign: 'right' } }, translate('rest')),
+							]), null),
 						];
 						cross.rows.forEach((who, r) => kids.push(row(`cross-${who}`, short(who),
-							cross.cols.map((src, c) => num(`c-${r}-${c}`, cross.grid[r][c], who, src))
-								.concat([num(`c-${r}-rest`, cross.restCol[r], who, translate('rest'))]))));
+							cross.cols.map((src, c) => num(`c-${r}-${c}`, cross.grid[r][c], who, src, hot === `src:${src}` || hot === `pkg:${who}`))
+								.concat([num(`c-${r}-rest`, cross.restCol[r], who, translate('rest'), hot === `pkg:${who}`)])), `pkg:${who}`));
 						kids.push(row('cross-rest', translate('rest'),
-							cross.cols.map((src, c) => num(`r-rest-${c}`, cross.restRow[c], translate('rest'), src))
-								.concat([num('cross-corner-cell', cross.corner, translate('rest'), translate('rest'))])));
+							cross.cols.map((src, c) => num(`r-rest-${c}`, cross.restRow[c], translate('rest'), src, hot === `src:${src}`))
+								.concat([num('cross-corner-cell', cross.corner, translate('rest'), translate('rest'), false)]), null));
 						kids.push(h('div', { key: 'cross-unit', title: t('crossHint'), style: { ...S.sub, textAlign: 'right' } },
 							`${translate('crossUnit')} · ${translate('crossBiggest')} ${short(cross.top.who)} · ${short(cross.top.src)} ${Math.round(cross.top.ms)}ms`));
 						return group('cross', t('crossTable'), crossSummary(cross), ...kids);
