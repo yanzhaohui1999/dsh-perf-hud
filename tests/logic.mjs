@@ -580,6 +580,19 @@ check('C2:词典里没有"没人引用"的死键(面板撤下后遗留的串)', 
 	const referenced = new Set([...outside.matchAll(/\b(?:t|translate)\(\s*(['"])([A-Za-z_$][\w$]*)\1\s*\)/g)].map((row) => row[2]));
 	return Object.keys(box.DICT.zh).filter((key) => referenced.has(key) === false);
 })(), []);
+// 面板是**纯文本**渲染,不是 markdown:凡是显示在**正文**里的词典值都不许带 `**` 或反引号,
+// 否则它们会原样出现在面板上(实测被吐槽)。带记号的只允许是"只做悬停 title"的那几个键 ——
+// 白名单里的键也不许是死键(下面那条核它)。新加正文文案时:要么去掉记号,要么确认它只进 title。
+const MARKDOWN_TITLE_ONLY = new Set([
+	'framePickHint', 'pkgHint', 'pkgWindowHint', 'pkgStoredHint', 'incidentWindowScopeHint', 'pkgIncidentWindowHint',
+	'forcedHint', 'crossHint', 'crossIncidentHint', 'frameNavHint', 'replayHint', 'replayTimelineHint', 'evidenceHint',
+	'splitHint', 'splitJsHint', 'invokerHint', 'windowScopeHint', 'watchHint', 'watchExportHint', 'viewEvidenceHint',
+]);
+check('正文文案不含 markdown 记号(`**` / 反引号),带记号的一律是白名单里的"只进悬停"键',
+	Object.keys(box.DICT.zh).filter((key) => /\*\*|`/.test(box.DICT.zh[key]) || /\*\*|`/.test(box.DICT.en[key]))
+		.filter((key) => MARKDOWN_TITLE_ONLY.has(key) === false), []);
+check('上面那份黑白名单没有过期条目(键都还在词典里)',
+	[...MARKDOWN_TITLE_ONLY].filter((key) => Object.hasOwn(box.DICT.zh, key) === false), []);
 check('C2:兜底跟文档语言走(zh → 中文,其余含认不出来 → 英文),不是写死中文', (() => {
 	const read = (lang, navLang) => {
 		box.document.documentElement.lang = lang;
@@ -1639,6 +1652,7 @@ const watchPieces = [
 	extract(source, 'function evidenceScope('),
 	extract(source, 'function evidenceZeroText('),
 	extract(source, 'function evidenceFooter('),
+	extract(source, 'function evidenceFooterTitle('),
 	extract(source, 'function watchPanelText('),
 	// 事故"选中的那条"这条上下文:文本函数跟的是 selectedIncident(),不是硬编码 incidents[0]
 	extract(source, 'function incidentOwner('),
@@ -1772,7 +1786,8 @@ const watchBox = new Function(`
 		verdictUnattributedText: '未观察到足以解释该帧的 JS 阻塞证据;请结合前后帧和时间间隙检查 rAF 挂起或浏览器节流',
 		replayGapCell: '这段时间没有帧记录', replayCellPick: '点它 → 选中这一帧', replayCellCount: '这一格',
 		pkgStoredHint: '存下来的包名', incidentWindowScopeHint: '事故窗口累计', pkgIncidentWindowHint: '事故窗口按包',
-		evidenceMissing: '缺:原始源码行号与调用栈', evidenceCaliber: '口径:x', frameEvidenceMissing: '这一帧没有脚本记录',
+		evidenceHoverHint: '悬停看口径与缺口', frameEvidenceMissing: '这一帧没有脚本记录',
+		evidenceCaliberPlain: '口径:函数名与毫秒由 LoAF 直接测量;合并批只给文件 + 「合并脚本行 N」。', evidenceMissingPlain: '缺:原始源码行号与调用栈。',
 		splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 	})[key] ?? key;
 	// 面板渲染区那两个文案函数用到的短名(真实实现里是 short():去掉 scope 前缀)
@@ -1804,7 +1819,7 @@ const watchBox = new Function(`
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT, sparkPickMap, sparkCellTitle, markResolved,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
 		tallyScripts, framePkgTally, pkgWhoText, whoRows, barSegments, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
-		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident, selectIncident, setIncidentScope, evidenceScope, evidenceFooter, evidenceZeroText, incidentScriptEvidence, incidentEvidenceAt, evidenceWhereText, evidenceLine, evidenceName, evidencePlace, replayScope, replayX, replaySummaryText, replaySplitText, evidenceCalls: () => evidenceCalls,
+		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident, selectIncident, setIncidentScope, evidenceScope, evidenceFooter, evidenceFooterTitle, evidenceZeroText, incidentScriptEvidence, incidentEvidenceAt, evidenceWhereText, evidenceLine, evidenceName, evidencePlace, replayScope, replayX, replaySummaryText, replaySplitText, evidenceCalls: () => evidenceCalls,
 		// 诊断上下文 + 历史帧数据层(逐帧回放)
 		diagMode, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, incidentFrameLevel, selectIncidentFrame, incidentFrameStep, incidentFrameBadStep, showLiveMode, replayColumns, replayCellTitle, incidentWallClock, incidentFrameTally, incidentWindowTally, incidentFrameEvidenceRows, incidentLongTasksAt, incidentVerdict, verdictColor, incidentScriptOf, detailContext, incidentFrameHeadingText, liveFrameHeadingText, saveWatchUI, restoreWatchUI, LS_WATCHUI,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
@@ -2441,6 +2456,22 @@ check('可疑脚本:事故优先(窗口内切片,跨会话读回仍在),范围�
 		return [scope.label.includes('i9'), scope.label.includes('窗口内'), scope.rows.length, scope.total, scope.named, footer.includes('1/3'), footer.includes('定到包 1/3'), watch.evidenceZeroText(scope)];
 	})(),
 	[true, true, 1, 3, 1, true, true, '可疑脚本:0 条定到名(窗口内 3条脚本)· 要深录']);
+// 底下一行是**正文**:以前它把「口径」与「缺口」两整段(各两三百字、带 `**` 与反引号)摊在这里,
+// 面板是纯文本渲染,于是那些记号原样显示出来 —— 实测被吐槽"这段文字很丑陋"。现在正文只留分母与
+// 一句悬停提示,全文进 title(与「复制摘要」共用同一份纯文本措辞)。
+check('证据块底下那一行:正文只有分母 + 悬停提示(单行、不含 markdown 记号),全文在悬停里',
+	(() => {
+		const footer = watch.evidenceFooter({ total: 2, named: 2 });
+		const title = watch.evidenceFooterTitle();
+		return [
+			footer,
+			/\*\*|`/.test(footer),
+			footer.includes('\n'),
+			title.includes('口径:'), title.includes('缺:'), title.includes('合并脚本行'),
+		];
+	})(),
+	['2条脚本 · 定到包 2/2 · 悬停看口径与缺口', false, false, true, true, true]);
+
 // 这一帧有 2 条脚本,但只有 1 条能定位(另一条 URL 为空、也没有函数名)→ **列 1 条,分母仍是 2**
 check('可疑脚本:没有事故时退回「当前选中那一帧」;不能定位的行不占名额但算进分母',
 	(() => {
