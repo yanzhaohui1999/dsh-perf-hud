@@ -797,8 +797,19 @@ window.__ModuleLoader__.load({
 		 * 不随上面列出的行数变(列出来的只是"能定位的那几条")。
 		 */
 		function evidenceFooter(scope) {
-			const coverage = `${scope.total}${translate('scriptsUnit')} · ${translate('pkgNamed')} ${scope.named}/${scope.total}`;
-			return `${coverage}\n${translate('evidenceCaliber')}\n${translate('evidenceMissing')}`;
+			// ⚠️ 正文只留**分母**与一句提示。以前这里把「口径」与「缺口」两整段(各两三百字)摊在正文里,
+			// 而面板是**纯文本**渲染(不是 markdown),于是 `**` 与反引号原样显示出来 —— 一屏全是解释,
+			// 分母反而找不着。完整口径与缺口进 evidenceFooterTitle() 的悬停;「复制摘要」那份交接件
+			// 仍然照旧带全文(它本来就是给别的 AI 读的,不受这里影响)。
+			return `${scope.total}${translate('scriptsUnit')} · ${translate('pkgNamed')} ${scope.named}/${scope.total} · ${translate('evidenceHoverHint')}`;
+		}
+
+		/**
+		 * 上面那一行悬停时给的**完整**口径与缺口 —— 与「复制摘要」的交接件用**同一份措辞**
+		 * (`evidenceCaliberPlain` / `evidenceMissingPlain`),所以两处不会各说一套。
+		 */
+		function evidenceFooterTitle() {
+			return `${translate('evidenceCaliberPlain')}\n${translate('evidenceMissingPlain')}`;
 		}
 
 		/**
@@ -5381,22 +5392,21 @@ window.__ModuleLoader__.load({
 				// 直接测量 / 归因推断 / 尚无法确认三者在这几句里分开写。
 				evidenceLabel: '可疑脚本', evidenceScopeIncident: '事故', evidenceWindowPrefix: '窗口内',
 				evidenceHint: '把「事故 → 帧 → 来源 → 包 → 文件:行」落到个体脚本上:上面那几块给的是"时间花在哪个包 / 哪类调用"(排行),这一块给的是"打开哪个文件、哪个函数"(定位)。**历史事故上下文**里优先给选中那一帧自己的脚本(捕获时存下来的,跨会话读回仍在);这一帧没有记录时才退回**事故窗口内**的切片,并在行上写明范围。**实时上下文**里给当前实时帧的脚本。LoAF 只上报 >5ms 的脚本,所以这一层是**下界**。',
-				evidenceCaliber: '口径:函数名与毫秒是 LoAF **直接给的**;包 / 文件 / 行号是由 URL 与 sourcemap 分段**推断的**(悬停看它属于哪一档)。⚠️ **行号是脚本自己的行号,不是原始 TS/TSX 源码行**:单包 URL 时它就是那个文件里的行;合并批(`plugins/??a,b`)里它是**合并后大文件**里的行,而文件只回答"这段代码属于哪个包的那个文件" —— 两者不是一个坐标系,所以那种情况**不拼成 `文件:行`**,行号单独写成「合并脚本行 N」。',
-				evidenceMissing: '缺:原始源码行号与调用栈 —— 要解 section 内层 mappings(VLQ)或录 Chrome trace,本项目都没做。所以这里能缩小到"哪个包的哪个文件哪一段",不能直接指出根因。',
+				evidenceHoverHint: '悬停看口径与缺口',
 				evidenceCopyHint: '点这一行复制「函数 @ 包 · 文件:行 · 耗时 · 来源」',
 				evidenceWhere: '位置', evidenceInvoker: '来源', copyScript: '脚本',
 				evidenceBundleLine: '合并脚本行',
 				replay: '事故回放', replayGaps: 'rAF 挂起', replayNoLoaf: '这一帧附近没有长动画帧记录(窗口里没有 LoAF)',
 				replayFailed: '事故回放算不出来',
 				replayHint: '这块是**捕获时存下来的窗口**(来自事故包,所以刷新生效),不是实时那条 60 秒帧环:横轴按**时间**放,一格可能有多帧(取最差的那一帧),点击选中的一定是 `incident.frames` 里**真实存在**的那一帧;整段 rAF 被挂起的地方留白(那是“没在测”,不是“没卡”,不补桩)。帧间隔与 LoAF 都是直接测量。⚠️ LoAF 不给每帧内脚本的起止时间,所以这里**不排帧内执行顺序**;要看逐帧明细请「导出事故包」+ tools/inspect-incident.mjs。',
-				replayScopeNote: '口径:帧间隔 / 分位 / 最差帧都来自**捕获时那 13 秒**的切片,不是实时读数,也不代表现在的状况;缺口 = 那段时间 rAF 被挂起。',
+				replayScopeNote: '口径:帧间隔 / 分位 / 最差帧都来自捕获时那 13 秒的切片,不是实时读数,也不代表现在的状况;缺口 = 那段时间 rAF 被挂起。',
 				evidenceFailed: '可疑脚本这一段算不出来',
 				fnUnknown: '函数名未记录', pkgUnresolvedShort: '包未定名', fileUnresolved: '文件未定名',
 				pkgNamed: '定到包',
 				viaDirect: '直接读出来', viaInferred: '分段推断', viaNotPlugin: '不是插件脚本', viaFailed: '解析失败', viaNotFetched: '还没预取(只有深录才拉脚本文本)', viaUnavailable: '还没到位/拿不到',
 				// 交接件(复制摘要)里那两行:措辞要能让**没看过面板的人**直接用
 				handoffInteractions: '窗口内 ≥100ms 的交互', handoffInteractionsScope: '(端到端时长,不是帧内拆分)',
-				evidenceCaliberPlain: '口径:函数名与毫秒由 LoAF 直接测量;包 / 文件 / 行号由 URL 与 sourcemap 分段推断(pkg= / line= 是原始 via 码);行号是脚本文件自己的行,不是原始源码行。',
+				evidenceCaliberPlain: '口径:函数名与毫秒由 LoAF 直接测量;包 / 文件 / 行号由 URL 与 sourcemap 分段推断(pkg= / line= 是原始 via 码);行号是脚本文件自己的行,不是原始源码行 —— 合并批里它是合并后大文件的行,所以只给文件 + 「合并脚本行 N」,不拼成 文件:行。',
 				evidenceMissingPlain: '缺:原始源码行号与调用栈(要解 section 内层 mappings 或录 Chrome trace);交互只有端到端时长,没有输入延迟/处理/呈现的拆分。',
 				hourUnit: '小时', minUnit: '分', secUnit: '秒',
 				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
@@ -5516,21 +5526,20 @@ window.__ModuleLoader__.load({
 				handoffFrameNoEvidence: 'this frame has no script records in the incident pack (interval only)',
 				evidenceLabel: 'suspect scripts', evidenceScopeIncident: 'incident', evidenceWindowPrefix: 'in window',
 				evidenceHint: 'Lands the chain "incident -> frame -> invoker -> package -> file:line" on individual scripts: the blocks above say where the time went (ranking), this one says which file and function to open (locating). In the **incident context** it prefers the selected history frame\'s own scripts (stored at capture time, still there after a reload); when that frame has no records it falls back to the **in-window** slice of the incident and says so. In the **live context** it shows the current live frame\'s scripts. LoAF only reports scripts over 5ms, so this layer is a **lower bound**.',
-				evidenceCaliber: 'Scope: the function name and the milliseconds are **measured** by LoAF; the package / file / line are **inferred** from the URL and sourcemap sections (hover shows which). ⚠️ The line is a line in the **script itself**, not an original TS/TSX source line: for a single-package URL it is a line in that file, while in a combo batch (`plugins/??a,b`) it is a line in the **merged big file** and the file only answers "which package owns this code" — two different coordinate systems, so that case is **not** joined into `file:line`; the line is shown separately as "line in merged script N".',
-				evidenceMissing: 'Missing: original source line and call stack — that needs the inner section mappings (VLQ) or a Chrome trace, neither of which this project does. So this narrows things to "which package, which file, which region", it cannot point at a root cause.',
+				evidenceHoverHint: 'hover for scope & gaps',
 				evidenceCopyHint: 'Click to copy "function @ package · file:line · cost · invoker"',
 				evidenceWhere: 'where', evidenceInvoker: 'invoked by', copyScript: 'script',
 				evidenceBundleLine: 'line in merged script',
 				replay: 'incident replay', replayGaps: 'rAF suspended', replayNoLoaf: 'no long animation frame recorded near this frame (no LoAF in the window)',
 				replayFailed: 'incident replay could not be computed',
 				replayHint: 'This is the **captured window** (it comes from the incident pack, so it survives a reload), not the live 60-second strip: the x axis is **time**, a column may hold several frames (the worst one is kept) and a click always selects a frame that **really exists** in `incident.frames`; stretches where rAF was suspended stay blank (that is "not measured", not "no stall" — nothing is fabricated). Frame intervals and LoAF entries are directly measured. ⚠️ LoAF gives no per-script start/end inside a frame, so this **does not order execution within a frame**; for per-frame detail use "Export incident" + tools/inspect-incident.mjs.',
-				replayScopeNote: 'Scope: frame intervals / quantiles / worst frame all come from the **captured 13 seconds**, not from live readings, and do not describe right now; a gap means rAF was suspended during that stretch.',
+				replayScopeNote: 'Scope: frame intervals / quantiles / worst frame all come from the captured 13 seconds, not from live readings, and do not describe right now; a gap means rAF was suspended during that stretch.',
 				evidenceFailed: 'the suspect-scripts block could not be computed',
 				fnUnknown: 'no function name', pkgUnresolvedShort: 'package unknown', fileUnresolved: 'file unknown',
 				pkgNamed: 'named',
 				viaDirect: 'read directly', viaInferred: 'inferred from sections', viaNotPlugin: 'not a plugin script', viaFailed: 'resolution failed', viaNotFetched: 'not fetched yet (only deep mode pulls script text)', viaUnavailable: 'not ready / unavailable',
 				handoffInteractions: 'interactions >=100ms in the window', handoffInteractionsScope: ' (end-to-end duration, not a frame breakdown)',
-				evidenceCaliberPlain: 'Scope: the function name and milliseconds are measured by LoAF; the package / file / line are inferred from the URL and sourcemap sections (pkg= / line= are the raw via codes); the line is a line in the script file itself, not an original-source line.',
+				evidenceCaliberPlain: 'Scope: the function name and milliseconds are measured by LoAF; the package / file / line are inferred from the URL and sourcemap sections (pkg= / line= are the raw via codes); the line is a line in the script file itself, not an original-source line — in a combo batch it is a line in the merged big file, so only the file plus "line in merged script N" is shown, never joined into file:line.',
 				evidenceMissingPlain: 'Missing: original source line and call stack (needs the inner section mappings or a Chrome trace); interactions only give an end-to-end duration, with no input-delay/processing/presentation split.',
 				hourUnit: 'h', minUnit: 'm', secUnit: 's',
 				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',
@@ -5936,8 +5945,8 @@ window.__ModuleLoader__.load({
 				// 一条**能定位的**都没有(没开深录 / 脚本被压掉函数名)→ 换一行带分母的说明,
 				// 不摆一列 `函数名未记录 @ 包未定名 + 毫秒`(那既没缩小范围又翻了几倍行数)
 				if (scope.rows.length === 0) {
-					return h('div', { style: { ...S.sub, marginTop: 8 }, title: t('evidenceHint') },
-						`${evidenceZeroText(scope)}\n${translate('evidenceMissing')}`);
+					return h('div', { style: { ...S.sub, marginTop: 8 }, title: `${t('evidenceHint')}\n${evidenceFooterTitle()}` },
+						evidenceZeroText(scope));
 				}
 				return h('div', { style: { marginTop: 8 } },
 					// 这一帧没有脚本记录、下面给的是窗口切片时,先把范围说出来(不含糊过去)
@@ -5956,7 +5965,7 @@ window.__ModuleLoader__.load({
 							title: `${translate('evidenceWhere')} ${evidenceWhereText(ev)}`,
 							style: { flex: '0 0 auto', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums' },
 						}, `${Math.round(ev.ms)}ms`)))),
-					h('div', { style: S.sub }, evidenceFooter(scope)));
+					h('div', { style: S.sub, title: evidenceFooterTitle() }, evidenceFooter(scope)));
 			} catch (error) {
 				// 派生统计算炸只降级成一行可见原文,不许带走整块面板(与其它几块同一条安全线)
 				recordError(error);
