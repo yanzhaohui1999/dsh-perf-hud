@@ -3200,9 +3200,130 @@ window.__ModuleLoader__.load({
 		};
 		const mb = (bytes) => (bytes / 1048576).toFixed(1);
 
-		function snapshot() {
-			const worst = worstLongTask();
+		// ───────────────────────────── 导出脱敏(离开本机的文件先做减法)─────────────────────────────
+		/**
+		 * 导出件会被交到外部 AI / 同事手里,所以**先做减法,再把减了什么写进 `context.redaction`**。
+		 * 三条铁律:
+		 *   ① 页面地址只留 origin + path —— DSH 首屏是 `?token=…` 进来的,查询串是凭据最可能的藏身处;
+		 *   ② 脚本 URL 只留路径 + `rev`(rev 是证据),敏感参数的值换成 `<redacted>`;
+		 *   ③ 用户目录与完整 UA 属于"能定位到具体的人",一并降级。
+		 * 这是**减法,不是匿名化**:`redactionReport()` 的 applied / kept / neverCollected 三个数组
+		 * 如实交代做了什么、没做什么、本来就没采什么 —— 不许写成"已匿名化"。
+		 */
+		// 单行数组:离线套件按"整行"抽常量(见 tests/logic.mjs),多行会被截断
+		const SECRET_PARAM_NAMES = ['token', 'accessToken', 'access_token', 'refresh_token', 'id_token', 'api_key', 'apikey', 'api-key', 'key', 'secret', 'client_secret', 'password', 'passwd', 'pwd', 'auth', 'authorization', 'bearer', 'session', 'sessionid', 'sid', 'sig', 'signature', 'credential', 'code'];
+		const SECRET_PARAM = new RegExp(`^(?:${SECRET_PARAM_NAMES.join('|')})$`, 'i');
+		const HOME_PATH = /(^|[^A-Za-z0-9._-])\/(?:Users|home)\/[^/\s"']+/g;
+		const WIN_HOME_PATH = /[A-Za-z]:\\Users\\[^\\\s"']+/g;
+
+		/** 敏感参数只换**值**、保留键名 —— 读的人要知道这里本来有什么,才知道该不该去别处找。 */
+		function scrubParams(text) {
+			const raw = String(text);
+			if (raw.indexOf('=') === -1) return raw;
+			return raw.replace(/([?&#])([A-Za-z0-9_.-]+)=([^&#\s]*)/g,
+				(all, sep, key) => (SECRET_PARAM.test(key) ? `${sep}${key}=<redacted>` : all));
+		}
+
+		/** 页面地址:只留 origin + path(+ 脱敏过的 hash),**查询串整段丢**。 */
+		function redactPageUrl(raw) {
+			if (typeof raw !== 'string' || raw === '') return null;
+			try {
+				const url = new URL(raw, location.href);
+				if (url.origin === 'null') return scrubParams(raw);
+				return `${url.origin}${url.pathname}${url.hash === '' ? '' : scrubParams(url.hash)}`;
+			} catch (error) {
+				return scrubParams(raw);
+			}
+		}
+
+		/** 脚本 URL:路径与 `rev` 都要留(它们是证据),去掉协议+主机,敏感参数换值。 */
+		function redactScriptUrl(raw) {
+			if (typeof raw !== 'string' || raw === '') return null;
+			return scrubParams(String(raw).replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, ''));
+		}
+
+		/** 用户目录 → `~`:整条路径带着用户名,把它交出去等于连人一起交出去。 */
+		function redactPath(text) {
+			if (typeof text !== 'string' || text === '') return text;
+			return text.replace(HOME_PATH, '$1~').replace(WIN_HOME_PATH, '~');
+		}
+
+		/** UA 只留"浏览器主版本 + 系统":完整 UA 能指纹到具体机器,而兼容性判断只用到主版本。 */
+		function redactUserAgent(raw) {
+			if (typeof raw !== 'string' || raw === '') return null;
+			const browser = /(Edg|OPR|Chrome|CriOS|Firefox|FxiOS|Version)\/(\d+)/.exec(raw);
+			const os = /(Windows NT [\d.]+|Mac OS X [\d_]+|Android \d+|iPhone OS [\d_]+|Linux)/.exec(raw);
+			const head = browser === null ? 'unknown-browser' : `${browser[1]}/${browser[2]}`;
+			return `${head} · ${os === null ? 'unknown-os' : os[1]}`;
+		}
+
+		// 按键分派:页面地址与脚本地址的规则不同(前者丢查询串,后者要留 rev)
+		const PAGE_KEYS = new Set(['page', 'href']);
+		const SCRIPT_URL_KEYS = new Set(['url', 'urls', 'sourceURL', 'scriptUrl']);
+		const FREE_TEXT_KEYS = new Set(['note', 'markDraft']);
+
+		/**
+		 * 深度脱敏:导出件只有这一个出口,规则集中在这里 —— 以后加导出字段不会漏。
+		 * 其余字符串一律过 `scrubParams` + `redactPath`(不对路就原样返回),所以**错误原文、
+		 * 组件栈、profile 路径**这些"顺手带出来的东西"也被一并覆盖。
+		 * `options.dropFreeText` 为真时把自由文本置空并标 `noteDropped:true`:那些是用户自己敲的字,
+		 * 可能整段贴着敏感内容,AI 诊断包默认不带(原始导出件仍保留 —— 那是本机调试件)。
+		 */
+		function redactExport(value, options, key) {
+			const opts = options ?? {};
+			if (typeof value === 'string') {
+				if (opts.dropFreeText === true && FREE_TEXT_KEYS.has(key)) return null;
+				if (PAGE_KEYS.has(key)) return redactPageUrl(value);
+				if (SCRIPT_URL_KEYS.has(key)) return redactScriptUrl(value);
+				if (key === 'userAgent') return redactUserAgent(value);
+				return redactPath(scrubParams(value));
+			}
+			if (Array.isArray(value)) return value.map((item) => redactExport(item, opts, key));
+			if (value === null || typeof value !== 'object') return value;
+			const out = {};
+			for (const name of Object.keys(value)) {
+				const item = value[name];
+				if (opts.dropFreeText === true && FREE_TEXT_KEYS.has(name) && (item === null || typeof item === 'string')) {
+					out[name] = null;
+					out[`${name}Dropped`] = true;
+					continue;
+				}
+				out[name] = redactExport(item, opts, name);
+			}
+			return out;
+		}
+
+		/** 这份文件做了什么减法、留了什么、本来就没采什么 —— 三问三答,给读文件的人。 */
+		function redactionReport(options) {
+			const opts = options ?? {};
 			return {
+				rule: '导出时做减法,不做匿名化;applied / kept / neverCollected 三个数组说明做了什么、没做什么',
+				applied: [
+					'page / href:只保留 origin + path,查询串整段丢弃(DSH 首屏的 ?token=… 就在这里)',
+					`url / urls / sourceURL:去掉协议与主机,保留路径与 rev;这些键名的值会被替换成 <redacted>:${SECRET_PARAM_NAMES.join(' / ')}`,
+					'其余字符串:/Users/<用户名>、/home/<用户名>、C:\\Users\\<用户名> 一律换成 ~',
+					'userAgent:只保留浏览器主版本 + 操作系统(完整 UA 能指纹到具体机器)',
+					opts.dropFreeText === true
+						? '自由文本(note / 场景标记的 note):已置空并标 noteDropped:true'
+						: '自由文本(note / 场景标记的 note):原样保留(用户自己敲的字,可能含敏感内容)',
+				],
+				kept: [
+					'性能数值本身(毫秒、计数、分位、帧序列)—— 不含个人信息,丢了这份文件就没用了',
+					'插件的包名 / 源文件路径 / 行号 —— 这是归因的全部价值,路径只做了 ~ 降级',
+					'viewport / devicePixelRatio / hardwareConcurrency / 时区 —— 解读帧耗时与分位要用',
+				],
+				neverCollected: [
+					'聊天正文与提示词(本插件从不读取被测量的 DOM 内容)',
+					'Cookie / Token / 请求头(只读 performance 观察器与自己的宿主路由回执)',
+					'宿主进程内存 / 磁盘 / 进程树(那是 dsh-perf-lens 的地盘)',
+				],
+				freeText: opts.dropFreeText === true ? [] : ['incident.note', 'timeline.marks[].note'],
+			};
+		}
+
+		function snapshot(options) {
+			const worst = worstLongTask();
+			const payload = {
 				plugin: PKG,
 				exportedAt: new Date().toISOString(),
 				// 自描述头:文件离开现场后仍能自证口径
@@ -3338,6 +3459,10 @@ window.__ModuleLoader__.load({
 				verification: verification(),
 				errors: state.errors,
 			};
+			// 唯一的出口:先脱敏,再把"减了什么"贴上去(报告本身不过脱敏,否则它会把自己的说明改掉)
+			const safe = redactExport(payload, options);
+			safe.context.redaction = redactionReport(options);
+			return safe;
 		}
 
 		function exportJson() {
@@ -3371,7 +3496,11 @@ window.__ModuleLoader__.load({
 			return list.find((row) => row.id === id) ?? null;
 		}
 
-		function incidentReport(id) {
+		/**
+		 * 事故包(下载件 / 交给 AI 的那份)。`options.dropFreeText` 为真时把用户自己敲的
+		 * note 置空并标 `noteDropped` —— 诊断包走 true,本机调试导出走默认(false)。
+		 */
+		function incidentReport(id, options) {
 			const incident = pickIncident(id);
 			if (incident === null || incident === undefined) return null;
 			const missing = [];
@@ -3420,7 +3549,7 @@ window.__ModuleLoader__.load({
 			howToAdd.push('零成本、当场可做:chrome://gpu 看是不是落到了软件渲染;DevTools → Rendering 打开 Frame Rendering Stats(FPS 表)与 Paint flashing —— 页面完全静止时帧率是否也上不去');
 			howToAdd.push('判定"主线程之外":Performance 面板录 5 秒,看 Main 轨道自身的忙碌时间是否远小于墙钟 —— 注意 blocking=0 / scripts 为空**不能**当证据(见上面的读取说明),要看 Main 轨道本身');
 			howToAdd.push('宿主火焰图:插件自带路由就能采 —— 带宿主 cookie(见 AGENTS §2.2)POST /api/dsh-perf-hud/host {op:"profileStart", seconds:5},再 POST {op:"profileGet"} 取回标准 .cpuprofile(speedscope 打开);退一步也可以 kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record');
-			return {
+			const payload = {
 				plugin: PKG,
 				kind: 'perf-hud-incident',
 				schema: 2,                      // 2 = 脚本 URL 抽成 incident.urls + scripts[].u
@@ -3465,6 +3594,9 @@ window.__ModuleLoader__.load({
 				},
 				incident,
 			};
+			const safe = redactExport(payload, options);
+			safe.context.redaction = redactionReport(options);
+			return safe;
 		}
 
 		/** 下载一份事故包。返回 false 表示没这个 id(不静默成功)。 */

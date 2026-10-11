@@ -35,8 +35,19 @@ function extract(text, header) {
 	throw new Error(`extract: unbalanced ${header}`);
 }
 
-const pluginUrl = source.slice(
-	source.indexOf('const PLUGIN_URL'),
+/**
+ * 按 header 取**整行**(单行常量用)。
+ * 为什么需要它:`extract()` 找的是 header 之后的第一个 `{` 并做括号配对,对
+ * `const SECRET_PARAM_NAMES = [...];` 这种没有块的常量会一路找到文件后面某个 `{`,
+ * 抽出一大段无关代码(不报错,只是沙箱里多了一堆垃圾)。
+ */
+const line = (header) => {
+	const at = source.indexOf(header);
+	if (at === -1) throw new Error(`line: missing ${header}`);
+	return source.slice(at, source.indexOf('\n', at));
+};
+
+const pluginUrl = source.slice(source.indexOf('const PLUGIN_URL'),
 	source.indexOf('\n', source.indexOf('const PLUGIN_URL')),
 );
 
@@ -493,6 +504,21 @@ const newPieces = [
 	'const mb = ',
 	'function verification(',
 	'function snapshot(',
+	// 导出脱敏:导出件只有这一个出口,两个盒子都要有(否则 snapshot / incidentReport 一跑就 ReferenceError)
+	'const SECRET_PARAM_NAMES = ',
+	'const SECRET_PARAM = ',
+	'const HOME_PATH = ',
+	'const WIN_HOME_PATH = ',
+	'function scrubParams(',
+	'function redactPageUrl(',
+	'function redactScriptUrl(',
+	'function redactPath(',
+	'function redactUserAgent(',
+	'const PAGE_KEYS = ',
+	'const SCRIPT_URL_KEYS = ',
+	'const FREE_TEXT_KEYS = ',
+	'function redactExport(',
+	'function redactionReport(',
 ].map((header) => {
 	if (header.startsWith('const ') && header.endsWith('{') === false) {
 		return source.slice(source.indexOf(header), source.indexOf('\n', source.indexOf(header)));
@@ -502,7 +528,7 @@ const newPieces = [
 }).join('\n');
 
 const box = new Function(`${sandbox}\n${newPieces}
-	return { state, changedNodes, bundleMaps, scriptLines, ring, storage: localStorage, setStreaming: (value) => { streamingFlag = value; },
+	return { state, changedNodes, bundleMaps, scriptLines, ring, storage: localStorage, location, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
@@ -511,7 +537,9 @@ const box = new Function(`${sandbox}\n${newPieces}
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentFrameBadStep, incidentVerdict, verdictColor, eventVerdictText, eventTitleText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
-		sectionSource, sectionIndex, sectionPath, scriptPosition, viaText, scriptEvidence, evidenceName, evidencePlace, evidenceWhereText, evidenceLine, incidentScriptEvidence, incidentEvidenceAt, incidentEvidenceLines, EVIDENCE_MAX } };`)();
+		sectionSource, sectionIndex, sectionPath, scriptPosition, viaText, scriptEvidence, evidenceName, evidencePlace, evidenceWhereText, evidenceLine, incidentScriptEvidence, incidentEvidenceAt, incidentEvidenceLines, EVIDENCE_MAX,
+		// 导出脱敏:整机 snapshot 的出口
+		redactExport, redactPageUrl, redactScriptUrl, redactPath, redactUserAgent, scrubParams, redactionReport, SECRET_PARAM, SECRET_PARAM_NAMES } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -1578,7 +1606,54 @@ check('verification 段报出独立包名(不含合并包 key)与 longtask 命�
 	&& exported.verification.independentPackages.sample.every((id) => id.startsWith('bundle:') === false)
 	&& exported.verification.longTask.attributed === 5 && exported.verification.longTask.withComponent === 1, true);
 
+// ═══════════════ 导出脱敏(交给外部 AI 之前必须成立)═══════════════
+// 这一组挡的是真事故:DSH 首屏是 `http://127.0.0.1:3080/?token=…` 进来的,
+// 而 `location.href` 以前被原样写进 `page`。凭据、用户目录、自由文本三条都要有牙齿。
+check('脱敏:页面地址丢查询串(DSH 首屏的 ?token=… 就藏在这里)',
+	EX.redactPageUrl('http://127.0.0.1:3080/session/x?token=SECRET&a=1#/y'),
+	'http://127.0.0.1:3080/session/x#/y');
+check('脱敏:相对地址按当前页面补全,同样丢查询串',
+	EX.redactPageUrl('/a/b?code=SECRET'), 'http://127.0.0.1:3080/a/b');
+check('脱敏:脚本 URL 保留路径与 rev(rev 是证据,不能顺手删掉)',
+	EX.redactScriptUrl('http://127.0.0.1:3080/plugins/??dsh-x/client.js&rev=abc'),
+	'/plugins/??dsh-x/client.js&rev=abc');
+check('脱敏:敏感参数只换值、保留键名(读的人才知道这里本来有什么)',
+	EX.scrubParams('/p?token=abc&keep=1&api_key=zzz'),
+	'/p?token=<redacted>&keep=1&api_key=<redacted>');
+check('脱敏:键名清单里每一个都被正则认下(清单与正则不许漂移)',
+	EX.SECRET_PARAM_NAMES.filter((name) => EX.SECRET_PARAM.test(name) === false), []);
+check('脱敏:大小写不敏感(TOKEN / ApiKey 也算)',
+	[EX.SECRET_PARAM.test('TOKEN'), EX.SECRET_PARAM.test('ApiKey'), EX.SECRET_PARAM.test('ok')], [true, true, false]);
+check('脱敏:用户目录换成 ~(unix 与 windows 两种写法)',
+	[EX.redactPath('/Users/tester/x/y.js'), EX.redactPath('C:\\Users\\tester\\x.js'), EX.redactPath('见 /home/tester/a.js 与无关文本')],
+	['~/x/y.js', '~\\x.js', '见 ~/a.js 与无关文本']);
+check('脱敏:UA 只留浏览器主版本 + 系统(完整 UA 能指纹到具体机器)',
+	EX.redactUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36'),
+	'Chrome/131 · Mac OS X 10_15_7');
+check('脱敏:认不出来的 UA 如实说 unknown,不假装识别成功',
+	EX.redactUserAgent('curl/8.7.1'), 'unknown-browser · unknown-os');
+check('脱敏:数组里的脚本 URL 走脚本规则(不是页面规则)',
+	EX.redactExport({ urls: ['http://h/plugins/??a/client.js&rev=1'] }).urls,
+	['/plugins/??a/client.js&rev=1']);
+
+// 端到端:把"带凭据的页面地址 + 用户目录 + 敏感参数"塞进真实状态,断言导出件里一个都不剩
+box.location.href = 'http://127.0.0.1:3080/?token=SECRET_TOKEN_VALUE';
+box.state.errors.push({ t: 1, iso: 'x', name: 'Error', message: 'boom at /Users/tester/app.js?api_key=SECRET_KEY_VALUE', stack: 'at /Users/tester/app.js:1:1', where: '' });
+const leaky = JSON.stringify(box.EX.snapshot());
+check('端到端:整机导出件里没有 token / 用户目录 / 敏感参数值',
+	[/SECRET_TOKEN_VALUE/, /SECRET_KEY_VALUE/, /tester/].filter((re) => re.test(leaky)), []);
+check('端到端:页面地址按当时的页面脱敏(路径保留、查询串丢弃)',
+	[exported.page, JSON.parse(leaky).page],
+	['http://127.0.0.1:3080/session/x', 'http://127.0.0.1:3080/']);
+check('端到端:导出件自带 redaction 三问三答(applied / kept / neverCollected)',
+	[exported.context.redaction.applied.length > 0, exported.context.redaction.kept.length > 0,
+		exported.context.redaction.neverCollected.length > 0, Array.isArray(exported.context.redaction.freeText)],
+	[true, true, true, true]);
+check('端到端:不许把"做减法"说成"已匿名化"(口径要照实)',
+	[/匿名化/.test(exported.context.redaction.rule), /做减法/.test(exported.context.redaction.rule)], [true, true]);
+
 // ── G:守夜层(帧环 / 触发 / 留存 / 时间对齐 / 窗口切片)──────────────────
+
 // 抽的是 client.js 里的真函数与真常量(连阈值一起抽,免得测试自己抄一份默认值)。
 const watchSource = (() => {
 	const from = source.indexOf('const WATCH_FRAMES');
@@ -1712,6 +1787,21 @@ const watchPieces = [
 	extract(source, 'function verdictColor('),
 	extract(source, 'function eventVerdictText('),
 	extract(source, 'function detailContext('),
+	// 导出脱敏:incidentReport 在守夜盒里被反复调用,这些函数少一个都会 ReferenceError
+	line('const SECRET_PARAM_NAMES'),
+	line('const SECRET_PARAM '),
+	line('const HOME_PATH'),
+	line('const WIN_HOME_PATH'),
+	line('const PAGE_KEYS'),
+	line('const SCRIPT_URL_KEYS'),
+	line('const FREE_TEXT_KEYS'),
+	extract(source, 'function scrubParams('),
+	extract(source, 'function redactPageUrl('),
+	extract(source, 'function redactScriptUrl('),
+	extract(source, 'function redactPath('),
+	extract(source, 'function redactUserAgent('),
+	extract(source, 'function redactExport('),
+	extract(source, 'function redactionReport('),
 ].join('\n');
 const watchBox = new Function(`
 	${watchPieces}
@@ -1814,6 +1904,7 @@ const watchBox = new Function(`
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
+		location,
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, frameSeverity, PICK_MIN_MS, unresolvedLabel, crossTable, crossSummary,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT, sparkPickMap, sparkCellTitle, markResolved,
@@ -1831,6 +1922,9 @@ const watchBox = new Function(`
 		observedOptions: () => observeCalls.map((options) => (options.type === 'event' ? 'event:' + options.durationThreshold : options.type)),
 		emit: (rows) => { for (const entry of observers) entry.callback({ getEntries: () => rows }); },
 		runTimer: (index) => timers[index].fn(),
+		// 导出脱敏(直接测这几个纯函数,而不是绕过它们去测 snapshot)
+		redactExport, redactPageUrl, redactScriptUrl, redactPath, redactUserAgent, scrubParams, redactionReport,
+		SECRET_PARAM, SECRET_PARAM_NAMES,
 	};
 `)();
 const watch = watchBox;
@@ -2588,6 +2682,20 @@ check('最差事件状态行:落盘失败带 ⚠️', (() => {
 
 // 事故包:自描述头 + 缺失声明(缺什么、怎么补)
 check('事故包:不存在的 id 返回 null(不静默成功)', watch.incidentReport('nope'), null);
+// 导出脱敏:自由文本默认保留(本机调试件要靠它知道当时在干什么),AI 诊断包走 dropFreeText
+check('脱敏:默认保留自由文本(本机调试件)',
+	watch.redactExport({ note: 'a', marks: [{ note: 'b', t: 1 }] }),
+	{ note: 'a', marks: [{ note: 'b', t: 1 }] });
+check('脱敏:dropFreeText 把 note 置空并留 noteDropped(不许静默删掉,也不许假装没这段)',
+	watch.redactExport({ note: 'a', marks: [{ note: 'b', t: 1 }] }, { dropFreeText: true }),
+	{ note: null, noteDropped: true, marks: [{ note: null, noteDropped: true, t: 1 }] });
+check('脱敏:事故包的 page 与 redaction 声明一起给出来(凭据进不去,减法说得清)', (() => {
+	watch.location.href = 'http://127.0.0.1:3080/?token=SECRET_PACK';
+	const pack = watch.incidentReport(0);
+	const text = JSON.stringify(pack);
+	return [/SECRET_PACK/.test(text), pack.context.page, pack.context.redaction.rule.includes('做减法'),
+		pack.context.redaction.freeText.length];
+})(), [false, 'http://127.0.0.1:3080/', true, 2]);
 const report = watch.incidentReport(0);
 check('summary 带窗口自己的分位(否则"和 baseline 比"在文件内做不了)', [typeof report.incident.summary.p50, report.incident.summary.p50 <= report.incident.summary.worstFrameMs, report.incident.summary.p99 === report.incident.summary.worstFrameMs], ['number', true, true]);
 check('会话基线:用"真的在跑的时间"算 fps,不被挂起拉低', (() => {

@@ -6,6 +6,12 @@
 
 ### 新增
 
+- **导出脱敏:任何离开本机的导出件先做一遍减法,并把它减了什么写进文件**(`redactExport()` / `redactionReport()`,**导出件只有这一个出口**,以后加字段不会漏)。四条规则:① `page` / `href` 只保留 `origin + path`、**查询串整段丢弃**;② `url` / `urls` / `sourceURL` 去掉协议与主机、保留路径与 `rev`,而 `token` / `accessToken` / `api_key` / `secret` / `password` / `signature` / `code` 等键的**值**换成 `<redacted>`(键名保留 —— 读的人要知道这里本来有什么);③ 其余字符串里的 `/Users/<用户名>`、`/home/<用户名>`、`C:\Users\<用户名>` 统一换成 `~`(所以错误原文、组件栈、宿主 profile 路径这些"顺手带出来的东西"也被一并覆盖);④ `userAgent` 只留浏览器主版本 + 系统。"其余字符串一律过一遍"这一条是刻意的:按字段名逐个加规则一定会漏,而漏一个就是一次泄漏。文件里 `context.redaction` 给三问三答 —— `applied`(做了什么)/ `kept`(留了什么)/ `neverCollected`(本来就没采:聊天正文、提示词、Cookie、Token、请求头),口径写明**这是减法不是匿名化**。`incidentReport(id, { dropFreeText: true })` 把用户手敲的自由文本(事故 `note`、场景标记)置空并标 `noteDropped: true`,默认(本机调试件)原样保留。
+
+### 修复
+
+- **`snapshot().page` 与 `incidentReport().context.page` 原来直接写 `location.href`**:DSH 首屏是 `http://127.0.0.1:3080/?token=…` 进来的,于是**一次导出就可能把会话 token 一起带出去**,而这份文件正是准备交给外部 AI 的那份。现在按上面那条脱敏规则处理,并有端到端断言:往真实状态里塞 `?token=SECRET_TOKEN_VALUE`、`/Users/tester/…`、`api_key=SECRET_KEY_VALUE`,断言序列化后的导出件里这三个字符串一个都不剩。
+
 - **历史事故逐帧诊断:选中一条事故之后,可以在「同一个诊断上下文」里逐帧回看、看那一帧的耗时分解与真实证据**:「取证明细」现在一次只服务**一个**上下文 —— `live`(实时帧环里的当前帧)或 `incident`(选中事故里的一条**历史帧**),由 `state.watch.mode` 决定,**分流只发生在 `detailContext()` 一处**,渲染那侧只读它的返回值。以前帧条 / 翻帧 / 饼图吃实时 `pickedLoaf()`,而事故卡片与回放吃 `selectedIncident()`,于是"上面是历史事故、下面是另一条实时帧的编号与耗时"必然出现 —— 现在实时与历史**共用视觉组件**(`ringBlock` / `scriptBreakdownRows` / `evidenceBlock` / `crossBlock`),但**不共用一个错误的上下文**。详情区第一行是上下文标题(`实时监控 · 当前帧` / `历史事故 i12 · 历史帧 3/305`),折叠组标题带上事故 id,事故卡片上按「看这一帧」进历史、按「回到实时」回实时;切换**只切数据源**,实时采集与另一侧的选中都不动。
 - **历史帧时间轴:可点的导航器,不是装饰性图表**(`replayColumns` / `replayCellTitle`)。事故窗口按**时间**切成 240 列,每列取该列里**最差的那一帧**,并把**那一帧的引用**留在格子里 —— 点击 / 选中 / 高亮全部映射回 `incident.frames` 里真实存在的记录(断言:每个非空格子的 `frame` 都在原数组里,不合成帧);整段 rAF 被挂起 / 采样缺失的地方**留白**,不补桩。档位与实时帧条共用 `sparkLevel` 与 `SPARK_COLORS`,选中帧是**一条蓝色竖线**(`--dsw-alias-state-business-primary`)。240 列把"一条 13 秒窗口几百帧"的绘制量钉在 ≤240 个 DOM 节点上。
 - **四个方向的逐帧导航 + 真实禁用态**(`incidentFrameNav` / `incidentFrameStep` / `incidentFrameBadStep`):`上一帧 / 下一帧` 按**时间序**走(与帧条方向一致),`上一异常帧 / 下一异常帧` 按守夜触发线(`PICK_MIN_MS`)筛;没有下一条就**禁用**按钮,不留"点了没反应"的动作。选中帧的**序号 / 耗时 / 档位文字**跟着更新。

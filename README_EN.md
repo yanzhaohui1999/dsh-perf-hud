@@ -180,8 +180,20 @@ is expensive in some usage", so do not read it as a causal proof.
    this HUD (`PerfHud` / `PerfHudStress` / the package name) are tagged "recorder itself" and listed
    **separately** from the attribution top — it only becomes the culprit when no other candidate explains the task
    (silently dropping it would read as "nothing was working", which is worse than tagging).
-7. Panel state lives in `localStorage`; exports are generated locally and sent nowhere.
-8. **If your browser is on another machine, a high "link RTT" is real**: over a tunnel to `127.0.0.1:3080` the
+7. Panel state lives in `localStorage`; exports are generated locally and sent nowhere — and **every export is
+   redacted first** (see the next item).
+8. **Exports are redacted, and the file states exactly what was removed**: an export is meant to be read by people
+   and handed to an external AI, so `snapshot()` / `report(id)` — (a) keep only `origin + path` for the page URL and
+   **drop the query string entirely** (DSH opens as `http://127.0.0.1:3080/?token=…`, so that is where credentials
+   live); (b) strip scheme and host from script URLs while keeping the path and `rev`, and replace the **value** of
+   `token` / `api_key` / `secret` / `password` / `signature` / `code` and friends with `<redacted>` (keys stay, so a
+   reader can see what used to be there); (c) turn `/Users/<name>`, `/home/<name>` and `C:\Users\<name>` into `~`;
+   (d) reduce `userAgent` to browser major version + OS. The file's `context.redaction` lists `applied` / `kept` /
+   `neverCollected` (chat text, prompts, cookies, tokens and request headers are never collected at all). **This is
+   subtraction, not anonymisation** — do not treat an export as anonymised data. Free text you typed yourself (the
+   incident `note`, scene marks) is kept in the local raw export; the AI diagnostic pack
+   (`report(id, { dropFreeText: true })`) blanks them and marks `noteDropped: true`.
+9. **If your browser is on another machine, a high "link RTT" is real**: over a tunnel to `127.0.0.1:3080` the
    tunnel's own RTT p50 can be tens to hundreds of milliseconds while `curl` on the host takes a few. That is why
    the panel has a "link suspected" verdict and an explicit "link ruled out (host and tunnel both normal)" line —
    the number is not a bug.
@@ -201,9 +213,9 @@ is expensive in some usage", so do not read it as a causal proof.
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 447 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 464 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 39 assertions: real index.js driven by a fake ctx
-# 497 offline assertions total, no running DSH required
+# 514 offline assertions total, no running DSH required
 ```
 
 The i18n dictionary now has **283 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).

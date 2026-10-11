@@ -121,7 +121,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 447 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 464 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 39 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -368,7 +368,7 @@ DOM 写入挪进「DOM 与堆」、`回调归因` 未插桩时降级成一行 `�
 分流点只有 `detailContext()` 一处;历史帧条是**导航器**(240 列,每列取该列最差的一帧,点击映射回 `incident.frames` 里的真实记录,
 rAF 挂起的区间留白),四个方向翻帧(没有下一条就禁用),选中帧的分解 / 脚本 / long task / 证据全部只吃那一帧(缺就是缺,不回退);
 归因状态收敛成**已确认 / 可疑 / 未归因**三档并去掉"更像 rAF 被节流"这类把可能写成结论的说法;诊断上下文落盘 `LS_WATCHUI`,
-刷新后仍停在同一条事故的同一帧。`npm test` 现在 **497** 条(attribution 11 / logic 447 / host 39),CI 门禁与文档同步成 `-eq 497`;
+刷新后仍停在同一条事故的同一帧。`npm test` 现在 **514** 条(attribution 11 / logic 464 / host 39),CI 门禁与文档同步成 `-eq 514`;
 真页面验收:`check-panel` / `check-storage` / `check-interaction` / **新增 `tools/check-incident.mjs`** 四个验证器 **ALL PASS**(见 REVIEW §2)。
 
 **仍然存在的债(套件是绿的 ≠ 它们没问题)**:
