@@ -1118,7 +1118,7 @@ const watchBox = new Function(`
 		needDeep: '要深录', scopeFrame: '本帧', bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本',
 		hit: '命中', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名', peak: '峰', framePickFiltered: '值得回看的帧',
 		otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
-		crossNone: '没有可交叉的脚本', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', rest: '其余',
+		crossNone: '没有可交叉的脚本', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', rest: '其余',
 		hourUnit: '小时', minUnit: '分', secUnit: '秒',
 	})[key] ?? key;
 	// 面板渲染区那两个文案函数用到的短名(真实实现里是 short():去掉 scope 前缀)
@@ -1752,6 +1752,10 @@ check('D5:"是谁"那一段文案:Top3 + 其余 + 定不到包的条数',
 		];
 	})(),
 	['dsh-a 60ms · dsh-b 30ms · dsh-c 20ms · 其余 1', '未定名(未归因 2)', 'dsh-a 200ms · 其余来源 u-zz 900ms']);
+
+check('按包:一个插件包名都没有时,把「其余来源」说出来(不是只剩未定名 N)',
+	watch.pkgWhoText({ top: [], byOther: [['index-abc.js', 266], ['无 URL(内联脚本)', 12]], unresolved: 2, unresolvedMs: 278, byInvoker: [], byPair: {} }),
+	'其余来源 index-abc.js 266ms · 无 URL(内联脚本) 12ms');
 check('一个包名都没定到时「按包」收敛成一行,但**留下分母**(否则像是功能被删了)',
 	watch.pkgZeroText(1, 461),
 	'按包:0 条定到名(本帧 1 · 窗口 461 条脚本)· 要深录');

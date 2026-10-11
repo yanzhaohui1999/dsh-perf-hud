@@ -17,7 +17,7 @@
   - 顺带修掉饼图 tooltip 里硬编码的 `脚本 ${js}ms`(en 用户会看到中文),改用 `splitScript` 键。
   - **函数级那一层实测走不通**:页面内唯一的采样剖析器是 JS Self-Profiling —— `typeof Profiler === 'function'`,但 `new Profiler({sampleInterval:10})` 抛 `NotAllowedError: JS profiling is disabled by Document Policy.`,因为 HTML 响应**没有** `Document-Policy` 头(实测 `null`),而那个头由 DSH 服务的 HTML 决定(动它就越过项目边界)。→ 函数级只剩 CDP / DevTools Performance(`missing` 里的 `devtools-trace`);宿主进程的函数级另有 A5 的 `node:inspector`。
   - **窗口那三行补上分母**(`windowScopeText`):它们是**累计**,`纯执行 21623.8ms` 这种数不写分母会被读成"某一次执行花了 21 秒"(实测被这么质疑过)。现在窗口行前面单独一行:`窗口:200 条长动画帧 · 跨 43分12秒 · 平均每条脚本 108.1ms` —— 条数与跨度回答"这段时间卡了多少次",**平均每条那一栏才和上面那张饼可比**(饼是单帧)。跨度越久累计越大,所以 hover 里明写"别拿它当越来越慢"。`tallyScripts` 因此多带 `count` 与 `spanMs`(最后一条 t − 第一条 t),`spanText(ms)` 把它写成人读的 `43分12秒`。
-  - 测试:373 条离线断言(attribution 11 / logic 323 / host 39),真页面 `tools/check-panel.mjs` 验过(4 个 `<circle>`、`本帧按来源 setTimeout 260ms`、`errors: 0`)。
+  - 测试:374 条离线断言(attribution 11 / logic 324 / host 39),真页面 `tools/check-panel.mjs` 验过(4 个 `<circle>`、`本帧按来源 setTimeout 260ms`、`errors: 0`)。
 
 ### 新增
 
@@ -36,6 +36,11 @@
 ### 修复
 
 - **点开「包 × 来源」会把整块面板打成错误边界(面板直接消失)**:`short()` 写的是 `id.replace(...)`,而交叉表"摘要"那行在 **Top3 之间一格交集都没有**时会拿到 `null`(最大的包住在第 4 名的来源里——完全可能) → `null.replace` 抛错 → 面板渲染抛错 → 外壳停用该条目(只能刷新)。两处修:① `short()` 对 null/undefined 返回空串;② `crossTable` 一个正格子都没有时把 `top` 退回"最大的行 × 最大的列"(而不是留 null),摘要改说「Top3 之间没有交集」。另外给这一块加了**可见的**降级:派生统计算炸时只降级成一行错误原文并记进导出件(`crossFailed`),不再把整块取证面板带走。
+
+### 修复
+
+- **脚本拆解那一整块(细拆 / 两条条 / 交叉表)加可见兜底**:任何一处派生统计抛错,现在只降级成一行 `这一帧的脚本拆解算不出来: <错误原文>`(交叉表那层还有自己的 `交叉表算不出来`),原文同时记进导出件的 `errors`。之前一处抛错会把**整块取证面板**交给外壳的错误边界 → 条目被永久停用、面板整块消失,现场只剩"刷新"这一个动作,错误原文也一起丢了(不满足 §1「不许假装成功」)。
+- **按包:一个插件包名都没有时不再只剩"未定名 N"**:那种情况下如果「其余来源」(外壳文件名 / 无 URL / 插件批次)有内容,现在会把它们连毫秒一起说出来(`其余来源 index-abc.js 266ms · 无 URL(内联脚本) 12ms`)。上一版的改动在零分支里丢了,有断言补上。
 
 ### 修改
 

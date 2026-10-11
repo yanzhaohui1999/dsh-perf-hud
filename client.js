@@ -3759,7 +3759,14 @@ window.__ModuleLoader__.load({
 			const top = tally.top.slice(0, 3);
 			const rest = tally.top.length - top.length;
 			if (top.length === 0) {
-				return `${translate('pkgNone')}${tally.unresolved === 0 ? '' : `(${translate('unblamed')} ${tally.unresolved})`}`;
+				// 一个插件包名都没定到:**其余来源**那段(外壳文件名 / 无 URL / 插件批次)也要说出来,
+				// 否则这里只剩"未定名 N",把已知信息丢掉一半。
+				if (others.length === 0) {
+					return `${translate('pkgNone')}${tally.unresolved === 0 ? '' : `(${translate('unblamed')} ${tally.unresolved})`}`;
+				}
+				return `${translate('otherSources')} `
+					+ others.slice(0, 2).map(([name, ms]) => `${name} ${Math.round(ms)}ms`).join(' · ')
+					+ (others.length > 2 ? ` · ${translate('rest')} ${others.length - 2}` : '');
 			}
 			// 定不到插件包名的那部分:能说出是什么就说(外壳文件名 / 无 URL / 插件批次)——
 			// 只写"未定名 + 条数"既丢了已知信息,又和同一行里的 ms 混单位。
@@ -4020,7 +4027,7 @@ window.__ModuleLoader__.load({
 				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', scopeFrame: '本帧',
 				bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本', needDeep: '要深录', invokerUnknown: '来源未记录',
 				otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
-				crossTable: '包 × 来源', crossCorner: '包 \\ 来源', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', crossUnit: '格内毫秒', crossBiggest: '最重', crossNone: '没有可交叉的脚本', crossHint: '两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间"。只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 脚本总耗时;格内是毫秒,把鼠标放上去看占比。',
+				crossTable: '包 × 来源', crossCorner: '包 \\ 来源', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', crossUnit: '格内毫秒', crossBiggest: '最重', crossNone: '没有可交叉的脚本', crossHint: '两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间"。只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 脚本总耗时;格内是毫秒,把鼠标放上去看占比。',
 				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
 				hourUnit: '小时', minUnit: '分', secUnit: '秒',
 				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
@@ -4091,7 +4098,7 @@ window.__ModuleLoader__.load({
 				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', scopeFrame: 'this frame',
 				bySource: 'by source', byPkg: 'by package', pkgZeroNamed: '0 resolved', scriptsUnit: 'scripts', needDeep: 'needs deep', invokerUnknown: 'source not recorded',
 				otherSources: 'other sources', srcNoUrl: 'no URL (inline)', srcBatch: 'plugin batch (not split)',
-				crossTable: 'pkg × source', crossCorner: 'pkg \\ src', crossNoOverlap: 'no overlap between the top 3', crossFailed: 'cross table failed', crossUnit: 'ms per cell', crossBiggest: 'heaviest', crossNone: 'nothing to cross-tabulate', crossHint: 'The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time". Top3 × Top3 is expanded, the rest is folded into the "rest" row/column (by subtraction) and the four blocks add up to the script total. Cells are milliseconds; hover for the share.',
+				crossTable: 'pkg × source', crossCorner: 'pkg \\ src', crossNoOverlap: 'no overlap between the top 3', crossFailed: 'cross table failed', splitFailed: 'script breakdown failed for this frame', crossUnit: 'ms per cell', crossBiggest: 'heaviest', crossNone: 'nothing to cross-tabulate', crossHint: 'The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time". Top3 × Top3 is expanded, the rest is folded into the "rest" row/column (by subtraction) and the four blocks add up to the script total. Cells are milliseconds; hover for the share.',
 				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
 				hourUnit: 'h', minUnit: 'm', secUnit: 's',
 				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',
@@ -4567,6 +4574,7 @@ window.__ModuleLoader__.load({
 					// 小标题上 —— 行标签就不用再重复一遍"本帧 / ·窗口",省掉一大截字。
 					// 按包那几行只在**真定到包名**时才出现:一个名都没定到时它只是噪声,换成一行说明。
 					(() => {
+						try {
 						const frame = frameSplit(pickedLoaf());
 						const framePkgs = framePkgTally(pickedLoaf());
 						const window = scriptPkgTally();
@@ -4622,6 +4630,13 @@ window.__ModuleLoader__.load({
 							}
 						}
 						return rows.length === 0 ? null : h('div', null, rows);
+						} catch (error) {
+							// 这一块全是**派生统计**(细拆 / 两条条 / 交叉表):任何一处算炸都只降级成
+							// 一行可见的错误原文,并把原文记进导出件 —— 绝不再让整块取证面板被外壳停用。
+							recordError(error);
+							return h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-error-primary)' } },
+								`${t('splitFailed')}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200));
+						}
 					})(),
 					// D6:包 × 来源**交叉表**(默认收起)。两个正交维度分开看是两张榜单,交叉起来才回答
 					// "哪个包的哪类回调在烧时间";只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),
