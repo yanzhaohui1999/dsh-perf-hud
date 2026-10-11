@@ -4363,9 +4363,13 @@ window.__ModuleLoader__.load({
 			const [, force] = React.useState(0);
 			const [open, setOpen] = React.useState(state.collapsed === false);
 			const [draft, setDraft] = React.useState('');
-			// 悬停联动:一个共享的 key(环段 / 来源段 / 包段),同一个维度在**几处视图**里同时加亮 ——
-			// 这是"跨视图一致"的一半(另一半是配色):鼠标指到哪,别处的同一个东西也亮起来。
-			const [hot, setHot] = React.useState(null);
+			// ⚠️ 悬停联动**暂时停用**(2026-10-08):实测「鼠标指到交叉表的行标签」会让整个条目被外壳停用 ——
+			// 面板直接消失,而且 `errors` 为空、`window.onerror` 不响、`__perfHud.enabled` 仍是 true
+			// (外壳 overlay 还在,只是这一条不再渲染),说明不是渲染期抛错。原文抓不到之前先让它变成一个
+			// **纯 no-op**:`hot` 恒为 null,于是不触发任何 state 更新、不重绘,三处联动一起静默。
+			// 要恢复:把下面这行换回 `const [hot, setHot] = React.useState(null);`,并先查清上面的原因。
+			const hot = null;
+			const setHot = () => {};
 			const hotProps = (key, extra) => ({
 				...extra,
 				onMouseEnter: () => setHot(key),
