@@ -4612,9 +4612,12 @@ window.__ModuleLoader__.load({
 												title: `${seg.name === null ? translate('rest') : seg.name} ${Math.round(seg.ms)}ms · ${Math.round((seg.ms / total) * 100)}%`,
 												style: {
 													flexGrow: seg.ms, flexShrink: 1, flexBasis: 3,
+													// 填充**不透明**,名次靠"压暗"而不是"变透明":token 本身在这个主题里是近白/纯绿,
+													// 降不透明度只会让整条发灰(实测被吐槽"更淡了");压亮度则保留色相 —— 绿还是绿,
+													// 只是不再荧光。用一个黑色渐变盖在上面,任何浏览器都认(不需要 color-mix)。
 													background: `var(${token})`,
-													opacity: [0.5, 0.38, 0.28, 0.2][index] ?? 0.2,
-													boxShadow: index === 0 ? undefined : 'inset 1px 0 0 0 rgba(0, 0, 0, 0.45)',
+													backgroundImage: `linear-gradient(rgba(0, 0, 0, ${[0.32, 0.46, 0.58, 0.68][index] ?? 0.68}), rgba(0, 0, 0, ${[0.32, 0.46, 0.58, 0.68][index] ?? 0.68}))`,
+													boxShadow: index === 0 ? undefined : 'inset 1px 0 0 0 rgba(0, 0, 0, 0.6)',
 													cursor: segKey === null ? 'default' : 'pointer',
 												},
 											});

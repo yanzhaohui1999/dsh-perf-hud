@@ -146,7 +146,9 @@ process.exitCode = failed === 0 ? 0 : 1;
 	const renderCode = renderRegion
 		.replace(/'(?:[^'\\]|\\.)*'/g, "''")
 		.replace(/"(?:[^"\\]|\\.)*"/g, '""');
-	const bare = [...new Set([...renderCode.matchAll(/(?<![.\w$])([a-z_$][\w$]*)\s*\(/g)].map((m) => m[1]))];
+	// ⚠️ 前瞻里要排掉 `-`:否则 `linear-gradient(` 会被当成裸调用 `gradient(`(CSS 函数名带连字符,
+	// 而它不是 JS 调用)。CSS_FUNCS 白名单只管前缀,补上连字符才算真的对齐意图。
+	const bare = [...new Set([...renderCode.matchAll(/(?<![.\w$-])([a-z_$][\w$]*)\s*\(/g)].map((m) => m[1]))];
 	check('面板渲染区的函数调用都有声明(signed 事故回归)',
 		bare.filter((name) => !declared.has(name) && !GLOBALS.has(name) && !CSS_FUNCS.has(name)), []);
 
