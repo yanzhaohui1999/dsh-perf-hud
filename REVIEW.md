@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场(2026-10-11 `gh repo view` 实测 `PUBLIC`) |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,而且 **`tools/` 与 `locale/` 按目录核**(以后加验证器或加语言文件不会漏检),显式清单 + 目录共覆盖包内全部 **18** 个文件(含 `package.json`),漏一份就失败 |
-| 6 | 门禁全绿 | ✅ 494 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ 497 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
 | 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
 
@@ -34,7 +34,7 @@
 
 | 判据 | 怎么验 | 最新实测 |
 |---|---|---|
-| 离线断言全绿 | `npm test` | **494** 条(attribution 11 / logic 444 / host 39) |
+| 离线断言全绿 | `npm test` | **497** 条(attribution 11 / logic 447 / host 39) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 守夜默认**零插桩** | `snapshot().instrumented` 在三种模式下的取值 | 默认(不插桩)档:`precise: false` / `instrumented: false`,`errors: 0` —— 守夜档仍然零插桩;点「深录」→ `true / true`;点回去 → `false / false`,`errors` 全程 0 |
@@ -53,6 +53,7 @@
 | **合并脚本的 file / line 口径拆开(不拼 `文件:行`)** | `scriptEvidence` 的 `lineScope` + `evidencePlace` / `evidenceLine` / `evidenceWhereText` + 静态断言 | 合并批(`plugins/??a,b`)里 `charPos → 行号` 是相对**合并后大文件**的,而 `sectionPath()` 给的是那个包**自己的源文件** —— 两个坐标系拼成 `file:line` 看着精确、实际指不到任何一行。现在 `lineScope` 分三档:`bundle`(合并批)/ `file`(单包 URL、单包组合)/ `null`;`evidencePlace()` 对 `bundle` **只给文件**,行号由 `evidenceLine()` 单独成段写成**「合并脚本行 N」**,`evidenceWhereText()` 在悬停里也分列(文件 · 合并脚本行 N · pkg/line 两个 via 档);口径文案写明**行号是脚本自己的行号,不是原始 TS/TSX 源码行**(要原始源码行得解 section 内层 `mappings` 的 VLQ,本项目没做)。实测:合并批那几行**绝不**出现 `client.js:25580` 这种串;单包 URL 那一行照旧 `client.js:455`(行号确实属于那个文件)。静态断言:合并批不拼 `file:line`、老包缺 `lineScope` 时按 `pkgVia` 现推(`section` ⇒ `bundle`,否则 `file`) |
 | **事故回放 · 历史帧时间轴(2026-10-12 起是逐帧诊断)** | 面板「取证明细」的**历史事故**那一支(`replayColumns` / `replayCellTitle` / `replayScope` / `replaySummaryText` / `incidentLoafAt` / `incidentFrameNav` / `detailContext`)+ `tools/check-incident.mjs` | 把**选中的那条事故**那一段窗口画成一条**可点的历史帧条**:数据**全部来自事故包**(`incident.frames` / `incident.loaf` / `summary` / `longTasks` / `urls`)→ **刷新生效、零新增采集**;与实时 60 秒帧条**刻意分开**(各自写明范围,历史那一支连实时帧环都不读)。当前实现覆盖:**点击时间轴里的真实帧**(最多 240 列、每列取该列最差的那一帧,点击映射回包里真实存在的记录,不合成帧)、**选中状态 / 耗时分解 / 关联证据同步更新**(`frameSplit` 的四段 + 与这一帧重叠的 long task + 这一帧自己的脚本证据)、**上一帧 / 下一帧**(按时间序)与**上一 / 下一异常帧**(帧间隔 ≥ 100ms;到不了就**禁用**按钮)、**缺失采样区间留白**(整段 rAF 挂起不补桩)、**刷新后恢复事故与帧的选中状态**(`LS_WATCHUI`)、**返回实时上下文**(实时帧条与实时读数回来、历史块消失)、**不混用实时与历史数据**(历史这一支的任何一个数都不来自实时帧环,分流只在 `detailContext()` 一处)。逐项判据与实测证据见本表下面那七行(上下文隔离 / 帧条映射 / 翻帧与禁用态 / 刷新同帧 / 缺失去向 / 三档归因 / 纯 CSS 悬停)。⚠️ 真实限制:不排**帧内执行顺序**、没有**完整函数级时间轴**;更细的原始数据仍走「导出事故包」+ `tools/inspect-incident.mjs` |
 | **REVIEW §3.4 的 `pkgZeroText` 债已还(死分支已删)** | 静态断言 + `whoRows(tally)` 数据断言 | 确认那段「0 条定到名(带分母)」**不可达**:外层要求 `window.js > 0`,而 `js > 0` 必然有脚本,脚本要么进 `top`、要么进 `byOther`(且 ms>0),两者互斥 —— 旧套件却因为**直接测那个函数**而一直绿。现在死分支与 `pkgZeroText` 一起删掉;断言改成**实际渲染的那份数据**:喂给「按包」堆叠条的就是 `whoRows(tally)`,一个包名都没定到时看到的是**按原因命名的「其余来源」段(带名字与毫秒)**,不是一行"0 条定到名";并加一条静态断言:全仓不再有 `pkgZeroText`(死代码不许回来) |
+| **「可疑脚本」的正文/悬停分离(2026-10-12)** | 真页面 CDP 探针(临时,用完即删;含整块 innerText 的 markdown 记号计数)+ 两条词典级断言 | 「可疑脚本」底下那一行以前把**口径与缺口两整段**(各两三百字、带 `**` 与反引号)摊在正文里 —— 面板是**纯文本**渲染,那些记号原样显示,一屏全是解释、分母反而找不着(实测被吐槽"这段文字很丑陋")。现在正文只留分母 + 一句提示(实测 `11条脚本 · 定到包 1/11 · 悬停看口径与缺口`,**33 字符、单行**),完整口径/缺口进 `evidenceFooterTitle()` 的 `title`(实测悬停里带 `口径:` 与 `缺:`,与「复制摘要」共用同一份纯文本措辞);整块可见文本里 `**` / 反引号的计数 **0**(实时模式与历史事故模式各扫一遍,扫描范围内还有"展开全部折叠组")。词典级断言:正文文案不许带 markdown 记号,带记号的一律得是白名单里"只进悬停"的那 20 个键,且白名单不许有死键 |
 | 「复制摘要」可直接交接给另一个 AI | 工具箱「复制摘要」 | = 结论 + 口径 + 可疑脚本证据行 + 「窗口内 ≥100ms 的交互」(有才写,标明端到端、不拆帧内)+ 缺什么;目的是**能直接交给另一个 AI 接着查** |
 | 组合 URL 的"文件路径"不再退化成 `/plugins/` | `scriptEvidence` 断言 + 真页面 | 真 bug:`new URL(url).pathname` 对**组合 URL**(`plugins/??…`)会把第一个 `?` 当成查询串开始,pathname 只剩 `/plugins/` → "文件路径"显示成 `/plugins/`。现在组合 URL 走正则自己拼(单包组合 ⇒ `plugins/<包>/<文件>`);断言里同时钉住 `new URL` 的 pathname 就是 `/plugins/` |
 | 合并包分段表三列对齐 | `rows` 一次建成 + 一起排序 | 真 bug:`names` 数组在 `offsets.sort()` 之后**没有跟着排序**(没人读过它所以一直没暴露);加上 `paths` 之后这个错位会变成"包名 A 配文件 B"。现在 offsets/names/paths 一次建成同一张表再一起排序 |
