@@ -36,6 +36,15 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      # 不能在 runner 自带的 npm 上赌 dist-tag:Trusted Publishing 的文档写明
+      # "dist-tags with OIDC Trusted publishing requires npm CLI version 11.21.0 (or later)",
+      # 而 node 24 自带的是 11.17.0(本机同版本 node v24.19.0 实测)。我们的 Publish 步骤
+      # 带 `--tag latest|next`(预发布走 next),所以显式升一次,把版本这条不确定剔掉。
+      - name: Use a recent npm CLI (OIDC dist-tags need >= 11.21.0)
+        run: |
+          npm install -g npm@latest
+          npm -v
+
       # tag 必须与 package.json 的 version 一致,否则直接失败,避免发错版本。
       - name: Verify tag matches package version
         if: github.event_name == 'release'
