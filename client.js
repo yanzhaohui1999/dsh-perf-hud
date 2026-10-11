@@ -4027,7 +4027,7 @@ window.__ModuleLoader__.load({
 				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', scopeFrame: '本帧',
 				bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本', needDeep: '要深录', invokerUnknown: '来源未记录',
 				otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
-				crossTable: '包 × 来源', crossCorner: '包 \\ 来源', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', crossUnit: '格内毫秒', crossBiggest: '最重', crossNone: '没有可交叉的脚本', crossHint: '两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间"。只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 脚本总耗时;格内是毫秒,把鼠标放上去看占比。',
+				crossTable: '包 × 来源', crossCorner: '包 \\ 来源', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', crossUnit: '格内毫秒', crossBiggest: '最重', crossNone: '没有可交叉的脚本', crossHint: '两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间"。只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 脚本总耗时;格内是毫秒,把鼠标放上去看占比。', barShareHint: '最大那一段占这条的多少',
 				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
 				hourUnit: '小时', minUnit: '分', secUnit: '秒',
 				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
@@ -4098,7 +4098,7 @@ window.__ModuleLoader__.load({
 				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', scopeFrame: 'this frame',
 				bySource: 'by source', byPkg: 'by package', pkgZeroNamed: '0 resolved', scriptsUnit: 'scripts', needDeep: 'needs deep', invokerUnknown: 'source not recorded',
 				otherSources: 'other sources', srcNoUrl: 'no URL (inline)', srcBatch: 'plugin batch (not split)',
-				crossTable: 'pkg × source', crossCorner: 'pkg \\ src', crossNoOverlap: 'no overlap between the top 3', crossFailed: 'cross table failed', splitFailed: 'script breakdown failed for this frame', crossUnit: 'ms per cell', crossBiggest: 'heaviest', crossNone: 'nothing to cross-tabulate', crossHint: 'The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time". Top3 × Top3 is expanded, the rest is folded into the "rest" row/column (by subtraction) and the four blocks add up to the script total. Cells are milliseconds; hover for the share.',
+				crossTable: 'pkg × source', crossCorner: 'pkg \\ src', crossNoOverlap: 'no overlap between the top 3', crossFailed: 'cross table failed', splitFailed: 'script breakdown failed for this frame', crossUnit: 'ms per cell', crossBiggest: 'heaviest', crossNone: 'nothing to cross-tabulate', crossHint: 'The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time". Top3 × Top3 is expanded, the rest is folded into the "rest" row/column (by subtraction) and the four blocks add up to the script total. Cells are milliseconds; hover for the share.', barShareHint: 'share of the largest segment in this bar',
 				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
 				hourUnit: 'h', minUnit: 'm', secUnit: 's',
 				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',
@@ -4589,29 +4589,42 @@ window.__ModuleLoader__.load({
 						const head = (key, text, hint) => h('div', { key, style: { ...S.blockLabel, marginTop: 8 }, title: hint }, text);
 						// 一条 100% 堆叠横条:上面是"谁 + 毫秒"的文字(绝对值),下面是占比(段宽)。
 						// 段宽按这一维度的总量算,所以条恒满格;名次靠由深到浅(与环同一套读法)。
+						// ⚠️ 三处按**实测**调过(2026-10-08):① 填充不再从满不透明起步(顶段 0.5,逐级 .38/.28/.2)
+						// —— 这个主题里 `brand-primary` 是近白 `rgb(249,250,251)`、`state-success-primary` 是纯绿
+						// `rgb(34,197,94)`,满不透明就是一块发光色块,"占比"读不出来;
+						// ② 段用 `flexGrow: 毫秒` + `flexBasis: 3px`:小段也占得住 3px(以前 6% 只有 21px × 0.28);
+						// ③ 顶段 ≥ 80% 时在条右边内联一个占比 —— 比例严重偏斜时,"几乎全在一桶"要用数字说出来。
 						const bar = (key, label, hint, list, token, text, kind) => {
 							const { segs, total } = barSegments(list);
 							if (segs.length === 0 || total <= 0) return null;
+							const topShare = segs[0].ms / total;
 							return h('div', { key, style: { marginTop: 6 } },
 								h('div', { style: { ...S.row, marginTop: 0 } },
 									h('span', { style: S.label, title: hint }, label),
 									h('span', { style: S.num }, text)),
-								h('div', { style: { display: 'flex', height: 10, marginTop: 4, borderRadius: 4, overflow: 'hidden', background: 'var(--dsw-alias-border-l2)' } },
-									segs.map((seg, index) => {
-										const segKey = seg.name === null ? null : `${kind}:${seg.name}`;
-										const lit = segKey !== null && hot === segKey;
-										return h('div', {
-											key: `seg-${index}`,
-											...hotProps(segKey, {}),
-											title: `${seg.name === null ? translate('rest') : seg.name} ${Math.round(seg.ms)}ms · ${Math.round((seg.ms / total) * 100)}%`,
-											style: {
-												width: `${(seg.ms / total) * 100}%`, background: `var(${token})`,
-												// 被指到的那一段提到最亮,其余压暗一档 —— 同一维度在表格里也同时亮
-												opacity: lit ? 1 : ([1, 0.7, 0.45, 0.28][index] ?? 0.28) * (hot === null ? 1 : 0.55),
-												cursor: segKey === null ? 'default' : 'pointer',
-											},
-										});
-									})));
+								h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
+									h('div', { style: { flex: '1 1 auto', display: 'flex', height: 8, borderRadius: 3, overflow: 'hidden', background: 'var(--dsw-alias-border-l2)' } },
+										segs.map((seg, index) => {
+											const segKey = seg.name === null ? null : `${kind}:${seg.name}`;
+											return h('div', {
+												key: `seg-${index}`,
+												...hotProps(segKey, {}),
+												title: `${seg.name === null ? translate('rest') : seg.name} ${Math.round(seg.ms)}ms · ${Math.round((seg.ms / total) * 100)}%`,
+												style: {
+													flexGrow: seg.ms, flexShrink: 1, flexBasis: 3,
+													background: `var(${token})`,
+													opacity: [0.5, 0.38, 0.28, 0.2][index] ?? 0.2,
+													boxShadow: index === 0 ? undefined : 'inset 1px 0 0 0 rgba(0, 0, 0, 0.45)',
+													cursor: segKey === null ? 'default' : 'pointer',
+												},
+											});
+										})),
+									topShare >= 0.8
+										? h('span', {
+											key: 'share', title: t('barShareHint'),
+											style: { ...S.label, flex: '0 0 auto', fontSize: 11, fontWeight: 400 },
+										}, `${Math.round(topShare * 100)}%`)
+										: null));
 						};
 						if (frame !== null && frame.js > 0 && framePkgs !== null) {
 							rows.push(head('frame-head', t('scopeFrame'), t('splitJsHint')));
