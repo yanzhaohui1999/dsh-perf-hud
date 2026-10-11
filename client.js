@@ -3589,6 +3589,7 @@ window.__ModuleLoader__.load({
 			let forced = 0;
 			let pause = 0;
 			let unresolved = 0;
+			let unresolvedMs = 0;
 			for (const row of rows) {
 				for (const script of row.scripts ?? []) {
 					js += script.ms ?? 0;
@@ -3597,12 +3598,12 @@ window.__ModuleLoader__.load({
 					const label = invokerLabel(script);
 					byInvoker.set(label, (byInvoker.get(label) ?? 0) + (script.ms ?? 0));
 					const resolved = packageOfScript(script.url, script.charPos);
-					if (resolved.pkg === null) { unresolved += 1; continue; }
+					if (resolved.pkg === null) { unresolved += 1; unresolvedMs += script.ms ?? 0; continue; }
 					byPkg.set(resolved.pkg, (byPkg.get(resolved.pkg) ?? 0) + (script.ms ?? 0));
 				}
 			}
 			return {
-				js: round1(js), exec: round1(Math.max(0, js - forced - pause)), forced: round1(forced), pause: round1(pause), unresolved,
+				js: round1(js), exec: round1(Math.max(0, js - forced - pause)), forced: round1(forced), pause: round1(pause), unresolved, unresolvedMs: round1(unresolvedMs),
 				// 窗口那几行是**累计**,必须带回它的分母:条数与跨度。没有它,`纯执行 21623.8ms`
 				// 会被读成"某一次执行花了 21 秒"(真被这么质疑过)—— 其实是 200 条长帧各百来毫秒攒起来的。
 				count: rows.length,
@@ -3682,9 +3683,11 @@ window.__ModuleLoader__.load({
 			if (top.length === 0) {
 				return `${translate('pkgNone')}${tally.unresolved === 0 ? '' : `(${translate('unblamed')} ${tally.unresolved})`}`;
 			}
+			// 未定名那段**必须带毫秒**:只写条数会和同一行里的 ms 混单位 ——
+			// 实测被读成"按包这一层只有 16ms"(实际那条没定名的脚本占了 234ms)。
 			return top.map(([name, ms]) => `${short(name)} ${Math.round(ms)}ms`).join(' · ')
 				+ (rest > 0 ? ` · ${translate('rest')} ${rest}` : '')
-				+ (tally.unresolved > 0 ? ` · ${translate('pkgNone')} ${tally.unresolved}` : '');
+				+ (tally.unresolved > 0 ? ` · ${translate('pkgNone')} ${Math.round(tally.unresolvedMs)}ms(${tally.unresolved} ${translate('scriptsUnit')})` : '');
 		}
 
 		/**

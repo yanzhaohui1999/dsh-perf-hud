@@ -1669,9 +1669,9 @@ watch.pkgByUrl.set('u-b', { pkg: 'dsh-b', via: 'url' });
 check('D5:窗口聚合:按包降序;纯执行 / 强制样式布局 / 暂停三分;定不到包的单独计数',
 	(() => {
 		const tally = watch.scriptPkgTally();
-		return [tally.top, tally.js, tally.exec, tally.forced, tally.pause, tally.unresolved];
+		return [tally.top, tally.js, tally.exec, tally.forced, tally.pause, tally.unresolved, tally.unresolvedMs];
 	})(),
-	[[['dsh-b', 70], ['dsh-a', 60]], 140, 122, 8, 10, 1]);
+	[[['dsh-b', 70], ['dsh-a', 60]], 140, 122, 8, 10, 1, 10]);
 check('D5:LoAF 窗口没变就复用上一次的结果(不让面板每 tick 重算 200×12 条脚本)',
 	watch.scriptPkgTally() === watch.scriptPkgTally(), true);
 check('D5:窗口变了才重算',
@@ -1704,7 +1704,7 @@ check('D5:"是谁"那一段文案:Top3 + 其余 + 定不到包的条数',
 			watch.pkgWhoText(watch.tallyScripts([{ scripts: [{ url: 'u-a', ms: 200 }, { url: 'u-zz', ms: 900 }] }])),
 		];
 	})(),
-	['dsh-a 60ms · dsh-b 30ms · dsh-c 20ms · 其余 1', '未定名(未归因 2)', 'dsh-a 200ms · 未定名 1']);
+	['dsh-a 60ms · dsh-b 30ms · dsh-c 20ms · 其余 1', '未定名(未归因 2)', 'dsh-a 200ms · 未定名 900ms(1 条脚本)']);
 check('一个包名都没定到时「按包」收敛成一行,但**留下分母**(否则像是功能被删了)',
 	watch.pkgZeroText(1, 461),
 	'按包:0 条定到名(本帧 1 · 窗口 461 条脚本)· 要深录');
