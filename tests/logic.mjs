@@ -184,6 +184,9 @@ process.exitCode = failed === 0 ? 0 : 1;
 		&& /forcedMs: script\.forcedMs/.test(source)
 		&& /forced \+= script\.forcedMs \?\? 0/.test(source), true);
 
+	// REVIEW §3.4 的债已还:那条"永远渲染不到"的分支连同它的函数一起删了(别只删文档)
+	check('REVIEW §3.4:不可达的 pkgZeroText 分支已删除(不留死代码)', /\bpkgZeroText\b/.test(source), false);
+
 	// P1:三处悬停联动**整体停用**,而且辅助代码已删 —— 这条钉住"没有人悄悄把 per-element
 	// 鼠标状态加回渲染里"。历史:2026-10-08 指到交叉表行标签会让外壳停用整个条目(面板消失、
 	// `errors` 为空),2026-10-11 在当前代码上**复现不出来**(163 个元素真实鼠标 + 153 次 JS
@@ -254,7 +257,7 @@ const sandbox = `
 		evidenceMissingPlain: '缺:原始源码行号与调用栈。',
 		handoffInteractions: '窗口内 ≥100ms 的交互', handoffInteractionsScope: '(端到端时长,不是帧内拆分)',
 		maxLabel: '最大', pickNone: '帧环里没有这条事故附近的帧(跨会话读回的事故无法定位到当前帧环):上面那条仍是自动/手选的那帧',
-		viaNotFetched: '还没预取(只有深录才拉脚本文本)',
+		viaNotFetched: '还没预取(只有深录才拉脚本文本)', evidenceBundleLine: '合并脚本行',
 		watchTrimmed: '裁掉',
 		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', needDeep: '要深录', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
 	})[key] ?? key;
@@ -289,6 +292,9 @@ const newPieces = [
 	'function evidenceName(',
 	'function evidencePlace(',
 	'function evidenceLine(',
+	'function incidentScriptEvidence(',
+	'function incidentEvidenceAt(',
+	'function evidenceWhereText(',
 	'function incidentEvidenceLines(',
 	'const EVIDENCE_MAX = ',
 	'function bundleMetaOf(',
@@ -438,7 +444,7 @@ const box = new Function(`${sandbox}\n${newPieces}
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, frameNearestIncident, revealIncident, eventTitleText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
-		sectionSource, sectionIndex, sectionPath, scriptPosition, viaText, scriptEvidence, evidenceName, evidencePlace, evidenceLine, incidentEvidenceLines, EVIDENCE_MAX } };`)();
+		sectionSource, sectionIndex, sectionPath, scriptPosition, viaText, scriptEvidence, evidenceName, evidencePlace, evidenceWhereText, evidenceLine, incidentScriptEvidence, incidentEvidenceAt, incidentEvidenceLines, EVIDENCE_MAX } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
@@ -943,12 +949,15 @@ check('复制摘要:事故里有脚本时带上「可疑脚本」证据行(交�
 			},
 		};
 		const text = EX.incidentSummaryText(row);
+		// ⚠️ 合并批的行号是**合并后大文件**里的行,不许拼成 `文件:行` —— 文件与行号分列,
+		// 行号明写「合并脚本行」
 		return [
 			text.includes('可疑脚本:'), text.includes('renderChat @ dsh-status-rotator'),
-			text.includes('/plugins/dsh-status-rotator/client.js:7'), text.includes('210ms'),
+			text.includes('· /plugins/dsh-status-rotator/client.js · 合并脚本行 7 · 210ms'),
+			text.includes('client.js:7') === false, text.includes('210ms'),
 			text.includes('来源 TimerHandler:setTimeout'), text.includes('pkg=section line=text'),
 		];
-	})(), [true, true, true, true, true, true]);
+	})(), [true, true, true, true, true, true, true]);
 check('复制摘要:窗口里有 ≥100ms 交互时写出事件来源(并标明是端到端、不是帧内拆分)',
 	(() => {
 		const row = { ...incidentRow, interactions: [{ type: 'event', name: 'click', ms: 168, waitMs: 7, handlerMs: 160 }] };
@@ -993,9 +1002,9 @@ check('scriptEvidence:单包 URL → 包直接读出来、文件就是 URL 的�
 		box.state.precise = true;
 		const ev = EX.scriptEvidence({ url, fn: 'render', invoker: 'TimerHandler:setTimeout', charPos: 4, ms: 12.3 }, url);
 		box.scriptLines.delete(url);
-		return [ev.pkg, ev.pkgVia, ev.file, ev.line, ev.lineVia, ev.fn, ev.ms, ev.invoker];
+		return [ev.pkg, ev.pkgVia, ev.file, ev.line, ev.lineVia, ev.lineScope, ev.fn, ev.ms, ev.invoker];
 	})(),
-	['dsh-x', 'url', '/plugins/dsh-x/client.js', 2, 'text', 'render', 12.3, 'TimerHandler:setTimeout']);
+	['dsh-x', 'url', '/plugins/dsh-x/client.js', 2, 'text', 'file', 'render', 12.3, 'TimerHandler:setTimeout']);
 check('scriptEvidence:合并批 → 包名靠分段表推出来,文件也在同一段(有 paths 时)',
 	(() => {
 		const url = 'http://127.0.0.1:3080/plugins/??a/client.js,b/client.js&rev=1';
@@ -1007,9 +1016,9 @@ check('scriptEvidence:合并批 → 包名靠分段表推出来,文件也在同�
 		const ev = EX.scriptEvidence({ url, fn: 'run', charPos: 44, ms: 5 }, url);
 		box.scriptLines.delete(url);
 		box.bundleMaps.delete(`bundle:${url}`);
-		return [ev.pkg, ev.pkgVia, ev.file, ev.line, ev.lineVia];
+		return [ev.pkg, ev.pkgVia, ev.file, ev.line, ev.lineVia, ev.lineScope];
 	})(),
-	['b', 'section', '/plugins/b/client.js', 12, 'text']);
+	['b', 'section', '/plugins/b/client.js', 12, 'text', 'bundle']);
 check('scriptEvidence:合并批 + 老缓存(没有 paths)→ 包名有、文件为 null —— 不拿包名冒充文件名',
 	(() => {
 		const url = 'http://127.0.0.1:3080/plugins/??a/client.js,b/client.js&rev=1';
@@ -1021,9 +1030,9 @@ check('scriptEvidence:合并批 + 老缓存(没有 paths)→ 包名有、文件�
 		const ev = EX.scriptEvidence({ url, fn: 'run', charPos: 44, ms: 5 }, url);
 		box.scriptLines.delete(url);
 		box.bundleMaps.delete(`bundle:${url}`);
-		return [ev.pkg, ev.pkgVia, ev.file, ev.line];
+		return [ev.pkg, ev.pkgVia, ev.file, ev.line, ev.lineScope];
 	})(),
-	['b', 'section', null, 12]);
+	['b', 'section', null, 12, 'bundle']);
 // ⚠️ 单包组合(`plugins/??<一个包>/client.js`)是个坑:`??` 的第一个 `?` 会被 `new URL` 当成
 // 查询串开始,pathname 只剩 `/plugins/` —— 于是"文件路径"会显示成 `/plugins/`(实测踩到)。
 check('scriptEvidence:单包组合 URL → 文件由正则自己拼(不能交给 new URL().pathname)',
@@ -1042,6 +1051,25 @@ check('scriptEvidence:非插件脚本(应用自己的外壳 bundle)→ 包名 nu
 		return [ev.pkg, ev.pkgVia, ev.file, EX.viaText(ev.pkgVia)];
 	})(),
 	[null, 'not-plugin', '/assets/index-abc.js', '不是插件脚本']);
+// ── 口径:合并批的行号不是 file 里的行 —— 不许拼成 file:line ─────────────
+check('合并批:文件与行号**分列**(行号是合并大文件里的行,不是包内文件的第 N 行)',
+	(() => {
+		const ev = { fn: 'run', ms: 1, pkg: 'dsh-b', pkgVia: 'section', file: '/plugins/dsh-b/client.js', line: 25580, lineVia: 'text', lineScope: 'bundle' };
+		return [EX.evidencePlace(ev), EX.evidenceLine(ev), EX.evidenceWhereText(ev)];
+	})(),
+	['/plugins/dsh-b/client.js', 'run @ dsh-b · /plugins/dsh-b/client.js · 合并脚本行 25580 · 1ms · pkg=section line=text', '/plugins/dsh-b/client.js · 合并脚本行 25580 · 分段推断 / 直接读出来']);
+check('单包 URL:行号就属于那个文件,照旧拼成 file:line(同一个坐标系)',
+	EX.evidencePlace({ fn: 'x', ms: 1, pkg: 'dsh-a', pkgVia: 'url', file: '/plugins/dsh-a/client.js', line: 42, lineVia: 'text', lineScope: 'file' }),
+	'/plugins/dsh-a/client.js:42');
+// 老事故包没有 lineScope:由 incidentScriptEvidence 按 pkgVia 现推(分段表算出来的包 ⇒ bundle)
+check('老包缺 lineScope:按 pkgVia 现推 —— section ⇒ bundle(不拼冒号),url ⇒ file(拼冒号)',
+	(() => {
+		const stored = { u: 0, ms: 7, fn: 'run', pkg: 'dsh-b', pkgVia: 'section', file: '/plugins/dsh-b/client.js', line: 7, lineVia: 'text' };
+		const bundle = EX.incidentScriptEvidence(stored, 'http://h/plugins/??a/client.js,b/client.js&rev=1', null);
+		const single = EX.incidentScriptEvidence({ ...stored, pkg: 'dsh-a', pkgVia: 'url', file: '/plugins/dsh-a/client.js' }, 'http://h/plugins/dsh-a/client.js', null);
+		return [bundle.lineScope, EX.evidencePlace(bundle), single.lineScope, EX.evidencePlace(single)];
+	})(),
+	['bundle', '/plugins/dsh-b/client.js', 'file', '/plugins/dsh-a/client.js:7']);
 check('证据行:自描述、可粘给别人(名字 @ 包 · 文件:行 · 耗时 · 来源 · 两个 via 码)',
 	EX.evidenceLine({ fn: 'renderChat', ms: 210, pkg: 'dsh-status-rotator', pkgVia: 'section', file: '/plugins/dsh-status-rotator/client.js', line: 7, lineVia: 'text', invoker: 'TimerHandler:setTimeout' }),
 	'renderChat @ dsh-status-rotator · /plugins/dsh-status-rotator/client.js:7 · 210ms · 来源 TimerHandler:setTimeout · pkg=section line=text');
@@ -1425,7 +1453,6 @@ const watchPieces = [
 	extract(source, 'function tallyScripts('),
 	extract(source, 'function scriptPkgTally('),
 	extract(source, 'function framePkgTally('),
-	extract(source, 'function pkgZeroText('),
 		source.slice(source.indexOf('const BUNDLE_PREFIX'), source.indexOf('\n', source.indexOf('const BUNDLE_PREFIX'))),
 		source.slice(source.indexOf('const PLUGIN_URL'), source.indexOf('\n', source.indexOf('const PLUGIN_URL'))),
 	extract(source, 'function ownerOfUrl('),
@@ -1452,6 +1479,17 @@ const watchPieces = [
 	extract(source, 'function watchStatus('),
 	extract(source, 'function selectIncident('),
 	extract(source, 'function setIncidentScope('),
+	extract(source, 'function incidentScriptEvidence('),
+	extract(source, 'function viaText('),
+	extract(source, 'function evidenceName('),
+	extract(source, 'function evidencePlace('),
+	extract(source, 'function evidenceLine('),
+	extract(source, 'function replayScope('),
+	extract(source, 'function replayX('),
+	extract(source, 'function replaySummaryText('),
+	extract(source, 'function replaySplitText('),
+	extract(source, 'function incidentEvidenceAt('),
+	extract(source, 'function evidenceWhereText('),
 	extract(source, 'function locatable('),
 	extract(source, 'function evidenceScope('),
 	extract(source, 'function evidenceZeroText('),
@@ -1513,7 +1551,7 @@ const watchBox = new Function(`
 		return {
 			fn: script?.fn ?? null, ms: script?.ms ?? 0,
 			pkg: resolved.pkg, pkgVia: resolved.via,
-			file: url === '' ? null : '/plugins/stub/client.js', line: 7, lineVia: 'stub-text',
+			file: url === '' ? null : '/plugins/stub/client.js', line: 7, lineVia: 'stub-text', lineScope: url === '' ? null : 'file',
 			invoker: script?.invoker ?? null, invokerType: script?.invokerType ?? null,
 			url: url === '' ? null : url,
 		};
@@ -1535,7 +1573,9 @@ const watchBox = new Function(`
 	// 面板文案用的两个桩:断言只检查"人看到的字",key 兜底返回 key 本身
 	const translate = (key) => ({
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉', times: ' 次',
-		evidenceLabel: '可疑脚本', evidenceScopeIncident: '事故', evidenceWindowPrefix: '窗口内', pkgNamed: '定到包',
+		evidenceLabel: '可疑脚本', evidenceScopeIncident: '事故', evidenceWindowPrefix: '窗口内', pkgNamed: '定到包', evidenceBundleLine: '合并脚本行',
+		evidenceInvoker: '来源', evidenceWhere: '位置', fnUnknown: '函数名未记录', pkgUnresolvedShort: '包未定名', fileUnresolved: '文件未定名',
+		viaDirect: '直接读出来', viaInferred: '分段推断', viaNotPlugin: '不是插件脚本', viaFailed: '解析失败', viaUnavailable: '还没到位/拿不到', viaNotFetched: '还没预取(只有深录才拉脚本文本)',
 		worstOne: '最差那条', sparkGap: '整格 rAF 挂起(间隙,不是卡顿)', sparkNoPick: '这一秒没有长动画帧,点不动', sparkPickHint: '点它 → 翻帧切到这一秒的长动画帧',
 		pkgNone: '未定名', unblamed: '未归因', rest: '其余', none: '无', invokerUnknown: '来源未记录', notYet: '未采集',
 		splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
@@ -1545,7 +1585,9 @@ const watchBox = new Function(`
 		hit: '命中', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名', peak: '峰', framePickFiltered: '值得回看的帧',
 		otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
 		crossNone: '没有可交叉的脚本', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', rest: '其余',
-		hourUnit: '小时', minUnit: '分', secUnit: '秒',
+		hourUnit: '小时', minUnit: '分', secUnit: '秒', framesUnit: ' 帧',
+		replayGaps: 'rAF 挂起', replayNoLoaf: '这一帧附近没有长动画帧记录(窗口里没有 LoAF)',
+		splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 	})[key] ?? key;
 	// 面板渲染区那两个文案函数用到的短名(真实实现里是 short():去掉 scope 前缀)
 	// 这里不用正则:盒子源码写在模板串里,反斜杠会被模板先吃掉
@@ -1575,8 +1617,8 @@ const watchBox = new Function(`
 		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, frameSeverity, PICK_MIN_MS, unresolvedLabel, crossTable, crossSummary,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT, sparkPickMap, sparkCellTitle, markResolved,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
-		tallyScripts, framePkgTally, pkgWhoText, whoRows, barSegments, pkgZeroText, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
-		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident, selectIncident, setIncidentScope, evidenceScope, evidenceFooter, evidenceZeroText, evidenceCalls: () => evidenceCalls,
+		tallyScripts, framePkgTally, pkgWhoText, whoRows, barSegments, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
+		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident, selectIncident, setIncidentScope, evidenceScope, evidenceFooter, evidenceZeroText, incidentScriptEvidence, incidentEvidenceAt, evidenceWhereText, evidenceLine, evidenceName, evidencePlace, replayScope, replayX, replaySummaryText, replaySplitText, evidenceCalls: () => evidenceCalls,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
 		setNow: (value) => { nowMs = value; },
@@ -1745,7 +1787,115 @@ check('事故选择:默认自动跟严重度最差那条(incidents 由 keepIncid
 	(() => { const pick = watch.selectedIncident(); return [pick.auto, pick.row.id]; })(), [true, watch.state.watch.incidents[0].id]);
 check('事故选择:选中之后跟的是那一条,auto=false',
 	(() => { watch.state.watch.selId = watch.state.watch.incidents[1].id; const pick = watch.selectedIncident(); watch.state.watch.selId = null; return [pick.auto, pick.row.id === watch.state.watch.incidents[1].id]; })(), [false, true]);
+// ── 事故回放:只用事故包里存下来的东西(刷新生效),不新增采集 ─────────────
+check('事故回放:没有事故 / 事故里没有帧 → null(不摆空条)',
+	(() => {
+		const saved = watch.state.watch.incidents.slice();
+		watch.state.watch.incidents.length = 0;
+		const none = watch.replayScope();
+		watch.state.watch.incidents.push({ id: 'i0', severity: 200, at: '2026-10-12T09:00:00.000Z', cause: 'frame', summary: {} });
+		const noFrames = watch.replayScope();
+		watch.state.watch.incidents.length = 0;
+		for (const r of saved) watch.state.watch.incidents.push(r);
+		return [none, noFrames];
+	})(),
+	[null, null]);
+check('事故回放:live 帧环为空(模拟刷新)也照样能回放 —— 数据全部来自事故包',
+	(() => {
+		const savedIncidents = watch.state.watch.incidents.slice();
+		const savedLoaf = watch.state.watch.loaf.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.loaf.length = 0;      // 刷新后实时帧环是空的
+		watch.state.watch.incidents.push({
+			id: 'i80', severity: 320, at: '2026-10-12T12:00:00.000Z', cause: 'frame',
+			window: { fromMs: 1000, toMs: 14000 },
+			summary: { frames: 3, p50: 20, p99: 320, worstFrameMs: 320, hiddenGaps: 1 },
+			frames: [
+				{ t: 1000, ms: 20, gap: false },
+				{ t: 6000, ms: 320, gap: false },
+				{ t: 9000, ms: 0, gap: true },
+			],
+			loaf: [{ t: 6000, dur: 320, blocking: 40, renderStart: 6100, styleAndLayoutStart: 6200, scripts: [{ ms: 120, forcedMs: 10, pauseMs: 0 }] }],
+		});
+		const scope = watch.replayScope();
+		const result = [
+			scope === null ? null : scope.frames.length, scope.span, scope.gaps,
+			scope.worst.ms, scope.split === null ? null : scope.split.total,
+			watch.replaySummaryText(scope), watch.replaySplitText(scope),
+		];
+		watch.state.watch.incidents.length = 0;
+		for (const r of savedIncidents) watch.state.watch.incidents.push(r);
+		watch.state.watch.loaf.length = 0;
+		for (const r of savedLoaf) watch.state.watch.loaf.push(r);
+		return result;
+	})(),
+	[3, 13000, 1, 320, 320,
+		'窗口 13秒 · 3 帧 · p50 20ms · p99 320ms · 最差 320ms · rAF 挂起 1',
+		'最差 320ms: 脚本 100 · 任务 0 · 渲染 100 · 样式+布局+绘制 120']);
+check('事故回放横轴按**时间**放:起点 0、终点满宽、中间按比例、越界夹住(不是按序号)',
+	[watch.replayX(1000, 1000, 13000, 1000), watch.replayX(14000, 1000, 13000, 1000), watch.replayX(7500, 1000, 13000, 1000), watch.replayX(0, 1000, 13000, 1000), watch.replayX(999999, 1000, 13000, 1000), watch.replayX(5, 0, 0, 1000)],
+	[0, 1000, 500, 0, 1000, 0]);
+check('事故回放:没有 LoAF 重叠时照实说,不给假的时间分解',
+	watch.replaySplitText({ split: null }), '这一帧附近没有长动画帧记录(窗口里没有 LoAF)');
+
 // ── 可疑脚本那一块吃什么 + 底下的分母 ─────────────────────────────
+// ── 历史事故的证据:存下来的优先(刷新生效),面板与复制摘要同一份 ─────────────
+check('历史事故:live 缓存全空(模拟刷新)时,仍然用捕获时存下来的 pkg/file/line',
+	(() => {
+		const savedIncidents = watch.state.watch.incidents.slice();
+		const savedLoaf = watch.state.watch.loaf.slice();
+		const savedPrecise = watch.state.precise;
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.loaf.length = 0;      // 刷新后 live 帧环是空的
+		watch.state.precise = false;            // 刷新后精确归因没开
+		watch.pkgByUrl.clear();                 // 解析缓存也空了
+		watch.state.watch.incidents.push({
+			id: 'i77', severity: 300, at: '2026-10-12T10:00:00.000Z', cause: 'frame',
+			urls: ['http://h/plugins/??a/client.js,b/client.js&rev=1'],
+			summary: {
+				topScripts: [{
+					u: 0, ms: 120, fn: 'run', charPos: 44, pkg: 'dsh-b', pkgVia: 'section',
+					file: '/plugins/dsh-b/client.js', line: 25580, lineVia: 'text', lineScope: 'bundle',
+					invoker: 'Response.json.then', invokerType: 'user-callback',
+				}],
+				pkgCoverage: { resolved: 1, total: 1 },
+			},
+		});
+		const scope = watch.evidenceScope();
+		const row = scope.rows[0];
+		const panelLine = watch.evidenceLine(row);
+		const incident = watch.state.watch.incidents[0];
+		const copyLine = watch.evidenceLine(watch.incidentEvidenceAt(incident, incident.summary.topScripts[0]));
+		const result = [scope.rows.length, row.pkg, row.file, row.line, row.lineScope, row.fn, panelLine === copyLine, panelLine];
+		watch.state.watch.incidents.length = 0;
+		for (const r of savedIncidents) watch.state.watch.incidents.push(r);
+		watch.state.watch.loaf.length = 0;
+		for (const r of savedLoaf) watch.state.watch.loaf.push(r);
+		watch.state.precise = savedPrecise;
+		return result;
+	})(),
+	[1, 'dsh-b', '/plugins/dsh-b/client.js', 25580, 'bundle', 'run', true,
+		'run @ dsh-b · /plugins/dsh-b/client.js · 合并脚本行 25580 · 120ms · 来源 Response.json.then · pkg=section line=text']);
+check('老事故包(没有 file/line 字段):才回退现算 —— 就算现算,也不把结果写成"存下来的"',
+	(() => {
+		const savedIncidents = watch.state.watch.incidents.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.pkgByUrl.clear();
+		watch.pkgByUrl.set('http://h/plugins/dsh-old/client.js', { pkg: 'dsh-old', via: 'url' });
+		watch.state.watch.incidents.push({
+			id: 'i78', severity: 200, at: '2026-10-12T11:00:00.000Z', cause: 'frame',
+			urls: ['http://h/plugins/dsh-old/client.js'],
+			summary: { topScripts: [{ u: 0, ms: 30, fn: 'old' }], pkgCoverage: { resolved: 0, total: 1 } },
+		});
+		const scope = watch.evidenceScope();
+		const row = scope.rows[0];
+		const result = [row.fn, row.pkg, row.file, row.line, row.lineVia, row.lineScope];
+		watch.state.watch.incidents.length = 0;
+		for (const r of savedIncidents) watch.state.watch.incidents.push(r);
+		watch.pkgByUrl.clear();
+		return result;
+	})(),
+	['old', 'dsh-old', '/plugins/stub/client.js', 7, 'stub-text', 'file']);
 check('可疑脚本:事故优先(窗口内切片,跨会话读回仍在),范围写在标题上',
 	(() => {
 		const savedIncident = watch.state.watch.incidents.slice();
@@ -1820,9 +1970,9 @@ check('事故切片:topScripts 带上 file / line / lineVia(证据链落到包�
 		watch.state.watch.loaf.length = 0;
 		for (const row of savedLoaf) watch.state.watch.loaf.push(row);
 		watch.pkgByUrl.clear();
-		return [watch.evidenceCalls() > before, script.file, script.line, script.lineVia];
+		return [watch.evidenceCalls() > before, script.file, script.line, script.lineVia, script.lineScope];
 	})(),
-	[true, '/plugins/stub/client.js', 7, 'stub-text']);
+	[true, '/plugins/stub/client.js', 7, 'stub-text', 'file']);
 // 「自动」跟哪一条:最差(默认)还是最近 —— 两个都要够得着,又不许多一张清单
 check('事故 scope:默认跟最差;切到「最近」之后跟时刻最新那条,并且清掉手选',
 	(() => {
@@ -2387,9 +2537,18 @@ check('D5:"是谁"那一段文案:Top3 + 其余 + 定不到包的条数',
 check('按包:一个插件包名都没有时,把「其余来源」说出来(不是只剩未定名 N)',
 	watch.pkgWhoText({ top: [], byOther: [['index-abc.js', 266], ['无 URL(内联脚本)', 12]], unresolved: 2, unresolvedMs: 278, byInvoker: [], byPair: {} }),
 	'其余来源 index-abc.js 266ms · 无 URL(内联脚本) 12ms');
-check('一个包名都没定到时「按包」收敛成一行,但**留下分母**(否则像是功能被删了)',
-	watch.pkgZeroText(1, 461),
-	'按包:0 条定到名(本帧 1 · 窗口 461 条脚本)· 要深录');
+// REVIEW §3.4 记过这条债:旧版这里收敛成一行 `按包:0 条定到名(本帧 1 · 窗口 461 条脚本)· 要深录`
+// —— 但那个分支**永远渲染不到**(外层要求 window.js > 0,而 js > 0 必然有脚本,脚本不是进 top
+// 就是进 byOther,两个条件互斥),套件却因为**直接测那个函数**而一直绿。
+// 现在死分支已删,断言改成**实际渲染的那份数据**:面板喂给按包那条堆叠条的就是 whoRows(tally)。
+check('一个包名都没定到时:按包那一条渲染的是「其余来源」段(带名字与毫秒),不是一行"0 条定到名"',
+	(() => {
+		const tally = { top: [], byOther: [['index-abc.js', 266], ['无 URL(内联脚本)', 12]], unresolved: 2, unresolvedMs: 278, byInvoker: [], byPair: {} };
+		const rows = watch.whoRows(tally);            // ← 渲染层 bar('win-pkg', …, whoRows(window), …) 吃的就是它
+		const segs = watch.barSegments(rows).segs;    // ← 条上的段由它算
+		return [rows.length, segs.map((seg) => [seg.name, Math.round(seg.ms)])];
+	})(),
+	[2, [['index-abc.js', 266], ['无 URL(内联脚本)', 12]]]);
 check('定不到插件包名的脚本按原因给名字(而不是笼统的"未定名")',
 	[
 		watch.unresolvedLabel({ url: '' }),

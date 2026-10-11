@@ -573,6 +573,10 @@ window.__ModuleLoader__.load({
 					} catch (error) { file = null; }
 				}
 			}
+			// 「这个行号属于哪个文件」—— 合并批的 charPos → 行号是相对**合并后的大文件**的,
+			// 而 file 是那个包自己的源文件;两者不是同一个坐标系,**不许拼成 file:line**
+			// (那看着精确,实际指不到任何一行)。单包 URL / 单包组合才是同一个文件。
+			const lineScope = position.line === null ? null : (resolved.via === 'section' ? 'bundle' : (file === null ? null : 'file'));
 			return {
 				fn: typeof script?.fn === 'string' && script.fn !== '' ? script.fn : null,
 				ms: typeof script?.ms === 'number' ? script.ms : 0,
@@ -581,6 +585,7 @@ window.__ModuleLoader__.load({
 				file,
 				line: position.line,
 				lineVia: position.via,
+				lineScope,
 				invoker: typeof script?.invoker === 'string' && script.invoker !== '' ? script.invoker : null,
 				invokerType: typeof script?.invokerType === 'string' ? script.invokerType : null,
 				url: typeof url === 'string' && url !== '' ? url : null,
@@ -598,12 +603,30 @@ window.__ModuleLoader__.load({
 			return `${who} @ ${pkg}`;
 		}
 
-		/** 「文件:行」那一格。文件拿不到就退回脚本名,两个都没有才给 null。 */
+		/**
+		 * 「文件(:行)」那一格。文件拿不到就退回脚本名,两个都没有才给 null。
+		 * ⚠️ **合并批不拼 `file:line`**:那里的行号是合并后大文件里的行号,而 file 是包内源文件 ——
+		 * 拼起来看着精确,其实指不到任何一行。那种情况只给文件,行号另起一段(`evidenceLine`)。
+		 */
 		function evidencePlace(ev) {
 			const file = ev.file == null ? (ev.url == null ? null : ev.url) : ev.file;
 			if (file === null && ev.line == null) return null;
 			const where = file === null ? translate('fileUnresolved') : short(file);
-			return ev.line == null ? where : `${where}:${ev.line}`;
+			if (ev.line == null || ev.lineScope === 'bundle') return where;
+			return `${where}:${ev.line}`;
+		}
+
+		/**
+		 * 悬停/复制里的「位置」那段:文件与行号**分列**,合并批的行号明确标成"合并脚本行"。
+		 * 不把两者混成一个数字,是为了让读者一眼看出"这不是原始源码行"。
+		 */
+		function evidenceWhereText(ev) {
+			const parts = [];
+			const place = evidencePlace(ev);
+			if (place !== null) parts.push(place);
+			if (ev.line != null && ev.lineScope === 'bundle') parts.push(`${translate('evidenceBundleLine')} ${ev.line}`);
+			parts.push(`${viaText(ev.pkgVia)} / ${viaText(ev.lineVia)}`);
+			return parts.join(' · ');
 		}
 
 		/**
@@ -614,17 +637,66 @@ window.__ModuleLoader__.load({
 			const parts = [evidenceName(ev)];
 			const place = evidencePlace(ev);
 			if (place !== null) parts.push(place);
+			// 合并批:行号单独一段,写明它是**合并脚本**里的行(不是 file 里的行,也不是源码行)
+			if (ev.line != null && ev.lineScope === 'bundle') parts.push(`${translate('evidenceBundleLine')} ${ev.line}`);
 			parts.push(`${Math.round(typeof ev.ms === 'number' ? ev.ms : 0)}ms`);
 			if (ev.invoker != null && ev.invoker !== '') parts.push(`${translate('evidenceInvoker')} ${ev.invoker}`);
 			parts.push(`pkg=${ev.pkgVia ?? '-'} line=${ev.lineVia ?? '-'}`);
 			return parts.join(' · ');
 		}
 
+		/**
+		 * 事故里的一条证据:**优先用捕获时存下来的定位结果**,只有包里确实没有的字段才回退到现算。
+		 *
+		 * 为什么不能一律现算:`scriptEvidence()` 依赖**当前**会话的 `state.precise` 与内存里的
+		 * `scriptLines` / `bundleMaps` 缓存 —— 刷新之后那两个缓存都是空的,现算会把捕获时已经定下来的
+		 * pkg / file / line 变成 `null` / `text-not-fetched`,**历史事故的定位信息就这样丢了**
+		 * (事故包落盘本来就为了活过刷新)。老包(加 file/line/lineVia/invoker 之前抓的)没有这些
+		 * 字段,那时才现算 —— 它是兼容垫片,不是主路。
+		 */
+		function incidentScriptEvidence(script, url, fallback) {
+			const stored = script ?? {};
+			const computed = fallback ?? {};
+			const pick = (key) => (stored[key] !== undefined ? stored[key] : (computed[key] ?? null));
+			const ms = typeof stored.ms === 'number' ? stored.ms : (typeof computed.ms === 'number' ? computed.ms : 0);
+			const line = pick('line');
+			const pkgVia = pick('pkgVia');
+			// 老包没有 lineScope:按同一条规则现推(分段表算出来的包 → 行号属于合并大文件)
+			const lineScope = stored.lineScope !== undefined
+				? stored.lineScope
+				: (line == null ? null : (pkgVia === 'section' ? 'bundle' : 'file'));
+			return {
+				fn: pick('fn'),
+				ms,
+				pkg: pick('pkg'),
+				pkgVia,
+				file: pick('file'),
+				line,
+				lineVia: pick('lineVia'),
+				lineScope,
+				invoker: pick('invoker'),
+				invokerType: pick('invokerType'),
+				url: computed.url ?? (typeof url === 'string' && url !== '' ? url : null),
+			};
+		}
+
+		/**
+		 * 事故里第 N 条脚本 → 证据(URL 从事故的 URL 表里解)。**面板与复制摘要共用它** ——
+		 * 两条路必须是同一份口径,否则"面板上看到一个文件:行、复制出来却没有"这种不一致会回来。
+		 */
+		function incidentEvidenceAt(row, script) {
+			const urls = row === null || row === undefined || Array.isArray(row.urls) === false ? [] : row.urls;
+			const url = script !== null && script !== undefined && script.u >= 0 ? (urls[script.u] ?? '') : '';
+			const needs = script === null || script === undefined || script.pkg === undefined
+				|| script.file === undefined || script.line === undefined || script.lineVia === undefined;
+			return incidentScriptEvidence(script, url, needs ? scriptEvidence(script, url) : null);
+		}
+
 		/** 事故包里那几条脚本的证据行(与面板「可疑脚本」同一份口径,同样只取前 EVIDENCE_MAX 条)。 */
 		function incidentEvidenceLines(row) {
 			const summary = row?.summary ?? {};
 			const top = Array.isArray(summary.topScripts) ? summary.topScripts : [];
-			return top.slice(0, EVIDENCE_MAX).map((script) => evidenceLine(script));
+			return top.slice(0, EVIDENCE_MAX).map((script) => evidenceLine(incidentEvidenceAt(row, script)));
 		}
 
 		/**
@@ -637,8 +709,9 @@ window.__ModuleLoader__.load({
 			const summary = selected.row === null ? null : selected.row.summary;
 			const top = summary === null || Array.isArray(summary.topScripts) === false ? [] : summary.topScripts;
 			if (selected.row !== null && top.length > 0) {
-				const urls = Array.isArray(selected.row.urls) ? selected.row.urls : [];
-				const rows = top.map((script) => scriptEvidence(script, script.u >= 0 ? (urls[script.u] ?? '') : ''))
+				// ⚠️ 走 incidentEvidenceAt:**捕获时存下来的定位结果优先**,老包才现算 ——
+				// 现算依赖当前会话的缓存,刷新后会把存好的 pkg/file/line 变成 null(历史事故丢定位)。
+				const rows = top.map((script) => incidentEvidenceAt(selected.row, script))
 					.sort((a, b) => b.ms - a.ms);
 				const coverage = summary.pkgCoverage ?? { resolved: 0, total: rows.length };
 				return {
@@ -1586,6 +1659,8 @@ window.__ModuleLoader__.load({
 					script.file = evidence.file;
 					script.line = evidence.line;
 					script.lineVia = evidence.lineVia;
+					// 行号属于哪个坐标系(合并大文件 / 那个文件自己)—— 存进包,面板与导出件才不用现推
+					script.lineScope = evidence.lineScope;
 				}
 			}
 			const scripts = [];
@@ -1659,7 +1734,7 @@ window.__ModuleLoader__.load({
 						// 「打开哪个文件、哪一段」:file = 包内那份文件(section 的 sources),
 						// line = **脚本文本自己的行号**(不是原始源码行),两个 via 码说明它们是怎么来的
 						pkg: script.pkg, pkgVia: script.pkgVia,
-						file: script.file, line: script.line, lineVia: script.lineVia,
+						file: script.file, line: script.line, lineVia: script.lineVia, lineScope: script.lineScope,
 					})),
 					// 窗口自己的分位:没有它,howToRead 里那句"拿 summary 和 baseline 比"在
 					// 文件内根本没法执行(实测一位只读文件的读者就卡在这)
@@ -4033,6 +4108,7 @@ window.__ModuleLoader__.load({
 		// "一格 = 那一段里最差的一帧"这个读法一致,阈值也逐条对应,所以两处能对着看。
 		const SPARK_SECONDS = 60;
 		const SPARK_HEIGHT = 18;
+		const SPARK_REPLAY_HEIGHT = 24;   // 事故回放条的高度(窗口短,细节看得清一点)
 		const SPARK_MAX_MS = 200;    // 画满高度的帧间隔(再高也只是画满)
 
 		/**
@@ -4084,6 +4160,69 @@ window.__ModuleLoader__.load({
 			return pick === undefined ? `${base} · ${translate('sparkNoPick')}` : `${base} · ${translate('sparkPickHint')}`;
 		}
 
+		// ───────────────── 事故回放(数据全部来自事故包) ─────────────────
+		/**
+		 * 事故回放吃的那份数据:**只用事故包里存下来的东西**(`incident.frames` / `incident.loaf` /
+		 * `summary`),所以它**刷新生效**,也不花任何新的采集成本 —— 面板上面那条 60 秒帧条是
+		 * **实时**帧环(刷新就没了),两者刻意分开显示、各自写明范围。
+		 *
+		 * 不做、也不假装的事:LoAF 不给每帧内脚本的**起止时间**,所以这里**不排帧内执行顺序**;
+		 * 一帧里谁先谁后只有 Chrome trace 知道。
+		 */
+		function replayScope() {
+			const row = selectedIncident().row;
+			if (row === null || Array.isArray(row.frames) === false || row.frames.length === 0) return null;
+			const frames = row.frames;
+			const win = row.window ?? {};
+			const from = typeof win.fromMs === 'number' ? win.fromMs : frames[0].t;
+			const to = typeof win.toMs === 'number' ? win.toMs : frames[frames.length - 1].t;
+			const span = Math.max(1, round1(to - from));
+			let worst = null;
+			let gaps = 0;
+			for (const frame of frames) {
+				if (frame.gap === true) { gaps += 1; continue; }
+				if (worst === null || frame.ms > worst.ms) worst = frame;
+			}
+			// 与最差帧**时间上重叠**的那条 LoAF:只用来给这一帧的时间分解(就近,不等于"这一帧只属于它")
+			let split = null;
+			const loaf = Array.isArray(row.loaf) ? row.loaf : [];
+			if (worst !== null) {
+				for (const entry of loaf) {
+					const start = worst.t - worst.ms;
+					if (entry.t <= worst.t && entry.t + (entry.dur ?? 0) >= start) { split = frameSplit(entry); break; }
+				}
+			}
+			return { row, frames, from, to, span, worst, gaps, split, summary: row.summary ?? {} };
+		}
+
+		/**
+		 * 回放条上这一帧的横坐标 —— **按时间**放(不是按序号):整段 rAF 被挂起的那几秒会留白,
+		 * 一眼看得出"这段时间根本没在测"。按序号放会把那个间隔压成一根柱子,那就等于说谎。
+		 */
+		function replayX(t, from, spanMs, width) {
+			if (!(spanMs > 0) || !(width > 0)) return 0;
+			const x = Math.round(((t - from) / spanMs) * width);
+			return x < 0 ? 0 : (x > width ? width : x);
+		}
+
+		/** 回放范围那一行:窗口跨度 / 帧数 / 分位 / 最差 / 缺口数(每一项都带单位)。 */
+		function replaySummaryText(scope) {
+			const summary = scope.summary;
+			const parts = [`${translate('windowScope')} ${spanText(scope.span)}`, `${scope.frames.length}${translate('framesUnit')}`];
+			if (typeof summary.p50 === 'number') parts.push(`p50 ${summary.p50}ms`);
+			if (typeof summary.p99 === 'number') parts.push(`p99 ${summary.p99}ms`);
+			if (scope.worst !== null) parts.push(`${translate('watchWorst')} ${Math.round(scope.worst.ms)}ms`);
+			if (scope.gaps > 0) parts.push(`${translate('replayGaps')} ${scope.gaps}`);
+			return parts.join(' · ');
+		}
+
+		/** 最差那一帧的时间去向:复用实时视图同一套 `frameSplit`(四段分区,相加 = 这一帧时长)。 */
+		function replaySplitText(scope) {
+			const split = scope.split;
+			if (split === null) return translate('replayNoLoaf');
+			return `${translate('watchWorst')} ${split.total}ms: ${translate('splitScript')} ${split.js} · ${translate('splitTask')} ${split.taskOther} · ${translate('splitRender')} ${split.render} · ${translate('splitTail')} ${split.tail}`;
+		}
+
 		/**
 		 * 一格算哪一档 —— 与导出件 ASCII 条带**逐条对应**:
 		 * `█` ≥100ms → bad · `▒` ≥50ms → warn · `·` 其余 → ok · `_` 整格 rAF 间隙 → gap · 空格 没采到 → empty。
@@ -4102,10 +4241,6 @@ window.__ModuleLoader__.load({
 		 * 一个包名都没定到时那一行:**必须留下分母** —— 直接不显示会让人以为"按包"被删了
 		 * (实测被这么问过)。给不出占比是因为没有名字就没有排行,不是没采。
 		 */
-		function pkgZeroText(frameScripts, windowScripts) {
-			return `${translate('byPkg')}:${translate('pkgZeroNamed')}(${translate('scopeFrame')} ${frameScripts} · ${translate('windowScope')} ${windowScripts} ${translate('scriptsUnit')})· ${translate('needDeep')}`;
-		}
-
 		/**
 		 * 一条脚本"是谁调起来的" —— LoAF 的 `invoker` 是一句 devtools 风格的调用点描述。
 		 * 真页面抓到的形态(2026-10-08,一份 24 条脚本的事故):
@@ -4372,16 +4507,19 @@ window.__ModuleLoader__.load({
 		 * 60 秒帧条本体(铺满一行的 SVG,只用 theme token)。
 		 * 每格:title 给墙钟时间与这一秒最差帧;**能导航过去的格子才可点**(见 sparkPickMap)。
 		 */
+		/** 帧条(实时 60 秒 / 事故回放)共用的一组 token:两处必须同一套颜色,否则同一档观感不一致。 */
+		const SPARK_COLORS = {
+			bad: 'var(--dsw-alias-state-error-primary)',
+			warn: 'var(--dsw-alias-state-warn-primary)',
+			ok: 'var(--dsw-alias-label-secondary)',
+			gap: 'var(--dsw-alias-border-l2)',
+		};
+
 		function sparkStrip() {
 			const now = performance.now();
 			const cells = sparkBars(now);
 			const picks = sparkPickMap(now);
-			const colors = {
-				bad: 'var(--dsw-alias-state-error-primary)',
-				warn: 'var(--dsw-alias-state-warn-primary)',
-				ok: 'var(--dsw-alias-label-secondary)',
-				gap: 'var(--dsw-alias-border-l2)',
-			};
+			const colors = SPARK_COLORS;
 			const bars = [];
 			for (let i = 0; i < cells.length; i += 1) {
 				const level = sparkLevel(cells[i]);
@@ -4725,10 +4863,15 @@ window.__ModuleLoader__.load({
 				// 直接测量 / 归因推断 / 尚无法确认三者在这几句里分开写。
 				evidenceLabel: '可疑脚本', evidenceScopeIncident: '事故', evidenceWindowPrefix: '窗口内',
 				evidenceHint: '把「事故 → 帧 → 来源 → 包 → 文件:行」落到个体脚本上:上面那几块给的是"时间花在哪个包 / 哪类调用"(排行),这一块给的是"打开哪个文件、哪个函数"(定位)。事故里的脚本是**窗口内**的切片(最多 5 条,跨会话读回之后仍在);没有事故时才退回当前选中那一帧。LoAF 只上报 >5ms 的脚本,所以这一层是**下界**。',
-				evidenceCaliber: '口径:函数名与毫秒是 LoAF **直接给的**;包 / 文件 / 行号是由 URL 与 sourcemap 分段**推断的**(悬停看它属于哪一档);行号是**脚本文件自己的行**,不是原始源码行。',
+				evidenceCaliber: '口径:函数名与毫秒是 LoAF **直接给的**;包 / 文件 / 行号是由 URL 与 sourcemap 分段**推断的**(悬停看它属于哪一档)。⚠️ **行号是脚本自己的行号,不是原始 TS/TSX 源码行**:单包 URL 时它就是那个文件里的行;合并批(`plugins/??a,b`)里它是**合并后大文件**里的行,而文件只回答"这段代码属于哪个包的那个文件" —— 两者不是一个坐标系,所以那种情况**不拼成 `文件:行`**,行号单独写成「合并脚本行 N」。',
 				evidenceMissing: '缺:原始源码行号与调用栈 —— 要解 section 内层 mappings(VLQ)或录 Chrome trace,本项目都没做。所以这里能缩小到"哪个包的哪个文件哪一段",不能直接指出根因。',
 				evidenceCopyHint: '点这一行复制「函数 @ 包 · 文件:行 · 耗时 · 来源」',
 				evidenceWhere: '位置', evidenceInvoker: '来源', copyScript: '脚本',
+				evidenceBundleLine: '合并脚本行',
+				replay: '事故回放', replayGaps: 'rAF 挂起', replayNoLoaf: '这一帧附近没有长动画帧记录(窗口里没有 LoAF)',
+				replayFailed: '事故回放算不出来',
+				replayHint: '这一块是**捕获时存下来的窗口**(来自事故包,所以刷新生效),不是上面那条实时的 60 秒帧环:横轴按**时间**放,整段 rAF 被挂起的那几秒会留白(那是“没在测”,不是“没卡”);帧间隔与 LoAF 都是直接测量。⚠️ LoAF 不给每帧内脚本的起止时间,所以这里**不排帧内执行顺序**;要看逐帧明细请「导出事故包」+ tools/inspect-incident.mjs。',
+				replayScopeNote: '口径:帧间隔 / 分位 / 最差帧都来自**捕获时那 13 秒**的切片,不是实时读数,也不代表现在的状况;缺口 = 那段时间 rAF 被挂起。',
 				evidenceFailed: '可疑脚本这一段算不出来',
 				fnUnknown: '函数名未记录', pkgUnresolvedShort: '包未定名', fileUnresolved: '文件未定名',
 				pkgNamed: '定到包',
@@ -4831,10 +4974,15 @@ window.__ModuleLoader__.load({
 				pickNone: 'no frame near this incident in the frame ring (incidents restored from a previous session cannot be located in the current ring); the row above is still the auto/manual pick',
 				evidenceLabel: 'suspect scripts', evidenceScopeIncident: 'incident', evidenceWindowPrefix: 'in window',
 				evidenceHint: 'Lands the chain "incident -> frame -> invoker -> package -> file:line" on individual scripts: the blocks above say where the time went (ranking), this one says which file and function to open (locating). The incident\'s scripts are the **in-window** slice (at most 5, still there after a reload); only when there is no incident does this fall back to the currently selected frame. LoAF only reports scripts over 5ms, so this layer is a **lower bound**.',
-				evidenceCaliber: 'Scope: the function name and the milliseconds are **measured** by LoAF; the package / file / line are **inferred** from the URL and sourcemap sections (hover shows which); the line is a line in the **script file itself**, not an original-source line.',
+				evidenceCaliber: 'Scope: the function name and the milliseconds are **measured** by LoAF; the package / file / line are **inferred** from the URL and sourcemap sections (hover shows which). ⚠️ The line is a line in the **script itself**, not an original TS/TSX source line: for a single-package URL it is a line in that file, while in a combo batch (`plugins/??a,b`) it is a line in the **merged big file** and the file only answers "which package owns this code" — two different coordinate systems, so that case is **not** joined into `file:line`; the line is shown separately as "line in merged script N".',
 				evidenceMissing: 'Missing: original source line and call stack — that needs the inner section mappings (VLQ) or a Chrome trace, neither of which this project does. So this narrows things to "which package, which file, which region", it cannot point at a root cause.',
 				evidenceCopyHint: 'Click to copy "function @ package · file:line · cost · invoker"',
 				evidenceWhere: 'where', evidenceInvoker: 'invoked by', copyScript: 'script',
+				evidenceBundleLine: 'line in merged script',
+				replay: 'incident replay', replayGaps: 'rAF suspended', replayNoLoaf: 'no long animation frame recorded near this frame (no LoAF in the window)',
+				replayFailed: 'incident replay could not be computed',
+				replayHint: 'This block is the **captured window** (it comes from the incident pack, so it survives a reload), not the live 60-second strip above: the x axis is **time**, and seconds where rAF was fully suspended show as blank (that is "not measured", not "no stall"); both the frame intervals and the LoAF entries are directly measured. ⚠️ LoAF gives no per-script start/end inside a frame, so this **does not order execution within a frame**; for per-frame detail use "Export incident" + tools/inspect-incident.mjs.',
+				replayScopeNote: 'Scope: frame intervals / quantiles / worst frame all come from the **captured 13 seconds**, not from live readings, and do not describe right now; a gap means rAF was suspended during that stretch.',
 				evidenceFailed: 'the suspect-scripts block could not be computed',
 				fnUnknown: 'no function name', pkgUnresolvedShort: 'package unknown', fileUnresolved: 'file unknown',
 				pkgNamed: 'named',
@@ -5293,6 +5441,41 @@ window.__ModuleLoader__.load({
 					h('div', { style: S.block },
 						h('div', { style: S.blockLabel, title: t('sparkHint') }, t('spark')),
 						h('div', { style: { marginTop: 2 } }, frameRing.size === 0 ? t('notYet') : sparkStrip())),
+					// ② 事故回放(**选中事故的窗口**,数据来自事故包 → 刷新生效)。与上面那条实时帧条分开,
+					// 标签写明是哪一条事故、范围多大;不排帧内执行顺序(LoAF 不给起止时间)。
+					(() => {
+						try {
+							const scope = replayScope();
+							if (scope === null) return null;
+							const viewW = 1000;
+							const bars = [];
+							scope.frames.forEach((frame, index) => {
+								const isGap = frame.gap === true;
+								// 档位与实时帧条**同一个函数**(sparkLevel),颜色同一组 token —— 两处读数不许打架
+								const level = isGap ? 'gap' : sparkLevel({ ms: frame.ms, seen: true, gap: false });
+								const height = isGap ? 2 : Math.max(2, Math.min(SPARK_REPLAY_HEIGHT, Math.round((frame.ms / SPARK_MAX_MS) * SPARK_REPLAY_HEIGHT)));
+								bars.push(h('rect', {
+									key: `r${index}`,
+									x: replayX(frame.t, scope.from, scope.span, viewW), y: SPARK_REPLAY_HEIGHT - height,
+									width: 1, height, fill: SPARK_COLORS[level],
+								}));
+							});
+							return h('div', { style: S.block },
+								h('div', { style: S.blockLabel, title: t('replayHint') }, `${t('replay')} · ${scope.row.id} · ${spanText(scope.span)}`),
+								h('svg', {
+									width: '100%', height: SPARK_REPLAY_HEIGHT, viewBox: `0 0 ${viewW} ${SPARK_REPLAY_HEIGHT}`, preserveAspectRatio: 'none',
+									style: { display: 'block', marginTop: 2 },
+								}, bars),
+								h('div', { style: S.sub }, replaySummaryText(scope)),
+								h('div', { style: S.sub }, replaySplitText(scope)),
+								h('div', { style: S.sub, title: t('replayHint') }, t('replayScopeNote')));
+						} catch (error) {
+							// 与其它派生块同一条安全线:算炸只降级成一行可见原文,不许带走整块面板
+							recordError(error);
+							return h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-error-primary)' } },
+								`${t('replayFailed')}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200));
+						}
+					})(),
 					// ② 选中的那一帧 / LoAF 证据
 					// 翻帧:最近 200 条长动画帧按严重度降序(最差的在前),◀ ▶ 换一条、⟲ 回到自动。
 					// 面板默认跟着"最差那条"走 —— 只有出现更差的才会换,所以常常同一条挂很久。
@@ -5455,13 +5638,14 @@ window.__ModuleLoader__.load({
 							// 全是纯执行时这一行只是把"脚本总耗时"重复一遍(条上已经看得到),不显示
 							if (window.forced + window.pause > 0) rows.push(line('win-js', t('splitJs'), t('forcedHint'), jsBreakdownText(window)));
 							rows.push(bar('win-pkg', t('byPkg'), t('pkgWindowHint'), whoRows(window), '--dsw-alias-state-success-primary', 'pkg'));
-							// 一个包名都没定到:按包这一层现在没有信息,但也不能装作它不存在
-							// 一个包名都没定到:这一层给不出占比(没有名字就没有排行),但**必须留下分母** ——
-							// 直接不显示会让人以为"按包"被删了(实测被这么问过)。
-							if (window.top.length === 0 && window.byOther.length === 0) {
-								rows.push(h('div', { key: 'pkg-none', style: S.sub, title: t('pkgHint') },
-									pkgZeroText(frame === null || framePkgs === null ? 0 : framePkgs.unresolved, window.unresolved)));
-							}
+							// (这里原来有一条"一个包名都没定到 → 收敛成一行带分母的说明"的分支。
+							//  它**永远不可达**:外层已经要求 window.js > 0,而 js > 0 就必然有脚本,
+							//  那条脚本要么定到包(top 非空)、要么进 byOther(byOther 非空 && ms > 0)
+							//  —— 两个条件互斥,所以面板从来没渲染过它;套件却因为直接测那个函数而一直是绿的。
+							//  真正的兜底在渲染路径上:whoRows(window) 把 top 与 byOther 一起喂给堆叠条,
+							//  所以"一个包名都没定到"时看到的是**按原因命名的「其余来源」段(带毫秒)**
+							//  (见 tests:`一个包名都没定到时:按包那一条渲染的是「其余来源」段`)。
+							//  死代码已删,不再留一条"看着像已落地"的分支。)
 						}
 						return rows.length === 0 ? null : h('div', null, rows);
 						} catch (error) {
@@ -5498,7 +5682,7 @@ window.__ModuleLoader__.load({
 										style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' },
 									}, evidenceName(ev)),
 									h('span', {
-										title: evidencePlace(ev) === null ? undefined : `${translate('evidenceWhere')} ${evidencePlace(ev)} · ${viaText(ev.pkgVia)} / ${viaText(ev.lineVia)}`,
+										title: `${translate('evidenceWhere')} ${evidenceWhereText(ev)}`,
 										style: { flex: '0 0 auto', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums' },
 									}, `${Math.round(ev.ms)}ms`)))),
 								h('div', { style: S.sub }, evidenceFooter(scope)));
