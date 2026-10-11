@@ -757,7 +757,7 @@ box.state.unattrAvg = 0;
 
 // ── 面板分层:折叠状态与摘要 ───────────────────────────────────────
 check('默认全部收起(过程/取证/工具不占常显篇幅)',
-	JSON.stringify(box.state.groups), JSON.stringify({ detail: false, dom: false, host: false, tools: false }));
+	JSON.stringify(box.state.groups), JSON.stringify({ detail: false, cross: false, dom: false, host: false, tools: false }));
 EX.toggleGroup('dom');
 check('toggle 展开', box.state.groups.dom, true);
 check('折叠选择被记住', JSON.parse(box.storage.getItem('dsh-perf-hud:groups')).dom, true);
@@ -1064,6 +1064,8 @@ const watchPieces = [
 	extract(source, 'function splitLegend('),
 	extract(source, 'function frameArcs('),
 	extract(source, 'function whoRows('),
+	extract(source, 'function crossTable('),
+	extract(source, 'function crossSummary('),
 	extract(source, 'function barSegments('),
 	extract(source, 'function worstLoaf('),
 	extract(source, 'function loafRanks('),
@@ -1116,6 +1118,7 @@ const watchBox = new Function(`
 		needDeep: '要深录', scopeFrame: '本帧', bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本',
 		hit: '命中', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名', peak: '峰', framePickFiltered: '值得回看的帧',
 		otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
+		crossNone: '没有可交叉的脚本', rest: '其余',
 		hourUnit: '小时', minUnit: '分', secUnit: '秒',
 	})[key] ?? key;
 	// 面板渲染区那两个文案函数用到的短名(真实实现里是 short():去掉 scope 前缀)
@@ -1143,7 +1146,7 @@ const watchBox = new Function(`
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
-		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, PICK_MIN_MS, unresolvedLabel,
+		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, PICK_MIN_MS, unresolvedLabel, crossTable, crossSummary,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT,
 		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
 		tallyScripts, framePkgTally, pkgWhoText, whoRows, barSegments, pkgZeroText, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
@@ -1443,6 +1446,29 @@ check('堆叠条:没有其它来源时不留"其余"段;毫秒为 0 的不上榜
 		return [one.segs.map((seg) => seg.name), one.total, empty.segs.length, empty.total];
 	})(),
 	[['only'], 40, 0, 0]);
+check('交叉表:Top3×Top3 + 其余行/列,四块之和 = 脚本总耗时(口径自洽的 tally)',
+	(() => {
+		const tally = {
+			js: 100,
+			top: [['A', 50], ['B', 30], ['C', 15]], byOther: [['D', 5]],
+			byInvoker: [['s1', 60], ['s2', 30], ['s3', 8], ['s4', 2]],
+			byPair: {
+				'A\u0000s1': 40, 'A\u0000s2': 10,
+				'B\u0000s1': 15, 'B\u0000s2': 10, 'B\u0000s3': 5,
+				'C\u0000s1': 5, 'C\u0000s2': 10,
+				'D\u0000s3': 3, 'D\u0000s4': 2,
+			},
+		};
+		const cross = watch.crossTable(tally);
+		const sum = cross.grid.reduce((acc, row) => acc + row.reduce((a, b) => a + b, 0), 0)
+			+ cross.restCol.reduce((a, b) => a + b, 0) + cross.restRow.reduce((a, b) => a + b, 0) + cross.corner;
+		return [cross.rows, cross.cols, cross.grid, cross.restCol, cross.restRow, cross.corner, sum, cross.top];
+	})(),
+	[['A', 'B', 'C'], ['s1', 's2', 's3'], [[40, 10, 0], [15, 10, 5], [5, 10, 0]], [0, 0, 0], [0, 0, 3], 2, 100, { who: 'A', src: 's1', ms: 40 }]);
+check('交叉表:没有可交叉的数据时返回 null(不画空表)',
+	[watch.crossTable({ js: 0, top: [], byOther: [], byInvoker: [], byPair: {} }),
+		watch.crossSummary(null), watch.crossSummary({ top: { who: '@a/dsh-x', src: 'setTimeout', ms: 240 } })],
+	[null, '没有可交叉的脚本', 'dsh-x · setTimeout 240ms']);
 check('"谁"的两类标签合起来排序(插件包 + 其余来源),堆叠条与交叉表共用',
 	watch.whoRows({ top: [['pkg', 10]], byOther: [['index-abc.js', 90], ['无 URL(内联脚本)', 5]] }),
 	[['index-abc.js', 90], ['pkg', 10], ['无 URL(内联脚本)', 5]]);

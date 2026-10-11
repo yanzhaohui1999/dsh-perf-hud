@@ -727,7 +727,7 @@ window.__ModuleLoader__.load({
 			baselineMs: null,        // 覆盖空闲基线窗口长度(默认 BASELINE_MS),自测用
 			errors: [],              // 面板自己捕获的渲染错误(导出件里能读到)
 			// 分组折叠:常显只有"现在顺不顺 + 谁的锅",过程/取证/工具默认收起(头部带摘要)
-			groups: { detail: false, dom: false, host: false, tools: false },
+			groups: { detail: false, cross: false, dom: false, host: false, tools: false },
 			stress: null,            // 最近一次自测 { at, nodes, burnMs, sync, commitMs }
 			stressBurn: 0,           // 自测渲染时显式燃烧的毫秒数
 			// G 守夜层:默认常开,不包装任何原型;开关跟着总开关走
@@ -3573,6 +3573,7 @@ window.__ModuleLoader__.load({
 			const byPkg = new Map();
 			const byOther = new Map();
 			const byInvoker = new Map();
+			const byPair = {};
 			let js = 0;
 			let forced = 0;
 			let pause = 0;
@@ -3586,14 +3587,19 @@ window.__ModuleLoader__.load({
 					const label = invokerLabel(script);
 					byInvoker.set(label, (byInvoker.get(label) ?? 0) + (script.ms ?? 0));
 					const resolved = packageOfScript(script.url, script.charPos);
+					// "谁"这个名字一份:定得到插件包名就用它,否则用 unresolvedLabel 给的替身
+					// (外壳文件名 / 无 URL / 插件批次)—— 交叉表的行与两处汇总共用同一条口径。
+					let who = resolved.pkg;
 					if (resolved.pkg === null) {
 						unresolved += 1;
 						unresolvedMs += script.ms ?? 0;
-						const fallback = unresolvedLabel(script);
-						byOther.set(fallback, (byOther.get(fallback) ?? 0) + (script.ms ?? 0));
-						continue;
+						who = unresolvedLabel(script);
+						byOther.set(who, (byOther.get(who) ?? 0) + (script.ms ?? 0));
+					} else {
+						byPkg.set(resolved.pkg, (byPkg.get(resolved.pkg) ?? 0) + (script.ms ?? 0));
 					}
-					byPkg.set(resolved.pkg, (byPkg.get(resolved.pkg) ?? 0) + (script.ms ?? 0));
+					const pair = `${who}\u0000${label}`;
+					byPair[pair] = round1((byPair[pair] ?? 0) + (script.ms ?? 0));
 				}
 			}
 			return {
@@ -3605,6 +3611,7 @@ window.__ModuleLoader__.load({
 				top: [...byPkg.entries()].sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
 				// 定不到插件包名的那部分:按**原因 / 文件名**汇总(不是笼统的"未定名")
 				byOther: [...byOther.entries()].filter(([, ms]) => ms > 0).sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
+				byPair,
 				// ms 为 0 的来源不进榜:它们没占时间,列出来只是噪声
 				byInvoker: [...byInvoker.entries()].filter(([, ms]) => ms > 0).sort((a, b) => b[1] - a[1]).map(([name, ms]) => [name, round1(ms)]),
 			};
@@ -3708,6 +3715,40 @@ window.__ModuleLoader__.load({
 			const restMs = round1(list.slice(3).reduce((sum, [, ms]) => sum + ms, 0));
 			if (restMs > 0) segs.push({ name: null, ms: restMs });
 			return { segs, total: round1(list.reduce((sum, [, ms]) => sum + ms, 0)) };
+		}
+
+		/**
+		 * 包 × 来源的**交叉表**:两个正交维度只有交叉起来才回答"哪个包的哪类回调在烧时间"
+		 * (分开看两张榜单永远答不了)。只展开 Top3 × Top3,其余并进"其余"行/列 —— 面板只有 372px,
+		 * 格子给毫秒(单位写在角上),占比放 hover。
+		 * "其余"那一行/列是**减法**:该行(列)的总量减去已展开的三格。四块拼起来恒等于脚本总耗时
+		 * (`js`),因为两个维度各自都是 js 的分区。
+		 */
+		/** 交叉表折叠起来时的摘要:最重的那一格(它就是这张表存在的理由)。 */
+		function crossSummary(cross) {
+			return cross === null
+				? translate('crossNone')
+				: `${short(cross.top.who)} · ${short(cross.top.src)} ${Math.round(cross.top.ms)}ms`;
+		}
+
+		function crossTable(tally) {
+			const who = whoRows(tally).filter(([, ms]) => ms > 0);
+			const src = (tally.byInvoker ?? []).filter(([, ms]) => ms > 0);
+			if (who.length === 0 || src.length === 0) return null;
+			const rows = who.slice(0, 3).map(([name]) => name);
+			const cols = src.slice(0, 3).map(([name]) => name);
+			const byPair = tally.byPair ?? {};
+			const at = (w, s) => byPair[`${w}\u0000${s}`] ?? 0;
+			const grid = rows.map((w) => cols.map((s) => round1(at(w, s))));
+			const restCol = rows.map((w, r) => round1(Math.max(0, who[r][1] - grid[r].reduce((a, b) => a + b, 0))));
+			const restRow = cols.map((s, c) => round1(Math.max(0, src[c][1] - grid.reduce((sum, row) => sum + row[c], 0))));
+			const js = round1(tally.js ?? 0);
+			const corner = round1(Math.max(0,
+				js - rows.reduce((sum, w, r) => sum + who[r][1], 0) - cols.reduce((sum, s, c) => sum + src[c][1], 0)
+					+ grid.reduce((sum, row) => sum + row.reduce((a, b) => a + b, 0), 0)));
+			let best = { who: null, src: null, ms: 0 };
+			rows.forEach((w, r) => cols.forEach((s, c) => { if (grid[r][c] > best.ms) best = { who: w, src: s, ms: grid[r][c] }; }));
+			return { rows, cols, grid, restCol, restRow, corner, js, top: best };
 		}
 
 		function pkgWhoText(tally) {
@@ -3976,6 +4017,7 @@ window.__ModuleLoader__.load({
 				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', scopeFrame: '本帧',
 				bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本', needDeep: '要深录', invokerUnknown: '来源未记录',
 				otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
+				crossTable: '包 × 来源', crossCorner: '包 \\ 来源', crossUnit: '格内毫秒', crossBiggest: '最重', crossNone: '没有可交叉的脚本', crossHint: '两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间"。只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 脚本总耗时;格内是毫秒,把鼠标放上去看占比。',
 				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
 				hourUnit: '小时', minUnit: '分', secUnit: '秒',
 				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
@@ -4046,6 +4088,7 @@ window.__ModuleLoader__.load({
 				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', scopeFrame: 'this frame',
 				bySource: 'by source', byPkg: 'by package', pkgZeroNamed: '0 resolved', scriptsUnit: 'scripts', needDeep: 'needs deep', invokerUnknown: 'source not recorded',
 				otherSources: 'other sources', srcNoUrl: 'no URL (inline)', srcBatch: 'plugin batch (not split)',
+				crossTable: 'pkg × source', crossCorner: 'pkg \\ src', crossUnit: 'ms per cell', crossBiggest: 'heaviest', crossNone: 'nothing to cross-tabulate', crossHint: 'The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time". Top3 × Top3 is expanded, the rest is folded into the "rest" row/column (by subtraction) and the four blocks add up to the script total. Cells are milliseconds; hover for the share.',
 				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
 				hourUnit: 'h', minUnit: 'm', secUnit: 's',
 				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',
@@ -4547,6 +4590,35 @@ window.__ModuleLoader__.load({
 							}
 						}
 						return rows.length === 0 ? null : h('div', null, rows);
+					})(),
+					// D6:包 × 来源**交叉表**(默认收起)。两个正交维度分开看是两张榜单,交叉起来才回答
+					// "哪个包的哪类回调在烧时间";只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),
+					// 四块拼起来恒等于脚本总耗时。格子给毫秒(单位写在末尾),占比放 hover。
+					(() => {
+						const cross = crossTable(scriptPkgTally());
+						if (cross === null) return null;
+						const pct = (ms) => `${Math.round((ms / (cross.js || 1)) * 100)}%`;
+						const cellStyle = { flex: '1 1 0', textAlign: 'right', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums', fontSize: 12 };
+						const nameStyle = { flex: '0 0 84px', color: 'var(--dsw-alias-label-secondary)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+						const row = (key, label, cells) => h('div', { key, style: { display: 'flex', gap: 4, marginTop: 2 } },
+							h('span', { style: nameStyle, title: label }, label), cells);
+						const num = (key, ms, who, src) => h('span', {
+							key, title: `${who} · ${src} ${Math.round(ms)}ms · ${pct(ms)}`,
+							style: { ...cellStyle, color: ms > 0 ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)' },
+						}, ms > 0 ? String(Math.round(ms)) : '·');
+						const kids = [
+							row('cross-head', t('crossCorner'), cross.cols.map((src) => h('span', { key: `h-${src}`, title: src, style: { ...nameStyle, flex: '1 1 0', textAlign: 'right' } }, short(src)))
+								.concat([h('span', { key: 'h-rest', style: { ...nameStyle, flex: '1 1 0', textAlign: 'right' } }, translate('rest'))])),
+						];
+						cross.rows.forEach((who, r) => kids.push(row(`cross-${who}`, short(who),
+							cross.cols.map((src, c) => num(`c-${r}-${c}`, cross.grid[r][c], who, src))
+								.concat([num(`c-${r}-rest`, cross.restCol[r], who, translate('rest'))]))));
+						kids.push(row('cross-rest', translate('rest'),
+							cross.cols.map((src, c) => num(`r-rest-${c}`, cross.restRow[c], translate('rest'), src))
+								.concat([num('cross-corner-cell', cross.corner, translate('rest'), translate('rest'))])));
+						kids.push(h('div', { key: 'cross-unit', title: t('crossHint'), style: { ...S.sub, textAlign: 'right' } },
+							`${translate('crossUnit')} · ${translate('crossBiggest')} ${short(cross.top.who)} · ${short(cross.top.src)} ${Math.round(cross.top.ms)}ms`));
+						return group('cross', t('crossTable'), crossSummary(cross), ...kids);
 					})(),
 					// 60 秒迷你时间条:一格一秒、格值取格里最差那帧,阈值与导出件 ASCII 条带一致
 					h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },
