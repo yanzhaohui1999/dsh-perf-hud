@@ -138,6 +138,15 @@ window.__ModuleLoader__.load({
 		const bundleMaps = new Map();   // bundle key -> { state, offsets, names, count, reason, source }
 		const bundleMeta = new Map();   // bundle key -> { phase, count }
 
+		/**
+		 * 解析状态推进计数。sourcemap 分段表与脚本文本都是**异步**到位的,所以窗口聚合的缓存指纹
+		 * 必须带上它:只用 `条数|最后一条 t` 的话,环满 200 条而一时没有新 LoAF 时,「窗口」那三行
+		 * 与交叉表会一直冻在"插件批次(未按 sourcemap 拆)" —— 同屏「本帧」行(不缓存)已经给出真名,
+		 * 窗口却还是旧结论,而且打开深录也不刷新。解析完成/失败/切换精确归因各推一次。
+		 */
+		let resolveSeq = 0;
+		function markResolved() { resolveSeq += 1; }
+
 		/** 把栈帧里可能出现的相对 URL 绝对化。 */
 		function absolutePluginUrl(url) {
 			if (/^[a-z][a-z\d+.-]*:\/\//i.test(url)) return url;
@@ -221,6 +230,7 @@ window.__ModuleLoader__.load({
 					entry.names = parsed.names;
 					entry.count = parsed.offsets.length;
 					entry.state = 'ready';
+					markResolved();
 					entry.source = 'localStorage';
 					return entry;
 				}
@@ -233,6 +243,7 @@ window.__ModuleLoader__.load({
 			const url = mapUrlOf(scriptUrl);
 			if (url === null) {
 				entry.state = 'failed';
+				markResolved();
 				entry.reason = 'URL 里没有 ?? 列表';
 				return;
 			}
@@ -257,6 +268,7 @@ window.__ModuleLoader__.load({
 				entry.names = names;
 				entry.count = offsets.length;
 				entry.state = 'ready';
+				markResolved();
 				entry.source = 'sourcemap';
 				try {
 					// 只留 offsets/names,原始 JSON 立刻丢掉。
@@ -309,10 +321,12 @@ window.__ModuleLoader__.load({
 				entry.names = offsets.map((item) => item[1]);
 				entry.count = offsets.length;
 				entry.state = 'ready';
+				markResolved();
 				entry.source = 'probe';
 				try { localStorage.setItem(entry.storageKey, JSON.stringify({ v: 1, offsets, names: entry.names })); } catch (error) { /* 同上 */ }
 			} catch (error) {
 				entry.state = 'failed';
+				markResolved();
 				entry.reason = error instanceof Error ? error.message : String(error);
 			}
 		}
@@ -371,8 +385,10 @@ window.__ModuleLoader__.load({
 				entry.starts = starts;
 				entry.length = text.length;
 				entry.state = 'ready';
+				markResolved();
 			} catch (error) {
 				entry.state = 'failed';
+				markResolved();
 				entry.reason = error instanceof Error ? error.message : String(error);
 			}
 			if (scriptLines.size > SCRIPT_LINES_MAX) {
@@ -736,6 +752,10 @@ window.__ModuleLoader__.load({
 				loaf: [],                // 最近的 LoAF 摘要(时间升序)
 				loafObserver: null,
 				pickT: null,             // 用户用 ◀ ▶ 选中的那一帧的 t(null = 自动跟着最差那条)
+				// 用户在事故清单里**选中**的事故 id(null = 自动,跟严重度最差那条)。
+				// 「最差事件」块 / 工具箱清单 / 取证明细的翻帧共享这一个上下文 —— 否则三处各说各的。
+				// 存 id 不存下标:新事故进来会按严重度重排,下标会悄悄指到另一条事故上。
+				selId: null,
 				loafState: 'not-started',   // not-started / on / stopped / unsupported:… / error:…
 				incidents: [],           // 最差 N 次(severity 降序,取用按索引 0 最差)
 				pending: null,           // 正在等后摇的那一次
@@ -759,6 +779,8 @@ window.__ModuleLoader__.load({
 			},
 			requestRender: null,     // 面板挂载时注册:用户动作要立刻重渲染,不能等 0.5 秒的定时器
 			displayKey: '',          // 面板显示值的指纹:没变就跳过这次 tick 的渲染
+			copyNote: null,          // 「复制摘要」的结果:成功/失败**原文**都照实显示,失败不许假装成功
+			pickNote: null,          // 「看这一帧」定位不到时的那句如实说明(否则按钮点了像没反应)
 			marks: [],
 			markDraft: '',
 			// D 宿主/链路
@@ -2073,6 +2095,17 @@ window.__ModuleLoader__.load({
 			dirty = true;
 		}
 
+		/**
+		 * 宿主 event-loop 那一行的值。p50/p99/**max** 三个都给:只给 p99 会把偶发的秒级停顿
+		 * 藏掉(max 才是"最坏卡了多久";宿主半每秒采一次,ring 保留 300 秒)。
+		 * 老版本宿主半没有 max 字段 → 如实只给 p50/p99,不补 0。
+		 */
+		function hostLoopText(loop) {
+			if (loop === null || loop === undefined) return translate('notYet');
+			const head = `p50 ${loop.p50}ms · p99 ${loop.p99}ms`;
+			return loop.max === undefined || loop.max === null ? head : `${head} · ${translate('maxLabel')} ${loop.max}ms`;
+		}
+
 		function hostEventsText() {
 			const watch = state.hostEvents;
 			if (watch === null) return translate('notYet');
@@ -3021,6 +3054,186 @@ window.__ModuleLoader__.load({
 			return true;
 		}
 
+		// ───────────────── 事故:选中上下文 + 面板上那几行文案 ─────────────────
+		/**
+		 * 事故严重度的**文字档位**。面板上"严重度"不许只靠颜色表达(色盲 / 打印 / 截图转灰度
+		 * 都会丢信息),所以先算档位,再同时给文字与 token 颜色。
+		 * 阈值不另立一套:红档 200ms 与面板判色的红档同一条线(见 README「面板怎么读」);
+		 * 黄档用**守夜触发线** 100ms —— 它已经是一条事故了,"正常"这个词在这里没有意义。
+		 */
+		function severityLevel(ms) {
+			if (typeof ms !== 'number' || Number.isNaN(ms)) return 'none';
+			if (ms >= 200) return 'bad';
+			if (ms >= WATCH_TRIGGER_MS) return 'warn';
+			return 'ok';
+		}
+
+		function severityText(level) {
+			if (level === 'bad') return translate('sevBad');
+			if (level === 'warn') return translate('sevWarn');
+			if (level === 'ok') return translate('sevOk');
+			return translate('none');
+		}
+
+		function severityColor(level) {
+			if (level === 'bad') return 'var(--dsw-alias-state-error-primary)';
+			if (level === 'warn') return 'var(--dsw-alias-state-warn-primary)';
+			if (level === 'ok') return 'var(--dsw-alias-state-success-primary)';
+			return 'var(--dsw-alias-label-secondary)';
+		}
+
+		/**
+		 * 这条事故"是谁":先看按包汇总(packages,已经按包聚合、降序),再退到 topScripts[0]。
+		 * 两者都是同一份 scripts 数据,但 packages 去过重 —— 所以它是第一顺位。
+		 * 一个包名都没定到时返回 null(面板照实写未归因,**不猜**)。
+		 */
+		function incidentOwner(row) {
+			if (row === null || row === undefined) return null;
+			const pkg = Array.isArray(row.packages) && row.packages.length > 0 ? row.packages[0] : null;
+			if (pkg !== null && pkg !== undefined && pkg.pkg !== null && pkg.pkg !== undefined) {
+				return { name: pkg.pkg, ms: pkg.ms, count: pkg.count };
+			}
+			const script = row.summary === undefined || row.summary === null ? undefined : row.summary.topScripts[0];
+			if (script !== undefined && script !== null && script.pkg !== null && script.pkg !== undefined) {
+				return { name: script.pkg, ms: script.ms, count: 1 };
+			}
+			return null;
+		}
+
+		/**
+		 * 面板当前选中的那条事故。`{ row, auto }`:
+		 *   auto=true  = 没选(跟严重度最差那条,incidents 由 keepIncident 维持降序);
+		 *   auto=false = 用户选的;
+		 * 选中的那条被更差的新事故挤出留存清单之后**退回自动** —— 不指着一个不存在的条目
+		 * (与翻帧那条 `pickT` 的规矩同源)。
+		 */
+		function selectedIncident() {
+			const list = state.watch.incidents;
+			if (list.length === 0) return { row: null, auto: true };
+			if (state.watch.selId === null) return { row: list[0], auto: true };
+			const found = list.find((row) => row.id === state.watch.selId);
+			if (found === undefined) return { row: list[0], auto: true };
+			return { row: found, auto: false };
+		}
+
+		/** 选中一条事故(工具箱清单与「最差事件」块共用)。 */
+		function selectIncident(id) {
+			const row = pickIncident(id);
+			if (row === null) return false;
+			state.watch.selId = row.id;
+			state.copyNote = null;
+			bump();
+			return true;
+		}
+
+		/**
+		 * 这条事故"落在哪一帧":帧环里 t 离事故开始时刻最近、**且落在事故窗口内**的那条 LoAF。
+		 * 事故切片里的 frames 与面板那个帧环不是同一份数据,所以这里只做**就近定位**。
+		 * ⚠️ 必须有距离上限:跨会话读回的事故(perf 时间轴已经重开)离当前帧环可能差几百秒,
+		 * 那时"最近的帧"是一条**无关帧** —— 宁可不定位,也不要给一条错的证据(面板会照实说)。
+		 */
+		function frameNearestIncident(row) {
+			if (row === null || row === undefined) return null;
+			const at = row.atPerfMs;
+			if (typeof at !== 'number' || Number.isNaN(at)) return null;
+			const from = typeof row.window?.fromMs === 'number' ? row.window.fromMs : at - WATCH_PRE_MS;
+			const to = typeof row.window?.toMs === 'number' ? row.window.toMs : at + WATCH_POST_MS;
+			let best = null;
+			for (const frame of state.watch.loaf) {
+				if (frame.t < from || frame.t > to) continue;
+				if (best === null || Math.abs(frame.t - at) < Math.abs(best.t - at)) best = frame;
+			}
+			return best;
+		}
+
+		/**
+		 * 「看这一帧」:选中这条事故 + 展开「取证明细」+ 把翻帧钉到它最近的那条 LoAF。
+		 * 三处共享同一个上下文;定位不到就在面板上留一句**如实的说明**(state.pickNote)——
+		 * 不能让按钮点了像没反应,也不能假装取证明细里那条就是它。
+		 */
+		function revealIncident(id) {
+			const row = pickIncident(id);
+			if (row === null) return false;
+			state.watch.selId = row.id;
+			state.copyNote = null;
+			state.groups.detail = true;
+			saveGroups();
+			const frame = frameNearestIncident(row);
+			if (frame !== null) {
+				state.watch.pickT = frame.t;
+				state.pickNote = null;
+			} else {
+				state.pickNote = translate('pickNone');
+			}
+			bump();
+			return true;
+		}
+
+		/** 「最差事件」块的标题行:`i84 · frame · 14:48`(发生时刻照实给,"最差"不是"最近")。 */
+		function eventTitleText(row) {
+			if (row === null || row === undefined) return translate('watchNone');
+			const at = Date.parse(row.at);
+			return `${row.id} · ${row.cause}${Number.isFinite(at) ? ` · ${clock(at)}` : ''}`;
+		}
+
+		/** 「最差事件」块的证据行:有没有 JS 证据 + 第一顺位归属。 */
+		function eventEvidenceText(row) {
+			if (row === null || row === undefined) return '';
+			const summary = row.summary ?? {};
+			const owner = incidentOwner(row);
+			const js = summary.worstFrameJs === 'js' ? translate('jsYes') : translate('jsNo');
+			const who = owner === null ? translate('unblamed') : `${short(owner.name)} ${Math.round(owner.ms)}ms`;
+			return `${translate('jsEvidence')} ${js} · ${translate('evOwner')} ${who}`;
+		}
+
+		/** 「最差事件」块的窗口行:窗口里有几帧、几条 LoAF、脚本按包的覆盖率(带分母)。 */
+		function eventWindowText(row) {
+			if (row === null || row === undefined) return '';
+			const summary = row.summary ?? {};
+			const cov = summary.pkgCoverage ?? { resolved: 0, total: 0 };
+			return `${translate('evWindow')} ${summary.frames ?? 0}${translate('framesUnit')} · LoAF ${summary.loafEntries ?? 0} · ${translate('byPkg')} ${cov.resolved}/${cov.total}`;
+		}
+
+		/**
+		 * 「复制摘要」要复制的那段文本。给的是**结论 + 口径**,不是整份事故包
+		 * (整份走「导出事故包」,那是 JSON)。缺数据的地方照实写,不省略成空。
+		 */
+		function incidentSummaryText(row) {
+			if (row === null || row === undefined) return '';
+			const summary = row.summary ?? {};
+			const owner = incidentOwner(row);
+			const cov = summary.pkgCoverage ?? { resolved: 0, total: 0 };
+			return [
+				`${PKG} ${row.id} · ${row.cause} · ${Math.round(row.severity)}ms · ${row.at}`,
+				`${translate('sevLabel')} ${severityText(severityLevel(row.severity))} · ${translate('jsEvidence')} ${summary.worstFrameJs === 'js' ? translate('jsYes') : translate('jsNo')}`,
+				`${translate('evOwner')} ${owner === null ? translate('unblamed') : `${owner.name} ${Math.round(owner.ms)}ms`}`,
+				`${translate('evWindow')} ${summary.frames ?? 0}${translate('framesUnit')} · LoAF ${summary.loafEntries ?? 0} · ${translate('byPkg')} ${cov.resolved}/${cov.total}`,
+			].join('\n');
+		}
+
+		/**
+		 * 复制一段文本。**失败要如实说**:剪贴板 API 在非安全上下文、页面没聚焦、没权限时都会
+		 * reject —— 按钮点了像成功是最糟的一种"假装成功"(见 AGENTS §1)。
+		 */
+		function copyText(text, label) {
+			const done = () => { state.copyNote = `${translate('copied')} · ${label}`; bump(); };
+			const fail = (error) => {
+				state.copyNote = `${translate('copyFailed')}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 90);
+				bump();
+			};
+			if (navigator.clipboard === undefined || navigator.clipboard === null || typeof navigator.clipboard.writeText !== 'function') {
+				fail(new Error(translate('copyNoApi')));
+				return;
+			}
+			try {
+				const pending = navigator.clipboard.writeText(text);
+				if (pending !== undefined && typeof pending.then === 'function') pending.then(done, fail);
+				else done();
+			} catch (error) {
+				fail(error);
+			}
+		}
+
 		function setEnabled(on) {
 			try { localStorage.setItem(LS_ON, on ? '1' : '0'); } catch (error) { /* 记住开关是尽力而为 */ }
 			if (on) start(); else stop();
@@ -3313,13 +3526,17 @@ window.__ModuleLoader__.load({
 			return { text: translate('cleared'), color: 'var(--dsw-alias-state-success-primary)', bad: false };
 		}
 
-		/** 概览第一行:帧 + 长任务 + 命中(短,必须一行放得下)。 */
+		/**
+		 * 概览第一行:帧 + 长任务 + 命中(短,必须一行放得下)。
+		 *
+		 * ⚠️ 这里**不**再挂 `(最差那条:未归因)` 那个后缀:`overviewLine2()` 紧接着就在同一块里
+		 * 写 `最差那条:<归属>`,而两者的触发条件完全相同(`primaryBlame(worst) === null`)——
+		 * 于是相邻两行必然把同一句话说两遍(§5「能不说就不说」)。"命中率"与"最差那条有没有
+		 * 归属"是两个口径这件事,由第二行自己的标签 `最差那条` 承担,不再靠第一行重复。
+		 */
 		function overviewLine1() {
 			const worst = worstLongTask();
-			// 命中率与"最差那条有没有归属"是两个口径:并列时必须当场说清,否则读者会拿
-			// "命中 4/7"去解释"最差那条未归因",而这两件事互不相干(实测被这么读过)。
-			const unblamed = worst !== null && primaryBlame(worst) === null ? `(${translate('worstOne')}:${translate('unblamed')})` : '';
-			return `${translate('overviewFrame')} ${state.frameWorst.toFixed(0)}ms · LT ${worst === null ? translate('none') : `${worst.ms.toFixed(0)}ms`} · ${translate('hit')} ${state.ltBlamed}/${state.ltTotal}${unblamed}`;
+			return `${translate('overviewFrame')} ${state.frameWorst.toFixed(0)}ms · LT ${worst === null ? translate('none') : `${worst.ms.toFixed(0)}ms`} · ${translate('hit')} ${state.ltBlamed}/${state.ltTotal}`;
 		}
 
 		/**
@@ -3431,31 +3648,41 @@ window.__ModuleLoader__.load({
 			];
 		}
 
-		/** 最近那条 blocking 最大的长动画帧(面板的饼图默认看的就是它)。 */
+		/**
+		 * 一条长动画帧的严重度 = `max(blocking, 帧时长)`。**面板里"最差那条帧"只有这一个口径**:
+		 * LoAF 的 blocking 在这个环境里常年偏小(实测 45 帧的 blocking 全部 < 100ms,最大 92ms),
+		 * 只看它会把 92ms 的帧排到 300ms 的帧前面;而判色(120/200ms)与圆环上的「帧里花在哪」
+		 * 显示的也是帧时长。
+		 * 以前 `worstLoaf` / `loafRanks` 只看 blocking、`pickList` 看 max —— 于是"自动选中的那条"
+		 * 可能根本不在翻帧清单里,标签会显示 `帧 0/N`。现在三处共用这一个函数。
+		 */
+		function frameSeverity(row) {
+			if (row === null || row === undefined) return 0;
+			return Math.max(row.blocking ?? 0, row.dur ?? 0);
+		}
+
+		/** 最差的那条长动画帧(面板的饼图默认看的就是它)。 */
 		function worstLoaf() {
 			let best = null;
-			for (const row of state.watch.loaf) if (best === null || (row.blocking ?? 0) > (best.blocking ?? 0)) best = row;
+			for (const row of state.watch.loaf) if (best === null || frameSeverity(row) > frameSeverity(best)) best = row;
 			return best;
 		}
 
-		/** 按 blocking 降序的帧清单(最差的排第一)。 */
+		/** 按严重度降序的帧清单(最差的排第一)。 */
 		function loafRanks() {
-			return state.watch.loaf.slice().sort((a, b) => (b.blocking ?? 0) - (a.blocking ?? 0));
+			return state.watch.loaf.slice().sort((a, b) => frameSeverity(b) - frameSeverity(a));
 		}
 
 		/**
-		 * 翻帧的清单:**只收值得回看的帧**(blocking ≥ `PICK_MIN_MS`)。
-		 * 200 条里绝大多数是刚过 50ms 的边角帧,全列出来 ◀ ▶ 就成了体力活(实测 68 条里
-		 * 真正想看的往往是个位数)。阈值取守夜那条触发线(`WATCH_TRIGGER_MS`),这样
-		 * 「翻帧翻得到的」和「守夜留得下的」是同一批帧。
+		 * 翻帧的清单:**只收值得回看的帧**(`frameSeverity` ≥ `PICK_MIN_MS`,即帧时长与 blocking
+		 * 里更大的那个)。200 条里绝大多数是刚过 50ms 的边角帧,全列出来 ◀ ▶ 就成了体力活
+		 * (实测 68 条里真正想看的往往是个位数)。阈值取守夜那条触发线(`WATCH_TRIGGER_MS`),
+		 * 这样「翻帧翻得到的」和「守夜留得下的」是同一批帧。
 		 * 一条都不到线时**退回全部**(否则按钮点了像坏的),此时 `filtered:false`,面板不显示阈值。
 		 */
 		function pickList() {
 			const all = loafRanks();
-			// 用 `max(blocking, dur)`:LoAF 的 blocking 在这个环境里常年偏小(实测 45 帧的 blocking 全 < 100,
-			// 于是清单退回"全部",而它们的时长其实都过了线);「帧时长」才是面板自己的严重度口径
-			// (判色用 120/200ms,圆环上的 `帧里花在哪` 显示的也是它),标签也改用它。
-			const hot = all.filter((row) => Math.max(row.blocking ?? 0, row.dur ?? 0) >= PICK_MIN_MS);
+			const hot = all.filter((row) => frameSeverity(row) >= PICK_MIN_MS);
 			return hot.length === 0 ? { rows: all, filtered: false } : { rows: hot, filtered: true };
 		}
 
@@ -3500,19 +3727,53 @@ window.__ModuleLoader__.load({
 		const SPARK_HEIGHT = 18;
 		const SPARK_MAX_MS = 200;    // 画满高度的帧间隔(再高也只是画满)
 
-		/** 最近 SPARK_SECONDS 秒的分格数据:一格一秒,格值 = 那一格里最差那帧的间隔;间隙另标。 */
+		/**
+		 * 最近 SPARK_SECONDS 秒的分格数据:一格一秒,格值 = 那一格里最差那帧的间隔;间隙另标。
+		 * `t` 带上"最差那一帧的 perf 毫秒" —— 帧条 hover 要给出墙钟时间,点格导航也要它。
+		 */
 		function sparkBars(now) {
 			const from = now - SPARK_SECONDS * 1000;
 			const cells = [];
-			for (let i = 0; i < SPARK_SECONDS; i += 1) cells.push({ ms: 0, seen: false, gap: false });
+			for (let i = 0; i < SPARK_SECONDS; i += 1) cells.push({ ms: 0, t: null, seen: false, gap: false });
 			for (const row of frameRing.slice(from, now)) {
 				const index = Math.min(SPARK_SECONDS - 1, Math.max(0, Math.floor((row.t - from) / 1000)));
 				const cell = cells[index];
 				if (row.gap === true) { cell.gap = true; continue; }
 				cell.seen = true;
-				if (row.ms > cell.ms) cell.ms = row.ms;
+				if (row.ms > cell.ms) { cell.ms = row.ms; cell.t = row.t; }
 			}
 			return cells;
+		}
+
+		/**
+		 * 帧条上**点得动**的格子:一格 → 那一格里最差的那条**长动画帧**(LoAF 环里真实存在的)。
+		 * 为什么不是每格都能点:帧条是按 `frameRing` 画的(每个 rAF 一条),而翻帧只在
+		 * `state.watch.loaf` 里翻 —— 点一个没有 LoAF 的格子会"什么也没发生",那正是最糟的一种
+		 * 假按钮。所以只有能真正导航过去的格子才给 onClick,别的格子只给 title 说清原因。
+		 */
+		function sparkPickMap(now) {
+			const from = now - SPARK_SECONDS * 1000;
+			const picks = new Map();
+			for (const frame of state.watch.loaf) {
+				const index = Math.floor((frame.t - from) / 1000);
+				if (index < 0 || index >= SPARK_SECONDS) continue;
+				const current = picks.get(index);
+				if (current === undefined || (frame.dur ?? 0) > (current.dur ?? 0)) picks.set(index, frame);
+			}
+			return picks;
+		}
+
+		/**
+		 * 帧条一格 hover 的说明:墙钟时间 + 这一秒最差帧多少 + 点得动还是点不动。
+		 * **点不动要写在 title 里** —— 不然读者只会以为"这个面板点了没反应"。
+		 */
+		function sparkCellTitle(cell, pick) {
+			const when = cell.t === null ? '' : `${clock(wallClock(cell.t))} · `;
+			if (cell.seen !== true) {
+				return when + (cell.gap === true ? translate('sparkGap') : translate('notYet'));
+			}
+			const base = `${when}${translate('worstOne')} ${Math.round(cell.ms)}ms`;
+			return pick === undefined ? `${base} · ${translate('sparkNoPick')}` : `${base} · ${translate('sparkPickHint')}`;
 		}
 
 		/**
@@ -3664,7 +3925,9 @@ window.__ModuleLoader__.load({
 		const scriptTallyCache = { stamp: null, value: null };
 		function scriptPkgTally() {
 			const rows = state.watch.loaf;
-			const stamp = rows.length === 0 ? 'x' : `${rows.length}|${rows[rows.length - 1].t}`;
+			// 指纹必须带 `resolveSeq`:脚本按包的结果依赖**异步**到位的 sourcemap 分段表与脚本文本,
+			// 少了它,环不再变长时窗口那三行与交叉表会冻在旧的解析状态(见 markResolved 的说明)。
+			const stamp = rows.length === 0 ? 'x' : `${rows.length}|${rows[rows.length - 1].t}|${resolveSeq}`;
 			if (scriptTallyCache.stamp === stamp) return scriptTallyCache.value;
 			const value = tallyScripts(rows);
 			scriptTallyCache.stamp = stamp;
@@ -3797,9 +4060,14 @@ window.__ModuleLoader__.load({
 				+ (rest > 0 ? ` · ${translate('rest')} ${rest}` : '');
 		}
 
-		/** 60 秒帧条本体(约 100×18 的 SVG,只用 theme token)。 */
+		/**
+		 * 60 秒帧条本体(铺满一行的 SVG,只用 theme token)。
+		 * 每格:title 给墙钟时间与这一秒最差帧;**能导航过去的格子才可点**(见 sparkPickMap)。
+		 */
 		function sparkStrip() {
-			const cells = sparkBars(performance.now());
+			const now = performance.now();
+			const cells = sparkBars(now);
+			const picks = sparkPickMap(now);
 			const colors = {
 				bad: 'var(--dsw-alias-state-error-primary)',
 				warn: 'var(--dsw-alias-state-warn-primary)',
@@ -3812,11 +4080,18 @@ window.__ModuleLoader__.load({
 				if (level === 'empty') continue;
 				// 间隙画成最矮的一根:它是"这段时间没在测",不是"这段时间没卡"
 				const height = level === 'gap' ? 2 : Math.max(2, Math.min(SPARK_HEIGHT, Math.round((cells[i].ms / SPARK_MAX_MS) * SPARK_HEIGHT)));
-				bars.push(h('rect', { key: `s${i}`, x: i, y: SPARK_HEIGHT - height, width: 1, height, fill: colors[level] }));
+				const pick = picks.get(i);
+				bars.push(h('rect', {
+					key: `s${i}`, x: i, y: SPARK_HEIGHT - height, width: 1, height, fill: colors[level],
+					title: sparkCellTitle(cells[i], pick),
+					// 点得动就给手型 + 真实行为;点不动就明确不给(不做"点了没反应"的假按钮)
+					style: pick === undefined ? undefined : { cursor: 'pointer' },
+					onClick: pick === undefined ? undefined : () => { state.watch.pickT = pick.t; bump(); },
+				}));
 			}
 			return h('svg', {
-				width: 100, height: SPARK_HEIGHT, viewBox: `0 0 ${SPARK_SECONDS} ${SPARK_HEIGHT}`, preserveAspectRatio: 'none',
-				style: { flex: '0 0 auto' },
+				width: '100%', height: SPARK_HEIGHT, viewBox: `0 0 ${SPARK_SECONDS} ${SPARK_HEIGHT}`, preserveAspectRatio: 'none',
+				style: { display: 'block' },
 			}, bars);
 		}
 
@@ -3889,20 +4164,55 @@ window.__ModuleLoader__.load({
 				(watch.persistError === null ? '' : ` · ⚠️ ${translate('watchPersistFailed')}`);
 		}
 
-		/** 守夜层那一行的补充:最差那条事故是什么、什么时候、带没带备注。 */
-		function watchLatestText() {
-			const row = state.watch.incidents[0];
-			if (row === undefined) return null;
+		/**
+		 * 「最差事件」块底下/悬停的那一句话:这条事故是什么、什么时候、带没带备注。
+		 * ⚠️ 它跟的是**选中的那条**(selectedIncident),不是硬编码 incidents[0] —— 用户在清单里
+		 * 切了一条之后,面板上三处必须说同一条事故,否则"选中的"和"摘要说的"会打架。
+		 */
+		function watchSelectedText() {
+			const row = selectedIncident().row;
+			if (row === null) return null;
 			const at = Date.parse(row.at);
 			return `${row.id} · ${row.cause} · ${Math.round(row.severity)}ms` +
 				(Number.isFinite(at) ? ` · ${clock(at)}` : '') +
 				(row.note === null || row.note === undefined ? '' : ` · ${row.note}`);
 		}
 
-		/** 工具箱里的一条事故:`1. i7 · frame · 326ms · 14:48 · 读回`。 */
+		/**
+		 * 「最差事件」块底下那一行:只在**还有话要说**的时候出现。
+		 * 「抓到几次 / 最差多少 / 还没抓到 / 未开录」上面那一行已经说过,再说一遍就是同一句话
+		 * 说两遍(§5 那条规矩);真正需要说出口的是三个状态位:读回 / 裁掉 / 落盘失败。
+		 */
+		function watchFlagText() {
+			const watch = state.watch;
+			// 上面那行已经写了「未开录」/「还没抓到(≥100ms)」,这里不重复
+			if (watch.on === false) return null;
+			if (watch.incidents.length === 0) return null;
+			const flags = [];
+			if (watch.restored > 0) flags.push(`${translate('watchRestored')} ${watch.restored}`);
+			if (watch.trimmedByBytes > 0) flags.push(`${translate('watchTrimmed')} ${watch.trimmedByBytes}`);
+			if (watch.persistError !== null) flags.push(`⚠️ ${translate('watchPersistFailed')}`);
+			return flags.length === 0 ? null : `${translate('watch')} · ${flags.join(' · ')}`;
+		}
+
+		/**
+		 * 「最差事件」块那一行的**值**:未开录 / 还没抓到(带阈值)/ 严重度(文字 + 数字)。
+		 * 阈值写在这里而不是另起一行 —— 「还没抓到」+「还没抓到(≥100ms)」两行是同一句话。
+		 */
+		function eventValueText(row) {
+			if (state.watch.on === false) return translate('watchOff');
+			if (row === null || row === undefined) return `${translate('watchNone')}(≥${WATCH_TRIGGER_MS}ms)`;
+			return `${severityText(severityLevel(row.severity))} ${Math.round(row.severity)}ms`;
+		}
+
+		/**
+		 * 工具箱里的一条事故:`1. i7 · frame · 326ms · 14:48 · 读回`。
+		 * 被选中的那条前面加 `● ` —— 清单排序是**按严重度**的,不标出来读者会以为"第一条就是最近那条"。
+		 */
 		function watchRowText(row, index) {
 			const at = Date.parse(row.at);
-			return `${index + 1}. ${row.id} · ${row.cause} · ${Math.round(row.severity)}ms` +
+			const marker = state.watch.selId === row.id ? '● ' : '';
+			return `${marker}${index + 1}. ${row.id} · ${row.cause} · ${Math.round(row.severity)}ms` +
 				(Number.isFinite(at) ? ` · ${clock(at)}` : '') +
 				(row.restored === true ? ` · ${translate('watchRestored')}` : '') +
 				// 靠"每天最差"那一档留下的要标出来,否则读者会奇怪它为什么没被更差的事故挤掉
@@ -3947,6 +4257,9 @@ window.__ModuleLoader__.load({
 				linkRowText(), state.loadState, state.linkText,
 				experiment.phase, experiment.message, experiment.results.length, experiment.restored === null ? 0 : 1,
 				state.marks.length, state.errors.length, state.stressNodes > 0 ? 1 : 0, state.baselineRunning ? 1 : 0,
+				// 事故选中上下文:选中的那条被更差的新事故挤出留存清单时会**自动退回**,指纹不带它
+				// 面板就会一直显示旧的「已选中」(而 selectedIncident 已经换了一条)
+				state.watch.incidents.length, state.watch.selId ?? 'x', state.copyNote ?? 'x', state.pickNote ?? 'x',
 				unexplainedFrame() === null ? 0 : 1, infraVerdict().text,
 				Object.values(state.groups).map((value) => (value ? 1 : 0)).join(''),
 				// 60 秒帧条:它每秒都在滚(老格子出窗口、新格子进来),而其它数字可能几百秒不动 ——
@@ -3962,20 +4275,57 @@ window.__ModuleLoader__.load({
 			if (typeof state.requestRender === 'function') state.requestRender();
 		}
 
+		/** 折叠选择落盘(尽力而为:记不住就本次会话有效)。 */
+		function saveGroups() {
+			try { localStorage.setItem(LS_GROUPS, JSON.stringify(state.groups)); } catch (error) { /* 记不住就本次会话有效 */ }
+		}
+
 		/** 折叠/展开一个分组,并把选择记住。 */
 		function toggleGroup(key) {
 			if (Object.hasOwn(state.groups, key) === false) return;
 			state.groups[key] = state.groups[key] !== true;
-			try { localStorage.setItem(LS_GROUPS, JSON.stringify(state.groups)); } catch (error) { /* 记不住就本次会话有效 */ }
+			saveGroups();
+			bump();
+		}
+
+		/**
+		 * 「全部折叠」:把取证/工具那几个组收起来,回到首屏。
+		 * 与「恢复默认布局」的区别:它**不动**用户的两个上下文选择(翻帧钉住、事故选中)。
+		 */
+		function collapseAll() {
+			for (const key of Object.keys(state.groups)) state.groups[key] = false;
+			saveGroups();
+			bump();
+		}
+
+		/**
+		 * 「恢复默认布局」:回到干净的首屏 —— 组全收起(这是默认值),翻帧回自动,事故选中回自动。
+		 * 面板可能被记成"全部展开"(展开状态是落盘的),这一条就是把它拉回来的一键。
+		 */
+		function resetLayout() {
+			for (const key of Object.keys(state.groups)) state.groups[key] = false;
+			state.watch.pickT = null;
+			state.watch.selId = null;
+			// 两个"一次性说明"也清掉:布局都回到默认了,还挂着一句"帧环里没有…"只会让人以为又出错了
+			state.copyNote = null;
+			state.pickNote = null;
+			saveGroups();
 			bump();
 		}
 
 		/**
 		 * 一个可折叠分组:收起时头部**必须**带一句话摘要 —— 收起不等于丢信息,
 		 * 而是把"过程/取证"这类不常看的行换成一行结论。
+		 *
+		 * ⚠️ **children 是"先求值再传参"的**:以前写成 `...children` 时,组折叠着,调用方那一串
+		 * IIFE(脚本按包 / 交叉表 / 帧条)照样每个渲染 tick 跑一遍 —— 「取证明细」里最贵的那几块
+		 * 全是"算了但不显示"。所以现在支持传**一个函数**:折叠时连函数体都不进(见 AGENTS §5
+		 * 关于"折叠组默认不做昂贵分析,由 group() 的 thunk 保证"那条)。
 		 */
 		function group(key, label, summary, ...children) {
 			const isOpen = state.groups[key] === true;
+			// 惰性:唯一一个 child 且是函数 → 只有展开那一刻才调用它拿子节点
+			const build = children.length === 1 && typeof children[0] === 'function' ? children[0] : null;
 			return h('div', { style: S.sep },
 				h('div', {
 					style: { ...S.row, cursor: 'pointer' },
@@ -3984,7 +4334,7 @@ window.__ModuleLoader__.load({
 				},
 					h('span', { style: S.label }, `${isOpen ? '▾' : '▸'} ${label}`),
 					h('span', { style: S.num }, summary)),
-				isOpen ? h('div', null, children) : null);
+				isOpen ? h('div', null, build === null ? children : build()) : null);
 		}
 
 		/** 精确归因开关:开启时立刻把已经见过的多包 URL 排队解析。 */
@@ -3993,6 +4343,8 @@ window.__ModuleLoader__.load({
 			try { localStorage.setItem(LS_PRECISE, state.precise ? '1' : '0'); } catch (error) { /* 记不住就本次会话有效 */ }
 			if (state.precise) primeBundleMaps();
 			dirty = true;
+			// 精确归因开关本身会改变"定名"的结果,窗口聚合的缓存要跟着失效(markResolved 的说明)
+			markResolved();
 			bump();
 		}
 
@@ -4000,7 +4352,7 @@ window.__ModuleLoader__.load({
 		const DICT = {
 			zh: {
 				title: '性能 HUD', off: '已关', turnOn: '开启', turnOff: '关闭',
-				frameWorst: '最差帧', blame: '回调归因(耗时)',
+				frameWorst: '最差帧', blame: '回调归因(耗时·下界)',
 				rest: '其余', dom: 'DOM 节点', none: '无', exportJson: '导出 JSON', clear: '清空',
 				collapse: '折叠', expand: '展开', sessions: '会话列表', messages: '消息区', perMin: '/分',
 				unattr: '帧内未归因', peak: '峰',
@@ -4016,26 +4368,31 @@ window.__ModuleLoader__.load({
 				domWritesHint: '前一项是精确总次数;下面按插件给出估算(每 10 次采样一次栈,命中按 10 折算)。',
 				component: '组件', cumulative: '累计',
 				overview: '概览', overviewHint: '三秒判断:最差帧 + 最差 longtask 及其归属 + 归因命中数',
+				scope60s: '近 60 秒',
 				overviewFrame: '帧', overviewBlame: '最差那条', worstSecondShort: '最差秒', hostShort: '宿主',
 				deepShort: '深录', deepHint: '深录(= 插桩 + 精确归因):装上调度点与 DOM 写入的包装,并拉那份 12MB 的 sourcemap。默认关着 —— 守夜与现场都不插桩',
 				recorder: '记录器自身', recorderHint: '每帧给这个 HUD 自己的 rAF 回调计时:测量工具必须自证没有明显改变被测对象。p99 取最近 600 帧',
 				split: '帧里花在哪', splitTotal: '这段长动画帧共', splitWorst: '最差那条',
 				framePick: '帧', framePinned: '已钉住(点 ⟲ 回到自动)', framePickAuto: '自动:跟着最差那条走',
 				frameAutoHint: '回到自动(跟着最差那条走)',
-				framePickHint: '最近 200 条长动画帧里**值得回看的那些**(blocking ≥ 100ms,与守夜触发线同一条),按 blocking 降序、最差的在前。◀ ▶ 换一条,⟲ 回到自动;选中的那条被挤出 200 条之后会自动退回。一条都不到 100ms 时这里退回显示全部',
+				framePickHint: '最近 200 条长动画帧里**值得回看的那些**(帧时长 ≥ 100ms,与守夜触发线同一条;排序也按它,blocking 只作补充),最差的在前。◀ ▶ 换一条,⟲ 回到自动;选中的那条被挤出 200 条之后会自动退回。一条都不到线时这里退回显示全部',
 				framePickFiltered: '值得回看的帧',
 				spark: '60 秒帧条',
 				sparkHint: '最近 60 秒,一格一秒:高度 = 那一秒里最差那一帧的间隔,颜色与导出件的 ASCII 帧条带用同一组阈值(≥100ms 红 / ≥50ms 黄 / 其余正常)。整格都是 rAF 挂起的那一秒画成最矮的灰柱 —— 那是间隙,不是卡顿;空白 = 那一秒没采到',
 				pkgNone: '未定名',
-				pkgHint: '最近这段 LoAF **窗口**里(不是上面那一帧),脚本耗时按包汇总(与事故包 incident.packages 同一条 resolve 路:单包 URL 直接读出来,合并批按 sourcemap 分段还原)。合并批里没开「精确」就只能给到那个 58 包的批 URL,这是刻意的,不硬猜',
+				pkgHint: '**本帧**(上面那张环的同一帧)里脚本耗时按包汇总(与事故包 incident.packages 同一条 resolve 路:单包 URL 直接读出来,合并批按 sourcemap 分段还原)。合并批里没开「精确」就只能给到那个 58 包的批 URL,这是刻意的,不硬猜',
+				pkgWindowHint: '最近这段 LoAF **窗口**(不是上面那一帧)的同一份按包汇总:它是**累计**,分母写在小标题上;拿它和「本帧」比之前先看平均每帧',
+				barCopyHint: '点这一行 → 复制「名字 + 毫秒」', copyName: '名称',
 				forcedLayout: '强制样式布局', forcedShort: '强制',
 				forcedHint: 'LoAF 的 forcedStyleAndLayoutDuration:读布局 / 写样式逼出来的同步布局。它**已经算在**脚本耗时里,来源却是样式而不是业务逻辑 —— 分不清"这块是 JS 慢还是样式慢"时看这一行。这一行是**窗口**聚合',
 				splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', scopeFrame: '本帧',
 				bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本', needDeep: '要深录', invokerUnknown: '来源未记录',
 				otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
-				crossTable: '包 × 来源', crossCorner: '包 \\ 来源', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', crossUnit: '格内毫秒', crossBiggest: '最重', crossNone: '没有可交叉的脚本', crossHint: '两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间"。只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 脚本总耗时;格内是毫秒,把鼠标放上去看占比。', barShareHint: '最大那一段占这条的多少',
-				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每条脚本',
+				crossTable: '包 × 来源 · 窗口', crossCorner: '包 \\ 来源', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', crossUnit: '格内毫秒', crossBiggest: '最重', crossNone: '没有可交叉的脚本', crossHint: '范围:**窗口**(最近 200 条长动画帧的**累计**,与上面那两行「·窗口」是同一份数据,不是某一帧)。两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间"。只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 脚本总耗时;格内是毫秒,把鼠标放上去看占比。', barShareHint: '最大那一段占这条的多少',
+				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每帧脚本',
+				maxLabel: '最大', sparkGap: '整格 rAF 挂起(间隙,不是卡顿)', sparkNoPick: '这一秒没有长动画帧,点不动', sparkPickHint: '点它 → 翻帧切到这一秒的长动画帧',
+				pickNone: '帧环里没有这条事故附近的帧(跨会话读回的事故无法定位到当前帧环):上面那条仍是自动/手选的那帧',
 				hourUnit: '小时', minUnit: '分', secUnit: '秒',
 				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
 				invokerHint: 'LoAF 的 scripts[].invoker:这条脚本是**谁调起来的** —— setTimeout / rAF、某个事件处理器(实测最多的是 `DOMWebSocket.onmessage`,即会话事件流)、Promise 回调、脚本加载。它与「按包」是同一份脚本耗时的两种切法:按来源覆盖全部脚本,按包只覆盖定得到包名的那部分(所以合计不相等是正常的,总数看上面的脚本耗时)。⚠️ 它只回答"哪一类调用",不回答"函数里面慢在哪" —— 函数级要 Chrome trace,页面内没有采样器',
@@ -4068,10 +4425,24 @@ window.__ModuleLoader__.load({
 				watchMark: '标记刚才', watchMarkHint: '手动记一次「刚刚卡了一下」:自动回退 3 秒(人的反应时间),立刻切片,并把上面输入框的备注原样写进证据包',
 				watchExport: '导出最近一次', watchExportHint: '下载**时刻最新**那一条的完整证据包(帧序列 + LoAF + 窗口内 longtask + 环境与缺失声明;不是最差那条)。要别的:__perfHud.exportIncident(\'i55\') 按 id、或 exportIncident(0) 取最差的',
 				watchManualNote: '手动标记',
+				// 最差事件入口(P0/P1):严重度用**文字 + token 颜色**两样一起给,不只靠颜色
+				worstEvent: '最差事件', worstEventHint: '守夜留下的最差那条(按严重度排,不是按时间)。默认自动跟它;在工具箱的清单里点一条就切过去,「恢复默认布局」可回到自动。',
+				sevLabel: '严重度', sevBad: '严重', sevWarn: '警告', sevOk: '低于线',
+				sevBadHint: '≥200ms 记为「严重」:与面板判色的红档同一条线;≥100ms(守夜触发线)记为「警告」',
+				jsEvidence: 'JS 证据', jsYes: '有(longtask/LoAF 与它重叠)', jsNo: '无(更像 rAF 被节流)',
+				evOwner: '主要归属', evWindow: '窗口', framesUnit: ' 帧', evAuto: '自动', evPinned: '已选中',
+				viewEvidence: '看这一帧', viewEvidenceHint: '选中这条事故 → 展开「取证明细」→ 把翻帧钉到它开始时刻最近的那条长动画帧。事故切片里的帧与面板那个帧环不是同一份数据,所以这里是**就近定位**,定位不到会如实说。',
+				exportIncidentBtn: '导出事故包', exportIncidentBtnHint: '下载这条事故的完整证据包(帧序列 + LoAF + 窗口内 longtask + 环境与缺失声明),不是整机快照。',
+				copySummary: '复制摘要', copySummaryHint: '把这条事故的结论与口径(严重度 / JS 证据 / 主要归属 / 窗口)作为纯文本复制走。',
+				copied: '已复制', copyFailed: '复制失败', copyNoApi: '这个环境没有剪贴板 API',
+				collapseAll: '全部折叠', collapseAllHint: '收起取证与工具那几组(不动翻帧与事故选中)',
+				resetLayout: '恢复默认布局', resetLayoutHint: '回到干净首屏:组全收起 + 翻帧回自动 + 事故选中回自动',
+				exportJsonHint: '整机快照:当前全部读数 + 记录器自身 + 错误账本 + 全部留存事故的清单 —— 不是某一次事故包(单次事故走「导出事故包」)。',
+				envPickHint: '点一条事故就切过去;当前选中的那条前面有 ●',
 			},
 			en: {
 				title: 'Perf HUD', off: 'off', turnOn: 'on', turnOff: 'off',
-				frameWorst: 'worst frame', blame: 'attribution (time)',
+				frameWorst: 'worst frame', blame: 'attribution (time · lower bound)',
 				rest: 'rest', dom: 'DOM nodes', none: 'n/a', exportJson: 'Export JSON', clear: 'Clear',
 				collapse: 'Collapse', expand: 'Expand', sessions: 'Sessions', messages: 'Messages', perMin: '/min',
 				unattr: 'unattributed/frame', peak: 'peak',
@@ -4087,26 +4458,31 @@ window.__ModuleLoader__.load({
 				domWritesHint: 'First number is the exact total; the rows below are estimates (stacks sampled every 10th write, hits scaled by 10).',
 				component: 'component', cumulative: 'total',
 				overview: 'overview', overviewHint: 'Three-second read: worst frame + worst longtask and its owner + attribution hit ratio',
+				scope60s: 'last 60s',
 				overviewFrame: 'frame', overviewBlame: 'worst one', worstSecondShort: 'worst sec', hostShort: 'host',
 				deepShort: 'deep', deepHint: 'Deep = instrumentation + precise attribution: wraps scheduling points and DOM writes and fetches the 12MB sourcemap. Off by default',
 				recorder: 'HUD itself', recorderHint: 'Times this HUD own rAF callback: a measuring tool must prove it does not change what it measures. p99 over the last 600 frames',
 				split: 'where the frame went', splitTotal: 'long frame total', splitWorst: 'worst',
 				framePick: 'frame', framePinned: 'pinned (⟲ returns to auto)', framePickAuto: 'auto: follows the worst',
 				frameAutoHint: 'back to auto (follow the worst)',
-				framePickHint: 'Out of the last 200 long animation frames, only the ones **worth reviewing** (blocking ≥ 100ms, the same line the night watch triggers on), worst first. ◀ ▶ flips through them, ⟲ returns to auto; a pinned frame falls back once it leaves the 200-frame ring. When nothing reaches 100ms this falls back to showing all of them',
+				framePickHint: 'Out of the last 200 long animation frames, only the ones **worth reviewing** (frame duration >= 100ms, the same line the night watch triggers on; the ranking uses it too, blocking is only a supplement), worst first. ◀ ▶ flips through them, ⟲ returns to auto; a pinned frame falls back once it leaves the 200-frame ring. When nothing reaches the line this falls back to showing all of them',
 				framePickFiltered: 'frames above the line',
 				spark: '60s frame strip',
 				sparkHint: 'Last 60 seconds, one bar per second: height = the worst frame interval in that second, and the colours use the same thresholds as the ASCII frame strip in the export (>=100ms red / >=50ms yellow / otherwise normal). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall; blank = nothing sampled in that second',
 				pkgNone: 'unnamed',
-				pkgHint: 'Script time in the recent LoAF **window** (not the single frame above), summed per package (the same resolve path as incident.packages: read straight off single-package URLs, restored from sourcemap sections for combo batches). Without precise attribution a combo batch can only be named as its 58-package batch URL — that is deliberate, nothing is guessed',
+				pkgHint: 'Script time in **this frame** (the same frame as the donut above), summed per package (the same resolve path as incident.packages: read straight off single-package URLs, restored from sourcemap sections for combo batches). Without precise attribution a combo batch can only be named as its 58-package batch URL — that is deliberate, nothing is guessed',
+				pkgWindowHint: 'The same per-package sum for the recent LoAF **window** (not the frame above): this is a **cumulative** figure, its denominator is on the section heading; check avg script per frame before comparing it with "this frame"',
+				barCopyHint: 'Click a row to copy "name + ms"', copyName: 'name',
 				forcedLayout: 'forced style+layout', forcedShort: 'forced',
 				forcedHint: 'LoAF forcedStyleAndLayoutDuration: synchronous layout forced by reading layout or writing style. It is **already inside** script time, but it comes from styling rather than business logic — read this row when you cannot tell whether the script side is slow because of JS or because of style. This row is the **window** aggregate',
 				splitScript: 'script', splitTask: 'task', splitRender: 'render', splitTail: 'style+layout+paint',
 				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', scopeFrame: 'this frame',
 				bySource: 'by source', byPkg: 'by package', pkgZeroNamed: '0 resolved', scriptsUnit: 'scripts', needDeep: 'needs deep', invokerUnknown: 'source not recorded',
 				otherSources: 'other sources', srcNoUrl: 'no URL (inline)', srcBatch: 'plugin batch (not split)',
-				crossTable: 'pkg × source', crossCorner: 'pkg \\ src', crossNoOverlap: 'no overlap between the top 3', crossFailed: 'cross table failed', splitFailed: 'script breakdown failed for this frame', crossUnit: 'ms per cell', crossBiggest: 'heaviest', crossNone: 'nothing to cross-tabulate', crossHint: 'The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time". Top3 × Top3 is expanded, the rest is folded into the "rest" row/column (by subtraction) and the four blocks add up to the script total. Cells are milliseconds; hover for the share.', barShareHint: 'share of the largest segment in this bar',
+				crossTable: 'pkg × source · window', crossCorner: 'pkg \\ src', crossNoOverlap: 'no overlap between the top 3', crossFailed: 'cross table failed', splitFailed: 'script breakdown failed for this frame', crossUnit: 'ms per cell', crossBiggest: 'heaviest', crossNone: 'nothing to cross-tabulate', crossHint: 'Scope: the **window** (the **cumulative** total of the last 200 long animation frames, the same data as the two "· window" rows above — not a single frame). The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time". Top3 × Top3 is expanded, the rest is folded into the "rest" row/column (by subtraction) and the four blocks add up to the script total. Cells are milliseconds; hover for the share.', barShareHint: 'share of the largest segment in this bar',
 				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
+				maxLabel: 'max', sparkGap: 'whole second was rAF suspension (a gap, not a stall)', sparkNoPick: 'no long animation frame in this second, not clickable', sparkPickHint: 'click it to move the frame picker to this second\'s long animation frame',
+				pickNone: 'no frame near this incident in the frame ring (incidents restored from a previous session cannot be located in the current ring); the row above is still the auto/manual pick',
 				hourUnit: 'h', minUnit: 'm', secUnit: 's',
 				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',
 				invokerHint: 'LoAF\'s scripts[].invoker: what invoked this script — setTimeout / rAF, an event handler (the most common one here is `DOMWebSocket.onmessage`, the session event stream), a promise callback, a script load. It and "by package" are two slicings of the same script time: "by source" covers every script, "by package" only those whose package could be resolved (so the two totals differ; the total is the script time above). ⚠️ It answers "which kind of call", not "which function inside is slow" — function level needs a Chrome trace, there is no in-page sampler',
@@ -4138,6 +4514,19 @@ window.__ModuleLoader__.load({
 				watchMark: 'Mark just now', watchMarkHint: 'Manually record "it just stuttered": rewinds 3s (human reaction time), slices immediately, and copies the note from the input above into the pack',
 				watchExport: 'Export latest', watchExportHint: 'Download the **newest by time** incident (frames + LoAF + long tasks in the window + environment and missing-data notes; not the worst one). For others: __perfHud.exportIncident(\'i55\') by id, or exportIncident(0) for the worst',
 				watchManualNote: 'manual mark',
+				worstEvent: 'worst event', worstEventHint: 'The worst incident the night watch kept (ranked by severity, not by time). It follows this one automatically; click an entry in the toolbox list to switch, or Reset layout to go back to auto.',
+				sevLabel: 'severity', sevBad: 'severe', sevWarn: 'warn', sevOk: 'below line',
+				sevBadHint: '>=200ms reads as severe: the same line as the red level of the panel verdict; >=100ms (the night-watch trigger) reads as warn',
+				jsEvidence: 'JS evidence', jsYes: 'yes (a longtask/LoAF overlaps it)', jsNo: 'none (more like rAF throttling)',
+				evOwner: 'main owner', evWindow: 'window', framesUnit: ' frames', evAuto: 'auto', evPinned: 'selected',
+				viewEvidence: 'Show frame', viewEvidenceHint: 'Select this incident, open forensics, and pin the frame picker to the long animation frame closest to its start. The frames in the incident slice are not the same data as the panel frame ring, so this is **nearest-match navigation**; when it cannot match it says so.',
+				exportIncidentBtn: 'Export incident', exportIncidentBtnHint: 'Download this incident\'s full evidence pack (frame series + LoAF + long tasks in the window + environment and missing-data notes) — not the whole-machine snapshot.',
+				copySummary: 'Copy summary', copySummaryHint: 'Copy this incident\'s conclusions and scope (severity / JS evidence / main owner / window) as plain text.',
+				copied: 'copied', copyFailed: 'copy failed', copyNoApi: 'no clipboard API in this environment',
+				collapseAll: 'Collapse all', collapseAllHint: 'Collapse the forensics and toolbox groups (keeps the frame pin and the incident selection)',
+				resetLayout: 'Reset layout', resetLayoutHint: 'Back to the clean first screen: all groups collapsed + frame picker to auto + incident selection to auto',
+				exportJsonHint: 'Whole-machine snapshot: every current reading + the recorder itself + the error ledger + the list of all kept incidents — not a single incident pack (use Export incident for that).',
+				envPickHint: 'Click an incident to switch to it; the selected one is marked with ●',
 			},
 		};
 		/**
@@ -4437,6 +4826,11 @@ window.__ModuleLoader__.load({
 			const rows = pluginTable();
 			const top = rows.slice(0, TOP_N);
 			const rest = rows.slice(TOP_N);
+			// 首屏「最差事件」块吃的这一份上下文:默认自动跟严重度最差那条;用户在清单里点过就跟
+			// 他选的那条(选中的被挤出留存清单时 selectedIncident 自己退回自动)。
+			const selected = selectedIncident();
+			const selectedRow = selected.row;
+			const selectedLevel = severityLevel(selectedRow === null ? null : selectedRow.severity);
 
 			const scene = sceneChip();
 			const head = h('div', { style: S.head },
@@ -4467,21 +4861,43 @@ window.__ModuleLoader__.load({
 			}
 
 			const body = h('div', null,
-				// ── 常显 1:卡不卡 + 谁的锅 ──
+				// ── 常显 1:当前状况(卡不卡 + 谁的锅)──
 				// 块式而不是 flex 行:这一行长文本换行在右对齐下会参差得像段落(实测被吐槽)。
+				// 标题里带「近 60 秒」:帧 / 长任务 / 命中三个数都是这个窗口的口径,不写出来只能猜。
 				h('div', { style: S.block, title: overviewTitle() },
-					h('div', { style: S.blockLabel }, t('overview')),
+					h('div', { style: S.blockLabel }, `${t('overview')} · ${t('scope60s')}`),
 					h('div', { style: { ...S.blockValue, color: levelFrame(state.fps, state.frameWorst) } }, `${overviewLine1()}\n${overviewLine2()}`)),
 
-				// ── 常显 2:回调归因 Top3(每插件一行,hover 补 msps 与累计)──
-				// (帧内未归因从常显挪进了「取证明细」:它是"解释",不是"现在卡不卡 / 谁的锅"
-				//  这两个常显问题本身;它的数字挂在那一组的摘要上,展开也看得到。)
-				// 没插桩 / 没抓到回调时这一块是 `0ms/s` + 空表 —— 白占地方,还会被读成"没有开销"
-				(top.length === 0 && rest.length === 0) ? null : h('div', { style: S.sep },
+				// ── 常显 2:最差事件入口(守夜留下的事故;严重度用**文字 + token 颜色**两样给)──
+				// 这是"事故 → 证据 → 来源/包"那条链的起点:三个按钮都是真动作(选中并定位到帧 /
+				// 下载这条事故包 / 复制结论),不是装饰。默认跟最差那条 —— 「最差」不是「最近」,
+				// 所以时间和"自动/已选中"都写在上面。
+				h('div', { style: S.sep },
+					h('div', { style: S.row },
+						h('span', { style: S.label, title: t('worstEventHint') }, t('worstEvent')),
+						h('span', { style: { ...S.num, color: selectedRow === null || state.watch.on === false ? 'var(--dsw-alias-label-secondary)' : severityColor(selectedLevel) }, title: t('sevBadHint') },
+							eventValueText(selectedRow))),
+					selectedRow === null ? null : h('div', { style: S.sub, title: t('envPickHint') },
+						`${watchSelectedText()} · ${selected.auto ? t('evAuto') : t('evPinned')}`),
+					selectedRow === null ? null : h('div', { style: S.sub }, eventEvidenceText(selectedRow)),
+					selectedRow === null ? null : h('div', { style: S.sub }, eventWindowText(selectedRow)),
+					selectedRow === null ? null : h('div', { style: S.buttons },
+						h('button', { type: 'button', style: S.btn, title: t('viewEvidenceHint'), onClick: () => revealIncident(selectedRow.id) }, t('viewEvidence')),
+						h('button', { type: 'button', style: S.btn, title: t('exportIncidentBtnHint'), onClick: () => exportIncident(selectedRow.id) }, t('exportIncidentBtn')),
+						h('button', { type: 'button', style: S.btn, title: t('copySummaryHint'), onClick: () => copyText(incidentSummaryText(selectedRow), t('copySummary')) }, t('copySummary'))),
+					state.copyNote === null ? null : h('div', { style: S.sub }, state.copyNote),
+					watchFlagText() === null ? null : h('div', { style: { ...S.sub, title: t('watchHint') } }, watchFlagText())),
+
+				// ── 常显 3:回调归因 Top3(每插件一行,hover 补 msps 与累计)──
+				// 这一块**总有**:以前没插桩时整段不渲染,于是首屏根本没有"回调归因"这一层,
+				// 读者分不清"没采"还是"采了是空的"。现在未插桩时降级成一行「要深录」——
+				// 绝不写 `0ms/s`(那会被读成"没有开销");插桩之后 `0ms/s` 才是真的(确实没有回调跑过)。
+				// 帧内未归因不在这里,它在「取证明细」(它是"解释",不是"现在卡不卡 / 谁的锅")。
+				h('div', { style: S.sep },
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('blameHint') }, t('blame')),
-						h('span', { style: S.num }, msPerSecText(state.attributedPerSec))),
-					h('div', null, top.map((row, index) => h('div', { key: row.id, style: S.row },
+						h('span', { style: S.num }, state.deep !== true ? t('needDeep') : msPerSecText(state.attributedPerSec))),
+					state.deep !== true || top.length === 0 ? null : h('div', null, top.map((row, index) => h('div', { key: row.id, style: S.row },
 						h('span', {
 							style: S.label,
 							title: `${row.id}\n` +
@@ -4491,20 +4907,28 @@ window.__ModuleLoader__.load({
 								t('cnScope'),
 						}, `${index + 1}. ${short(row.id)}`),
 						h('span', { style: S.num }, attrText(row))))),
-					rest.length === 0 ? null : h('div', { style: S.row },
+					state.deep !== true || rest.length === 0 ? null : h('div', { style: S.row },
 						h('span', { style: S.label, title: restTitleText(rest) }, `${t('rest')} (${rest.length})`),
 						h('span', { style: S.num }, restValueText(rest)))),
 
-				// ── 常显 4:守夜(偶发卡顿的入口:抓到几次、最差多少)──
-				h('div', { style: S.sep },
-					h('div', { style: S.row },
-						h('span', { style: S.label, title: t('watchHint') }, t('watch')),
-						h('span', { style: S.num }, watchPanelText())),
-					watchLatestText() === null ? null : h('div', { style: S.sub }, watchLatestText())),
+				// ── 布局工具:从"被记成全部展开"的长面板一键回到诊断首页 ──
+				// 放在组之前:它是常显的,收起任何组之后都还够得着。
+				h('div', { style: { ...S.sep, display: 'flex', gap: 6 } },
+					h('button', { type: 'button', style: S.btn, title: t('collapseAllHint'), onClick: collapseAll }, t('collapseAll')),
+					h('button', { type: 'button', style: S.btn, title: t('resetLayoutHint'), onClick: resetLayout }, t('resetLayout'))),
 
 				// ── 折叠 1:取证明细(最差那秒 + DOM 写入者)──
-				group('detail', t('groupDetail'), detailSummary(),
-					// 翻帧:最近 200 条长动画帧按 blocking 降序(最差的在前),◀ ▶ 换一条、⟲ 回到自动。
+				// ⚠️ 子节点走**惰性回调**:这一组里全是"算了但不显示"的派生统计(脚本按包 /
+				// 交叉表 / 帧条),折叠时连函数体都不该进(见 group() 的说明)。
+				group('detail', t('groupDetail'), detailSummary(), () => [
+					// ① 60 秒帧条(趋势导航)**放最前**:先看"卡在哪一秒",再看那一秒的帧是谁。
+					// 块式(标签独占一行)而不是挤在右对齐的窄条里 —— 铺满一行之后每格约 6px,
+					// 点了才点得中;有长动画帧的那几格可点,点了就把翻帧下面那条钉过去。
+					h('div', { style: S.block },
+						h('div', { style: S.blockLabel, title: t('sparkHint') }, t('spark')),
+						h('div', { style: { marginTop: 2 } }, frameRing.size === 0 ? t('notYet') : sparkStrip())),
+					// ② 选中的那一帧 / LoAF 证据
+					// 翻帧:最近 200 条长动画帧按严重度降序(最差的在前),◀ ▶ 换一条、⟲ 回到自动。
 					// 面板默认跟着"最差那条"走 —— 只有出现更差的才会换,所以常常同一条挂很久。
 					(() => {
 						const list = pickList();
@@ -4525,6 +4949,8 @@ window.__ModuleLoader__.load({
 								h('button', { type: 'button', style: S.btn, title: t('framePickHint'), onClick: () => pickStep(1) }, '▶'),
 								h('button', { type: 'button', style: S.btn, title: t('frameAutoHint'), onClick: pickAuto }, '⟲')));
 					})(),
+					// 「看这一帧」没定位到时那句话(定位到了就清掉):按钮点了必须看得见反应
+					state.pickNote === null ? null : h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } }, state.pickNote),
 					// 长动画帧的时间去向:圆环**只画一个维度**(四段:脚本 / 任务里没归到的 / 渲染 / 尾部)。
 					// 页面内看不到"绘制/合成",最后一段是"剩下的都在这儿" —— 拿它当"样式布局占比"会读错。
 					// 脚本内部的「来源」细分在下面的堆叠条里,不塞进环(层级挤一圈读不出来)。
@@ -4612,19 +5038,26 @@ window.__ModuleLoader__.load({
 							return h('div', { key, style: { marginTop: 6 } },
 								h('span', { style: S.blockLabel, title: hint }, label),
 								h('div', { style: { marginTop: 2 } },
-									segs.map((seg, index) => h('div', {
-										key: `row-${index}`,
-										style: { display: 'flex', gap: 8, alignItems: 'baseline', lineHeight: 1.45 },
-									},
-										h('span', {
-											title: seg.name === null ? translate('rest') : seg.name,
-											style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' },
-										}, seg.name === null
-											? `${translate('rest')}${restCount > 1 ? ` ${restCount}${translate('times')}` : ''}`
-											: short(seg.name)),
-										h('span', {
-											style: { flex: '0 0 auto', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums' },
-										}, `${Math.round(seg.ms)}ms`)))),
+									segs.map((seg, index) => {
+										// 「其余」那一项是合计数,没有单个名字可复制 —— 只有具名行才给动作
+										const named = seg.name !== null;
+										const text = named ? `${seg.name} ${Math.round(seg.ms)}ms` : translate('rest');
+										return h('div', {
+											key: `row-${index}`,
+											title: named ? `${t('barCopyHint')}\n${text}` : translate('restHint'),
+											style: { display: 'flex', gap: 8, alignItems: 'baseline', lineHeight: 1.45, cursor: named ? 'pointer' : 'default' },
+											// 点一行复制「名字 + 毫秒」:这是真动作(剪贴板),不是装饰
+											onClick: named ? () => copyText(text, t('copyName')) : undefined,
+										},
+											h('span', {
+												style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' },
+											}, named
+												? short(seg.name)
+												: `${translate('rest')}${restCount > 1 ? ` ${restCount}${translate('times')}` : ''}`),
+											h('span', {
+												style: { flex: '0 0 auto', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums' },
+											}, `${Math.round(seg.ms)}ms`));
+									})),
 								h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 } },
 									h('div', { style: { flex: '1 1 auto', display: 'flex', height: 8, borderRadius: 3, overflow: 'hidden', background: 'var(--dsw-alias-border-l2)' } },
 										segs.map((seg, index) => {
@@ -4638,7 +5071,10 @@ window.__ModuleLoader__.load({
 													background: `var(${token})`,
 													backgroundImage: `linear-gradient(rgba(0, 0, 0, ${[0.32, 0.46, 0.58, 0.68][index] ?? 0.68}), rgba(0, 0, 0, ${[0.32, 0.46, 0.58, 0.68][index] ?? 0.68}))`,
 													boxShadow: index === 0 ? undefined : 'inset 1px 0 0 0 rgba(0, 0, 0, 0.6)',
-													cursor: segKey === null ? 'default' : 'pointer',
+													// ⚠️ 段本身**不给手型**:它是同一份数据的比例视图,点了没有别的去处。
+													// 以前这里是 `pointer`,而悬停联动因"指到交叉表行标签会让外壳停用条目"停用中
+													// (hot 恒为 null)→ 那是个纯装饰的假按钮,比没有更糟。
+													cursor: 'default',
 												},
 											});
 										})),
@@ -4660,7 +5096,7 @@ window.__ModuleLoader__.load({
 							rows.push(bar('win-src', t('bySource'), t('invokerHint'), window.byInvoker, '--dsw-alias-brand-primary', 'src'));
 							// 全是纯执行时这一行只是把"脚本总耗时"重复一遍(条上已经看得到),不显示
 							if (window.forced + window.pause > 0) rows.push(line('win-js', t('splitJs'), t('forcedHint'), jsBreakdownText(window)));
-							rows.push(bar('win-pkg', t('byPkg'), t('pkgHint'), whoRows(window), '--dsw-alias-state-success-primary', 'pkg'));
+							rows.push(bar('win-pkg', t('byPkg'), t('pkgWindowHint'), whoRows(window), '--dsw-alias-state-success-primary', 'pkg'));
 							// 一个包名都没定到:按包这一层现在没有信息,但也不能装作它不存在
 							// 一个包名都没定到:这一层给不出占比(没有名字就没有排行),但**必须留下分母** ——
 							// 直接不显示会让人以为"按包"被删了(实测被这么问过)。
@@ -4718,7 +5154,7 @@ window.__ModuleLoader__.load({
 								.concat([num('cross-corner-cell', cross.corner, translate('rest'), translate('rest'), false)]), null));
 						kids.push(h('div', { key: 'cross-unit', title: t('crossHint'), style: { ...S.sub, textAlign: 'right' } },
 							`${translate('crossUnit')} · ${translate('crossBiggest')} ${short(cross.top.who)} · ${short(cross.top.src)} ${Math.round(cross.top.ms)}ms`));
-						return group('cross', t('crossTable'), crossSummary(cross), ...kids);
+						return group('cross', t('crossTable'), crossSummary(cross), () => kids);
 						} catch (error) {
 							// 交叉表是**派生统计**:它自己算炸了不该把整块取证面板带走(实测被报"点开就闪退":
 							// `short(null)` 抛错 → 面板渲染抛错 → 外壳停用条目,面板整块消失)。降级成一行**可见**的
@@ -4728,12 +5164,7 @@ window.__ModuleLoader__.load({
 								`${t('crossFailed')}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200));
 						}
 					})(),
-					// 60 秒迷你时间条:一格一秒、格值取格里最差那帧,阈值与导出件 ASCII 条带一致
-					h('div', { style: { ...S.row, alignItems: 'center', gap: 8 } },
-						h('span', { style: S.label, title: t('sparkHint') }, t('spark')),
-						h('span', { style: { flex: '1 1 auto', textAlign: 'right' } },
-							frameRing.size === 0 ? t('notYet') : sparkStrip())),
-					// 帧里"JS 之外"的残差:唯一能反映 CSS/绘制卡顿的数字,从常显挪进来
+					// ③ 时间分解之后:帧里"JS 之外"的残差 —— 唯一能反映 CSS/绘制卡顿的数字
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),
 						h('span', { style: { ...S.num, color: state.deep === true && unexplained !== null ? 'var(--dsw-alias-state-warn-primary)' : undefined } },
@@ -4755,14 +5186,10 @@ window.__ModuleLoader__.load({
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: `${t('legFiber')} / ${t('legSubtree')} / ${t('legDom')} / ${t('legOwner')}` }, t('hit')),
 						h('span', { style: S.num }, hitText(tally))),
-					// 这两行只有插桩了才有意义(不插桩时计数恒为 0)
-					state.deep !== true ? null : h('div', { style: S.row },
-						h('span', { style: S.label, title: t('domWritesHint') }, t('domWrites')),
-						h('span', { style: S.num }, String(state.mutations))),
-					state.deep !== true ? null : writeRows()),
+				]),
 
 				// ── 折叠 2:DOM 与堆 ──
-				group('dom', t('groupDom'), domSummary(),
+				group('dom', t('groupDom'), domSummary(), () => [
 					h('div', { style: S.row },
 						h('span', { style: S.label }, `${t('dom')} · ${t('rateWindow')}`),
 						h('span', { style: S.num }, `${state.dom.total} · ${rateText(state.dom.series)}`)),
@@ -4774,10 +5201,17 @@ window.__ModuleLoader__.load({
 					}),
 					state.heap === null ? null : h('div', { style: S.row },
 						h('span', { style: S.label }, t('heap')),
-						h('span', { style: S.num }, `${mb(state.heap)}MB · ${heapRateText()}`))),
+						h('span', { style: S.num }, `${mb(state.heap)}MB · ${heapRateText()}`)),
+					// DOM 写入属于「DOM 与堆」,不属于「取证明细」—— 那组回答的是"这一帧的时间去哪了"。
+					// 这两行只有插桩了才有意义(不插桩时计数恒为 0,那时它们只会被读成"没有开销")
+					state.deep !== true ? null : h('div', { style: S.row },
+						h('span', { style: S.label, title: t('domWritesHint') }, t('domWrites')),
+						h('span', { style: S.num }, String(state.mutations))),
+					state.deep !== true ? null : writeRows(),
+				]),
 
 				// ── 折叠 3:宿主与链路(排查"是页面卡还是链路卡"才看)──
-				group('host', t('groupHost'), hostSummary(),
+				group('host', t('groupHost'), hostSummary(), () => [
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('stream')),
 						h('span', { style: S.num }, `${state.streaming ? t('running') : t('idle')}${state.streaming || state.idleSince === 0 ? '' : ` ${Math.round((performance.now() - state.idleSince) / 1000)}s`}${state.baselineRunning ? ` · ${t('idleBase')}…` : ''}`)),
@@ -4788,7 +5222,7 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.label }, t('hostLoop')),
 						h('span', { style: { ...S.num, color: loop === null ? undefined : levelUp(loop.p99, 50, 200) } },
 							state.hostError !== null ? `${t('hostDown')}:${state.hostError.slice(0, 26)}`
-								: loop === null ? t('notYet') : `p50 ${loop.p50}ms · p99 ${loop.p99}ms`)),
+								: hostLoopText(loop))),
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('hostEventsHint') }, t('hostEvents')),
 						h('span', { style: S.num }, hostEventsText())),
@@ -4801,16 +5235,24 @@ window.__ModuleLoader__.load({
 							? t('notYet')
 							: `${idleBase.fps}fps · LT ${idleBase.longTasks} · ${idleBase.domPerMin}${t('perMin')}`)),
 					idleBase === null || idleBase === undefined || idleBase.domPerMin <= 0 ? null : h('div', { style: S.sub },
-						`${t('idleWriter')}: ${(idleBase.domTop ?? []).map((row) => `${short(row?.id ?? '?')}${row?.component === null || row?.component === undefined ? '' : `(${row.component})`}`).join(' / ') || t('none')}`)),
+						`${t('idleWriter')}: ${(idleBase.domTop ?? []).map((row) => `${short(row?.id ?? '?')}${row?.component === null || row?.component === undefined ? '' : `(${row.component})`}`).join(' / ') || t('none')}`),
+				]),
 
-				// ── 折叠 4:工具箱(隔离实验 / 场景标记 / 验收)──
-				group('tools', t('groupTools'), toolsSummary(),
+				// ── 折叠 4:工具箱(事故清单 / 场景标记 / 整机导出)──
+				group('tools', t('groupTools'), toolsSummary(), () => [
 					// 守夜层:最差几次的清单 + 手动补记 + 导出最近一次
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('watchHint') }, t('watch')),
 						h('span', { style: S.num }, watchPanelText())),
-					state.watch.incidents.length === 0 ? null : h('div', null,
-						state.watch.incidents.map((row, index) => h('div', { key: row.id, style: S.sub }, watchRowText(row, index)))),
+					// 清单按**严重度**排(不是时间序):点一条就选中它 —— 首屏「最差事件」块与
+					// 「取证明细」的翻帧都跟着走。它真能导航到同一条事故,所以才做成可点的行。
+					state.watch.incidents.length === 0 ? null : h('div', { title: t('envPickHint') },
+						state.watch.incidents.map((row, index) => h('div', {
+							key: row.id,
+							style: { ...S.sub, cursor: 'pointer', fontWeight: state.watch.selId === row.id ? 700 : 400 },
+							title: t('envPickHint'),
+							onClick: () => selectIncident(row.id),
+						}, watchRowText(row, index)))),
 					h('div', { style: S.buttons },
 						// 备注输入框留着:它就是「标记刚才」写进事故包的 note
 						h('input', {
@@ -4822,10 +5264,10 @@ window.__ModuleLoader__.load({
 						}),
 						h('button', { type: 'button', style: S.btn, disabled: state.watch.on === false, title: t('watchMarkHint'), onClick: () => { W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft); setDraft(''); } }, t('watchMark')),
 						h('button', { type: 'button', style: S.btn, disabled: state.watch.incidents.length === 0, title: t('watchExportHint'), onClick: () => W.__perfHud.exportIncident('latest') }, t('watchExport'))),
-
-				h('div', { style: { ...S.sep, display: 'flex', gap: 6 } },
-					h('button', { type: 'button', style: S.btn, onClick: exportJson }, t('exportJson')),
-					h('button', { type: 'button', style: S.btn, onClick: () => W.__perfHud.clear() }, t('clear')))));
+					h('div', { style: { ...S.sep, display: 'flex', gap: 6 } },
+						h('button', { type: 'button', style: S.btn, title: t('exportJsonHint'), onClick: exportJson }, t('exportJson')),
+						h('button', { type: 'button', style: S.btn, onClick: () => W.__perfHud.clear() }, t('clear'))),
+				]));
 
 			// 自带边界:渲染抛错时只降级成一块小面板,不让外壳把整个条目停用。
 			return h(HudBoundary, { renderError: renderErrorView },
