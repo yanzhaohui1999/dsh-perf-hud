@@ -20,7 +20,9 @@
  * ⚠️ 不是离线门禁:要本机跑着 `dsh web` + 装着 Chrome(与 check-panel 同一套约定)。
  */
 import { withPage } from './cdp.mjs';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 
 /** 词典的键名:面板正文里出现任何一个,就说明它少了词条、界面上印出了 key(实测踩过 7 个)。 */
 const DICT_KEYS = (() => {
@@ -50,7 +52,7 @@ const clickText = (evaluate, text) => evaluate(`(() => {
 	return 'clicked';
 })()`);
 
-await withPage({}, async ({ evaluate, reload, waitForHud }) => {
+await withPage({}, async ({ evaluate, reload, waitForHud, sleep }) => {
 	await waitForHud();
 	check('HUD 挂上了', await evaluate(`typeof window.__perfHud === 'object'`), true);
 
@@ -150,6 +152,50 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	check('诊断包:预览列出文件与排除项', [pack.previewFiles, pack.previewExcludes >= 3], [4, true]);
 	check('诊断包:候选原因每条都带支持与限制、出处三档', pack.causeShape, true);
 	console.log(`     包 = ${pack.files.join(' / ')} · 候选 ${JSON.stringify(pack.causeLeads)}`);
+
+	// ── P1:ZIP 的真实字节验收(页面里生成的 zip 落盘,交给系统 unzip 判)──
+	// 先造一条**带备注**的事故:否则"AI 包脱敏 / 完整包保留"这件事根本验不到
+	// ⚠️ 手动标记会被**并进正在等的那一次**(`triggerCapture` 的 pending 分支),那样样本就没备注 ——
+	// 所以先等 pending 空出来。这不是放宽断言,而是让样本真的落在"手动标记"这条路上。
+	for (let attempt = 0; attempt < 20; attempt += 1) {
+		if (await evaluate(`window.__perfHud.watch().pending === null`)) break;
+		await sleep(300);
+	}
+	const zipInfo = await evaluate(`(async () => {
+		window.__perfHud.capture('验收:带备注 token=SECRET_NOTE');
+		await new Promise((resolve) => setTimeout(resolve, 900));
+		const list = window.__perfHud.incidents();
+		if (list.length === 0) return null;
+		const withNote = list.find((row) => row.note !== null && row.note !== undefined) ?? list[0];
+		const id = withNote.id;
+		return { id, hasNote: withNote.note !== null && withNote.note !== undefined,
+			ai: window.__perfHud.zip(id, { dropFreeText: true }), full: window.__perfHud.zip(id, { dropFreeText: false }) };
+	})()`);
+	check('ZIP:验收样本真的带备注(否则下面两条是空断言)', zipInfo === null ? false : zipInfo.hasNote, true);
+	if (zipInfo !== null) {
+		const aiPath = `${tmpdir()}/dsh-perf-hud-check-ai.zip`;
+		const fullPath = `${tmpdir()}/dsh-perf-hud-check-full.zip`;
+		writeFileSync(aiPath, Buffer.from(zipInfo.ai, 'base64'));
+		writeFileSync(fullPath, Buffer.from(zipInfo.full, 'base64'));
+		const probe = execFileSync('unzip', ['-t', aiPath], { encoding: 'utf8' });
+		check('ZIP:系统 unzip 认它是合法压缩包(No errors detected)', /No errors detected/.test(probe), true);
+		const listing = execFileSync('unzip', ['-l', aiPath], { encoding: 'utf8' });
+		check('ZIP:包里就是那四份文件(顺序与清单一致)',
+			['manifest.json', 'summary.md', 'incident.json', 'README.md'].filter((name) => listing.includes(name)),
+			['manifest.json', 'summary.md', 'incident.json', 'README.md']);
+		const aiIncident = execFileSync('unzip', ['-p', aiPath, 'incident.json'], { encoding: 'utf8' });
+		const fullIncident = execFileSync('unzip', ['-p', fullPath, 'incident.json'], { encoding: 'utf8' });
+		const aiSummary = execFileSync('unzip', ['-p', aiPath, 'summary.md'], { encoding: 'utf8' });
+		check('ZIP:AI 包把备注置空并标 noteDropped,两个文件里都不出现原文',
+			[JSON.parse(aiIncident).incident.note, JSON.parse(aiIncident).incident.noteDropped,
+				/备注:已置空/.test(aiSummary), /SECRET_NOTE/.test(aiIncident + aiSummary)],
+			[null, true, true, false]);
+		check('ZIP:完整包保留备注正文,但里面粘的凭据照样被脱成占位符',
+			[/验收:带备注/.test(fullIncident), /token=<redacted>/.test(fullIncident), /SECRET_NOTE/.test(fullIncident)],
+			[true, true, false]);
+		check('ZIP:两条路的包大小不一样(差的正是那段自由文本)', Buffer.from(zipInfo.full, 'base64').length > Buffer.from(zipInfo.ai, 'base64').length, true);
+		console.log(`     真 zip:ai ${Buffer.from(zipInfo.ai, 'base64').length}B / full ${Buffer.from(zipInfo.full, 'base64').length}B · unzip -t 通过 · 四份文件齐全`);
+	}
 
 	// ── 本轮收尾:人话原因 / 展开区 / 两条导出路径 / 分享前预览 ──
 	// 先把面板摆到主界面(这一屏才是普通用户看到的)

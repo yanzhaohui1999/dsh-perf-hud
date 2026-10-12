@@ -578,6 +578,10 @@ const newPieces = [
 	// 能力矩阵 + 可能原因 + 诊断包(整机导出件 snapshot 会调 capabilities)
 	'const CAUSE_MAX = ',
 	'const PACK_SCHEMA_VERSION = ',
+	'function crc32(',
+	'function utf8Bytes(',
+	'function dosStamp(',
+	'function zipStore(',
 	'function latestIncident(',
 	'function causePlainLead(',
 	'function healthIcon(',
@@ -631,6 +635,7 @@ const box = new Function(`${sandbox}\n${newPieces}
 		capabilities, capabilityMissing, provenanceOf, provenanceText, strengthText, causeCandidates,
 		healthIcon, healthText, healthVerdict, repeatedLead, trendSummary, trendText, secondsText, lastStallSubText, trendRawText,
 		latestIncident, causePlainLead,
+		crc32, zipStore, dosStamp, utf8Bytes,
 		// 视图模型断言要用计数桶:直接测纯函数,不走 snapshot
 		clearTally, bumpTally, tallyWindow, noteTallySeverity,
 		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview, exportPack, CAUSE_MAX, PACK_SCHEMA_VERSION } };`)();
@@ -1833,6 +1838,68 @@ watchless: {
 	EX.clearTally();
 }
 
+// ═══════════ P1:诊断包 ZIP(store 模式,零依赖)═══════════════
+// 这一组盯四件事:CRC32 是不是标准那个、zip 的三个结构在不在、目录里的长度/CRC 与内容对得上、
+// 以及"一个 zip 一次下载"这条真的接上了(不是只写了个函数没接线)。
+check('ZIP:CRC32 是标准的那个(空串 0 / "123456789" = 0xCBF43926 / "a" = 0xE8B7BE43)',
+	[EX.crc32(EX.utf8Bytes('')), EX.crc32(EX.utf8Bytes('123456789')), EX.crc32(EX.utf8Bytes('a'))],
+	[0, 0xCBF43926, 0xE8B7BE43]);
+check('ZIP:中文内容按 UTF-8 字节算长度(不是字符数)',
+	[EX.utf8Bytes('中文').length, EX.utf8Bytes('a').length], [6, 1]);
+check('ZIP:DOS 时间戳落在年份 >= 1980 的合法范围里(1980 之前会被截到 1980)',
+	(() => {
+		const early = EX.dosStamp(Date.parse('1970-01-02T03:04:05Z'));
+		const later = EX.dosStamp(Date.parse('2026-10-13T10:20:30Z'));
+		return [((early.date >> 9) & 0x7F) + 1980, ((later.date >> 9) & 0x7F) + 1980, later.time !== early.time];
+	})(), [1980, 2026, true]);
+
+// ── zip 结构的字节级断言 ──
+const zipFiles = [{ name: 'a.txt', text: 'hello' }, { name: 'b.md', text: '# 中文内容\n第二行\n' }];
+const zipBytes = EX.zipStore(zipFiles, Date.parse('2026-10-13T10:20:30Z'));
+const zipView = new DataView(zipBytes.buffer, zipBytes.byteOffset, zipBytes.byteLength);
+const readName = (at, len) => new TextDecoder().decode(zipBytes.subarray(at, at + len));
+check('ZIP:开头是本地文件头签名(0x04034B50),结尾是 EOCD(0x06054B50)',
+	[zipView.getUint32(0, true), zipView.getUint32(zipBytes.length - 22, true)], [0x04034B50, 0x06054B50]);
+check('ZIP:EOCD 里的条目数与中央目录偏移都对得上',
+	(() => {
+		const eocdAt = zipBytes.length - 22;
+		const count = zipView.getUint16(eocdAt + 10, true);
+		const centralAt = zipView.getUint32(eocdAt + 16, true);
+		return [count, zipView.getUint32(centralAt, true), readName(centralAt + 46, zipView.getUint16(centralAt + 28, true))];
+	})(), [2, 0x02014B50, 'a.txt']);
+check('ZIP:本地头的 CRC 就是内容字节的 CRC32(解压器据它判 bad CRC)',
+	(() => {
+		const crc = zipView.getUint32(14, true);
+		const size = zipView.getUint32(18, true);
+		const nameLen = zipView.getUint16(26, true);
+		const data = zipBytes.subarray(30 + nameLen, 30 + nameLen + size);
+		return [crc, EX.crc32(data), new TextDecoder().decode(data)];
+	})(), [EX.crc32(EX.utf8Bytes('hello')), EX.crc32(EX.utf8Bytes('hello')), 'hello']);
+check('ZIP:压缩方式必须是 store(0) —— 本实现不压缩,声明成 8 就会解压失败',
+	[zipView.getUint16(8, true), zipView.getUint16(6, true) & 0x0800], [0, 0x0800]);
+check('ZIP:体积 = 各份内容之和 + 目录开销(store 模式不会变小,但也不会离谱)',
+	(() => {
+		const raw = zipFiles.reduce((sum, file) => sum + EX.utf8Bytes(file.text).length, 0);
+		return [zipBytes.length > raw, zipBytes.length < raw + 2 * 100];
+	})(), [true, true]);
+check('ZIP:空文件清单也能打包(不抛错,给一个只有 EOCD 的合法 zip)',
+	(() => { const empty = EX.zipStore([], 0); return [empty.length, new DataView(empty.buffer).getUint32(0, true)]; })(),
+	[22, 0x06054B50]);
+
+// ── 接线:两条路径都要 zip,而且文件名分得清 ──
+check('ZIP:导出走的是一个 zip 一次下载(不再逐个下载文件),两条路径的文件名带 -ai / -full',
+	(() => {
+		return [/const bytes = zipStore\(pack\.files\);/, /link\.download = `\$\{base\}\$\{opts\.dropFreeText === true \? '-ai' : '-full'\}\.zip`;/,
+			/'application\/zip'/.test(source), /exportPack\(id, opts\)/.test(source) === false]
+			.map(Boolean);
+	})(), [true, true, true, true]);
+check('ZIP:预览里给的是压缩包总大小(zipBytes),而且"zip 是下一步"那句过渡文案已删',
+	[/(\s)zipBytes,/.test(source), /zipStore\(list\)\.length/.test(source), /一次打包成一个 zip 是下一步/.test(source), /bundling them into one zip is the next step/.test(source)],
+	[true, true, false, false]);
+check('ZIP:验收口子给的是 zip 的 base64(验收器拿它去 unzip -t)',
+	[/function zipBase64\(/, /zip: \(id, options\) => \{/, /zipBase64\(zipStore\(pack\.files\)\)/].map((re) => re.test(source)),
+	[true, true, true]);
+
 // ═══════════ 能力矩阵 / 可能原因 / 诊断包(P0.2 + P0.3)═══════════════
 // 这一组挡的是:① "哪一层没采到"被写成一句没人能核的话;② 把"耗时最高的包"说成根因;
 // ③ 诊断包与面板各说各话(所以两边读的是同一批纯函数)。
@@ -2123,6 +2190,10 @@ const watchPieces = [
 	line('const LS_VIEW'),
 	line('const TALLY_TREND_SHORT_MS'),
 	line('const TALLY_TREND_LONG_MS'),
+	extract(source, 'function crc32('),
+	extract(source, 'function utf8Bytes('),
+	extract(source, 'function dosStamp('),
+	extract(source, 'function zipStore('),
 	line('const CAUSE_MAX'),
 	line('const PACK_SCHEMA_VERSION'),
 	extract(source, 'function severityLevel('),
@@ -2298,6 +2369,7 @@ const watchBox = new Function(`
 		SECRET_PARAM, SECRET_PARAM_NAMES,
 		// 能力矩阵(事故包的缺失声明由它推)
 		capabilities, capabilityMissing, causeCandidates,
+		crc32, zipStore,
 		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview,
 		// 捕获计数(与留存分离):桶 / 窗口 / 落盘
 		tallyWindow, tallyOfDay, tallyText, tallyTitle, tallyReport, bumpTally, noteTallySeverity, pruneTally,

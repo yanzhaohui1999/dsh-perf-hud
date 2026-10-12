@@ -3764,6 +3764,124 @@ window.__ModuleLoader__.load({
 			return out.slice(0, CAUSE_MAX);
 		}
 
+		// ───────────────────────── ZIP(store 模式,零依赖)─────────────────────────
+		/**
+		 * 为什么自己写:本仓库**零运行时依赖、无构建步骤**,不能引 JSZip;而 store(不压缩)模式的
+		 * zip 只要三个结构 + CRC32,几十行就够,而且**字节结构可以离线断言**(见 logic.mjs)。
+		 * 不压缩的理由:包里全是 JSON / Markdown,deflate 能省一半体积,但要么引依赖、要么
+		 * 依赖 `CompressionStream`(异步 + Safari 老版本没有)—— 为了几十 KB 不值得。
+		 *
+		 * 三条硬性:① 文件名与内容都按 **UTF-8 字节**写,长度用**字节数**(不是字符数);
+		 * ② 本地头与中央目录里的 CRC / 长度必须一致(否则任何解压器都报 bad CRC);
+		 * ③ 结尾必须有 EOCD(没有它,文件根本不被认成 zip)。
+		 */
+		/**
+		 * 标准 CRC-32(IEEE 802.3):`'123456789'` → 0xCBF43926,有断言钉住。
+		 * 用逐位算法而不是 256 项查表:一次打包只调用 4 次,现算换掉一份模块级状态更划算
+		 * (而且"没有额外的模块级 const"让两个测试沙箱都好抽)。
+		 */
+		function crc32(bytes) {
+			let crc = -1;
+			for (let i = 0; i < bytes.length; i += 1) {
+				crc ^= bytes[i];
+				for (let k = 0; k < 8; k += 1) crc = (crc & 1) !== 0 ? (0xEDB88320 ^ (crc >>> 1)) : (crc >>> 1);
+			}
+			return (crc ^ -1) >>> 0;
+		}
+
+		function utf8Bytes(text) {
+			return new TextEncoder().encode(String(text));
+		}
+
+		/** zip 要的是 DOS 时间戳(两个 16 位字段),不是 ISO 串。 */
+		function dosStamp(atMs) {
+			const date = new Date(typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now());
+			const year = Math.max(1980, date.getFullYear());
+			return {
+				time: ((date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2)) & 0xFFFF,
+				date: (((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate()) & 0xFFFF,
+			};
+		}
+
+		/** `files` = `[{ name, text }]` → zip 的字节(store,不压缩)。 */
+		function zipStore(files, atMs) {
+			const stamp = dosStamp(atMs);
+			const parts = [];
+			const central = [];
+			let offset = 0;
+			for (const file of files) {
+				const name = utf8Bytes(file.name);
+				const data = utf8Bytes(file.text);
+				const crc = crc32(data);
+				const local = new Uint8Array(30 + name.length);
+				const lv = new DataView(local.buffer);
+				lv.setUint32(0, 0x04034B50, true);      // 本地文件头签名
+				lv.setUint16(4, 20, true);              // version needed to extract
+				lv.setUint16(6, 0x0800, true);          // 文件名是 UTF-8
+				lv.setUint16(8, 0, true);               // 0 = store
+				lv.setUint16(10, stamp.time, true);
+				lv.setUint16(12, stamp.date, true);
+				lv.setUint32(14, crc, true);
+				lv.setUint32(18, data.length, true);    // 压缩后大小 = 原始大小(store)
+				lv.setUint32(22, data.length, true);
+				lv.setUint16(26, name.length, true);
+				lv.setUint16(28, 0, true);              // extra 长度
+				local.set(name, 30);
+				parts.push(local, data);
+				const dir = new Uint8Array(46 + name.length);
+				const dv = new DataView(dir.buffer);
+				dv.setUint32(0, 0x02014B50, true);      // 中央目录签名
+				dv.setUint16(4, 20, true);              // version made by
+				dv.setUint16(6, 20, true);
+				dv.setUint16(8, 0x0800, true);
+				dv.setUint16(10, 0, true);
+				dv.setUint16(12, stamp.time, true);
+				dv.setUint16(14, stamp.date, true);
+				dv.setUint32(16, crc, true);
+				dv.setUint32(20, data.length, true);
+				dv.setUint32(24, data.length, true);
+				dv.setUint16(28, name.length, true);
+				dv.setUint16(30, 0, true);              // extra
+				dv.setUint16(32, 0, true);              // comment
+				dv.setUint16(34, 0, true);              // disk number
+				dv.setUint16(36, 0, true);              // internal attrs
+				dv.setUint32(38, 0, true);              // external attrs
+				dv.setUint32(42, offset, true);         // 本地头偏移
+				dir.set(name, 46);
+				central.push(dir);
+				offset += local.length + data.length;
+			}
+			let centralSize = 0;
+			for (const dir of central) centralSize += dir.length;
+			const eocd = new Uint8Array(22);
+			const ev = new DataView(eocd.buffer);
+			ev.setUint32(0, 0x06054B50, true);          // EOCD 签名
+			ev.setUint16(4, 0, true);
+			ev.setUint16(6, 0, true);
+			ev.setUint16(8, files.length, true);
+			ev.setUint16(10, files.length, true);
+			ev.setUint32(12, centralSize, true);
+			ev.setUint32(16, offset, true);             // 中央目录起始偏移
+			ev.setUint16(20, 0, true);                  // 注释长度
+			const all = [...parts, ...central, eocd];
+			let total = 0;
+			for (const part of all) total += part.length;
+			const out = new Uint8Array(total);
+			let at = 0;
+			for (const part of all) { out.set(part, at); at += part.length; }
+			return out;
+		}
+
+		/** zip 字节 → base64:给验收器用(CDP 里传字节数组太笨重)。分块,避免 apply 爆栈。 */
+		function zipBase64(bytes) {
+			let text = '';
+			const CHUNK = 0x8000;
+			for (let at = 0; at < bytes.length; at += CHUNK) {
+				text += String.fromCharCode(...bytes.subarray(at, at + CHUNK));
+			}
+			return btoa(text);
+		}
+
 		// ───────────────────────── 诊断包(给人看,也给 AI 读)─────────────────────────
 		/**
 		 * 包是**数据**,不是界面文案:构建全在这几个纯函数里,UI 只负责下载。
@@ -3912,6 +4030,8 @@ window.__ModuleLoader__.load({
 			if (row === null || row === undefined) return null;
 			const opts = options ?? {};
 			const list = files ?? buildPack(id, opts)?.files ?? [];
+			// 压缩包总大小:预览里给用户看的那个数(store 模式 ≈ 各份之和 + 每个条目 ~100 字节的目录开销)
+			const zipBytes = list.length === 0 ? 0 : zipStore(list).length;
 			const gaps = capabilityMissing(row);
 			return {
 				incident: { id: row.id, at: row.at, severity: row.severity },
@@ -3920,6 +4040,7 @@ window.__ModuleLoader__.load({
 					name: file.name,
 					bytes: file.text.length,
 				})),
+				zipBytes,
 				includes: [
 					'事故的结构化证据:帧序列 / LoAF / 窗口内 long task / 环境读数',
 					'能力矩阵与缺失声明(哪一层采到了、哪一层没有、为什么)',
@@ -3937,24 +4058,23 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * 下载整包。**临时实现:P0 阶段逐个文件下载**(浏览器不喜欢一次弹好几个下载,
-		 * 但这里只有 3~4 个小文件);P1 会换成一个 store-only 的 zip,一次点完。
-		 * 返回 false 表示没这个 id(不静默成功)。
+		 * 下载整包:**一个 zip 一次搞定**(P1 之前是逐个下载 4 个文件 —— 部分浏览器会把后续
+		 * 下载拦掉,而且用户文件夹里会散落四个文件)。文件名带 `-ai` / `-full`,两条路径落到
+		 * 磁盘上也分得清。返回 false 表示没这个 id(不静默成功)。
 		 */
 		function exportPack(id, options) {
-			const pack = buildPack(id, options);
+			const opts = options ?? {};
+			const pack = buildPack(id, opts);
 			if (pack === null) return false;
-			pack.files.forEach((file, index) => {
-				natives.setTimeout(() => {
-					const blob = new Blob([file.text], { type: file.name.endsWith('.json') ? 'application/json' : 'text/markdown' });
-					const url = URL.createObjectURL(blob);
-					const link = document.createElement('a');
-					link.href = url;
-					link.download = `${incidentFileName(pickIncident(id), pickIncident(id).at).replace(/\.json$/, '')}-${file.name}`;
-					link.click();
-					natives.setTimeout(() => URL.revokeObjectURL(url), 2000);
-				}, index * 400);   // 间隔一下:同时触发多个下载会被浏览器拦掉一部分
-			});
+			const row = pickIncident(id);
+			const bytes = zipStore(pack.files);
+			const base = incidentFileName(row, row.at).replace(/\.json$/, '');
+			const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = `${base}${opts.dropFreeText === true ? '-ai' : '-full'}.zip`;
+			link.click();   // 不挂进 body:避免污染被统计的 DOM
+			natives.setTimeout(() => URL.revokeObjectURL(url), 2000);
 			return true;
 		}
 
@@ -4913,7 +5033,11 @@ window.__ModuleLoader__.load({
 			capabilities,
 			/** 可能原因(候选假设):面板与诊断包读同一份,所以两边不会各说各话。 */
 			causes: (id) => causeCandidates(pickIncident(id ?? 'latest')),
-			/** 诊断包:pack(id) 拿对象(不下载)、preview(id) 只看清单、exportPack(id) 逐个文件下载(P1 换 zip)。 */
+			/** 诊断包:pack(id) 拿对象、preview(id) 只看清单、exportPack(id) 下载一个 zip;zip(id) 给 base64 字节(验收用)。 */
+			zip: (id, options) => {
+				const pack = buildPack(id, options ?? { dropFreeText: true });
+				return pack === null ? null : zipBase64(zipStore(pack.files));
+			},
 			pack: buildPack,
 			preview: (id, options) => packPreview(id, options),
 			exportPack,
@@ -6338,7 +6462,7 @@ window.__ModuleLoader__.load({
 				exportFullHint: '本机调试件:与上面同源,但保留你手敲的备注 —— 它不是脱敏件,别直接交出去',
 				previewTitle: '导出预览(还没生成文件)', previewFiles: '文件',
 				previewNotesDropped: '备注:已置空(标 noteDropped)', previewNotesKept: '备注:保留(本机调试件)',
-				previewExcludes: '本包不含', previewZip: '现在会分别下载这几个文件;一次打包成一个 zip 是下一步',
+				previewExcludes: '本包不含', previewZip: '一个 zip 一次下载:', previewZipHint: '(含上面四个文件)',
 				previewGo: '生成并导出', previewCancel: '取消', exportPreviewCopy: '复制导出预览',
 				hudOff: 'HUD 已关闭', loafOff: 'LoAF 未装上',
 				healthOk: '运行流畅', healthStall: '刚才有卡顿', healthLimited: '监测受限',
@@ -6540,7 +6664,7 @@ window.__ModuleLoader__.load({
 				exportFullHint: 'Local debugging artifact: same source, but it KEEPS the notes you typed — it is not redacted, do not hand it out as-is',
 				previewTitle: 'Export preview (nothing generated yet)', previewFiles: 'files',
 				previewNotesDropped: 'notes: blanked (marked noteDropped)', previewNotesKept: 'notes: kept (local debugging artifact)',
-				previewExcludes: 'not included', previewZip: 'This downloads the files separately; bundling them into one zip is the next step',
+				previewExcludes: 'not included', previewZip: 'one zip, one download:', previewZipHint: ' (the four files above) ',
 				previewGo: 'Generate and export', previewCancel: 'Cancel', exportPreviewCopy: 'Copy export preview',
 				hudOff: 'HUD is off', loafOff: 'LoAF not available',
 				healthOk: 'Running smoothly', healthStall: 'A stall just happened', healthLimited: 'Monitoring limited',
@@ -7033,7 +7157,7 @@ window.__ModuleLoader__.load({
 					h('div', { style: S.sub }, `${t('previewFiles')}:${preview.files.map((file) => `${file.name}(${Math.max(1, Math.round(file.bytes / 1024))}KB)`).join(' · ')}`),
 					h('div', { style: S.sub }, preview.notes === 'dropped' ? t('previewNotesDropped') : t('previewNotesKept')),
 					h('div', { style: S.sub }, `${t('previewExcludes')}:${preview.excludes.length}${t('tallyUnit')}`),
-					h('div', { style: { ...S.sub, color: 'var(--dsw-alias-label-secondary)' } }, t('previewZip')),
+					h('div', { style: { ...S.sub, color: 'var(--dsw-alias-label-secondary)' } }, `${t('previewZip')}${Math.max(1, Math.round(preview.zipBytes / 1024))}KB${t('previewZipHint')}`),
 					h('div', { style: S.buttons },
 						h('button', { type: 'button', style: S.btn, onClick: () => props.onExportGo() }, t('previewGo')),
 						h('button', { type: 'button', style: S.btn, onClick: () => props.onExportCancel() }, t('previewCancel')))));

@@ -112,6 +112,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
    **什么时候必须跑 `check-incident.mjs`**:改完**历史事故回放 / 取证明细的上下文切换**就跑它 —— 它挡的是"上面历史事故、下面另一条实时帧"和"刷新后历史事故打不开"这类离线套件结构上盖不到的事故。它依赖两个 DOM 约定:根节点 `id="dsh-perf-hud-root"`(控件态样式的作用域)与详情区第一行的 `data-ctx-bar="1"`(验收器靠它读"现在是哪个上下文")—— **改这两个名字等于改验收器**,改之前先看 `tools/check-incident.mjs`。
 
+   ⚠️ **验收器被强杀会留下 headless Chrome 占着 `--user-data-dir` 与调试端口,后续跑会"挂死"**(2026-10-13 踩过):症状是 `waitForHud` 之后的第一次 `evaluate` 永不返回(不是超时报错,是**一直等**),因为新实例连上的是那个残留实例。处置:`pkill -f 'remote-debugging-port=93' && rm -rf /tmp/dsh-perf-hud-chrome-*` 再跑。别花时间怀疑被测代码 —— 先看 `pgrep -fl 'remote-debugging-port=93'`。
    ⚠️ **它们不是离线门禁**:要真浏览器 + 本机跑着 `dsh web`,所以 `npm test` 与 CI 里**没有**它们(CI 只对 `tools/*.mjs` 做 `node --check`)。`check-panel.mjs` 挡的就是"三套件全绿、浏览器里插件激活或渲染失败"那类事故,所以它跑不过就别提交。
 
 ---
@@ -122,7 +123,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 541 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 553 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 39 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -183,7 +184,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **折叠组默认不做昂贵分析,现在由 `group()` 的 thunk 保证**:`group(key, label, summary, ...children)` 支持"唯一一个 child 且是个函数"的形式,折叠时**连函数体都不进**;五个调用点(`detail` / `cross` / `dom` / `host` / `tools`)全传 thunk,所以「取证明细」收起时脚本按包 / 交叉表 / 帧条一次都不算。代价要记住:`cross` 那一层仍嵌套在「取证明细」的 thunk 里 —— 一展开「取证明细」,调用方就先构造 `crossTable(scriptPkgTally())` 与 `kids` 数组(4×5 格,代价低),所以窗口聚合那份缓存不能省。
 - **可点 / 不可点的界线(不要做假按钮)**:可点 = 「按来源 / 按包」小表的**具名行**(→ `copyText` 复制「名字 + 毫秒」,成功/失败都照实写进 `state.copyNote`)、工具箱事故清单行(→ 选中)、帧条**有 LoAF 的格子**(→ 钉住那一帧)、组头(→ 折叠)、**可疑脚本的每一行**(→ 复制那条证据行);**不可点** = 堆叠条的**色段**本身(`cursor` 是 `default`)、「其余」那一行(它是合计数,没有单个名字可复制)。
 - **按钮按需出现,不留"点了没反应"的动作**:「全部折叠」只在**有组开着**时渲染(`anyGroupOpen()`),「恢复默认布局」只在 `layoutDirty()` 为真时渲染(有组开着 / 翻帧被钉住 / 手选了事故 / `scope` 不是 `worst` / 挂着一次性说明);两者都无意义时整行不渲染。新加"布局类"按钮前先问:默认状态下点它会发生什么?什么都不会发生就别显示。
-- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键(现在中英各 **408** 键)—— 两条断言钉住这件事(logic.mjs):**键集合必须一致**、**每个键都得有人引用**(撤下界面时留下的死键会被报出来;死键那条只认字面量 `t('…')` / `translate('…')`,真要加动态取键得先放宽它)。**兜底策略跟文档语言**:locale 服务不在时按 `document.documentElement.lang`(取不到退 `navigator.language`)选那本字典,不是中文就用英文 —— 写死中文会让英文用户看到中文,简单反转(`DICT.en ?? key`)又会让中文用户看到英文,两种都错。
+- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键(现在中英各 **409** 键)—— 两条断言钉住这件事(logic.mjs):**键集合必须一致**、**每个键都得有人引用**(撤下界面时留下的死键会被报出来;死键那条只认字面量 `t('…')` / `translate('…')`,真要加动态取键得先放宽它)。**兜底策略跟文档语言**:locale 服务不在时按 `document.documentElement.lang`(取不到退 `navigator.language`)选那本字典,不是中文就用英文 —— 写死中文会让英文用户看到中文,简单反转(`DICT.en ?? key`)又会让中文用户看到英文,两种都错。
 - **插桩必须可还原**:包装 `setTimeout/setInterval/rAF` 与 `appendChild/insertBefore/setAttribute` 时,保存原生引用、只在"当前仍是我们那个 wrapper"时才还原(避免踩掉别人的包装)。
 - **改 `client.js` 一律用带锚点的小批次**:一次替换一个可唯一匹配的片段,失败即整批作废。本项目有**两次**"整段替换吞掉相邻声明"的事故(§8 第 7 条)。
 
@@ -375,7 +376,7 @@ DOM 写入挪进「DOM 与堆」、`回调归因` 未插桩时降级成一行 `�
 分流点只有 `detailContext()` 一处;历史帧条是**导航器**(240 列,每列取该列最差的一帧,点击映射回 `incident.frames` 里的真实记录,
 rAF 挂起的区间留白),四个方向翻帧(没有下一条就禁用),选中帧的分解 / 脚本 / long task / 证据全部只吃那一帧(缺就是缺,不回退);
 归因状态收敛成**已确认 / 可疑 / 未归因**三档并去掉"更像 rAF 被节流"这类把可能写成结论的说法;诊断上下文落盘 `LS_WATCHUI`,
-刷新后仍停在同一条事故的同一帧。`npm test` 现在 **591** 条(attribution 11 / logic 541 / host 39),CI 门禁与文档同步成 `-eq 591`;
+刷新后仍停在同一条事故的同一帧。`npm test` 现在 **603** 条(attribution 11 / logic 553 / host 39),CI 门禁与文档同步成 `-eq 603`;
 真页面验收:`check-panel` / `check-storage` / `check-interaction` / **新增 `tools/check-incident.mjs`** 四个验证器 **ALL PASS**(见 REVIEW §2)。
 
 **仍然存在的债(套件是绿的 ≠ 它们没问题)**:

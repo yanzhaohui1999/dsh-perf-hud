@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场(2026-10-11 `gh repo view` 实测 `PUBLIC`) |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,而且 **`tools/` 与 `locale/` 按目录核**(以后加验证器或加语言文件不会漏检),显式清单 + 目录共覆盖包内全部 **18** 个文件(含 `package.json`),漏一份就失败 |
-| 6 | 门禁全绿 | ✅ 591 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ 603 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
 | 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
 
@@ -34,7 +34,7 @@
 
 | 判据 | 怎么验 | 最新实测 |
 |---|---|---|
-| 离线断言全绿 | `npm test` | **591** 条(attribution 11 / logic 541 / host 39) |
+| 离线断言全绿 | `npm test` | **603** 条(attribution 11 / logic 553 / host 39) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 守夜默认**零插桩** | `snapshot().instrumented` 在三种模式下的取值 | 默认(不插桩)档:`precise: false` / `instrumented: false`,`errors: 0` —— 守夜档仍然零插桩;点「深录」→ `true / true`;点回去 → `false / false`,`errors` 全程 0 |
@@ -52,6 +52,7 @@
 | 普通用户的原因不出现包名 | 离线断言 + 真页面 | 真页面主界面正文:`某个脚本模块的耗时偏高 · 线索中等` / `这一段时间里有较重的渲染任务 · 线索中等`,正则扫 `@deepseek-ai/` 与 `dsh-` **零命中**;点「为什么这样判断?」之后才出现 `以下是原始证据 … 脚本耗时最高的包 · dsh-client-modules · 出处:归因推断` 与支持 / 限制(含"不等于已定位根因") |
 | 两条导出路径只差自由文本 | 离线断言 + 真页面 | 同一份事故:AI 包 `incident.note === null` + `noteDropped: true`、`summary.md` 里也不含备注原文(只写"备注:已置空");完整导出 `note` 保留、但里面那个裸 `token=SECRET_NOTE` 被换成 `token=<redacted>`;`preview().notes` 分别是 `dropped` / `kept`。真页面:主界面「导出诊断报告」→ 预览卡(4 个文件 + 备注已置空 + 生成并导出 / 取消),取消后卡片消失;开发者详情「原始数据」两个按钮文案分别写明"给 AI(脱敏、不含备注)"与"完整技术导出(保留备注)" |
 | 界面不会印出词典 key | 离线反向断言 + 真页面逐视图扫 | 新断言:`t('…')` / `translate('…')` 字面量引用的键必须存在于 `DICT.zh` 与 `DICT.en` —— 它**当场抓出 8 个漏掉的条目**(面板上一直印着 `viewIncident` / `exportPreviewCopy` / `packFilesLabel` 等);真页面再按标识符边界扫开发者详情与卡顿详情两屏,零命中 |
+| ZIP 一次交给 AI | 离线 11 条字节级断言 + `tools/check-counts.mjs`(真实字节) | 页面里生成的 zip 落盘 → **系统 `unzip -t` 报 `No errors detected`**,`unzip -l` 四份文件齐全;`unzip -p` 读回:`ai 55604B / full 55896B`(差的是自由文本),AI 包 `noteDropped: true` 且两个文件都不含备注原文,完整包保留备注正文但 `token=` 已脱成 `<redacted>`;离线另钉住 CRC32 标准向量与"压缩方式必须是 store(0)" |
 | 60 秒帧条与导出件同口径 | 面板 SVG + `tools/inspect-incident.mjs` 的 ASCII | 真实页面 **`width 100%`**(实测 **365×18**,`viewBox 0 0 60 18`)、`errors: 0`,每格都有 `title`(墙钟时间 + 该秒最差帧 + 点得动/点不动);`sparkPickMap` **只有那一秒真的有 LoAF 的格子可点**(点了把翻帧切过去),其余格子不给 `onClick`(不做点了没反应的假按钮);阈值一致性有静态断言(≥100 / ≥50) |
 | 帧拆分:环的四段 + 脚本三种切法 / 两个分母 | 面板 SVG / `frameSplit` / `frameArcs` / `framePkgTally` / `invokerLabel` | 真实页面(**`node tools/check-panel.mjs --expr=…`**,自己造带脚本的 LoAF):环 **84×84**、`viewBox 0 0 84 84`、半径 34;一条只有单个来源的帧画出 **4 个 `<circle>`**(弧长 `175.3 / 35.1 / 0.3 / 0.1`,周长 213.6;颜色 `state-error / label-secondary / state-warn / brand` —— 任务那段是中性灰);六行块式值实测 `纯执行 260.1ms` / `未定名(未归因 1)` / `setTimeout 260ms` / `dsh-client-modules 192ms · 未定名 25` / `DOMWebSocket.onmessage 425ms · setTimeout 421ms · Response.json.then 322ms · 其余 1` / `纯执行 1353.2ms · 强制 6.4ms`;窗口那组的标题自带分母 `窗口:N 条长动画帧 · 跨 T · 平均每条脚本 Xms`(`spanText` 把跨度写成 `43分12秒`);没插桩时 `帧内未归因` 写「要深录」、`命中` 只列非零的腿、`回调归因` 与 `DOM 写入` 两行不渲染;**翻帧按钮真的换帧**(同一次实测:自动 `帧 1/16 · 530ms` → 环 `579.6ms`;按 ▶ → `2/25 · 275ms` → 环 `325ms`;再 ▶ → `3/28 · 170ms` → 环 `220.3ms`;按 ⟲ 回到 `1/… · 530ms`);**清单只收达线的帧**(同一次实测:环里 21 条 LoAF,选单只有 `帧 1/4 · 210ms · ≥100ms`,▶ 走到 `2/4`);`errors: 0`。**函数级的边界也是实测的**:`typeof Profiler === 'function'` 但 `new Profiler()` 抛 `NotAllowedError … disabled by Document Policy`(响应头实测 `null`)。⚠️ 行里"脚本那几段 `stroke-opacity` 递浅"是脚本细分还画在环上时的读数;后来环只画四段,来源/包各自搬成 100% 堆叠条、名次用压暗 overlay(见上一行) |
 | 改版后整场深检(一次性 CDP,用完即删、没入库) | 面板 DOM + 真实鼠标 | 5 个组全展开渲染 **0 错误**;真实鼠标移到 5 个行级元素上(按包小表行 / 事故清单行 / 组头)**都没有被外壳停用**,0 错误 |
