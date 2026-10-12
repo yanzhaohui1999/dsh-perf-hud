@@ -316,11 +316,20 @@ const sandbox = `
 		watchTrimmed: '裁掉',
 		// 视图模型 / 主界面
 		healthOk: '运行流畅', healthStall: '刚才有卡顿', healthLimited: '监测受限', hudOff: 'HUD 已关闭', loafOff: 'LoAF 未装上',
+		causePlainScript: '某个脚本模块的耗时偏高', causePlainLongTask: '这一段时间里有较重的渲染任务', causePlainHost: '宿主进程那侧偏忙', causePlainUnknown: '缺少能解释这次停顿的 JS 证据',
+		causeWhy: '为什么这样判断?', causeWhyHide: '收起', causeRawNote: '以下是原始证据',
+		exportAiBtn: '导出诊断包(给 AI)', exportFullBtn: '完整技术导出(保留备注)',
+		previewTitle: '导出预览(还没生成文件)', previewFiles: '文件', previewNotesDropped: '备注:已置空', previewNotesKept: '备注:保留', previewZip: '分别下载', previewGo: '生成并导出', previewCancel: '取消', previewExcludes: '本包不含',
 		stallSaved: '现场已自动保存', stallNotSaved: '现场未完整保存', secondsUnit: ' 秒',
 		stallSuffix: '卡顿', trendNone: '这段时间没有检测到卡顿', trendRepeat: '重复线索', tallyWorst: '最长一次',
+		trendRepeatPlain: '同一个脚本模块',
 		times: ' 次', watchKept: '已保存现场', watchLost: '丢失', tallyUnit: ' 份',
 		// 可能原因 / 能力矩阵 / 诊断包:断言要看真词
 		causeScriptLead: '脚本耗时最高的包', causeLongTaskLead: '长任务归属', causeHostLead: '宿主事件循环', causeNoEvidenceLead: '缺少 JS 阻塞证据',
+		causePlainScript: '某个脚本模块的耗时偏高', causePlainLongTask: '这一段时间里有较重的渲染任务', causePlainHost: '宿主进程那侧偏忙', causePlainUnknown: '缺少能解释这次停顿的 JS 证据',
+		causeWhy: '为什么这样判断?', causeWhyHide: '收起', causeRawNote: '以下是原始证据',
+		exportAiBtn: '导出诊断包(给 AI)', exportFullBtn: '完整技术导出(保留备注)',
+		previewTitle: '导出预览(还没生成文件)', previewFiles: '文件', previewNotesDropped: '备注:已置空', previewNotesKept: '备注:保留', previewZip: '分别下载', previewGo: '生成并导出', previewCancel: '取消', previewExcludes: '本包不含',
 		causeUnresolvedSuffix: '没定到包名', causeHostBasis: '事故前后的宿主事件循环', hostSnapshotNotInstant: '这份宿主快照每 10 秒采一次',
 		causeLongTaskLimit: '四条腿只覆盖三次调度的回调与 DOM 写入,事件处理器 / Promise / 微任务不在内(所以这是下界)',
 		causeLongTaskLimit: '四条腿只覆盖三次调度的回调与 DOM 写入,事件处理器 / Promise / 微任务不在内(所以这是下界)',
@@ -569,12 +578,15 @@ const newPieces = [
 	// 能力矩阵 + 可能原因 + 诊断包(整机导出件 snapshot 会调 capabilities)
 	'const CAUSE_MAX = ',
 	'const PACK_SCHEMA_VERSION = ',
+	'function latestIncident(',
+	'function causePlainLead(',
 	'function healthIcon(',
 	'function healthText(',
 	'function healthVerdict(',
 	'function repeatedLead(',
 	'function trendSummary(',
 	'function trendText(',
+	'function trendRawText(',
 	'function secondsText(',
 	'function lastStallSubText(',
 	'function provenanceOf(',
@@ -617,7 +629,8 @@ const box = new Function(`${sandbox}\n${newPieces}
 		redactExport, redactPageUrl, redactScriptUrl, redactPath, redactUserAgent, scrubParams, redactionReport, SECRET_PARAM, SECRET_PARAM_NAMES,
 		// 能力矩阵 / 可能原因 / 诊断包
 		capabilities, capabilityMissing, provenanceOf, provenanceText, strengthText, causeCandidates,
-		healthIcon, healthText, healthVerdict, repeatedLead, trendSummary, trendText, secondsText, lastStallSubText,
+		healthIcon, healthText, healthVerdict, repeatedLead, trendSummary, trendText, secondsText, lastStallSubText, trendRawText,
+		latestIncident, causePlainLead,
 		// 视图模型断言要用计数桶:直接测纯函数,不走 snapshot
 		clearTally, bumpTally, tallyWindow, noteTallySeverity,
 		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview, exportPack, CAUSE_MAX, PACK_SCHEMA_VERSION } };`)();
@@ -689,6 +702,18 @@ check('C2:词典里没有"没人引用"的死键(面板撤下后遗留的串)', 
 	const referenced = new Set([...outside.matchAll(/\b(?:t|translate)\(\s*(['"])([A-Za-z_$][\w$]*)\1\s*\)/g)].map((row) => row[2]));
 	return Object.keys(box.DICT.zh).filter((key) => referenced.has(key) === false);
 })(), []);
+// 反向的那一条:**引用了但词典里没有**同样要报 —— 这时 `translate` 会退回 key 本身,
+// 面板 / 导出件上就**直接印出** `exportPreviewCopy` 这种内部键名(实测踩到过:按钮文案少了
+// 词典条目,三套件全绿、死键断言也不响,只有真页面才看得出来)。死键断言管不到它,所以必须有这一条。
+check('C2:引用的键必须真的在词典里(否则界面上会印出 key 名)', (() => {
+	const dictBlock = extract(source, 'const DICT = {');
+	const outside = source.replace(dictBlock, '');
+	const referenced = new Set([...outside.matchAll(/\b(?:t|translate)\(\s*(['"])([A-Za-z_$][\w$]*)\1\s*\)/g)].map((row) => row[2]));
+	const zh = new Set(Object.keys(box.DICT.zh));
+	const en = new Set(Object.keys(box.DICT.en));
+	return [...referenced].filter((key) => zh.has(key) === false || en.has(key) === false);
+})(), []);
+
 // 面板是**纯文本**渲染,不是 markdown:凡是显示在**正文**里的词典值都不许带 `**` 或反引号,
 // 否则它们会原样出现在面板上(实测被吐槽)。带记号的只允许是"只做悬停 title"的那几个键 ——
 // 白名单里的键也不许是死键(下面那条核它)。新加正文文案时:要么去掉记号,要么确认它只进 title。
@@ -1789,6 +1814,11 @@ watchless: {
 	check('趋势:检测到 2 次(triggered)· 最长一次取 max · 重复线索按留存清单数',
 		[trend.detected, trend.kept, trend.repeated === null ? null : trend.repeated.name, trend.repeated === null ? null : trend.repeated.count],
 		[2, 2, 'dsh-x', 2]);
+	check('趋势:「重复线索」默认只说是同一个脚本模块,包名只在原始线索那一行(展开区才出)',
+		[EX.trendText(3600000, base).includes('dsh-x'), /同一个脚本模块/.test(EX.trendText(3600000, base)),
+			/重复线索:dsh-x/.test(EX.trendRawText(3600000, base))],
+		[false, true, true]);
+	check('趋势:没有重复线索时原始线索给 null(不编一行空的)', EX.trendRawText(60000, base), null);
 	check('趋势:那一行的三个数各有各的名字,而且 ≤ 60 字(主界面最挤的一行)',
 		(() => { const text = EX.trendText(3600000, base); return [text.length <= 60, /2 次卡顿/.test(text), /最长一次/.test(text), /重复线索/.test(text)]; })(),
 		[true, true, true, true]);
@@ -1881,6 +1911,51 @@ check('可能原因:只有 suspectedThrottle 成立时才提"更像 rAF 挂起�
 	return [unknown.strength, /更像/.test(unknown.basis.join(''))];
 })(), ['weak', true]);
 check('可能原因:没有事故就返回空数组(不造候选)', [EX.causeCandidates(null), EX.causeCandidates(undefined)], [[], []]);
+
+// ═══════════ 收尾:最近 vs 最差的语义分离 / 人话原因 / 两条导出路径 ═══════════
+// 这一组盯三件事(都来自真实使用里"两个语义被混在一起"的教训):
+//   ① 主界面说"最近一次"就必须是**时间最新**那条,不能是 `selectedIncident()` 的默认(最差);
+//   ② 给普通用户的原因行里**不许出现包名 / 毫秒**(原始证据收进展开区);
+//   ③ 两条导出路径只差自由文本,而且这件事要能被断言(不是靠文档说)。
+
+// ── ① 最近 ≠ 最差 ──
+{
+	const saved = box.state.watch.incidents.slice();
+	box.state.watch.incidents.length = 0;
+	// 一条"很久以前的最差" + 一条"刚刚的小卡" —— 顺序也故意反着放,防止"取 list[0] 也算对"
+	box.state.watch.incidents.push(
+		{ id: 'old-worst', severity: 900, at: '2026-10-12T10:00:00.000Z', cause: 'frame' },
+		{ id: 'new-small', severity: 120, at: '2026-10-12T12:00:00.000Z', cause: 'frame' });
+	check('主界面「最近一次」取时间最新那条,而不是最差那条(两条语义不许混)',
+		[EX.latestIncident().id, EX.selectedIncident().row.id], ['new-small', 'old-worst']);
+	check('空留存清单时最近一次给 null(不伪造一条)',
+		(() => { box.state.watch.incidents.length = 0; return EX.latestIncident(); })(), null);
+	box.state.watch.incidents.length = 0;
+	for (const row of saved) box.state.watch.incidents.push(row);
+}
+check('主界面只吃时间语义(结构上不碰 selectedIncident / 手选那套)', (() => {
+	const seg = extract(source, 'function mainView(');
+	return [seg.includes('selectedIncident') === false, seg.includes('props.latest'), /const latestRow = latestIncident\(\);/.test(source)];
+})(), [true, true, true]);
+check('主界面的人话行里没有 item.name(包名只在展开区出现)', (() => {
+	const seg = extract(source, 'function mainView(');
+	const plainLine = /h\('div', \{ style: S\.blockLabel \}, `\$\{index \+ 1\}\. \$\{causePlainLead\(item\)\} · \$\{strengthText\(item\.strength\)\}`\)/.test(seg);
+	const whyBranch = /props\.why !== true \? null : h\('div', null,[\s\S]{0,400}?short\(item\.name\)/.test(seg);
+	return [plainLine, whyBranch];
+})(), [true, true]);
+
+// ── ② 人话原因:不出现包名 / 文件名 / 数字 ──
+check('每一种候选都有对应的"人话"分类(四种都非空且不相同)', (() => {
+	const kinds = ['script', 'longtask', 'host', 'unknown'];
+	const texts = kinds.map((kind) => EX.causePlainLead({ kind }));
+	return [texts.every((text) => typeof text === 'string' && text.length > 0), new Set(texts).size];
+})(), [true, 4]);
+check('人话行里不出现包名 / 文件名 / 毫秒(原始证据只在展开区与开发者详情)',
+	['script', 'longtask', 'host', 'unknown']
+		.map((kind) => EX.causePlainLead({ kind }))
+		.filter((text) => /@|dsh-|\.js|[0-9]/.test(text)), []);
+check('未知那一支说的是"缺少 JS 证据",不是"浏览器节流"(不越界下结论)',
+	[/缺少/.test(EX.causePlainLead({ kind: 'unknown' })), /节流/.test(EX.causePlainLead({ kind: 'unknown' }))], [true, false]);
 
 // ── G:守夜层(帧环 / 触发 / 留存 / 时间对齐 / 窗口切片)──────────────────
 
@@ -2128,6 +2203,10 @@ const watchBox = new Function(`
 		// 捕获计数(与留存分离)的文案:断言要看到真词,而不是 key
 		watchDetected: '检测', watchKept: '已保存现场', watchLost: '丢失', tallyUnit: ' 份',
 		causeScriptLead: '脚本耗时最高的包', causeLongTaskLead: '长任务归属', causeHostLead: '宿主事件循环', causeNoEvidenceLead: '缺少 JS 阻塞证据',
+		causePlainScript: '某个脚本模块的耗时偏高', causePlainLongTask: '这一段时间里有较重的渲染任务', causePlainHost: '宿主进程那侧偏忙', causePlainUnknown: '缺少能解释这次停顿的 JS 证据',
+		causeWhy: '为什么这样判断?', causeWhyHide: '收起', causeRawNote: '以下是原始证据',
+		exportAiBtn: '导出诊断包(给 AI)', exportFullBtn: '完整技术导出(保留备注)',
+		previewTitle: '导出预览(还没生成文件)', previewFiles: '文件', previewNotesDropped: '备注:已置空', previewNotesKept: '备注:保留', previewZip: '分别下载', previewGo: '生成并导出', previewCancel: '取消', previewExcludes: '本包不含',
 		causeUnresolvedSuffix: '条脚本没定到包名', causeHostBasis: '事故前后的宿主事件循环', hostSnapshotNotInstant: '这份宿主快照每 10 秒采一次',
 		strengthStrong: '线索较强', strengthMedium: '线索中等', strengthWeak: '线索较弱', strengthNone: '证据不足',
 		provenanceMeasured: '直接测量', provenanceInferred: '归因推断', provenanceUnknown: '无法确认',
@@ -3671,6 +3750,43 @@ check('诊断包:自由文本走 dropFreeText 时 manifest 里也留标记', (()
 })(), [0, true]);
 check('诊断包:不存在的 id 返回 null(不静默成功)', [watch.buildPack('nope'), watch.packPreview('nope')], [null, null]);
 watch.state.watch.incidents.length = 0;
+
+// ── ③ 两条导出路径:只差自由文本 ──
+{
+	const saved = watch.state.watch.incidents.slice();
+	const noteRow = { ...causeRow, note: '我贴了一段敏感内容 token=SECRET_NOTE' };
+	watch.state.watch.incidents.length = 0;
+	watch.state.watch.incidents.push(noteRow);
+	const ai = watch.buildPack('i9', { dropFreeText: true });
+	const full = watch.buildPack('i9', { dropFreeText: false });
+	const aiText = ai.files.map((file) => file.text).join(String.fromCharCode(10));
+	const fullText = full.files.map((file) => file.text).join(String.fromCharCode(10));
+	const aiIncident = JSON.parse(ai.files.find((file) => file.name === 'incident.json').text);
+	const fullIncident = JSON.parse(full.files.find((file) => file.name === 'incident.json').text);
+	check('AI 包:备注被置空并留标记(连 summary.md 都不能带);完整导出:保留备注但照样脱掉粘贴的凭据',
+		[aiIncident.incident.note, aiIncident.incident.noteDropped, /SECRET_NOTE/.test(aiText), /备注:已置空/.test(aiText),
+			fullIncident.incident.note, /SECRET_NOTE/.test(fullText)],
+		[null, true, false, true, '我贴了一段敏感内容 token=<redacted>', false]);
+	check('预览里写明这一份是"丢了备注"还是"留着备注"(两条路不许长得一样)',
+		[ai.preview.notes, full.preview.notes], ['dropped', 'kept']);
+	check('两条路**只有**自由文本不同:文件清单与脱敏声明其余部分一致',
+		[JSON.stringify(ai.files.map((file) => file.name)), JSON.stringify(full.files.map((file) => file.name)),
+			ai.preview.files.length, full.preview.files.length], [JSON.stringify(full.files.map((file) => file.name)), JSON.stringify(full.files.map((file) => file.name)), 4, 4]);
+	check('包内一直没有凭据:两条路都不出现原样的 token(完整导出把裸 token= 也换成占位符)', [/SECRET_NOTE/.test(aiText), /SECRET_NOTE/.test(fullText), /token=<redacted>/.test(fullText)], [false, false, true]);
+	watch.state.watch.incidents.length = 0;
+	for (const row of saved) watch.state.watch.incidents.push(row);
+}
+check('两条导出路径在代码里就是分开的(主界面/AI = dropFreeText:true,完整导出 = false)', (() => {
+	return [/onExportGo: \(\) => \{[\s\S]{0,200}?dropFreeText: true/, /onExportPreview: \(id\) => \{ openPackPreview\(id, \{ dropFreeText: true \}\);/,
+		/exportPack\(selectedRow === null \? 'latest' : selectedRow\.id, \{ dropFreeText: false \}\)/, /exportPack\(selectedRow === null \? 'latest' : selectedRow\.id, \{ dropFreeText: true \}\)/]
+		.map((re) => re.test(source));
+})(), [true, true, true, true]);
+check('分享前预览是"先看再生成":预览态不落盘,生成之后自动收起', (() => {
+	return [/function openPackPreview\(/, /state\.packPreview = packPreview\(id, opts\);/, /onExportGo: \(\) => \{[\s\S]{0,160}?closePackPreview\(\);[\s\S]{0,80}?exportPack/]
+		.map((re) => re.test(source));
+})(), [true, true, true]);
+check('本地预览态不进 localStorage(它不是读数,也没有新键位)',
+	/state\.packPreviewId = id;[\s\S]{0,80}?bump\(\);/.test(source) && /LS_VIEW/.test(source), true);
 
 // ═══════════ 捕获计数:与"留存了几份详细现场"彻底分开 ═══════════
 // 挡的是这一类事故:留存清单受容量限制(最差 10 + 每天 1),却拿它的条数回答"发生了多少次卡顿"

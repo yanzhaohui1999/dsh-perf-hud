@@ -20,6 +20,19 @@
  * ⚠️ 不是离线门禁:要本机跑着 `dsh web` + 装着 Chrome(与 check-panel 同一套约定)。
  */
 import { withPage } from './cdp.mjs';
+import { readFileSync } from 'node:fs';
+
+/** 词典的键名:面板正文里出现任何一个,就说明它少了词条、界面上印出了 key(实测踩过 7 个)。 */
+const DICT_KEYS = (() => {
+	const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+	const start = source.indexOf('const DICT = {');
+	const block = source.slice(start, source.indexOf('\n\t\t};', start));
+	return [...new Set([...block.matchAll(/^\s{4}([A-Za-z_$][\w$]*):/gm)].map((row) => row[1]))];
+})();
+
+/** 某个视图的正文里有没有漏成 key 的文案。
+ * ⚠️ 要按**标识符边界**比:直接 `includes` 会把 `watchui` 里的 `watch` 也算成漏文案(实测的假阳性)。 */
+const leakedKeys = (text) => DICT_KEYS.filter((key) => new RegExp(`(^|[^A-Za-z0-9_$])${key}([^A-Za-z0-9_$]|$)`).test(text));
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -27,6 +40,15 @@ const check = (name, actual, expected) => {
 	if (!ok) failed += 1;
 	console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${ok ? '' : `  got ${JSON.stringify(actual)} want ${JSON.stringify(expected)}`}`);
 };
+
+/** 按可见文字点一个按钮(面板没有 test-id,按文案点最接近"用户真的点了它")。 */
+const clickText = (evaluate, text) => evaluate(`(() => {
+	const nodes = [...document.querySelectorAll('#dsh-perf-hud-root button')].filter((node) => node.textContent.trim() === ${JSON.stringify(text)});
+	if (nodes.length === 0) return 'missing';
+	if (nodes[0].disabled === true) return 'disabled';
+	nodes[0].click();
+	return 'clicked';
+})()`);
 
 await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	await waitForHud();
@@ -128,6 +150,58 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	check('诊断包:预览列出文件与排除项', [pack.previewFiles, pack.previewExcludes >= 3], [4, true]);
 	check('诊断包:候选原因每条都带支持与限制、出处三档', pack.causeShape, true);
 	console.log(`     包 = ${pack.files.join(' / ')} · 候选 ${JSON.stringify(pack.causeLeads)}`);
+
+	// ── 本轮收尾:人话原因 / 展开区 / 两条导出路径 / 分享前预览 ──
+	// 先把面板摆到主界面(这一屏才是普通用户看到的)
+	await evaluate(`localStorage.setItem('dsh-perf-hud:collapsed','0'); localStorage.setItem('dsh-perf-hud:view:v1', JSON.stringify({ v: 1, view: 'main', devTab: 'frames', trendMs: 3600000 }))`);
+	await reload();
+	const mainText = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
+	check('主界面:原因块在,而且默认**不出现**包名(普通用户看到的是人话线索)',
+		[/可能原因/.test(mainText), /某个脚本模块的耗时偏高|这一段时间里有较重的渲染任务|宿主进程那侧偏忙|缺少能解释这次停顿的 JS 证据/.test(mainText),
+			/@deepseek-ai\/|dsh-/.test(mainText)],
+		[true, true, false]);
+	check('主界面:默认不铺展开区(支持 / 限制要先点开)',
+		[mainText.includes('以下是原始证据'), mainText.includes('为什么这样判断?')], [false, true]);
+
+	const why = await clickText(evaluate, '为什么这样判断?');
+	const expanded = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
+	check('展开「为什么这样判断?」之后才给原始包名与支持 / 限制(要查的时候够得着)',
+		[why, expanded.includes('以下是原始证据'), expanded.includes('支持:'), expanded.includes('限制:'),
+			/不等于已定位根因/.test(expanded)],
+		['clicked', true, true, true, true]);
+	console.log(`     展开后片段 = ${JSON.stringify(expanded.slice(expanded.indexOf('以下是原始证据'), expanded.indexOf('以下是原始证据') + 120).replace(/\s+/g, ' '))}`);
+
+	// 分享前预览:点「导出诊断报告」不许直接下载,先摊清单
+	const previewOpen = await clickText(evaluate, '导出诊断报告');
+	const previewText = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
+	check('主界面导出先出预览:写明文件 / 备注已置空 / 本包不含,并给"生成并导出"与"取消"',
+		[previewOpen, /导出预览/.test(previewText), /备注:已置空/.test(previewText), /manifest\.json/.test(previewText),
+			previewText.includes('生成并导出'), previewText.includes('取消')],
+		['clicked', true, true, true, true, true]);
+	check('预览态不产生渲染错误', (await evaluate(`window.__perfHud.snapshot().errors.length`)), 0);
+	const cancelled = await clickText(evaluate, '取消');
+	const afterCancel = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
+	check('取消之后预览收起(不留一个关不掉的卡片)', [cancelled, /导出预览/.test(afterCancel)], ['clicked', false]);
+
+	// 两条导出路径在开发者详情里各有各的名字
+	await clickText(evaluate, '开发者详情(技术数据)');
+	await clickText(evaluate, '原始数据');
+	const devText = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
+	check('开发者详情把两条导出路径分开写:给 AI(脱敏、不含备注) / 完整技术导出(保留备注)',
+		[/导出诊断包\(给 AI/.test(devText), /完整技术导出\(保留备注\)/.test(devText), devText.includes('复制导出预览')],
+		[true, true, true]);
+
+	// 面板正文里出现词典键名 = 那个文案少了词条(translate 退回 key)。逐视图扫一遍。
+	const devLeaks = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
+	check('开发者详情 / 原始数据这一屏没有漏成 key 的文案(引用的键都在词典里)',
+		leakedKeys(devLeaks), []);
+	await clickText(evaluate, '← 返回');
+	await clickText(evaluate, '查看这次卡顿').catch(() => 'missing');
+	const incidentLeaks = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
+	check('卡顿详情这一屏也没有漏成 key 的文案',
+		leakedKeys(incidentLeaks), []);
+	await clickText(evaluate, '卡顿详情 ← 返回').catch(() => 'missing');
+
 
 	// ── 活过刷新:以**落盘的那份**为基准(活页面读数会继续涨) ──
 	await reload();

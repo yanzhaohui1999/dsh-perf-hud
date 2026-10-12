@@ -107,6 +107,11 @@ The default screen never shows LoAF / p99 / RTT / package rankings / frame indic
 
 ## Reading the panel
 
+> ⚠️ The line-level notes below describe the blocks inside **developer details** (see the interface structure
+> section above). The default screen is the **overview**: current status / most recent stall / possible cause /
+> recent trend plus two primary actions — no package names, frame indices, LoAF, p99 or RTT. Screenshots and
+> step-by-step instructions come after the new UI passes real-device acceptance.
+
 The plugin has **three tiers**, and the default is the cheapest one — it measures other people's performance,
 so it has to be cheap, switchable and reversible itself:
 
@@ -268,12 +273,12 @@ the offline suites assert its shape directly — a future UI rewrite or MCP serv
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 524 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 541 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 39 assertions: real index.js driven by a fake ctx
-# 574 offline assertions total, no running DSH required
+# 591 offline assertions total, no running DSH required
 ```
 
-The i18n dictionary now has **379 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
+The i18n dictionary now has **408 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
 

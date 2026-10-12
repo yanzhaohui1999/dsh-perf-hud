@@ -1174,6 +1174,10 @@ window.__ModuleLoader__.load({
 				persistError: null,      // 落盘失败的原因(失败就照实说,不假装存下来了)
 				coveredUntil: 0,         // 最近一份事故窗口的结束时刻(perf ms):这段不再另立事故
 			},
+			causeOpen: false,          // 主界面「为什么这样判断?」的展开态(一次性,不落盘)
+			packPreview: null,         // 分享前预览(构建一次存着,别每次渲染都重新序列化)
+			packPreviewId: null,
+			packPreviewOptions: null,
 			// 视图模型(方案 1:整屏切换)。落盘只存"在看哪个视图",不存任何读数。
 			view: 'main',           // main / incident / dev / settings
 			devTab: 'frames',       // 开发者详情的标签页(frames / dom / host / tools / raw)
@@ -3818,6 +3822,7 @@ window.__ModuleLoader__.load({
 		/** 摘要的固定形态:摘要 → 假设 → 缺失 → 下一步 → 元信息(产品计划 §4 要求的那六段)。 */
 		function diagnosticSummary(row, options) {
 			const t = translate;
+			const opts = options ?? {};
 			const lines = [t('packSummaryTitle'), ''];
 			const verdict = incidentVerdict(row);
 			const owner = incidentOwner(row);
@@ -3825,7 +3830,12 @@ window.__ModuleLoader__.load({
 			const span = typeof win.fromMs === 'number' && typeof win.toMs === 'number' ? round1(win.toMs - win.fromMs) : null;
 			lines.push(t('packSecSummary'));
 			lines.push(`- ${t('sevLabel')}:${severityText(severityLevel(row.severity))}(${Math.round(row.severity)}ms)`);
-			lines.push(`- ${t('worstEvent')}:${row.at}${row.note === null || row.note === undefined ? '' : ` · ${row.note}`}`);
+			// ⚠️ 摘要这一行**必须吃同一个 dropFreeText**:否则同一份包里 `incident.json` 把备注置空了、
+			// `summary.md` 还带着原文 —— 两份文件各说各话,而包里那份正是要交给 AI 的(实测踩过)。
+			// 保留那一支也要过 scrubParams:自由文本里粘贴的凭据同样不许原样出门。
+			const note = row.note === null || row.note === undefined ? '' : String(row.note);
+			const noteText = note === '' ? '' : (opts.dropFreeText === true ? ` · ${t('previewNotesDropped')}` : ` · ${redactPath(scrubParams(note))}`);
+			lines.push(`- ${t('worstEvent')}:${row.at}${noteText}`);
 			lines.push(`- ${t('evWindow')}:${span === null ? t('none') : `${Math.round(span)}ms`} · ${Array.isArray(row.frames) ? row.frames.length : 0}${t('framesUnit')}`);
 			lines.push(`- ${t('verdictLabel')}:${t(verdict.level === 'confirmed' ? 'verdictConfirmed' : verdict.level === 'suspected' ? 'verdictSuspected' : 'verdictUnattributed')}`);
 			lines.push('');
@@ -3916,6 +3926,9 @@ window.__ModuleLoader__.load({
 					'发生频次(最近 24 小时的滚动计数)',
 				],
 				excludes: capabilities().unobserved.map((item) => `${item.id}:${item.reason}`),
+				// 两条导出路径的**唯一实质差别**:给 AI 的那条把自由文本置空并标 noteDropped,
+				// 本机调试件保留。放在预览里写明,免得用户以为两份是同一份。
+				notes: opts.dropFreeText === true ? 'dropped' : 'kept',
 				redaction: redactionReport(opts),
 				missingCount: gaps.missing.length,
 				nextStepCount: gaps.howToAdd.length,
@@ -3965,8 +3978,13 @@ window.__ModuleLoader__.load({
 		function scrubParams(text) {
 			const raw = String(text);
 			if (raw.indexOf('=') === -1) return raw;
-			return raw.replace(/([?&#])([A-Za-z0-9_.-]+)=([^&#\s]*)/g,
-				(all, sep, key) => (SECRET_PARAM.test(key) ? `${sep}${key}=<redacted>` : all));
+			return raw
+				.replace(/([?&#])([A-Za-z0-9_.-]+)=([^&#\s]*)/g,
+					(all, sep, key) => (SECRET_PARAM.test(key) ? `${sep}${key}=<redacted>` : all))
+				// 自由文本里的凭据常常是**裸的** `token=abc`(前面没有 ?/&),URL 那条规则漏掉它们。
+				// 再按词边界扫一遍:代价是 `code=200` 这类无关键也会被换成占位符 —— 宁可多脱一个,不要漏一个。
+				.replace(/(^|[^A-Za-z0-9_.-])([A-Za-z0-9_.-]+)=([^\s&#]*)/g, (all, head, key, value) =>
+					(SECRET_PARAM.test(key) && value !== '<redacted>' ? `${head}${key}=<redacted>` : all));
 		}
 
 		/** 页面地址:只留 origin + path(+ 脱敏过的 hash),**查询串整段丢**。 */
@@ -6046,6 +6064,7 @@ window.__ModuleLoader__.load({
 				// 事故选中上下文:选中的那条被更差的新事故挤出留存清单时会**自动退回**,指纹不带它
 				// 面板就会一直显示旧的「已选中」(而 selectedIncident 已经换了一条)
 				state.watch.incidents.length, state.watch.selId ?? 'x', state.copyNote ?? 'x', state.pickNote ?? 'x',
+				state.causeOpen ? 1 : 0, state.packPreviewId ?? 'x',
 				// 诊断上下文(实时 / 历史事故 / 事故里的哪一帧):切上下文是用户动作,必须立刻重绘,
 				// 所以它也在指纹里(否则切了模式面板可能停在旧的那一支,直到别的数字变化)
 				state.watch.mode, state.watch.frameT ?? 'x', state.watch.scope,
@@ -6300,6 +6319,27 @@ window.__ModuleLoader__.load({
 				packReadmeNotes: '在别的工具里读 incident.json 时:帧的 t 是页面时间轴毫秒,要靠 incident.env.perfOrigin 换成墙钟;loaf 与 frames 是同一信号的两个视图,别相加;blocking 可以是 0 而这一帧仍然很重。',
 				// ── 视图模型(方案 1:主界面 / 卡顿详情 / 开发者详情 / 设置)──
 				viewDev: '开发者详情', viewSettings: '设置', back: '← 返回',
+				// ⚠️ 这一组是补上来的:上一轮它们**只被引用、没进词典**,面板上直接印出了 key 名
+				// (viewIncident / packFilesLabel / storageKeys …)。新加的"引用的键必须在词典里"那条断言
+				// 专门挡这一类 —— 死键断言管不到它。
+				viewIncident: '卡顿详情', backHint: '回到主界面(那一屏只回答五个问题)',
+				packFilesLabel: '诊断包内容', packFilesHint: '给 AI 的那条:格式说明 + 摘要 + 原始证据 + 怎么读',
+				packFilesValue: 'manifest.json · summary.md · incident.json · README.md',
+				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / map',
+				storageKeysHint: '清状态时按需删;map 是那份 12MB sourcemap 的分段表缓存(按 rev 存)',
+				// 本轮:原因说人话(包名收进展开区)、两条导出路径、分享前预览
+				causePlainScript: '某个脚本模块的耗时偏高', causePlainLongTask: '这一段时间里有较重的渲染任务',
+				causePlainHost: '宿主进程那侧偏忙', causePlainUnknown: '缺少能解释这次停顿的 JS 证据',
+				causeWhy: '为什么这样判断?', causeWhyHide: '收起',
+				causeWhyHint: '展开看原始包名、毫秒与支持 / 限制;也可以去「开发者详情」',
+				causeRawNote: '以下是原始证据(包名 / 毫秒 / 出处),平时不用看',
+				exportAiBtn: '导出诊断包(给 AI:脱敏、不含备注)', exportFullBtn: '完整技术导出(保留备注)',
+				exportAiHint: '给 AI 的那条:自由文本置空并标 noteDropped、页面地址只留 origin+path、用户目录换成 ~、UA 只留主版本',
+				exportFullHint: '本机调试件:与上面同源,但保留你手敲的备注 —— 它不是脱敏件,别直接交出去',
+				previewTitle: '导出预览(还没生成文件)', previewFiles: '文件',
+				previewNotesDropped: '备注:已置空(标 noteDropped)', previewNotesKept: '备注:保留(本机调试件)',
+				previewExcludes: '本包不含', previewZip: '现在会分别下载这几个文件;一次打包成一个 zip 是下一步',
+				previewGo: '生成并导出', previewCancel: '取消', exportPreviewCopy: '复制导出预览',
 				hudOff: 'HUD 已关闭', loafOff: 'LoAF 未装上',
 				healthOk: '运行流畅', healthStall: '刚才有卡顿', healthLimited: '监测受限',
 				healthHint: '看的是最近 60 秒:帧间隔与长动画帧的档位(与面板判色同一套阈值)',
@@ -6309,6 +6349,7 @@ window.__ModuleLoader__.load({
 				trendScope: '计数是"检测到几次卡顿"(同一串算一次);重复线索只数留存下来的现场,所以它不会比实际更严重',
 				noStallYet: '暂未记录到明显卡顿,仍在后台观察。', noCauseYet: '还没有抓到事故,先让它继续观察。',
 				trendNone: '这段时间没有检测到卡顿', trendRepeat: '重复线索', stallSuffix: '卡顿',
+				trendRepeatPlain: '同一个脚本模块',
 				viewThisStall: '查看这次卡顿', exportReport: '导出诊断报告',
 				devEntry: '开发者详情(技术数据)', devEntryHint: '帧 / 脚本 / DOM / 宿主 / 链路 / 原始数据 —— 现有能力一个都没删,只是收进这里',
 				settingsHint: '记录模式、数据保留、隐私与脱敏',
@@ -6483,6 +6524,24 @@ window.__ModuleLoader__.load({
 				packReadmeNotes: 'When reading incident.json elsewhere: frame t is page-timeline milliseconds and needs incident.env.perfOrigin to become wall clock; loaf and frames are two views of one signal, never add them; blocking can be 0 while the frame is still heavy.',
 				// view model (scheme 1: main / incident detail / developer details / settings)
 				viewDev: 'Developer details', viewSettings: 'Settings', back: '← Back',
+				viewIncident: 'Stall detail', backHint: 'Back to the overview (that screen only answers five questions)',
+				packFilesLabel: 'diagnostic pack', packFilesHint: 'the AI path: format note + summary + raw evidence + how to read it',
+				packFilesValue: 'manifest.json · summary.md · incident.json · README.md',
+				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / map',
+				storageKeysHint: 'delete as needed when clearing state; map is the section-table cache for that 12MB sourcemap (keyed by rev)',
+				// this round: plain-language causes (package names behind a disclosure), two export paths, pre-share preview
+				causePlainScript: 'one script module is spending an unusual amount of time', causePlainLongTask: 'a heavy render task happened in this window',
+				causePlainHost: 'the host process side looks busy', causePlainUnknown: 'no JS evidence that explains this stall',
+				causeWhy: 'Why this conclusion?', causeWhyHide: 'Collapse',
+				causeWhyHint: 'Expand for raw package names, milliseconds and support / limits; or open developer details',
+				causeRawNote: 'Raw evidence below (package names / ms / provenance) — you rarely need this',
+				exportAiBtn: 'Export diagnostic pack (for AI: redacted, no notes)', exportFullBtn: 'Full technical export (keeps notes)',
+				exportAiHint: 'The AI path: free text blanked and marked noteDropped, page URL keeps origin+path only, home dirs become ~, UA keeps the major version',
+				exportFullHint: 'Local debugging artifact: same source, but it KEEPS the notes you typed — it is not redacted, do not hand it out as-is',
+				previewTitle: 'Export preview (nothing generated yet)', previewFiles: 'files',
+				previewNotesDropped: 'notes: blanked (marked noteDropped)', previewNotesKept: 'notes: kept (local debugging artifact)',
+				previewExcludes: 'not included', previewZip: 'This downloads the files separately; bundling them into one zip is the next step',
+				previewGo: 'Generate and export', previewCancel: 'Cancel', exportPreviewCopy: 'Copy export preview',
 				hudOff: 'HUD is off', loafOff: 'LoAF not available',
 				healthOk: 'Running smoothly', healthStall: 'A stall just happened', healthLimited: 'Monitoring limited',
 				healthHint: 'Last 60 seconds: frame interval and long animation frame levels (same thresholds as the panel colours)',
@@ -6492,6 +6551,7 @@ window.__ModuleLoader__.load({
 				trendScope: 'The count is "stalls detected" (one burst counts once); the repeating lead only counts evidence that was kept, so it never overstates',
 				noStallYet: 'No noticeable stall recorded yet — still watching in the background.', noCauseYet: 'Nothing captured yet; let it keep watching.',
 				trendNone: 'No stall detected in this window', trendRepeat: 'Repeating lead', stallSuffix: ' stalls',
+				trendRepeatPlain: 'the same script module',
 				viewThisStall: 'View this stall', exportReport: 'Export diagnostic report',
 				devEntry: 'Developer details (technical data)', devEntryHint: 'Frames / scripts / DOM / host / link / raw data — nothing was removed, it just moved in here',
 				settingsHint: 'Capture mode, retention, privacy and redaction',
@@ -6823,8 +6883,16 @@ window.__ModuleLoader__.load({
 			if (trend.detected === 0) return translate('trendNone');
 			const parts = [`${trend.detected}${translate('times')}${translate('stallSuffix')}`];
 			if (trend.worstMs > 0) parts.push(`${translate('tallyWorst')} ${Math.round(trend.worstMs)}ms`);
-			if (trend.repeated !== null) parts.push(`${translate('trendRepeat')}:${short(trend.repeated.name)}(${trend.repeated.count}${translate('times')})`);
+			// 「重复线索」也**不给包名**:它是普通用户那屏,包名属于展开区与开发者详情
+			if (trend.repeated !== null) parts.push(`${translate('trendRepeat')}:${translate('trendRepeatPlain')}(${trend.repeated.count}${translate('times')})`);
 			return parts.join(' · ');
+		}
+
+		/** 趋势那一行的**原始线索**(具体包名)—— 只在主界面的展开区里出。 */
+		function trendRawText(ms, atMs) {
+			const trend = trendSummary(ms, atMs);
+			if (trend.repeated === null) return null;
+			return `${translate('trendRepeat')}:${short(trend.repeated.name)}(${trend.repeated.count}${translate('times')}) · ${translate('provenanceInferred')}`;
 		}
 
 		/** 秒数写法(主界面的 hero):0.98 秒 —— 毫秒对普通用户读不出量级。 */
@@ -6838,6 +6906,53 @@ window.__ModuleLoader__.load({
 			const when = Number.isFinite(at) ? clock(at) : row.at;
 			const saved = row.kept === 'kept' || row.kept === 'replaced';
 			return `${when} · ${saved ? translate('stallSaved') : translate('stallNotSaved')}`;
+		}
+
+		/**
+		 * 「最近一次卡顿」用的是**时间语义**(时刻最新那一条)。
+		 * 开发者详情的「最差事件」用的是**严重度语义**(`selectedIncident()`,默认最差)。
+		 * 两个视图复用同一批数据,但**语义不许混** —— 把最差那条显示成"最近一次"就是错的
+		 * (最差常常是几小时前那次,而用户问的是"刚才卡的是哪一下")。
+		 */
+		function latestIncident() {
+			return pickIncident('latest');
+		}
+
+		/**
+		 * 候选原因给**普通用户**的那一行。刻意**不出现包名**:包名是内部实现细节,
+		 * 对用户来说"某个脚本模块"才是他能理解、也能行动的信息;真实包名 / 毫秒 / 支持证据
+		 * 放在「为什么这样判断?」展开区与开发者详情里(要查的时候够得着,平时不糊在脸上)。
+		 * ⚠️ 只说**线索类别**,不编模块功能、也不暗示根因(那是 limits 那句的职责)。
+		 */
+		function causePlainLead(item) {
+			if (item.kind === 'script') return translate('causePlainScript');
+			if (item.kind === 'longtask') return translate('causePlainLongTask');
+			if (item.kind === 'host') return translate('causePlainHost');
+			return translate('causePlainUnknown');
+		}
+
+		/** 「为什么这样判断?」展开 / 收起:一次性披露,不落盘(刷新回到默认收起的形态)。 */
+		function setCauseOpen(open) {
+			state.causeOpen = open === true;
+			bump();
+		}
+
+		/** 分享前预览:构建一次存进 state(别每次渲染都重新序列化整份事故包)。 */
+		function openPackPreview(id, options) {
+			if (id === null || id === undefined) return null;
+			const opts = options ?? { dropFreeText: true };
+			state.packPreview = packPreview(id, opts);
+			state.packPreviewId = id;
+			state.packPreviewOptions = opts;
+			bump();
+			return state.packPreview;
+		}
+
+		function closePackPreview() {
+			state.packPreview = null;
+			state.packPreviewId = null;
+			state.packPreviewOptions = null;
+			bump();
 		}
 
 		/** 状态图标(图形,不走词典 —— 它不是文案,是记号;颜色与文字两样一起给,见 §7)。 */
@@ -6856,11 +6971,13 @@ window.__ModuleLoader__.load({
 		function mainView(props) {
 			const t = translate;
 			const health = props.health;
-			const row = props.selected === null ? null : props.selected.row;
+			// ⚠️ 这里是**时间语义**(最近一次);严重度语义(最差那条)只属于开发者详情。
+			const row = props.latest ?? null;
 			const causes = row === null ? [] : causeCandidates(row);
 			// ⚠️ 必须是**局部名字**:这个函数在模块作用域,直接写 `trendMs` 会去解析全局标识符 ——
 			// 浏览器里当场 ReferenceError(面板整块被外壳停用),而 node --check 与三套件都看不出来。
 			const trendMs = props.trendMs;
+			const trendRaw = trendRawText(trendMs);
 			const kids = [
 				h('div', { style: S.block, title: health.reason === '' ? t('healthHint') : health.reason },
 					h('div', { style: S.blockLabel }, t('mainStatus')),
@@ -6887,18 +7004,40 @@ window.__ModuleLoader__.load({
 					h('div', { style: S.sub }, lastStallSubText(row)),
 					h('div', { style: S.buttons },
 						h('button', { type: 'button', style: S.btn, onClick: () => props.onOpen(row.id) }, t('viewThisStall')),
-						h('button', { type: 'button', style: S.btn, onClick: () => props.onExport(row.id) }, t('exportReport')))));
+						// 这是**给 AI 的那条路**:先出预览(写明脱了什么),再生成
+						h('button', { type: 'button', style: S.btn, title: t('exportAiHint'), onClick: () => props.onExportPreview(row.id) }, t('exportReport')))));
 			}
-			// 可能原因:最多 3 条,每条都带支持与限制(不许只给一个名字)
+			// 可能原因:最多 3 条。**普通用户看到的只有"线索类别 + 强度"** ——
+			// 原始包名 / 毫秒 / 支持证据收进「为什么这样判断?」展开区(要查的时候够得着)。
+			// 展开区里那句限制一直在:不编模块功能,也不把相关写成根因。
 			kids.push(h('div', { style: S.sep },
 				h('div', { style: S.blockLabel }, t('mainCause')),
 				causes.length === 0
 					? h('div', { style: { ...S.blockValue, color: 'var(--dsw-alias-label-secondary)' } }, row === null ? t('noCauseYet') : t('packNoCandidate'))
 					: h('div', null, causes.map((item, index) => h('div', { key: `${index}-${item.kind}`, style: S.block },
-						h('div', { style: S.blockLabel }, `${index + 1}. ${item.lead}${item.name === null ? '' : ` · ${short(item.name)}`} · ${strengthText(item.strength)}`),
-						// 支持 / 限制各占一行:塞进一行会被折在词中间(§5「长文本用块式」)
-						h('div', { style: S.sub, title: `${t('packProvenance')}:${provenanceText(item.provenance)}` }, `${t('packSupport')}:${item.basis.join(' / ')}`),
-						h('div', { style: S.sub }, `${t('packLimits')}:${item.limits.join(' / ')}`))))));
+						h('div', { style: S.blockLabel }, `${index + 1}. ${causePlainLead(item)} · ${strengthText(item.strength)}`),
+						props.why !== true ? null : h('div', null,
+							h('div', { style: { ...S.sub, color: 'var(--dsw-alias-label-secondary)' } }, t('causeRawNote')),
+							h('div', { style: { ...S.sub, fontFamily: MONO_FONT } }, `${item.lead}${item.name === null ? '' : ` · ${short(item.name)}`} · ${t('packProvenance')}:${provenanceText(item.provenance)}`),
+							// 支持 / 限制各占一行:塞进一行会被折在词中间(§5「长文本用块式」)
+							h('div', { style: S.sub }, `${t('packSupport')}:${item.basis.join(' / ')}`),
+							h('div', { style: S.sub }, `${t('packLimits')}:${item.limits.join(' / ')}`))))),
+				causes.length === 0 ? null : h('div', { style: S.buttons },
+					h('button', { type: 'button', style: S.btn, title: t('causeWhyHint'), onClick: () => props.onWhy(props.why !== true) },
+						props.why === true ? t('causeWhyHide') : t('causeWhy')))));
+			// 分享前预览:还没生成文件,先把"包含什么 / 脱了什么 / 少了什么"摊出来
+			if (props.preview !== null && props.preview !== undefined) {
+				const preview = props.preview;
+				kids.push(h('div', { style: S.card },
+					h('div', { style: S.cardTitle }, t('previewTitle')),
+					h('div', { style: S.sub }, `${t('previewFiles')}:${preview.files.map((file) => `${file.name}(${Math.max(1, Math.round(file.bytes / 1024))}KB)`).join(' · ')}`),
+					h('div', { style: S.sub }, preview.notes === 'dropped' ? t('previewNotesDropped') : t('previewNotesKept')),
+					h('div', { style: S.sub }, `${t('previewExcludes')}:${preview.excludes.length}${t('tallyUnit')}`),
+					h('div', { style: { ...S.sub, color: 'var(--dsw-alias-label-secondary)' } }, t('previewZip')),
+					h('div', { style: S.buttons },
+						h('button', { type: 'button', style: S.btn, onClick: () => props.onExportGo() }, t('previewGo')),
+						h('button', { type: 'button', style: S.btn, onClick: () => props.onExportCancel() }, t('previewCancel')))));
+			}
 			// 最近趋势:次数 / 最长一次 / 重复线索 —— 窗口可切(1 小时 / 24 小时)
 			kids.push(h('div', { style: S.sep },
 				h('div', { style: { ...S.row, marginTop: 0 } },
@@ -6906,6 +7045,7 @@ window.__ModuleLoader__.load({
 					h('button', { type: 'button', style: S.btn, title: t('trendSwitchHint'), onClick: () => props.onRange(trendMs === TALLY_TREND_LONG_MS ? TALLY_TREND_SHORT_MS : TALLY_TREND_LONG_MS) },
 						`→ ${trendMs === TALLY_TREND_LONG_MS ? t('mainTrend1') : t('mainTrend24')}`)),
 				h('div', { style: S.blockValue, title: t('trendHint') }, trendText(trendMs)),
+				props.why !== true ? null : (trendRaw === null ? null : h('div', { style: { ...S.sub, fontFamily: MONO_FONT } }, trendRaw)),
 				h('div', { style: S.sub }, t('trendScope'))));
 			// 入口
 			kids.push(h('div', { style: { ...S.sep, display: 'flex', gap: 8, flexWrap: 'wrap' } },
@@ -7817,7 +7957,10 @@ window.__ModuleLoader__.load({
 					h('span', { style: S.label, title: t('packFilesHint') }, t('packFilesLabel')),
 					h('span', { style: S.num }, t('packFilesValue'))),
 				h('div', { style: S.buttons },
-					h('button', { type: 'button', style: S.btn, title: t('exportPackHint'), disabled: selectedRow === null, onClick: () => exportPack(selectedRow === null ? 'latest' : selectedRow.id, { dropFreeText: false }) }, t('exportPackBtn')),
+					// 两条路**只差自由文本**:给 AI 的那条置空并标 noteDropped,本机调试件保留。
+					// 所以标题必须自己说清是哪一条(免得"以为导出的是同一份")。
+					h('button', { type: 'button', style: S.btn, title: t('exportAiHint'), disabled: selectedRow === null, onClick: () => exportPack(selectedRow === null ? 'latest' : selectedRow.id, { dropFreeText: true }) }, t('exportAiBtn')),
+					h('button', { type: 'button', style: S.btn, title: t('exportFullHint'), disabled: selectedRow === null, onClick: () => exportPack(selectedRow === null ? 'latest' : selectedRow.id, { dropFreeText: false }) }, t('exportFullBtn')),
 					h('button', { type: 'button', style: S.btn, disabled: selectedRow === null, onClick: () => copyText(JSON.stringify(packPreview(selectedRow === null ? 'latest' : selectedRow.id, {}), null, 2), t('exportPreviewCopy')) }, t('exportPreviewCopy'))),
 				h('div', { style: S.buttons },
 					h('button', { type: 'button', style: S.btn, title: t('exportIncidentBtnHint'), disabled: state.watch.incidents.length === 0, onClick: () => exportIncident('latest') }, t('watchExport')),
@@ -7837,13 +7980,25 @@ window.__ModuleLoader__.load({
 			// ⚠️ 三个视图**只在被选中时才构造**:`incidentDetail(detailContext())` 要求"现在真的在
 			// 历史上下文里",无条件先算一遍会在实时上下文中拿不到 row 直接抛错(实测过:面板整块不渲染,
 			// 离线三套件全绿,只有 check-panel 抓得到)。这里的写法本身也是"没用到的视图不做工"。
+			// 两个语义在这里就分开:`latestRow` 给主界面(时间最新),`selectedRow` 给开发者详情
+			// (默认最差 / 用户手选)。刻意不共用一个变量 —— 共用就会有人把最差显示成"最近一次"。
+			const latestRow = latestIncident();
 			const body = h('div', null,
 				view === 'main' ? mainView({
 					health: healthVerdict(),
-					selected,
+					latest: latestRow,
 					trendMs: state.trendMs,
+					why: state.causeOpen,
+					preview: state.packPreview !== null && latestRow !== null && state.packPreview.incident.id === latestRow.id ? state.packPreview : null,
 					onOpen: (id) => { setView('incident'); revealIncident(id); },
-					onExport: (id) => exportPack(id, { dropFreeText: true }),
+					onExportPreview: (id) => { openPackPreview(id, { dropFreeText: true }); },
+					onExportGo: () => {
+						const id = state.packPreviewId;
+						closePackPreview();
+						exportPack(id, { dropFreeText: true });
+					},
+					onExportCancel: closePackPreview,
+					onWhy: setCauseOpen,
 					onRange: setTrendMs,
 					onDev: () => setView('dev'),
 					onSettings: () => setView('settings'),
