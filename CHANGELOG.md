@@ -62,6 +62,7 @@
 - 真页面四件套:`check-panel` / `check-storage` / `check-interaction` / `check-incident` **ALL PASS**;另外用 CDP 真实鼠标扫过展开的面板 644 个点,断言条目仍活着、`errors: 0`、悬停边框解析到交互蓝 token —— 这是纯 CSS,没有任何 JS 鼠标状态。
 
 ### 文档
+- **README / README_EN 的界面说明跟上新版 UI**:补「四屏一眼看完」的九张截图(主界面 / 卡顿详情 / 设置 / 开发者详情五个标签页 / 折叠药丸)、五步操作路径(展开 → 看那一次卡顿 → 看技术数据 → 交给 AI → 本机排查),并写明两条导出路径的差别。截图由新脚本 `tools/shots.mjs` 生成:每张图**先把视图状态写死再刷新**,所以图与代码里的那一屏一一对应,改完重跑即全量更新;它和 `check-*.mjs` 一样不在离线门禁里。截图放 `docs/images/`,**不进** `package.json#files`(GitHub 上的 README 用相对路径就够;真要以 npm 页面为主再把它加进白名单 —— 这条取舍写在这里,免得以后当成遗漏)。
 
 
 - **首发机制改准(staged publishing,不是直接 `npm publish`)**:0.4.0 实际是先 `npm stage publish`(registry 见状建了占位版本 `0.0.0-stage` 占住包名),再由维护者用 2FA **approve** 上线的 —— 证据是 registry 的 `gitHead` 等于当时的 `main`、`fileCount` 18、线上 tarball 与本机 `npm pack` 逐文件 sha256 全等(字节 shasum 不同只因打包用的 npm 版本不同:线上 11.17.0 / 本机 11.12.1)。REVIEW §3.1 与 AGENTS §10/§11 按这份证据改写,并记下 Trusted Publisher 的 **Allowed actions** 决定以后是否需要每版人工 approve(`npm stage publish` 永远允许;直接 `npm publish` 要显式勾选)。上一版文档写"本机 `npm publish` 首发"是错的。

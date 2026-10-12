@@ -108,6 +108,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
    node tools/check-interaction.mjs               # CDP 发真实输入 → 验 event timing 真的交付
    node tools/check-incident.mjs                  # 抓一条真事故 → 逐帧回看 / 切回实时 / 刷新后仍能打开
    node tools/check-counts.mjs                    # 计数跨刷新 + 口径不虚报 + 导出件里没有凭据(真 location 里塞 token)
+   node tools/shots.mjs                           # 改完**界面结构 / 文案**之后重出一遍 README 的九张截图(写进 docs/images/)
    ```
 
    **什么时候必须跑 `check-incident.mjs`**:改完**历史事故回放 / 取证明细的上下文切换**就跑它 —— 它挡的是"上面历史事故、下面另一条实时帧"和"刷新后历史事故打不开"这类离线套件结构上盖不到的事故。它依赖两个 DOM 约定:根节点 `id="dsh-perf-hud-root"`(控件态样式的作用域)与详情区第一行的 `data-ctx-bar="1"`(验收器靠它读"现在是哪个上下文")—— **改这两个名字等于改验收器**,改之前先看 `tools/check-incident.mjs`。
