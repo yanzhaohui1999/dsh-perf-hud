@@ -52,6 +52,9 @@ window.__ModuleLoader__.load({
 		// 诊断上下文(看实时 / 看哪条历史事故 / 看事故里的哪一帧)。它是**界面状态**,与事故包分开存:
 		// 事故落盘只在切片那一刻写一次,而用户来回切换上下文不该逼着再抓一次事故。
 		const LS_WATCHUI = 'dsh-perf-hud:watchui:v1';
+		const LS_VIEW = 'dsh-perf-hud:view:v1';        // 只存视图名 / 标签页 / 趋势窗口,不存读数
+		const TALLY_TREND_SHORT_MS = 3600000;          // 主界面「最近 1 小时」
+		const TALLY_TREND_LONG_MS = 86400000;          // 主界面「最近 24 小时」
 		const LS_SESSIONS = 'dsh-perf-hud:sessions:v1';     // A2 跨会话基线(每个会话一条,只进导出件)
 		const SESSION_KEEP = 20;                            // 跨会话基线保留最近几个会话
 		// 面板根节点 id 与它自己的控件态样式表 id:纯 CSS 的 hover / focus / disabled 靠它们生效
@@ -1171,6 +1174,10 @@ window.__ModuleLoader__.load({
 				persistError: null,      // 落盘失败的原因(失败就照实说,不假装存下来了)
 				coveredUntil: 0,         // 最近一份事故窗口的结束时刻(perf ms):这段不再另立事故
 			},
+			// 视图模型(方案 1:整屏切换)。落盘只存"在看哪个视图",不存任何读数。
+			view: 'main',           // main / incident / dev / settings
+			devTab: 'frames',       // 开发者详情的标签页(frames / dom / host / tools / raw)
+			trendMs: TALLY_TREND_SHORT_MS,   // 主界面「最近趋势」的窗口
 			// 捕获计数:与"留存了几份详细现场"分开的轻量时间桶(见 §捕获计数)。
 			// minute / day 的桶都是 TALLY_FIELDS 那个 6 元数组。
 			tally: {
@@ -2679,6 +2686,7 @@ window.__ModuleLoader__.load({
 			restoreIncidents();
 			restoreTally();
 			restoreWatchUI();
+			restoreView();
 		}
 
 		function flush(force) {
@@ -4892,19 +4900,7 @@ window.__ModuleLoader__.load({
 			preview: (id, options) => packPreview(id, options),
 			exportPack,
 			/** 只清事故,不动别的读数 —— 与 clear() 分开,免得手滑丢掉等了很久的证据。 */
-			clearIncidents() {
-				state.watch.incidents.length = 0;
-				state.watch.captured = 0;
-				state.watch.coalesced = 0;
-				state.watch.dropped = 0;
-				state.watch.restored = 0;
-				state.watch.trimmedByBytes = 0;
-				state.watch.deduped = 0;
-				// ⚠️ **计数桶不清**:那些卡顿确实发生过,清掉的是证据,不是事实 ——
-				// 把频次一起清掉等于让"最近一小时几次"这件事凭空消失。要清用 clearTally()。
-				saveIncidents();   // 落盘的那份也要清掉,否则刷新又"复活"
-				return true;
-			},
+			clearIncidents: clearIncidentsNow,
 			clear() {
 				// 注意:守夜层留存的事故**不在这里清** —— 那是等了很久才抓到的东西,
 				// 清读数的手滑不该把它带走。要清用 clearIncidents()。
@@ -6302,6 +6298,37 @@ window.__ModuleLoader__.load({
 				packReadmeHow: '先读 summary.md 的「最可能的假设」:每一条都带支持证据与限制,以及出处(直接测量 / 归因推断 / 无法确认)。「缺失的证据」说明这一层为什么没采到 —— 不要把「没有证据」读成「没有发生」。',
 				packReadmePrivacy: '包内不含聊天正文、提示词、Cookie、Token 与请求头(不是筛掉了,是本来就没采);页面地址只保留 origin + path,用户目录降级成 ~,UA 只留主版本与系统。这是减法,不是匿名化。',
 				packReadmeNotes: '在别的工具里读 incident.json 时:帧的 t 是页面时间轴毫秒,要靠 incident.env.perfOrigin 换成墙钟;loaf 与 frames 是同一信号的两个视图,别相加;blocking 可以是 0 而这一帧仍然很重。',
+				// ── 视图模型(方案 1:主界面 / 卡顿详情 / 开发者详情 / 设置)──
+				viewDev: '开发者详情', viewSettings: '设置', back: '← 返回',
+				hudOff: 'HUD 已关闭', loafOff: 'LoAF 未装上',
+				healthOk: '运行流畅', healthStall: '刚才有卡顿', healthLimited: '监测受限',
+				healthHint: '看的是最近 60 秒:帧间隔与长动画帧的档位(与面板判色同一套阈值)',
+				mainStatus: '当前状态', mainLast: '最近一次卡顿', mainCause: '可能原因',
+				mainTrend1: '最近 1 小时', mainTrend24: '最近 24 小时',
+				trendSwitchHint: '在这两个窗口之间切换(计数跨刷新保存)', trendHint: '检测到几次 / 最长一次 / 重复线索 —— 三个数各有各的口径',
+				trendScope: '计数是"检测到几次卡顿"(同一串算一次);重复线索只数留存下来的现场,所以它不会比实际更严重',
+				noStallYet: '暂未记录到明显卡顿,仍在后台观察。', noCauseYet: '还没有抓到事故,先让它继续观察。',
+				trendNone: '这段时间没有检测到卡顿', trendRepeat: '重复线索', stallSuffix: '卡顿',
+				viewThisStall: '查看这次卡顿', exportReport: '导出诊断报告',
+				devEntry: '开发者详情(技术数据)', devEntryHint: '帧 / 脚本 / DOM / 宿主 / 链路 / 原始数据 —— 现有能力一个都没删,只是收进这里',
+				settingsHint: '记录模式、数据保留、隐私与脱敏',
+				stallSaved: '现场已自动保存', stallNotSaved: '现场未完整保存', secondsUnit: ' 秒',
+				devTabFrames: '帧与归因', devTabDom: 'DOM 与堆', devTabHost: '宿主与链路', devTabTools: '工具箱', devTabRaw: '原始数据',
+				devTabFramesHint: '概览 / 最差事件 / 回调归因 / 取证明细(帧条、时间轴、脚本拆解、交叉表)',
+				devTabDomHint: 'DOM 节点、容器增长、JS 堆、写入者(深录时)',
+				devTabHostHint: '宿主 event-loop、宿主事件到达、空闲基线、链路 RTT 与吞吐',
+				devTabToolsHint: '事故清单 / 手动标记 / 隔离实验与清空读数',
+				devTabRawHint: '整机 JSON、事故包、诊断包预览与存储键位',
+				settingsMode: '记录模式', settingsRetain: '数据保留', settingsPrivacy: '隐私与脱敏',
+				modeWatch: '守夜(默认常开、零插桩)', modeDeep: '深录(装插桩 + 精确归因,有代价)',
+				modeHint: '守夜与现场是同一档采集,只差面板收放;深录才会包装 setTimeout / DOM 写入并拉那份 sourcemap',
+				modeHintShort: '守夜默认常开且不插桩;深录要你显式打开,面板会跟着变贵',
+				retainText: '留存取两档并集:全局最差 10 次 + 每天最差 1 条(最多最近 7 天),另有 2MB 落盘上限 —— 超了就裁最弱的,并在"裁掉"里照实计数',
+				clearIncidentsBtn: '清空事故现场', clearIncidentsHint: '只清事故(证据),不动发生频次:清掉的是证据,不是事实',
+				clearHint: '清空当前读数(帧环、长表、归因表);事故现场与发生频次都不动',
+				privacyText: '所有数据都在本机采集与保存,默认不上传任何内容。导出件在你本机生成,交给谁是你的动作。',
+				privacyRedaction: '导出前会先做减法:页面地址只留 origin + path(查询串整段丢弃)、用户目录换成 ~、UA 只留主版本;包内写明脱了什么、留了什么、本来就没采什么。这是减法,不是匿名化。',
+				privacyRedactionHint: '还有两处默认不导出:你手敲的备注(AI 诊断包里置空并标 noteDropped);聊天正文 / 提示词 / Cookie / Token / 请求头 —— 那些本插件从不读取',
 				tallyScopeSuffix: '内,同一串卡顿算一次', tallyKeepHint: '受容量限制,不等于检测到', tallyWorst: '最长一次',
 				watchDaily: '当天最差',
 				watchNone: '还没抓到', watchOff: '未开录', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉',
@@ -6454,6 +6481,37 @@ window.__ModuleLoader__.load({
 				packReadmeHow: 'Start with the hypotheses in summary.md: each carries its supporting evidence, its limits, and its provenance (measured / inferred / unknown). The missing-evidence section says WHY a layer was not captured — do not read "no evidence" as "it did not happen".',
 				packReadmePrivacy: 'The pack contains no chat text, prompts, cookies, tokens or request headers (never collected, not filtered out); page URLs keep origin + path only, home directories become ~, and the UA keeps just the major version and OS. This is subtraction, not anonymisation.',
 				packReadmeNotes: 'When reading incident.json elsewhere: frame t is page-timeline milliseconds and needs incident.env.perfOrigin to become wall clock; loaf and frames are two views of one signal, never add them; blocking can be 0 while the frame is still heavy.',
+				// view model (scheme 1: main / incident detail / developer details / settings)
+				viewDev: 'Developer details', viewSettings: 'Settings', back: '← Back',
+				hudOff: 'HUD is off', loafOff: 'LoAF not available',
+				healthOk: 'Running smoothly', healthStall: 'A stall just happened', healthLimited: 'Monitoring limited',
+				healthHint: 'Last 60 seconds: frame interval and long animation frame levels (same thresholds as the panel colours)',
+				mainStatus: 'Current status', mainLast: 'Most recent stall', mainCause: 'Possible cause',
+				mainTrend1: 'Last hour', mainTrend24: 'Last 24 hours',
+				trendSwitchHint: 'Switch between the two windows (counts survive a reload)', trendHint: 'How many / the longest / a repeating lead — three numbers with three different calibers',
+				trendScope: 'The count is "stalls detected" (one burst counts once); the repeating lead only counts evidence that was kept, so it never overstates',
+				noStallYet: 'No noticeable stall recorded yet — still watching in the background.', noCauseYet: 'Nothing captured yet; let it keep watching.',
+				trendNone: 'No stall detected in this window', trendRepeat: 'Repeating lead', stallSuffix: ' stalls',
+				viewThisStall: 'View this stall', exportReport: 'Export diagnostic report',
+				devEntry: 'Developer details (technical data)', devEntryHint: 'Frames / scripts / DOM / host / link / raw data — nothing was removed, it just moved in here',
+				settingsHint: 'Capture mode, retention, privacy and redaction',
+				stallSaved: 'scene saved automatically', stallNotSaved: 'scene not fully saved', secondsUnit: 's',
+				devTabFrames: 'Frames & blame', devTabDom: 'DOM & heap', devTabHost: 'Host & link', devTabTools: 'Toolbox', devTabRaw: 'Raw data',
+				devTabFramesHint: 'Overview / worst event / attribution / forensics (frame strip, timeline, script split, cross table)',
+				devTabDomHint: 'DOM nodes, container growth, JS heap, writers (when deep recording is on)',
+				devTabHostHint: 'Host event loop, host event arrival, idle baseline, link RTT and throughput',
+				devTabToolsHint: 'Incident list / manual mark / isolation experiment and clearing readings',
+				devTabRawHint: 'Whole-machine JSON, incident pack, diagnostic pack preview and storage keys',
+				settingsMode: 'Capture mode', settingsRetain: 'Retention', settingsPrivacy: 'Privacy and redaction',
+				modeWatch: 'Night watch (always on, zero instrumentation)', modeDeep: 'Deep recording (instrumentation + precise attribution, has a cost)',
+				modeHint: 'Night watch and live view are the same capture tier, differing only in whether the panel is unfolded; deep recording is what wraps setTimeout / DOM writes and pulls that sourcemap',
+				modeHintShort: 'Night watch is on by default and installs nothing; deep recording is yours to switch on and makes the panel itself more expensive',
+				retainText: 'Retention is the union of two tiers: the worst 10 overall + one per day (last 7 days), plus a 2MB persistence cap — over it the weakest are dropped and counted honestly',
+				clearIncidentsBtn: 'Clear saved scenes', clearIncidentsHint: 'Clears evidence only, never the frequency counts: what is removed is evidence, not the fact that it happened',
+				clearHint: 'Clears current readings (frame ring, long tasks, attribution); saved scenes and frequency counts are untouched',
+				privacyText: 'Everything is collected and stored locally; nothing is uploaded by default. Exports are built on your machine — sharing them is your action.',
+				privacyRedaction: 'Exports are redacted first: page URLs keep origin + path only (the query string is dropped), home directories become ~, the UA keeps just the major version; the pack states what was removed, kept and never collected. Subtraction, not anonymisation.',
+				privacyRedactionHint: 'Two more things are excluded by default: free text you typed (blanked and marked noteDropped in the AI pack) and chat text / prompts / cookies / tokens / request headers — this plugin never reads those',
 				tallyScopeSuffix: ' — one stall counts once', tallyKeepHint: 'capacity-limited, not the number of stalls', tallyWorst: 'longest',
 				watchDaily: 'daily worst',
 				watchNone: 'nothing caught yet', watchOff: 'not recording', watchPersistFailed: 'persist failed', watchTrimmed: 'trimmed',
@@ -6651,6 +6709,260 @@ window.__ModuleLoader__.load({
 		}
 
 		/** 折叠组的标题:历史事故上下文里带上事故 id —— 折叠着也能看出正在看哪一条。 */
+		/** 只清事故(证据),**不动计数桶**:清掉的是证据,不是事实。要清频次用 clearTally()。 */
+		function clearIncidentsNow() {
+			const watch = state.watch;
+			watch.incidents.length = 0;
+			watch.captured = 0;
+			watch.coalesced = 0;
+			watch.dropped = 0;
+			watch.restored = 0;
+			watch.trimmedByBytes = 0;
+			watch.deduped = 0;
+			saveIncidents();   // 落盘的那份也要清掉,否则刷新又"复活"
+			bump();
+			return true;
+		}
+
+		// ───────────────────── 视图模型(方案 1:整屏切换,不是把摘要贴在旧面板顶上)─────────────────────
+		/**
+		 * 四个视图,一次只渲染一个:`main` 回答问题 / `incident` 看一条事故 / `dev` 技术数据 /
+		 * `settings` 设置与隐私。落盘只存"在看哪个视图"(`LS_VIEW`),不存任何读数 ——
+		 * 所以刷新之后视图回来了,数据该是什么还是什么。
+		 * `dev` 内部再分标签页:标签页**按现有分组照实映射**(不硬套概念图的名字):
+		 * 帧与归因 / DOM 与堆 / 宿主与链路 / 工具箱 / 原始数据 —— 一个能力都没删,只是从
+		 * "一屏铺开 + 五个折叠组"变成"选一个标签页看一组"。
+		 */
+		const VIEWS = ['main', 'incident', 'dev', 'settings'];
+		const DEV_TABS = ['frames', 'dom', 'host', 'tools', 'raw'];
+
+		function setView(name) {
+			state.view = VIEWS.indexOf(name) === -1 ? 'main' : name;
+			saveView();
+			bump();
+		}
+
+		function setDevTab(name) {
+			state.devTab = DEV_TABS.indexOf(name) === -1 ? 'frames' : name;
+			saveView();
+			bump();
+		}
+
+		function setTrendMs(ms) {
+			state.trendMs = ms === TALLY_TREND_LONG_MS ? TALLY_TREND_LONG_MS : TALLY_TREND_SHORT_MS;
+			saveView();
+			bump();
+		}
+
+		/** 只存视图名 / 标签页 / 趋势窗口 —— **不存读数**(读数有自己的键位与自己的一致性)。 */
+		function saveView() {
+			try {
+				localStorage.setItem(LS_VIEW, JSON.stringify({ v: 1, view: state.view, devTab: state.devTab, trendMs: state.trendMs }));
+			} catch (error) { /* 记不住视图不影响任何读数 */ }
+		}
+
+		function restoreView() {
+			try {
+				const saved = JSON.parse(localStorage.getItem(LS_VIEW) ?? 'null');
+				if (saved === null || typeof saved !== 'object') return;
+				if (VIEWS.indexOf(saved.view) !== -1) state.view = saved.view;
+				if (DEV_TABS.indexOf(saved.devTab) !== -1) state.devTab = saved.devTab;
+				if (typeof saved.trendMs === 'number') state.trendMs = saved.trendMs === TALLY_TREND_LONG_MS ? TALLY_TREND_LONG_MS : TALLY_TREND_SHORT_MS;
+			} catch (error) { /* 坏了就用默认视图 */ }
+		}
+
+		/**
+		 * "现在到底卡不卡" —— 主界面第一块,三档。
+		 * ⚠️ **监测不可用不许伪装成正常**:HUD 关着 / LoAF 没装上时给的是"监测受限" + 原因,
+		 * 而不是绿色的"运行流畅"。阈值与判色**同一个函数**(`frameLevel`),所以主界面与面板
+		 * 不会各说各的。
+		 */
+		function healthVerdict() {
+			const worst = worstLongTask();
+			const worstMs = round1(Math.max(state.frameWorst, worst === null ? 0 : worst.ms));
+			if (state.on === false) return { level: 'limited', fps: state.fps, worstMs, reason: translate('hudOff') };
+			if (state.watch.loafState !== 'on') return { level: 'limited', fps: state.fps, worstMs, reason: `${translate('loafOff')}:${state.watch.loafState}` };
+			const level = frameLevel(state.fps, state.frameWorst);
+			return { level: level === 'ok' ? 'ok' : 'stall', fps: state.fps, worstMs, reason: '' };
+		}
+
+		function healthText(level) {
+			if (level === 'ok') return translate('healthOk');
+			if (level === 'stall') return translate('healthStall');
+			return translate('healthLimited');
+		}
+
+		/**
+		 * 留存清单里、**趋势窗口内**最常见的那个包名(≥2 次才算"重复")。
+		 * 口径照实写:只数**留存下来**的事故(留存受容量限制),所以它是"重复线索"而不是"总次数"。
+		 */
+		function repeatedLead(ms, atMs) {
+			const at = typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now();
+			const from = at - ms;
+			const tally = new Map();
+			for (const row of state.watch.incidents) {
+				const when = Date.parse(row.at);
+				if (Number.isFinite(when) === false || when < from || when > at) continue;
+				const pkg = Array.isArray(row.packages) && row.packages.length > 0 ? row.packages[0].pkg : null;
+				if (pkg === null || pkg === undefined) continue;
+				tally.set(pkg, (tally.get(pkg) ?? 0) + 1);
+			}
+			const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+			return ranked.length === 0 || ranked[0][1] < 2 ? null : { name: ranked[0][0], count: ranked[0][1] };
+		}
+
+		function trendSummary(ms, atMs) {
+			const row = tallyWindow(ms, atMs);
+			return { detected: row.detected, kept: row.kept, lost: row.lost, worstMs: round1(row.worstMs), repeated: repeatedLead(ms, atMs) };
+		}
+
+		/** 主界面「最近趋势」那一行:次数 / 最长一次 / 重复线索 —— 三个数各有各的名字。
+		 * `atMs` 只为可测:离线断言要固定基准时刻,不然窗口会跟着真实时钟飘。 */
+		function trendText(ms, atMs) {
+			const trend = trendSummary(ms, atMs);
+			if (trend.detected === 0) return translate('trendNone');
+			const parts = [`${trend.detected}${translate('times')}${translate('stallSuffix')}`];
+			if (trend.worstMs > 0) parts.push(`${translate('tallyWorst')} ${Math.round(trend.worstMs)}ms`);
+			if (trend.repeated !== null) parts.push(`${translate('trendRepeat')}:${short(trend.repeated.name)}(${trend.repeated.count}${translate('times')})`);
+			return parts.join(' · ');
+		}
+
+		/** 秒数写法(主界面的 hero):0.98 秒 —— 毫秒对普通用户读不出量级。 */
+		function secondsText(ms) {
+			return `${(Math.round(ms / 10) / 100).toFixed(2)}${translate('secondsUnit')}`;
+		}
+
+		/** 最近一次卡顿那一块的正文行(时间 + 现场是否保存) —— 一行说清,不摆原始字段。 */
+		function lastStallSubText(row) {
+			const at = Date.parse(row.at);
+			const when = Number.isFinite(at) ? clock(at) : row.at;
+			const saved = row.kept === 'kept' || row.kept === 'replaced';
+			return `${when} · ${saved ? translate('stallSaved') : translate('stallNotSaved')}`;
+		}
+
+		/** 状态图标(图形,不走词典 —— 它不是文案,是记号;颜色与文字两样一起给,见 §7)。 */
+		function healthIcon(level) {
+			if (level === 'ok') return '✓';
+			if (level === 'stall') return '!';
+			return '—';
+		}
+
+		/**
+		 * 主界面:普通用户的那一屏,只回答五个问题。
+		 * 它**只排版**——四个读数(`healthVerdict` / `selectedIncident` / `causeCandidates` /
+		 * `trendSummary`)全是已经算好的纯函数,界面自己不推断(与"口径只在纯函数里"同一条规矩)。
+		 * ⚠️ 这里**不出现** LoAF / p99 / RTT / 包名排行 / 帧编号 —— 那些在「开发者详情」。
+		 */
+		function mainView(props) {
+			const t = translate;
+			const health = props.health;
+			const row = props.selected === null ? null : props.selected.row;
+			const causes = row === null ? [] : causeCandidates(row);
+			// ⚠️ 必须是**局部名字**:这个函数在模块作用域,直接写 `trendMs` 会去解析全局标识符 ——
+			// 浏览器里当场 ReferenceError(面板整块被外壳停用),而 node --check 与三套件都看不出来。
+			const trendMs = props.trendMs;
+			const kids = [
+				h('div', { style: S.block, title: health.reason === '' ? t('healthHint') : health.reason },
+					h('div', { style: S.blockLabel }, t('mainStatus')),
+					h('div', {
+						style: {
+							...S.blockValue,
+							color: health.level === 'ok' ? 'var(--dsw-alias-state-success-primary)'
+								: health.level === 'stall' ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-label-secondary)',
+						},
+					}, `${healthIcon(health.level)} ${healthText(health.level)} · ${health.fps.toFixed(0)} fps${health.reason === '' ? '' : ` · ${health.reason}`}`)),
+			];
+			// 最近一次卡顿:持续时间 / 何时 / 现场留没留住
+			if (row === null) {
+				kids.push(h('div', { style: S.sep },
+					h('div', { style: S.blockLabel }, t('mainLast')),
+					h('div', { style: { ...S.blockValue, color: 'var(--dsw-alias-label-secondary)' } }, t('noStallYet'))));
+			} else {
+				const level = severityLevel(row.severity);
+				kids.push(h('div', { style: S.sep },
+					h('div', { style: S.blockLabel }, t('mainLast')),
+					h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
+						h('span', { style: { ...S.hero, color: severityColor(level) } }, secondsText(row.severity)),
+						h('span', { style: { ...S.label, color: severityColor(level) } }, severityText(level))),
+					h('div', { style: S.sub }, lastStallSubText(row)),
+					h('div', { style: S.buttons },
+						h('button', { type: 'button', style: S.btn, onClick: () => props.onOpen(row.id) }, t('viewThisStall')),
+						h('button', { type: 'button', style: S.btn, onClick: () => props.onExport(row.id) }, t('exportReport')))));
+			}
+			// 可能原因:最多 3 条,每条都带支持与限制(不许只给一个名字)
+			kids.push(h('div', { style: S.sep },
+				h('div', { style: S.blockLabel }, t('mainCause')),
+				causes.length === 0
+					? h('div', { style: { ...S.blockValue, color: 'var(--dsw-alias-label-secondary)' } }, row === null ? t('noCauseYet') : t('packNoCandidate'))
+					: h('div', null, causes.map((item, index) => h('div', { key: `${index}-${item.kind}`, style: S.block },
+						h('div', { style: S.blockLabel }, `${index + 1}. ${item.lead}${item.name === null ? '' : ` · ${short(item.name)}`} · ${strengthText(item.strength)}`),
+						// 支持 / 限制各占一行:塞进一行会被折在词中间(§5「长文本用块式」)
+						h('div', { style: S.sub, title: `${t('packProvenance')}:${provenanceText(item.provenance)}` }, `${t('packSupport')}:${item.basis.join(' / ')}`),
+						h('div', { style: S.sub }, `${t('packLimits')}:${item.limits.join(' / ')}`))))));
+			// 最近趋势:次数 / 最长一次 / 重复线索 —— 窗口可切(1 小时 / 24 小时)
+			kids.push(h('div', { style: S.sep },
+				h('div', { style: { ...S.row, marginTop: 0 } },
+					h('span', { style: S.label }, trendMs === TALLY_TREND_LONG_MS ? t('mainTrend24') : t('mainTrend1')),
+					h('button', { type: 'button', style: S.btn, title: t('trendSwitchHint'), onClick: () => props.onRange(trendMs === TALLY_TREND_LONG_MS ? TALLY_TREND_SHORT_MS : TALLY_TREND_LONG_MS) },
+						`→ ${trendMs === TALLY_TREND_LONG_MS ? t('mainTrend1') : t('mainTrend24')}`)),
+				h('div', { style: S.blockValue, title: t('trendHint') }, trendText(trendMs)),
+				h('div', { style: S.sub }, t('trendScope'))));
+			// 入口
+			kids.push(h('div', { style: { ...S.sep, display: 'flex', gap: 8, flexWrap: 'wrap' } },
+				h('button', { type: 'button', style: S.btn, title: t('devEntryHint'), onClick: () => props.onDev() }, t('devEntry')),
+				h('button', { type: 'button', style: S.btn, title: t('settingsHint'), onClick: () => props.onSettings() }, t('viewSettings'))));
+			return kids;
+		}
+
+		/** 开发者详情的标签页行:一次看一组,不把技术数据全铺在一屏(能力一个都没删)。 */
+		function devTabRow(props) {
+			const t = translate;
+			const tab = props.tab;
+			const row = (key, label, hint) => h('button', {
+				type: 'button',
+				style: { ...S.btn, color: tab === key ? 'var(--dsw-alias-state-business-primary)' : undefined, fontWeight: tab === key ? 700 : 400 },
+				title: hint,
+				onClick: () => props.onTab(key),
+			}, label);
+			return h('div', { style: { ...S.sep, display: 'flex', gap: 6, flexWrap: 'wrap' } },
+				row('frames', t('devTabFrames'), t('devTabFramesHint')),
+				row('dom', t('devTabDom'), t('devTabDomHint')),
+				row('host', t('devTabHost'), t('devTabHostHint')),
+				row('tools', t('devTabTools'), t('devTabToolsHint')),
+				row('raw', t('devTabRaw'), t('devTabRawHint')));
+		}
+
+		/**
+		 * 设置:记录模式 / 数据保留 / 隐私与脱敏。
+		 * 三个开关都是**已有**的(`state.deep` / `state.on` / `clearIncidents()`),这里不新增任何
+		 * 采集行为 —— 尤其是深录:**不许默认自动开**(概念图里那格"异常时自动加深"刻意没做)。
+		 */
+		function settingsView(props) {
+			const t = translate;
+			const kept = state.watch.incidents.length;
+			return [
+				h('div', { style: S.block },
+					h('div', { style: S.blockLabel }, t('settingsMode')),
+					h('div', { style: { ...S.blockValue, color: state.deep === true ? 'var(--dsw-alias-brand-primary)' : undefined } },
+						state.deep === true ? t('modeDeep') : t('modeWatch')),
+					h('div', { style: S.sub, title: t('modeHint') }, t('modeHintShort')),
+					h('div', { style: S.buttons },
+						h('button', { type: 'button', style: S.btn, title: t('deepHint'), onClick: () => setDeep(state.deep === false) }, `${t('deepShort')}${state.deep ? '✓' : ''}`),
+						h('button', { type: 'button', style: S.btn, onClick: () => setEnabled(state.on === false) }, state.on === true ? t('turnOff') : t('turnOn')))),
+				h('div', { style: S.sep },
+					h('div', { style: S.blockLabel }, t('settingsRetain')),
+					h('div', { style: S.blockValue }, t('retainText')),
+					h('div', { style: S.sub }, `${t('watchKept')} ${kept}${t('tallyUnit')} · ${t('watchLost')} ${props.trend.lost}${t('tallyUnit')} · ${t('watchTrimmed')} ${state.watch.trimmedByBytes}${t('tallyUnit')}`),
+					h('div', { style: S.buttons },
+						h('button', { type: 'button', style: S.btn, disabled: kept === 0, title: t('clearIncidentsHint'), onClick: () => props.onClearIncidents() }, t('clearIncidentsBtn')),
+						h('button', { type: 'button', style: S.btn, title: t('clearHint'), onClick: () => props.onClearAll() }, t('clear')))),
+				h('div', { style: S.sep },
+					h('div', { style: S.blockLabel }, t('settingsPrivacy')),
+					h('div', { style: S.blockValue }, t('privacyText')),
+					h('div', { style: S.sub, title: t('privacyRedactionHint') }, t('privacyRedaction'))),
+			];
+		}
+
 		function detailGroupLabel() {
 			const row = diagMode() === 'incident' ? selectedIncident().row : null;
 			return row === null ? translate('groupDetail') : `${translate('groupDetail')} · ${row.id}`;
@@ -7147,9 +7459,16 @@ window.__ModuleLoader__.load({
 		 * 合并判色:FPS 与最差帧**任一触发即降色**。
 		 * 原来只看 fps(levelDown),于是 54.2fps 是绿的、而同期最差帧 130ms —— 绿点掩盖了卡顿。
 		 */
+		function frameLevel(fps, frameWorst) {
+			if (fps <= 30 || frameWorst >= 200) return 'bad';
+			if (fps <= 50 || frameWorst >= 120) return 'warn';
+			return 'ok';
+		}
+
 		function levelFrame(fps, frameWorst) {
-			if (fps <= 30 || frameWorst >= 200) return 'var(--dsw-alias-state-error-primary)';
-			if (fps <= 50 || frameWorst >= 120) return 'var(--dsw-alias-state-warn-primary)';
+			const level = frameLevel(fps, frameWorst);
+			if (level === 'bad') return 'var(--dsw-alias-state-error-primary)';
+			if (level === 'warn') return 'var(--dsw-alias-state-warn-primary)';
 			return 'var(--dsw-alias-state-success-primary)';
 		}
 
@@ -7249,6 +7568,9 @@ window.__ModuleLoader__.load({
 			const toggle = () => {
 				const next = open === false;
 				setOpen(next);
+				// 展开药丸 = 回到"日常那一屏"(主界面);开发者详情 / 设置是显式入口,
+				// 不因为上次停在那就一直停在那 —— 否则普通用户点开看到的是一屏技术数据。
+				if (next === true) setView('main');
 				state.collapsed = next === false;
 				try { localStorage.setItem(LS_UI, next ? '0' : '1'); } catch (error) { /* 折叠状态记不住无所谓 */ }
 			};
@@ -7279,8 +7601,13 @@ window.__ModuleLoader__.load({
 			const selectedLevel = severityLevel(selectedRow === null ? null : selectedRow.severity);
 
 			const scene = sceneChip();
+			// 落盘的是"上次在看哪个视图",而事故可能已经被挤出留存清单 —— 那时退回主界面,
+			// 不去渲染一个空的历史上下文(与 selectedIncident 的退回自动是同一条规矩)。
+			const view = state.view === 'incident' && state.watch.mode !== 'incident' ? 'main' : state.view;
+			const viewTitle = view === 'dev' ? t('viewDev') : view === 'settings' ? t('viewSettings') : t('viewIncident');
 			const head = h('div', { style: S.head },
-				h('span', { style: S.brand }, t('title')),
+				h('span', { style: S.brand }, view === 'main' ? t('title') : `${t('title')} · ${viewTitle}`),
+				view === 'main' ? null : h('button', { type: 'button', style: S.btn, title: t('backHint'), onClick: () => setView('main') }, t('back')),
 				h('span', { style: { ...S.label, color: scene.color } }, scene.text),
 				h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(1)} fps`),
 				h('button', {
@@ -7289,6 +7616,7 @@ window.__ModuleLoader__.load({
 					title: t('deepHint'),
 					onClick: () => setDeep(state.deep === false),
 				}, `${t('deepShort')}${state.deep ? '✓' : ''}`),
+				h('button', { type: 'button', style: S.btn, title: t('settingsHint'), onClick: () => setView(view === 'settings' ? 'main' : 'settings') }, t('viewSettings')),
 				h('button', { type: 'button', style: S.btn, title: open ? t('collapse') : t('expand'), onClick: toggle }, open ? '–' : '+'),
 				h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff')));
 
@@ -7312,7 +7640,8 @@ window.__ModuleLoader__.load({
 						h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff'))));
 			}
 
-			const body = h('div', null,
+			// ── 开发者详情:原来那一整套技术数据(一个都没删),按标签页分组,一次看一组 ──
+			const devFrames = [
 				// ── 常显 1:当前状况(卡不卡 + 谁的锅)──
 				// 块式而不是 flex 行:这一行长文本换行在右对齐下会参差得像段落(实测被吐槽)。
 				// 标题里带「近 60 秒」:帧 / 长任务 / 命中三个数都是这个窗口的口径,不写出来只能猜。
@@ -7394,6 +7723,8 @@ window.__ModuleLoader__.load({
 					return detail.kind === 'incident' ? incidentDetail(detail) : liveDetail(detail);
 				}),
 
+			];
+			const devDom = [
 				// ── 折叠 2:DOM 与堆 ──
 				group('dom', t('groupDom'), domSummary(), () => [
 					h('div', { style: S.row },
@@ -7416,6 +7747,8 @@ window.__ModuleLoader__.load({
 					state.deep !== true ? null : writeRows(),
 				]),
 
+			];
+			const devHost = [
 				// ── 折叠 3:宿主与链路(排查"是页面卡还是链路卡"才看)──
 				group('host', t('groupHost'), hostSummary(), () => [
 					h('div', { style: S.row },
@@ -7444,6 +7777,8 @@ window.__ModuleLoader__.load({
 						`${t('idleWriter')}: ${(idleBase.domTop ?? []).map((row) => `${short(row?.id ?? '?')}${row?.component === null || row?.component === undefined ? '' : `(${row.component})`}`).join(' / ') || t('none')}`),
 				]),
 
+			];
+			const devTools = [
 				// ── 折叠 4:工具箱(事故清单 / 场景标记 / 整机导出)──
 				group('tools', t('groupTools'), toolsSummary(), () => [
 					// 守夜层:最差几次的清单 + 手动补记 + 导出最近一次
@@ -7473,7 +7808,59 @@ window.__ModuleLoader__.load({
 					h('div', { style: { ...S.sep, display: 'flex', gap: 6 } },
 						h('button', { type: 'button', style: S.btn, title: t('exportJsonHint'), onClick: exportJson }, t('exportJson')),
 						h('button', { type: 'button', style: S.btn, onClick: () => W.__perfHud.clear() }, t('clear'))),
-				]));
+				]),
+			];
+
+			// ── 原始数据(标签页 5):导出与交接件的入口 ──
+			const devRaw = [
+				h('div', { style: S.row },
+					h('span', { style: S.label, title: t('packFilesHint') }, t('packFilesLabel')),
+					h('span', { style: S.num }, t('packFilesValue'))),
+				h('div', { style: S.buttons },
+					h('button', { type: 'button', style: S.btn, title: t('exportPackHint'), disabled: selectedRow === null, onClick: () => exportPack(selectedRow === null ? 'latest' : selectedRow.id, { dropFreeText: false }) }, t('exportPackBtn')),
+					h('button', { type: 'button', style: S.btn, disabled: selectedRow === null, onClick: () => copyText(JSON.stringify(packPreview(selectedRow === null ? 'latest' : selectedRow.id, {}), null, 2), t('exportPreviewCopy')) }, t('exportPreviewCopy'))),
+				h('div', { style: S.buttons },
+					h('button', { type: 'button', style: S.btn, title: t('exportIncidentBtnHint'), disabled: state.watch.incidents.length === 0, onClick: () => exportIncident('latest') }, t('watchExport')),
+					h('button', { type: 'button', style: S.btn, title: t('exportJsonHint'), onClick: exportJson }, t('exportJson'))),
+				h('div', { style: { ...S.sep, display: 'flex', gap: 6 } },
+					h('button', { type: 'button', style: S.btn, title: t('watchMarkHint'), disabled: state.watch.on === false, onClick: () => { W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft); setDraft(''); } }, t('watchMark')),
+					h('button', { type: 'button', style: S.btn, title: t('clearHint'), onClick: () => W.__perfHud.clear() }, t('clear'))),
+				h('div', { style: S.sub, title: t('storageKeysHint') }, t('storageKeys')),
+			];
+
+			// ── 一次只渲染一个视图 ──
+			const trend = trendSummary(state.trendMs);
+			const devKids = state.devTab === 'dom' ? devDom
+				: state.devTab === 'host' ? devHost
+					: state.devTab === 'tools' ? devTools
+						: state.devTab === 'raw' ? devRaw : devFrames;
+			// ⚠️ 三个视图**只在被选中时才构造**:`incidentDetail(detailContext())` 要求"现在真的在
+			// 历史上下文里",无条件先算一遍会在实时上下文中拿不到 row 直接抛错(实测过:面板整块不渲染,
+			// 离线三套件全绿,只有 check-panel 抓得到)。这里的写法本身也是"没用到的视图不做工"。
+			const body = h('div', null,
+				view === 'main' ? mainView({
+					health: healthVerdict(),
+					selected,
+					trendMs: state.trendMs,
+					onOpen: (id) => { setView('incident'); revealIncident(id); },
+					onExport: (id) => exportPack(id, { dropFreeText: true }),
+					onRange: setTrendMs,
+					onDev: () => setView('dev'),
+					onSettings: () => setView('settings'),
+				}) : null,
+				view === 'incident' ? [
+					h('div', { key: 'actions', style: S.buttons },
+						h('button', { type: 'button', style: S.btn, onClick: () => setView('main') }, t('back')),
+						h('button', { type: 'button', style: S.btn, title: t('copySummaryHint'), disabled: selectedRow === null, onClick: () => copyText(incidentSummaryText(selectedRow), t('copySummary')) }, t('copySummary')),
+						h('button', { type: 'button', style: S.btn, title: t('exportIncidentBtnHint'), disabled: selectedRow === null, onClick: () => exportIncident(selectedRow === null ? 'latest' : selectedRow.id) }, t('exportIncidentBtn'))),
+					incidentDetail(detailContext()),
+				] : null,
+				view === 'dev' ? h('div', null, devTabRow({ tab: state.devTab, onTab: setDevTab }), devKids) : null,
+				view === 'settings' ? settingsView({
+					trend,
+					onClearIncidents: () => { clearIncidentsNow(); },
+					onClearAll: () => { W.__perfHud.clear(); },
+				}) : null);
 
 			// 自带边界:渲染抛错时只降级成一块小面板,不让外壳把整个条目停用。
 			return h(HudBoundary, { renderError: renderErrorView },

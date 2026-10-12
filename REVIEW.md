@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场(2026-10-11 `gh repo view` 实测 `PUBLIC`) |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,而且 **`tools/` 与 `locale/` 按目录核**(以后加验证器或加语言文件不会漏检),显式清单 + 目录共覆盖包内全部 **18** 个文件(含 `package.json`),漏一份就失败 |
-| 6 | 门禁全绿 | ✅ 561 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ 574 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
 | 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
 
@@ -34,7 +34,7 @@
 
 | 判据 | 怎么验 | 最新实测 |
 |---|---|---|
-| 离线断言全绿 | `npm test` | **561** 条(attribution 11 / logic 511 / host 39) |
+| 离线断言全绿 | `npm test` | **574** 条(attribution 11 / logic 524 / host 39) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 守夜默认**零插桩** | `snapshot().instrumented` 在三种模式下的取值 | 默认(不插桩)档:`precise: false` / `instrumented: false`,`errors: 0` —— 守夜档仍然零插桩;点「深录」→ `true / true`;点回去 → `false / false`,`errors` 全程 0 |
@@ -46,6 +46,8 @@
 | 捕获频次跨刷新、且不虚报 | `tools/check-counts.mjs` + 13 条离线计数断言 | 清桶后手动标记一次:`检测到 3(triggered 3 · 切成现场 2 · 同串触发 29)· 已保存现场 2 · 丢失 1`(同一份现场,旧口径 `captured + coalesced` 会记成 32);刷新后 `triggered` 仍 ≥ 落盘值;折叠药丸显示 `检测 N 次`(不再显示留存份数) |
 | 诊断包可交付、且给人看也给 AI 读 | `tools/check-counts.mjs` + 离线断言 | 真页面 `__perfHud.pack(id)` 给出 `manifest.json / summary.md / incident.json / README.md`;摘要五段齐全;`manifest.capabilities.renderer` ≥ 6 个叶子;预览列出 4 个文件与 ≥ 3 条排除项;真 location 里塞过凭据 → **四个文件拼起来一个都不含**;候选原因现场给 `["script","longtask"]`,每条都带支持与限制 |
 | 能力矩阵是唯一事实来源 | `tests/logic.mjs`(能力矩阵一节)+ `capabilityMissing` 前缀断言 | 叶子枚举 `state ∈ on/degraded/off/unsupported`、`provenance ∈ measured/inferred/unknown`、`reason` 非空;`unobserved` 单列 GPU 合成 / Electron 主进程 / 原始源码行号 / 帧内顺序 / DevTools trace;`missing` 的 `devtools-trace: / interaction-breakdown: / compositor: / recorder-cost: / baseline:` 五个前缀仍由它推出来 |
+| 方案 1 的四个视图都能进、且默认那屏不出现技术术语 | `tools/check-incident.mjs`(真页面)+ 13 条离线断言 | 真页面走一遍:主界面「查看这次卡顿」→ 卡顿详情(标题带视图名 + 「← 返回」)→ 时间轴/翻帧照旧 → 刷新后仍停在同一帧 → 「← 返回」回主界面(该屏**不挂**返回按钮)→ 开发者详情 5 个标签页 → 「回到实时」实时帧条回来 → 设置页三块(记录模式 / 数据保留 / 隐私与脱敏)齐全、深录 `precise: false`。主界面现场文本:`! 刚才有卡顿 · 19 fps` / `0.20 秒` / 可能原因两条(各带支持与限制)/ `4 次卡顿 · 最长一次 205ms · 重复线索:dsh-client-modules(2 次)` |
+| 监测不可用不许伪装成正常 | 离线断言(视图模型那一组) | `state.on=false` → `limited` + 原因带"关闭";`loafState='unsupported:…'` → `limited` + 原因带原始状态;`fps 20` 与 `最差帧 130ms` 都判 `stall`(阈值与 `levelFrame` 同源) |
 | 60 秒帧条与导出件同口径 | 面板 SVG + `tools/inspect-incident.mjs` 的 ASCII | 真实页面 **`width 100%`**(实测 **365×18**,`viewBox 0 0 60 18`)、`errors: 0`,每格都有 `title`(墙钟时间 + 该秒最差帧 + 点得动/点不动);`sparkPickMap` **只有那一秒真的有 LoAF 的格子可点**(点了把翻帧切过去),其余格子不给 `onClick`(不做点了没反应的假按钮);阈值一致性有静态断言(≥100 / ≥50) |
 | 帧拆分:环的四段 + 脚本三种切法 / 两个分母 | 面板 SVG / `frameSplit` / `frameArcs` / `framePkgTally` / `invokerLabel` | 真实页面(**`node tools/check-panel.mjs --expr=…`**,自己造带脚本的 LoAF):环 **84×84**、`viewBox 0 0 84 84`、半径 34;一条只有单个来源的帧画出 **4 个 `<circle>`**(弧长 `175.3 / 35.1 / 0.3 / 0.1`,周长 213.6;颜色 `state-error / label-secondary / state-warn / brand` —— 任务那段是中性灰);六行块式值实测 `纯执行 260.1ms` / `未定名(未归因 1)` / `setTimeout 260ms` / `dsh-client-modules 192ms · 未定名 25` / `DOMWebSocket.onmessage 425ms · setTimeout 421ms · Response.json.then 322ms · 其余 1` / `纯执行 1353.2ms · 强制 6.4ms`;窗口那组的标题自带分母 `窗口:N 条长动画帧 · 跨 T · 平均每条脚本 Xms`(`spanText` 把跨度写成 `43分12秒`);没插桩时 `帧内未归因` 写「要深录」、`命中` 只列非零的腿、`回调归因` 与 `DOM 写入` 两行不渲染;**翻帧按钮真的换帧**(同一次实测:自动 `帧 1/16 · 530ms` → 环 `579.6ms`;按 ▶ → `2/25 · 275ms` → 环 `325ms`;再 ▶ → `3/28 · 170ms` → 环 `220.3ms`;按 ⟲ 回到 `1/… · 530ms`);**清单只收达线的帧**(同一次实测:环里 21 条 LoAF,选单只有 `帧 1/4 · 210ms · ≥100ms`,▶ 走到 `2/4`);`errors: 0`。**函数级的边界也是实测的**:`typeof Profiler === 'function'` 但 `new Profiler()` 抛 `NotAllowedError … disabled by Document Policy`(响应头实测 `null`)。⚠️ 行里"脚本那几段 `stroke-opacity` 递浅"是脚本细分还画在环上时的读数;后来环只画四段,来源/包各自搬成 100% 堆叠条、名次用压暗 overlay(见上一行) |
 | 改版后整场深检(一次性 CDP,用完即删、没入库) | 面板 DOM + 真实鼠标 | 5 个组全展开渲染 **0 错误**;真实鼠标移到 5 个行级元素上(按包小表行 / 事故清单行 / 组头)**都没有被外壳停用**,0 错误 |

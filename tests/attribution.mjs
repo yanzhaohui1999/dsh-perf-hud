@@ -43,6 +43,9 @@ const line = (header) => source.slice(source.indexOf(header), source.indexOf('\n
 const chunk = [
 	line('const BUNDLE_PREFIX = '),
 	line('const PLUGIN_URL = '),
+	// state 里用到视图模型的两条窗口常量 —— 排在 state 之前(否则 TDZ)
+	line('const TALLY_TREND_SHORT_MS = '),
+	line('const TALLY_TREND_LONG_MS = '),
 	`${extract(source, 'const state = {')};`,
 	extract(source, 'function isCore('),
 	extract(source, 'function ownerOfUrl('),

@@ -66,11 +66,19 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 	check('烧出来的长帧被守夜自动抓成一条事故,而且包里真带帧记录(后面所有回放的地基)',
 		captured.n >= 1 && captured.frames > 0, JSON.stringify(captured));
 
-	const clicked = await clickText(page, '看这一帧');
-	check('「看这一帧」可点并且切进了历史事故上下文', clicked === 'clicked', clicked);
+	// 方案 1 的入口在主界面:「查看这次卡顿」→ 进历史事故详情视图。
+	// 「看这一帧」仍在开发者详情的「最差事件」块里(能力没删),所以这里先试主入口再兜底。
+	const clicked = await clickText(page, '查看这次卡顿');
+	const clickedOld = clicked === 'clicked' ? clicked : await clickText(page, '看这一帧');
+	check('主界面「查看这次卡顿」可点,并且切进了历史事故详情视图', clickedOld === 'clicked', clickedOld);
 
 	const ctxIncident = await contextBar(page);
 	check('详情区第一行是**历史事故**上下文(不是实时那一支)', typeof ctxIncident === 'string' && ctxIncident.includes('历史事故') && ctxIncident.includes('历史帧'), JSON.stringify(ctxIncident));
+	check('卡顿详情视图是独立一屏(标题带视图名,而且有「← 返回」)', (await page.evaluate(`(() => {
+		const head = document.querySelector('#dsh-perf-hud-root').innerText.split(String.fromCharCode(10))[0];
+		const back = [...document.querySelectorAll('#dsh-perf-hud-root button')].some((node) => node.textContent.trim() === '← 返回');
+		return { head, back };
+	})()`)).back === true, '');
 	check('事故回放的时间轴在场(历史帧条)', (await frameCount(page)) > 0);
 	check('面板没有渲染错误', (await errors(page)).length === 0, JSON.stringify(await errors(page)));
 
@@ -138,7 +146,23 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 		`${JSON.stringify(beforeReload)} → ${JSON.stringify(afterReload)}`);
 	check('刷新之后面板依然没有渲染错误', (await errors(page)).length === 0, JSON.stringify(await errors(page)));
 
-	// 切回实时:历史块让位给实时帧条与实时读数
+	// 三个视图都真的能进:「← 返回」→ 主界面 → 开发者详情(5 个标签页)→ 设置
+	const leave = await clickText(page, '← 返回');
+	const mainView = await page.evaluate(`(() => {
+		const text = document.querySelector('#dsh-perf-hud-root').innerText;
+		return { has: text.includes('当前状态') && text.includes('可能原因'), back: [...document.querySelectorAll('#dsh-perf-hud-root button')].some((node) => node.textContent.trim() === '← 返回') };
+	})()`);
+	check('「← 返回」回到主界面(那一屏只回答五个问题,不再挂返回按钮)',
+		leave === 'clicked' && mainView.has === true && mainView.back === false, JSON.stringify(mainView));
+
+	const toDev = await clickText(page, '开发者详情(技术数据)');
+	const devTabs = await page.evaluate(`(() => {
+		const text = document.querySelector('#dsh-perf-hud-root').innerText;
+		return ['帧与归因', 'DOM 与堆', '宿主与链路', '工具箱', '原始数据'].filter((label) => text.includes(label)).length;
+	})()`);
+	check('开发者详情有 5 个标签页(现有能力一个都没删)', toDev === 'clicked' && devTabs === 5, String(devTabs));
+
+	// 切回实时:历史块让位给实时帧条与实时读数(这个动作在开发者详情的「最差事件」块里)
 	const back = await clickText(page, '回到实时');
 	const liveCtx = await contextBar(page);
 	const liveStrip = await page.evaluate(`!!document.querySelector('#dsh-perf-hud-root svg[viewBox="0 0 60 18"]')`);
@@ -146,6 +170,19 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 	check('回到实时:上下文标题变成实时监控 · 当前帧', back === 'clicked' && typeof liveCtx === 'string' && liveCtx.includes('实时监控'), JSON.stringify(liveCtx));
 	check('回到实时:60 秒实时帧条回来,历史回放块消失', liveStrip === true && historyGone === true, JSON.stringify({ liveStrip, historyGone }));
 	check('全程面板 0 渲染错误', (await errors(page)).length === 0);
+
+	// 设置:记录模式 / 数据保留 / 隐私与脱敏 三块都在,而且深录不是默认开的
+	const toSettings = await clickText(page, '设置');
+	const settings = await page.evaluate(`(() => {
+		const text = document.querySelector('#dsh-perf-hud-root').innerText;
+		return { blocks: ['记录模式', '数据保留', '隐私与脱敏'].filter((label) => text.includes(label)).length,
+			deep: !!window.__perfHud.precise, localOnly: text.includes('默认不上传') };
+	})()`);
+	// ⚠️ 这个文件的 check 是 (name, ok, detail) —— ok 必须是**布尔**,传数组一律算失败(踩过)
+	check('设置页三块齐全(记录模式 / 数据保留 / 隐私与脱敏),隐私写着"默认不上传"',
+		toSettings === 'clicked' && settings.blocks === 3 && settings.localOnly === true, JSON.stringify(settings));
+	check('设置页不改变采集:深录仍然默认关(要显式开)', settings.deep === false, String(settings.deep));
+	check('设置页渲染 0 错误', (await errors(page)).length === 0);
 });
 
 console.log(failed === 0 ? 'ALL PASS(真页面 · 历史事故逐帧回放)' : `FAILURES=${failed}`);

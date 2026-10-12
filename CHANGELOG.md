@@ -5,6 +5,7 @@
 ## 未发布
 
 ### 新增
+- **界面改成四个视图(方案 1:整屏切换,不再把摘要贴在旧面板顶上)**。默认是**主界面**,只回答五个问题:当前状态(`healthVerdict()`:运行流畅 / 刚才有卡顿 / **监测受限** —— HUD 关着或 LoAF 没装上时给的是后者 + 原因,绝不伪装成正常)、最近一次卡顿(秒数 + 时刻 + 现场有没有留住)、可能原因(`causeCandidates()`,每条都带**支持与限制**)、最近趋势(1 小时 / 24 小时可切:检测到几次 / 最长一次 / 重复线索)、两个主操作(查看这次卡顿 / 导出诊断报告)。**卡顿详情**是独立一屏(「← 返回」);**开发者详情**是 5 个标签页(**帧与归因 / DOM 与堆 / 宿主与链路 / 工具箱 / 原始数据**,照实映射现有分组,现有能力一个都没删);**设置**管记录模式(守夜默认常开、深录必须显式开)、数据保留与隐私脱敏。落盘只存"在看哪个视图 / 哪个标签页 / 哪个趋势窗口"(`LS_VIEW`),**不存任何读数**;折叠药丸展开时回到主界面。主界面**不出现** LoAF / p99 / RTT / 包名排行 / 帧编号。
 - **能力矩阵 + 诊断包:把"哪一层采到了、可能是什么原因、缺什么"固化成可断言的数据**(`capabilities()` / `capabilityMissing()` / `causeCandidates()` / `buildPack()`)。`capabilities()` 是能力状态的唯一事实来源(renderer / host / link 三组叶子 + `unobserved` 一层:GPU 合成、Electron 主进程、原始源码行号、帧内顺序、DevTools trace),每片叶子给 `{ state, provenance, reason }`;事故包那串 `missing:` / `howToAdd` 改由 `capabilityMissing(row)` 从它推出来(前缀形状不变,线上断言照旧认)。`causeCandidates(row)` 给**最多 3 条候选原因**,每条带**支持证据 / 限制 / 出处三档**(`measured` / `inferred` / `unknown`),而且限制里一定有"不等于已定位根因";`worstFrameJs === 'none'` 时不会顺手写节流结论(只有 `suspectedThrottle` 成立才写"更像 rAF 挂起或浏览器节流")。`__perfHud.pack(id)` 打出**四个文件**:`manifest.json`(入口:schemaVersion、平台、采集档位、能力矩阵、脱敏、不含什么)/ `summary.md`(固定五段:摘要 → 最可能的假设 → 缺失的证据 → 下一步验证 → 元信息)/ `incident.json`(与面板「导出事故包」同源)/ `README.md`(怎么读 + 隐私口径);`preview(id)` 只给清单,`exportPack(id)` 才下载(P0 逐个文件,P1 换成一个 zip)。构建全是**纯函数**,不碰 DOM —— 所以离线套件直接断言格式,以后换界面 / 加 MCP 不用动这份格式。
 - **捕获频次:跨刷新的时间桶,与"留存了几份现场"彻底分开**(`state.tally` / `LS_TALLY` = `dsh-perf-hud:tally:v1`)。留存清单受容量限制(最差 10 + 每天 1),**它的条数不能回答"最近卡了几次"** —— 被挤掉的卡顿不是没发生(实测一次会话里 `captured 40 · dropped 38`)。现在每分钟一个 7 元桶、只留最近 24 小时,再按天汇总 30 天;落盘走 2 秒合并定时器(`markTallyDirty`:后摇窗口里每帧都会触发,不能每帧写盘),读回时形状不对的桶**整桶丢掉**并把原因记进 `tally.loadError`。四个数各有各的名字,面板悬停与导出件(`context.tally`)都写全:**检测到 = `triggered`**(起过几次捕获)**/ 同串触发 = `coalesced`**(同一串里被并掉的触发数,是密度不是次数)**/ 已保存现场 = `incidents.length` / 丢失 = (triggered − captured) + dropped + trimmed + failed**。折叠药丸那一格从"留存份数"改成"最近 24 小时检测到几次"(它原来把 `incidents.length` 显示成"抓到 N 次",正是产品计划 §3.A 要拆开的那个混淆)。`clearIncidents()` **不清**计数桶(清掉的是证据,不是事实),要清频次得显式 `clearTally()`。
 
@@ -35,6 +36,8 @@
 
 
 ### 测试
+- 断言 **561 → 574** 条(logic 511 → 524):视图模型与主界面 13 条 —— 监测不可用不许说"运行流畅"、三个档位图标不同、秒数写法、`frameLevel` 与判色同源(fps 20 → stall/bad;最差帧 130ms 也 stall)、趋势三个数的口径与长度预算 ≤ 60、只出现一次不算"重复线索"、空窗口给人话不显示零值。
+- `tools/check-incident.mjs` 跟着改成方案 1 的走法,并把**视图切换**也纳入验收:主界面「查看这次卡顿」→ 卡顿详情(独立一屏,有「← 返回」)→ 逐帧回放照旧 → 刷新后仍停在同一帧 → 「← 返回」回主界面(不再挂返回按钮)→ 开发者详情 5 个标签页 → 「回到实时」→ 设置页三块齐全且深录仍默认关。**ALL PASS**。
 - 断言 **539 → 561** 条(logic 489 → 511):能力矩阵(叶子形状与枚举、三组齐全与 unobserved、没插桩时 DOM 写入 off 且理由写明、element timing 恒 unsupported、`capabilityMissing` 由它推且前缀齐全)+ 候选原因(最多 3 条、每条三个非空字段、限制里必有"不等于根因"、覆盖率不到 100% 时写明还剩几条、宿主只在 p99 偏高时出现、`worstFrameJs==='none'` 时只能"证据不足"或"更像…"、空 id 给空数组)+ 诊断包(四文件顺序、manifest 字段、凭据进不去、五段形态、每条假设的出处只能是三档之一、预览的包含 / 排除 / 脱敏、`dropFreeText` 在 manifest 与 incident 两处都留标记、不存在的 id 返回 null)。
 
 - 离线断言 **497 → 539** 条(attribution 11 / logic **489** / host 39):捕获计数的口径(窗口边界按分钟桶切、`coveredFrom/To` 照实给、日汇总与当日分钟桶同一口径、24h 外裁剪有计数、`worstMs` 取 max 不求和、跨刷新读回、坏 JSON 与形状不对的桶不静默变 0、`bumpTally` 认不出的 kind 不静默记错、起过捕获没切成现场单列 `unsettled`、清事故不动计数桶、药丸文案不再拿留存份数当次数)+ 导出脱敏(丢查询串 / 留 rev / 只换值不换键 / `~` 降级 / UA 降级 / 数组走脚本规则 / `dropFreeText` 留 `noteDropped` 标记)。`ci.yml` 的 `-eq` 门禁与 README / README_EN / AGENTS / REVIEW 的数字同步。

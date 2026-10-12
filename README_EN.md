@@ -92,6 +92,19 @@ hot-loads it in dev), `index.js` → **restart the host**, `package.json`'s `dsh
 The host half is **optional**: without it the panel still works, and the three host-dependent rows say
 "unavailable" with a reason instead of pretending.
 
+## 🧭 Interface structure (scheme 1: full-screen views)
+
+The panel has **four views**, one at a time (only the view name is persisted, never any reading):
+
+| View | For | Answers |
+|---|---|---|
+| **Overview** (default) | everyday users | Is it smooth right now / how long was the last stall and when / what might have caused it (each candidate with its **support and limits**) / how many stalls in the last hour or 24 hours and whether a lead repeats; the two primary actions are "view this stall" and "export the diagnostic report" |
+| **Stall detail** | looking at that one stall | Its own screen with "← Back"; the incident's real timeline, per-frame navigation, and that frame's breakdown and evidence (all from **its own** incident pack) |
+| **Developer details** | developers | 5 tabs: **Frames & blame** / **DOM & heap** / **Host & link** / **Toolbox** / **Raw data** — nothing was removed, it moved from one long screen with five folded groups into one group per tab |
+| **Settings** | everyone | Capture mode (night watch always on / deep recording explicit), retention policy, privacy and redaction |
+
+The default screen never shows LoAF / p99 / RTT / package rankings / frame indices — those live in developer details. Collapsed, it is the pill in the bottom-right corner (fps / worst frame / stalls detected in the last 24 hours); expanding it returns to the overview.
+
 ## Reading the panel
 
 The plugin has **three tiers**, and the default is the cheapest one — it measures other people's performance,
@@ -255,12 +268,12 @@ the offline suites assert its shape directly — a future UI rewrite or MCP serv
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 511 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 524 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 39 assertions: real index.js driven by a fake ctx
-# 561 offline assertions total, no running DSH required
+# 574 offline assertions total, no running DSH required
 ```
 
-The i18n dictionary now has **325 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
+The i18n dictionary now has **379 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
 

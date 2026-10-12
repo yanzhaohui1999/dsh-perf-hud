@@ -53,6 +53,10 @@ const pluginUrl = source.slice(source.indexOf('const PLUGIN_URL'),
 
 const pieces = [
 	pluginUrl,
+	// 单行常量(没有块)走 line():extract 会一路找到文件后面某个 '{'。
+	// 视图模型的两条窗口常量排在 state 之前 —— state 里就用到它们(TDZ)。
+	'const TALLY_TREND_SHORT_MS = ',
+	'const TALLY_TREND_LONG_MS = ',
 	'const state = {',
 	'function isCore(',
 	'function ownerOfUrl(',
@@ -62,7 +66,9 @@ const pieces = [
 	'function round1(',
 	'function worstSecond(',
 	'function blame(',
-].map((header) => extract(source, header)).join('\n');
+].map((header) => (header.startsWith('const ') && header.endsWith('{') === false
+	? line(header)
+	: extract(source, header))).join('\n');
 
 const api = new Function(`${pieces}
 	const ring = [];
@@ -228,7 +234,9 @@ process.exitCode = failed === 0 ? 0 : 1;
 		// 盖不到它们 —— 这里对它们单独跑同一条分析(§8 第 7 条那类事故的回归)。
 		const helpers = ['function contextBar(', 'function ringBlock(', 'function scriptBreakdownRows(', 'function evidenceBlock(',
 			'function crossBlock(', 'function liveFramePickRow(', 'function timelineBlock(', 'function longTaskBlock(',
-			'function verdictBlock(', 'function incidentDetail(', 'function liveDetail('];
+			'function verdictBlock(', 'function incidentDetail(', 'function liveDetail(',
+			// 方案 1 的视图函数(同样定义在 `function PerfHud(` 之前)
+			'function mainView(', 'function settingsView(', 'function devTabRow('];
 		const text = helpers.map((header) => extract(source, header)).join('\n');
 		const code = text.replace(/'(?:[^'\\]|\\.)*'/g, "''").replace(/"(?:[^"\\]|\\.)*"/g, '""');
 		const bare = [...new Set([...code.matchAll(/(?<![.\w$-])([a-z_$][\w$]*)\s*\(/g)].map((match) => match[1]))];
@@ -306,6 +314,11 @@ const sandbox = `
 		maxLabel: '最大', pickNone: '这条事故包里没有帧记录(老包或捕获时没采到):只能看窗口统计,不能逐帧回看',
 		viaNotFetched: '还没预取(只有深录才拉脚本文本)', evidenceBundleLine: '合并脚本行',
 		watchTrimmed: '裁掉',
+		// 视图模型 / 主界面
+		healthOk: '运行流畅', healthStall: '刚才有卡顿', healthLimited: '监测受限', hudOff: 'HUD 已关闭', loafOff: 'LoAF 未装上',
+		stallSaved: '现场已自动保存', stallNotSaved: '现场未完整保存', secondsUnit: ' 秒',
+		stallSuffix: '卡顿', trendNone: '这段时间没有检测到卡顿', trendRepeat: '重复线索', tallyWorst: '最长一次',
+		times: ' 次', watchKept: '已保存现场', watchLost: '丢失', tallyUnit: ' 份',
 		// 可能原因 / 能力矩阵 / 诊断包:断言要看真词
 		causeScriptLead: '脚本耗时最高的包', causeLongTaskLead: '长任务归属', causeHostLead: '宿主事件循环', causeNoEvidenceLead: '缺少 JS 阻塞证据',
 		causeUnresolvedSuffix: '没定到包名', causeHostBasis: '事故前后的宿主事件循环', hostSnapshotNotInstant: '这份宿主快照每 10 秒采一次',
@@ -328,6 +341,10 @@ const sandbox = `
 	];
 `;
 const newPieces = [
+	// 视图模型的三条常量:state 里就用到,必须排在 state 之前(否则运行到 state 就 TDZ)
+	'const LS_VIEW = ',
+	'const TALLY_TREND_SHORT_MS = ',
+	'const TALLY_TREND_LONG_MS = ',
 	'const state = {',
 	'function round1(',
 	'function pluginTable(',
@@ -449,6 +466,7 @@ const newPieces = [
 	'function infraVerdict(',
 	'function sceneChip(',
 	'function unexplainedFrame(',
+	'function frameLevel(',
 	'function levelFrame(',
 	'function hostSummary(',
 	'function hostLoopText(',
@@ -551,6 +569,14 @@ const newPieces = [
 	// 能力矩阵 + 可能原因 + 诊断包(整机导出件 snapshot 会调 capabilities)
 	'const CAUSE_MAX = ',
 	'const PACK_SCHEMA_VERSION = ',
+	'function healthIcon(',
+	'function healthText(',
+	'function healthVerdict(',
+	'function repeatedLead(',
+	'function trendSummary(',
+	'function trendText(',
+	'function secondsText(',
+	'function lastStallSubText(',
 	'function provenanceOf(',
 	'function capabilities(',
 	'function capabilityMissing(',
@@ -582,7 +608,7 @@ const box = new Function(`${sandbox}\n${newPieces}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentFrameBadStep, incidentVerdict, verdictColor, eventVerdictText, eventTitleText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -591,6 +617,9 @@ const box = new Function(`${sandbox}\n${newPieces}
 		redactExport, redactPageUrl, redactScriptUrl, redactPath, redactUserAgent, scrubParams, redactionReport, SECRET_PARAM, SECRET_PARAM_NAMES,
 		// 能力矩阵 / 可能原因 / 诊断包
 		capabilities, capabilityMissing, provenanceOf, provenanceText, strengthText, causeCandidates,
+		healthIcon, healthText, healthVerdict, repeatedLead, trendSummary, trendText, secondsText, lastStallSubText,
+		// 视图模型断言要用计数桶:直接测纯函数,不走 snapshot
+		clearTally, bumpTally, tallyWindow, noteTallySeverity,
 		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview, exportPack, CAUSE_MAX, PACK_SCHEMA_VERSION } };`)();
 const EX = box.EX;
 box.state.samplesLength = 1;
@@ -1704,6 +1733,76 @@ check('端到端:导出件自带 redaction 三问三答(applied / kept / neverCo
 check('端到端:不许把"做减法"说成"已匿名化"(口径要照实)',
 	[/匿名化/.test(exported.context.redaction.rule), /做减法/.test(exported.context.redaction.rule)], [true, true]);
 
+// ═══════════ 视图模型与主界面(方案 1 的第一屏)═══════════════
+// 主界面只回答五个问题,所以这一组断言盯三件事:
+//   ① 监测不可用时**不许**说"运行流畅"(必须给"监测受限" + 原因);
+//   ② 主界面文案有长度预算(它是最挤的一屏,而且看不到浏览器渲染);
+//   ③ 趋势那一行的三个数各有各的口径(次数不是留存数,重复线索只数留存下来的)。
+box.state.on = false;
+check('主界面:关掉 HUD 时说"监测受限"并给出原因,不许报"运行流畅"',
+	(() => { const v = EX.healthVerdict(); return [v.level, EX.healthText(v.level), /关闭/.test(v.reason)]; })(),
+	['limited', '监测受限', true]);
+box.state.on = true;
+box.state.watch.loafState = 'unsupported:no-loaf';
+check('主界面:LoAF 装不上时也是"监测受限",理由带上原始状态',
+	(() => { const v = EX.healthVerdict(); return [v.level, /未装上/.test(v.reason), /unsupported/.test(v.reason)]; })(),
+	['limited', true, true]);
+box.state.watch.loafState = 'on';
+box.state.fps = 59;
+box.state.frameWorst = 17;
+check('主界面:采到了而且没到线 = 运行流畅', [EX.healthVerdict().level, EX.healthText('ok')], ['ok', '运行流畅']);
+box.state.fps = 20;
+check('主界面:帧档位与判色同源(fps 20 就是不流畅)',
+	[EX.healthVerdict().level, EX.frameLevel(20, 17), EX.levelFrame(20, 17).includes('error')], ['stall', 'bad', true]);
+box.state.fps = 59;
+box.state.frameWorst = 130;
+check('主界面:最差帧越过 120ms 也算"刚才有卡顿"(只看 fps 会漏)',
+	[EX.healthVerdict().level, EX.frameLevel(59, 130)], ['stall', 'warn']);
+box.state.frameWorst = 17;
+
+check('主界面:三个档位的图标不一样(不能只靠颜色)',
+	[EX.healthIcon('ok'), EX.healthIcon('stall'), EX.healthIcon('limited')], ['✓', '!', '—']);
+check('主界面:秒数写法(毫秒读不出量级)', [EX.secondsText(326.5), EX.secondsText(980), EX.secondsText(0)], ['0.33 秒', '0.98 秒', '0.00 秒']);
+check('主界面:最近一次卡顿的副行 ≤ 40 字(时间 + 现场有没有留住)',
+	(() => {
+		const text = EX.lastStallSubText({ at: '2026-10-12T12:30:39.000Z', kept: 'kept' });
+		return [text.length <= 40, /已自动保存/.test(text)];
+	})(), [true, true]);
+check('主界面:现场没留住时照实说(不许默认"已保存")',
+	/未完整保存/.test(EX.lastStallSubText({ at: '2026-10-12T12:30:39.000Z', kept: 'dropped' })), true);
+
+// ── 趋势:三个数各有各的口径 ──
+watchless: {
+	const savedIncidents = box.state.watch.incidents.slice();
+	box.state.watch.incidents.length = 0;
+	EX.clearTally();
+	const base = 1700000040000;
+	EX.bumpTally('triggered', base - 60000);
+	EX.bumpTally('triggered', base - 60000);
+	EX.bumpTally('coalesced', base - 60000);
+	// "最长一次"走的是严重度通道(不是 triggered 的累计),所以这里单独记一笔
+	EX.noteTallySeverity(base - 60000, 300);
+	box.state.watch.incidents.push(
+		{ id: 'a', severity: 300, at: new Date(base - 120000).toISOString(), packages: [{ pkg: 'dsh-x', ms: 200, count: 2 }] },
+		{ id: 'b', severity: 150, at: new Date(base - 240000).toISOString(), packages: [{ pkg: 'dsh-x', ms: 90, count: 1 }] });
+	const trend = EX.trendSummary(3600000, base);
+	check('趋势:检测到 2 次(triggered)· 最长一次取 max · 重复线索按留存清单数',
+		[trend.detected, trend.kept, trend.repeated === null ? null : trend.repeated.name, trend.repeated === null ? null : trend.repeated.count],
+		[2, 2, 'dsh-x', 2]);
+	check('趋势:那一行的三个数各有各的名字,而且 ≤ 60 字(主界面最挤的一行)',
+		(() => { const text = EX.trendText(3600000, base); return [text.length <= 60, /2 次卡顿/.test(text), /最长一次/.test(text), /重复线索/.test(text)]; })(),
+		[true, true, true, true]);
+	check('趋势:没有卡顿时给一句人话,不是"0 次"(不显示零值)',
+		[EX.trendText(3600000, base + 7200000), EX.trendText(60000, base)], ['这段时间没有检测到卡顿', '这段时间没有检测到卡顿']);
+	check('趋势:只出现一次不算"重复线索"', (() => {
+		box.state.watch.incidents.length = 1;
+		return EX.repeatedLead(3600000, base);
+	})(), null);
+	box.state.watch.incidents.length = 0;
+	for (const row of savedIncidents) box.state.watch.incidents.push(row);
+	EX.clearTally();
+}
+
 // ═══════════ 能力矩阵 / 可能原因 / 诊断包(P0.2 + P0.3)═══════════════
 // 这一组挡的是:① "哪一层没采到"被写成一句没人能核的话;② 把"耗时最高的包"说成根因;
 // ③ 诊断包与面板各说各话(所以两边读的是同一批纯函数)。
@@ -1946,6 +2045,9 @@ const watchPieces = [
 	extract(source, 'function clearTally('),
 	// 能力矩阵(事故包的缺失声明由它推)
 	line('const MUT_SAMPLE'),
+	line('const LS_VIEW'),
+	line('const TALLY_TREND_SHORT_MS'),
+	line('const TALLY_TREND_LONG_MS'),
 	line('const CAUSE_MAX'),
 	line('const PACK_SCHEMA_VERSION'),
 	extract(source, 'function severityLevel('),
@@ -2087,6 +2189,7 @@ const watchBox = new Function(`
 		longTasks: [],
 		// 捕获计数的时间桶(与 client.js 的 state.tally 同形;手写桩,加字段要同步)
 		tally: { minute: new Map(), day: new Map(), expiredBuckets: 0, expiredDays: 0, prunedMinute: -1, loadError: null, savedAt: 0, dirty: false, timer: 0 },
+		view: 'main', devTab: 'frames', trendMs: TALLY_TREND_SHORT_MS,
 		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', pickT: null, selId: null, mode: 'live', frameT: null, scope: 'worst', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
 			// A4:交互计时的状态位(eventObserver 由 startInteractions 自己写)
 			eventObserver: null, eventState: 'not-started', eventSupported: [], interactions: [], eventCount: 0, elementCount: 0 },
@@ -3729,11 +3832,9 @@ check('计数:折叠药丸不再拿留存份数当发生次数(静态)', (() => 
 	const seg = source.slice(at, source.indexOf("h('button'", at));
 	return [true, seg.includes('incidents.length') === false];
 })(), [true, true]);
-check('计数:清事故不动计数桶(清掉的是证据,不是事实)', (() => {
-	const from = source.indexOf('clearIncidents() {');
-	const to = source.indexOf('clear() {', from);
-	const body = source.slice(from, to);
-	return [from !== -1, to !== -1, body.includes('tally') === false];
+check('计数:清事故不动计数桶(清掉的是证据,不是事实);而且设置页与 API 共用这一条实现', (() => {
+	const body = extract(source, 'function clearIncidentsNow(');
+	return [body.includes('tally') === false, body.includes('watch.incidents.length = 0'), /clearIncidents: clearIncidentsNow,/.test(source)];
 })(), [true, true, true]);
 
 // 这一段动过真事故数组,收尾还原,别影响别的断言
