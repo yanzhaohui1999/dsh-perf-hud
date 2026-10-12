@@ -15,7 +15,12 @@
 
 **本轮做出来的口径**(已在代码、断言与文档三处一致):`检测到 = triggered`、`同串触发 = coalesced`(密度不是次数)、`已保存现场 = incidents.length`、`丢失 = (triggered − captured) + dropped + trimmed + failed`;`capabilities()` 是能力状态的唯一事实来源;`causeCandidates()` 是"可能原因"的唯一生成处。
 
-**下一轮(P0.4–P0.6,已确认的方案 1)**:整屏切换的主界面 / 卡顿详情 / 开发者详情(5 个标签页)/ 设置;数据接口已经稳定,界面只需读这四个纯函数(`capabilities` / `causes` / `tally` / `buildPack`)。P1 的自研 store-only zip 与可移植 Agent Skill 排在 UI 之后。
+| P0.4–P0.6 界面重构(方案 1) | `16dbae6` | 断言 561 → **574**;真页面:`check-incident` 走完 主界面 → 卡顿详情 → 刷新 → 返回 → 开发者详情 5 标签页 → 回到实时 → 设置 |
+
+**下一轮(收尾)**:方案 1 已经落地(见上表):四个视图 + 开发者详情五标签页 + 设置,**现有能力一个都没删**。仍然留给下一轮的是:
+- **导出对话**:现在导出入口在「原始数据」标签页(整机 JSON / 事故包 / 诊断包 + 预览),概念图里那种"两个卡片 + 导出前预览"的独立对话**没做** —— 它要一次下载多个文件,而 P1 的自研 store-only zip 才是正经交付方式,两件事一起做更划算;
+- **P1**:自研 store-only zip(零依赖 + CRC32)、可移植 Agent Skill(`skills/dsh-perf-diagnosis/`)、黄金样本;
+- **P2**:只读 MCP(等真实需求;`capabilities()` 与 `manifest.schemaVersion` 就是留给它的接口)。
 
 ---
 
