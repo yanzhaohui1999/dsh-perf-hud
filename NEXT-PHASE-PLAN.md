@@ -18,8 +18,8 @@
 | P0.4–P0.6 界面重构(方案 1) | `16dbae6` | 断言 561 → **574**;真页面:`check-incident` 走完 主界面 → 卡顿详情 → 刷新 → 返回 → 开发者详情 5 标签页 → 回到实时 → 设置 |
 
 **下一轮(收尾)**:方案 1 已经落地(见上表):四个视图 + 开发者详情五标签页 + 设置,**现有能力一个都没删**。仍然留给下一轮的是:
-- **导出对话**:现在导出入口在「原始数据」标签页(整机 JSON / 事故包 / 诊断包 + 预览),概念图里那种"两个卡片 + 导出前预览"的独立对话**没做** —— 它要一次下载多个文件,而 P1 的自研 store-only zip 才是正经交付方式,两件事一起做更划算;
-- **P1**:自研 store-only zip(零依赖 + CRC32)、可移植 Agent Skill(`skills/dsh-perf-diagnosis/`)、黄金样本;
+- **导出对话**:现在导出入口在「原始数据」标签页(整机 JSON / 事故包 / 诊断包 + 预览),概念图里那种"两个卡片 + 导出前预览"的独立对话**没做** —— 它要一次下载多个文件,而自研 store-only zip 两个都要用,两件事一起做更划算;
+- **P1**:~~自研 store-only zip(零依赖 + CRC32)~~ → **已落地**(`f92399e`,断言 591 → 603;`exportPack(id)` 现在一次下载一个 `-ai` / `-full` zip,预览给压缩包总大小)。仍然待做:可移植 Agent Skill(`skills/dsh-perf-diagnosis/`)、黄金样本;
 - **P2**:只读 MCP(等真实需求;`capabilities()` 与 `manifest.schemaVersion` 就是留给它的接口)。
 
 ---
@@ -218,6 +218,6 @@
 ## 7. 需要先定的四件事(会影响文件清单与提交顺序)
 
 1. **P0 一次做完,还是先做 P0.1~P0.3(数据层,界面不动)?** 数据层单独交付就能让导出件立刻可用(P1 的 Skill 依赖它),而且**零界面风险**。
-2. **`crossSummary` 没有长度预算**(REVIEW §3.4 的债)—— 顺路还掉,还是单开一个 `test` 提交?
-3. **`replaySplitText` / `stressText` / `pkgWhoText` / `invokerWhoText` 四个零调用点函数**(REVIEW §3.4)—— 这轮重排会决定它们是"找到回落点"还是"连断言一起删"。
+2. ~~**`crossSummary` 没有长度预算**(REVIEW §3.4 的债)—— 顺路还掉,还是单开一个 `test` 提交?~~ → **已还**(`clipName()` 截到 14 / 15 字符 + 真实量级名字的预算断言,见 CHANGELOG「未发布 · 修复」)。
+3. ~~**`replaySplitText` / `stressText` / `pkgWhoText` / `invokerWhoText` 四个零调用点函数**(REVIEW §3.4)—— 这轮重排会决定它们是"找到回落点"还是"连断言一起删"。~~ → **已还**:连同另外六个零调用点函数一起删了(函数 + `extract` / `pieces` / 断言 + 只被它们引用的 13 个词典键);`node tools/dead-code.mjs` 现在 0 个候选。
 4. **Skill 的落点**:只放仓库 `skills/`(随包发布),还是同时在 `~/.dsh/skills/` 装一份(要写进 README,不能偷偷装)?

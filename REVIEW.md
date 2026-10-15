@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场(2026-10-11 `gh repo view` 实测 `PUBLIC`) |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,而且 **`tools/` 与 `locale/` 按目录核**(以后加验证器或加语言文件不会漏检),显式清单 + 目录共覆盖包内全部 **18** 个文件(含 `package.json`),漏一份就失败 |
-| 6 | 门禁全绿 | ✅ 603 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ 585 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
 | 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
 
@@ -34,7 +34,7 @@
 
 | 判据 | 怎么验 | 最新实测 |
 |---|---|---|
-| 离线断言全绿 | `npm test` | **603** 条(attribution 11 / logic 553 / host 39) |
+| 离线断言全绿 | `npm test` | **585** 条(attribution 11 / logic 533 / host 41) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 守夜默认**零插桩** | `snapshot().instrumented` 在三种模式下的取值 | 默认(不插桩)档:`precise: false` / `instrumented: false`,`errors: 0` —— 守夜档仍然零插桩;点「深录」→ `true / true`;点回去 → `false / false`,`errors` 全程 0 |
@@ -147,11 +147,14 @@
    所以放在一起做,别分两次。**它正是 `missing` 里 `recorder-cost` 那句的来源**:在 `incidentReport()` 的
    `context` 里加一行 `recorder: selfStats()` 之后,那句 `missing` 就不再是缺失项,应当一并删掉
    (现在那句已经改成实话:"没带在这份事故包里")。
-3. **`__perfHud.stress()` 的结果没人看得到(明确不做,等真有人用自测时再定)**:面板不再渲染"自测结果",
+3. **`__perfHud.stress()` 的结果没人看得到(2026-10-13:选了"删字符串"那一支,缺口如实留着)**:面板不再渲染"自测结果",
    `stressText()` 在 `client.js` 里已无调用点;更要紧的是 `stress()` **什么都不返回** —— 控制台点了自测,
-   **没有任何可读结果**(`PerfHudStress` / `stress()` 本身按 D4 保留,它是归因链路的自测夹具)。真要动,应该连着
-   "自测结果给谁看"一起定(把结果接回面板 = 小改;或连 `stressText()` 与它引用的那些 i18n 键、8 条断言一起删)。
-   现在**明确不做**,免得只清字符串把这个缺口盖住。
+   **没有任何可读结果**(`PerfHudStress` / `stress()` 本身按 D4 保留,它是归因链路的自测夹具)。这里当时留了两种改法:
+   把结果接回面板(小改),或连 `stressText()` 与它引用的那些 i18n 键、断言一起删。2026-10-13 随死代码层一起选了**后者**:
+   `stressText()` 与它的 11 条断言、9 个只被它引用的词典键(自测那一组)都删了,**缺口不掩盖** ——
+   `stress(nodes, burnMs)` 仍然照旧工作(给 longtask / fiber / DOM 写入三条腿造受控输入),只是**仍然没有可读结果**;
+   `state.stress` 那点记账(`commitMs` / `writes0`)是留给"接回面板"那一支的钩子,一并保留。
+   真要补结果,现在只剩"接回面板"这一条路。
 
 ### 3.3 定了不做的
 
@@ -176,7 +179,7 @@
 - **悬停联动停用且辅助代码已删**:`hot` / `setHot` / `hotProps` / `hotStyle` 与各处 `hot === …` 都不在了。2026-10-08 会让外壳停用整个条目,2026-10-11 在当前代码上**复现不出来**(163 个元素真实鼠标 + 153 次 JS 派发 `mouseover` 全程存活),既不能证明根因也不能证明已修好 —— **恢复前必须先能复现**(复现配方在渲染区注释里,含去外壳日志 grep `slot entry crashed`),否则不要把它当可用特性写进任何文档。
 - ~~**`pkgZeroText` 那段「0 条定到名(带分母)」永远不渲染**:它的分支条件与同屏「其余来源」那行互斥 —— 走到那一步时 `byOther` 一定非空,所以面板上看不到这段文案(函数与断言都还在,套件因此是绿的)。~~ → **已删**:确认**不可达**(外层要求 `window.js > 0`,而 `js > 0` 必然有脚本,脚本要么进 `top`、要么进 `byOther` 且 ms>0,两者互斥),死分支与 `pkgZeroText` 一起删掉;断言改成**实际渲染的那份数据**(喂给「按包」堆叠条的是 `whoRows(tally)`,一个包名都没定到时看到的是按原因命名的「其余来源」段,不是一行"0 条定到名"),并加静态断言「全仓不再有 `pkgZeroText`」。证据在 §2。
 - **`tallyScripts` 算出的 `unresolvedMs` 没有运行时读者**:它被算出来并写进 tally,但面板与导出件都没有任何一处读它(只有单测顺手断言了它)。
-- **`stressText` / `pkgWhoText` / `invokerWhoText` 三个函数零调用点**:界面撤下入口后它们只剩单测覆盖着 —— 单测仍绿,但这条路上任何回归都不会影响用户可见行为。**2026-10-11 起 `replaySplitText` 也进了这一类**:历史那一支改用逐帧的 `frameSplit` + 时间轴之后,它只剩定义处与一条断言(`replaySplitText({ split: null })`)还在引用 —— 与上面三个同样处理(要么给它找回落点,要么连同断言一起删)。
+- ~~**`stressText` / `pkgWhoText` / `invokerWhoText` 三个函数零调用点**~~ → **已还(2026-10-13)**:界面撤下入口后它们只剩单测覆盖着(单测仍绿,但这条路上任何回归都不会影响用户可见行为)。**2026-10-11 起 `replaySplitText` 也进了这一类**;2026-10-13 用 `node tools/dead-code.mjs` 把这一类**整个清掉**:`experimentText` / `beyondNoiseText` / `metricList` / `stressText` / `eventTitleText` / `tallyText` / `pkgWhoText` / `invokerWhoText` / `replaySplitText` / `levelDown` 十个函数连同 `tests/logic.mjs` 里的 `extract` / `pieces` / 断言一起删掉(只删函数会让 `extract` 直接抛;只删断言会留下没人用的函数),外加 `state.markDraft` 与 `PerfHud()` 里三个未用局部(`v` / `tally` / `unexplained`),以及只被这些函数引用的 **13 个词典键**。死代码不许回来:扫描器现在是 **0 个候选**(它**不是门禁**,判据保守,见 §2)。
 - ~~**事故的**自己那段窗口**没有在面板里重放**:`incident.frames` / `incident.loaf` 是事故切片里的一份独立数据(与面板那个 `frameRing` 不是同一份),面板只做**就近定位**(`frameNearestIncident` 把翻帧钉到事故窗口内最接近的那条 LoAF)。要看事故那 13 秒的逐帧序列,只有「导出事故包」+ `tools/inspect-incident.mjs` 这一条路 —— 面板里没有"事故回放视图",要做的话得先把切片与帧环的关系定义清楚(它们的 `t` 分属两条时间轴)。~~ → **已还**:新增**事故回放**(见 §2)—— 切片与实时帧环的关系已经定义清楚(两条时间轴,**刻意分开显示**:上面是实时的 60 秒帧条,回放块写明事故 id 与跨度),数据全部来自事故包,所以刷新生效、零新增采集。**仍然成立**的只剩"不排帧内执行顺序"这一条能力边界。→ **2026-10-11 再进一步**:回放从一条窗口帧条升级成**可点、可翻帧的时间轴**(每列映射回真实帧 + 四个方向翻帧 + 选中帧自己的分解 / long task / 脚本证据),所以"面板里没有逐帧回看的路"这句**不再成立** —— 逐帧的证据面板上就有;「导出事故包」+ `tools/inspect-incident.mjs` 的定位随之变成"看面板**没有呈现的原始字段与更细的数据**(全部 LoAF / 脚本条目、窗口内 longtask 明细、按耗时排序的脚本)",不再是看逐帧明细的唯一入口。
 - **帧条点击只到"秒"这一级**:一格约 6px,一格里可能有多条 LoAF;`sparkPickMap` 只能取格里 `dur` 最大的那条。要逐帧选只能靠 ◀ ▶ / ⟲。
 ### 3.5 这一轮(历史事故逐帧诊断)留下的限制(2026-10-11 记,如实)
@@ -188,6 +191,6 @@
 - **1400 行以上的事故窗口仍然是"降采样后的形状"**:240 列对超长挂起(几秒的 gap)表现为一整段留白,列的计数(`count`)只在悬停里给 —— 这一层刻意不做密度图(它会把"没在测"画成"卡得很密")。
 - **`installStyle()` 是面板唯一的一处样式表**,而且用 `!important` 覆盖行内样式(面板其余样式全在行内)。它是纯 CSS,没有 JS 鼠标状态;要再加样式优先改行内,别往这张表里堆规则。
 - **验收器依赖两个约定**:根节点 `id="dsh-perf-hud-root"`(样式作用域与选择器)与详情区第一行的 `data-ctx-bar="1"`。它们不是给用户看的,但**改名字会让 `check-incident.mjs` / 悬停扫场失败** —— 改之前先看 `tools/check-incident.mjs`。
-- **第 5 个折叠组「包 × 来源 · 窗口」的摘要没有长度预算断言**:`crossSummary` 输出 `short(包) · short(来源) Nms`,名字与来源都可能很长(`dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms` = **53** 字符),在 396px 里会折行。组数从 4 变 5 时漏了这条预算;补的时候要用真实量级的名字(见 AGENTS §8 第 13 条)。
+- ~~**第 5 个折叠组「包 × 来源 · 窗口」的摘要没有长度预算断言**~~ → **已还(2026-10-13)**:`crossSummary` 的名字与来源都可能很长(`dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms` = **53** 字符),在 396px 里会折行。现在 `clipName()` 把两个名字各截到 `CROSS_SUMMARY_NAME_MAX` / `CROSS_SUMMARY_SRC_MAX`(14 / 15,完整名字在展开后的交叉表里),并补上**用真实量级名字**喂的预算断言(≤ 40 字符 + 必须出现省略号)。改文案时这条与另外五组一起跑。
 
 **时机**:0.4.0 已于 2026-10-11 发到 npm(手工首发,见 §3.1);发布这件事只剩两件:下次发版前配 Trusted Publisher、提收录 PR。

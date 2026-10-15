@@ -4,6 +4,23 @@
 
 ## 未发布
 
+### 重构
+- **死代码层清掉:`4393ea8` 撤面板入口时没收回来的函数、状态位与词典键**(2026-10-13,`review/2026-10-13-audit` 的实施)。`experimentText` / `beyondNoiseText` / `metricList` / `stressText` / `eventTitleText` / `tallyText` / `pkgWhoText` / `invokerWhoText` / `replaySplitText` / `levelDown` 十个函数在 `client.js` 里**零调用点**,却被 `tests/logic.mjs` 抽出来断言着 —— **改坏了没有任何界面会变,CI 却全绿**(与已还的 `pkgZeroText` 同一形态)。现在函数、`extract` / `pieces` 条目与对应断言一起删(`metricList` 是删 `beyondNoiseText` 之后才暴露出来的级联),连带只被它们引用的 **13 个词典键**(中英各 409 → **396**)、`state.markDraft` 与 `PerfHud()` 里三个未用局部(`v` / `tally` / `unexplained`)。重新扫:**0 个候选**(`node tools/dead-code.mjs`,判据保守,不是门禁)。断言 603 → **585**(attribution 11 / logic 533 / host 41)。
+- **`snapshot()` 不再是"读 + 写"**:`sessionBaselines()` 以前直通 `saveSessionBaseline()`,于是**文档承诺的只读 API 每被调一次就重写一遍 `localStorage` 的跨会话基线**(五个真页面验收器每轮会调它若干次,多数只为读 `errors`)。现在拆成 `readSessionBaselines()`(纯读)+ `mergeSessionBaseline()`(合并本次会话但**不写盘**)+ `saveSessionBaseline()`(只由 `pagehide` 调),导出件的内容**逐字不变**(仍含当前会话,仍最多 20 条),只是不再落盘;新增断言钉住"调 `sessionBaselines()` 前后 `localStorage` 一个字节都没变"。
+- **帧条不再白扫整个环**:`frameRing.slice()` 从环头正扫改成**从最新一帧倒着走、遇到 `at < from` 就停**。环容量 12000(60fps ≈ 3.3 分钟),而调用方只要最近 60 秒(≈3600 条)—— 展开「取证明细」时每个渲染 tick 白扫约 8400 条,正是"测量工具自己变成被测开销"那条边界要挡的事。倒扫依赖"环按时间升序"这条不变式(生产里每帧只经 rAF 循环 push 一次);一条构造出乱序环的旧用例因此改用 `triggerCapture` 起捕获,并把这个不变式写进注释。
+- **导出件的 `timeline.last60s` 删掉**:它是 `timeline.samples` 的子集(500 条环约 106KB,它重复约 13KB),而全仓唯一引用是一句 `Array.isArray`。
+
+### 修复
+- **诊断包 `manifest.files` 的顺序说错了**:manifest 在描述"这份包里有什么"时把 `summary.md` 排在第一,而 `buildPack()` 与 UI 词典 `packFilesValue` 都是 `manifest.json` 在最前(它是入口,注释也这么写)。现在三处一致,并补一条断言(manifest 描述的顺序 == 包里真实的顺序)。
+- **折叠态与展开态对同一个数用了不同粒度**:宿主摘要写 `宿主 24.04ms`(实际是 p99),展开那一行写 `p50 X · p99 Y · 最大 Z` —— 读者会把折叠态的数当成均值。现在摘要也写 `p99 Xms`(宿主与 RTT 两处)。
+- **工具箱折叠摘要与展开后第一行说同一句话**(`守夜 5 次 · 最差 282ms` vs `抓到 5 次 · 最差 282ms`):摘要改成折叠态独有的信息 `守夜 N 次 · 24h 检测 M 次`(跨刷新、24 小时口径),`抓到 / 最差 / 读回 / 裁掉` 仍只由展开后那一行给。
+- **`localStorage` 键位清单两处都不全**:面板那行只列 7 个、README 列 11 个,而代码里有 **13 个**;两处都漏了 **`:deep`**(它决定下次打开是守夜档还是深录档)。现在面板与 README 对齐成同一份 13 项清单,并把"会改变采集档位"的三个(`:on` / `:deep` / `:precise`)点出来。
+- **`__perfHud.marks()` 在 README 里承诺过却没实现**:`4393ea8` 撤「场景标记」面板入口时给的出口一直是空的。现在补上只读 getter(`marks: () => state.marks`),并加静态断言防止它再消失。
+- **`crossSummary`(第 5 个折叠组摘要)没有长度预算**:真实量级的名字 `dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms` = **53** 字符,在 396px 里会把摘要折成参差两行。现在 `clipName()` 把两个名字各截到 14 / 15 字符(完整名字在展开后的交叉表里),并补上**拿真实量级名字喂**的预算断言(≤ 40 字符 + 必须出现省略号)。
+- **`check-counts.mjs` 的"有时绿"**:它等 `pending === null` 就立刻 `capture()`,但等待期间守夜可能又自己触发一次,手动标记被并进 pending、样本不带备注 —— 第一次跑 3 条 FAIL、重跑三次全过。现在看 `capture()` 的返回值(`{ok, reason}`)**重试**,并按 `capture().incident.id` 取回刚标记那条,不再用"谁有备注就取谁"的启发式。这种抖动比红更糟:它会训练人忽略失败。
+- **宿主半的 confirm 安全线只钉住了一半**:`setBundle` 的 deny 名单有两项(自己 + `session-persistence-jsonl`),而 `tests/host.mjs` 只测了"拒绝动自己"。补上第二条,并断言两条都拒绝时**一次都没写**。
+- **README 的两处漂移**:`exportPack` 那行还写着"逐个文件下载(P1 换成一个 zip)"(zip 已在 `f92399e` 落地);`NEXT-PHASE-PLAN.md` 的"下一轮"清单里 zip 也还在待办。
+
 ### 新增
 - **诊断包改成一个 ZIP 一次下载**(`zipStore()` / `crc32()`,**零依赖、store 模式不压缩**)。P1 之前是逐个下载 4 个文件 —— 部分浏览器会把后续下载拦掉,用户文件夹里也会散落四个文件。现在 `exportPack(id, options)` 打一个 zip,名字带 `-ai` / `-full`,两条路径落到磁盘上也分得清。不压缩的理由:包里全是 JSON / Markdown,deflate 能省一半体积,但要么引依赖、要么依赖异步的 `CompressionStream`,为几十 KB 不值得;CRC 用逐位算法(一次打包只调 4 次,省掉一份模块级查表状态)。预览卡从"每份大小"改成**压缩包总大小 + 逐份清单**,并删掉那句"一次打包成一个 zip 是下一步"的过渡文案。
 - **主界面的「最近一次卡顿」用时间语义,与开发者详情的「最差事件」分开**(`latestIncident()`)。原来主界面吃的是 `selectedIncident()`,而它默认跟**全局最差**那条 —— 于是一小时前那次最严重的会被显示成"最近一次"。现在两个语义各有各的函数、各有各的视图:主界面 = 时间最新,开发者详情 = 默认最差 / 用户手选;结构上有断言钉住"主界面不碰 selectedIncident"。

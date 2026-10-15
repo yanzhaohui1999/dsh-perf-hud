@@ -291,7 +291,7 @@ dsh plugin --profile web add "$PWD"
 | `report(id)` / `exportIncident(id)` | 事故包对象 / 触发下载 |
 | `capabilities()` | 能力矩阵:每层证据的状态 / 原因 / 出处三档 |
 | `causes(id)` | 候选原因(每条带支持 / 限制 / 出处)—— 面板与诊断包读同一份 |
-| `pack(id)` / `preview(id)` / `exportPack(id)` | 诊断包对象 / 只为预览的清单 / 逐个文件下载(P1 换成一个 zip) |
+| `pack(id)` / `preview(id)` / `exportPack(id)` | 诊断包对象 / 只为预览的清单 / **一个 store-only zip 一次下载**(四份文件都在里面) |
 | `capture(note)` | 手动标记"刚刚卡了一下"(回退 3 秒反应时间) |
 | `clearIncidents()` | 只清事故(**不动发生频次**:清掉的是证据,不是事实;要清频次用 `clearTally()`) |
 | `tally(ms?)` / `tallyOfDay(day)` | 发生频次:窗口内(默认 24h)的检测到 / 已保存现场 / 丢失三个数 / 某一天的汇总(**本地日期**) |
@@ -305,18 +305,18 @@ dsh plugin --profile web add "$PWD"
 | `stress(nodes?, burnMs?)` | 渲染型卡顿自测(显式燃烧,面板会标注"人为燃烧") |
 | `hostEvents(on)` / `host()` / `link()` | 宿主事件到达延迟开关 / 宿主回执 / 链路样本 |
 
-`localStorage` 键位(清状态时按需删):`dsh-perf-hud:ring:v1`(环形缓冲)、`:tally:v1`(**发生频次**:最近 24 小时的分钟桶 + 最近 30 天的日汇总,稀疏存储,空转近乎 0 字节)、`:on`、`:collapsed`、`:precise`、`:groups`、`:marks`、`:map:<rev>:<len>`(按 rev 缓存的 sourcemap 分段表)、`:incidents:v1`(留存的事故)、`:watchui:v1`(诊断上下文)、`:sessions:v1`(跨会话基线)。
+`localStorage` 键位(清状态时按需删):`dsh-perf-hud:ring:v1`(环形缓冲)、`:tally:v1`(**发生频次**:最近 24 小时的分钟桶 + 最近 30 天的日汇总,稀疏存储,空转近乎 0 字节)、`:on`(总开关)、`:collapsed`(收放)、**`:deep`(深录 = 插桩 + 精确归因)**、`:precise`(精确归因)、`:groups`(折叠状态)、`:marks`(场景标记)、`:view:v1`(视图 / 标签页 / 趋势窗口)、`:map:<rev>:<len>`(按 rev 缓存的 sourcemap 分段表)、`:incidents:v1`(留存的事故)、`:watchui:v1`(诊断上下文)、`:sessions:v1`(跨会话基线)。**会改变采集档位(也就是"面板贵不贵")的是 `:on` / `:deep` / `:precise` 三个。**
 
 ## 🛠️ 开发与测试
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 553 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
-node tests/host.mjs          # 39 条:用假 ctx 驱动真实 index.js
-# 合计 603 条断言,离线,无需 DSH 在跑
+node tests/logic.mjs         # 533 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js
+# 合计 585 条断言,离线,无需 DSH 在跑
 ```
 
-i18n 词典现在是**中英各 409 键**(两本字典键集合必须一致,且每个键都得有人引用 —— 撤下界面时留下的死键会被断言报出来)。
+i18n 词典现在是**中英各 396 键**(两本字典键集合必须一致,且每个键都得有人引用 —— 撤下界面时留下的死键会被断言报出来)。
 
 线上验证(需要先换 cookie,步骤见 [AGENTS.md](AGENTS.md) §2.2):
 

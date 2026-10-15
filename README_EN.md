@@ -274,7 +274,7 @@ is expensive in some usage", so do not read it as a causal proof.
 ## 📦 Diagnostic pack (readable by people and by AI)
 
 `__perfHud.pack(id)` turns one incident into **four files** (nothing downloads; `preview(id)` returns only the
-manifest, `exportPack(id)` downloads them):
+manifest, `exportPack(id)` downloads **a single store-only zip** containing all four):
 
 | File | What it is |
 |---|---|
@@ -301,12 +301,12 @@ the offline suites assert its shape directly — a future UI rewrite or MCP serv
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 553 assertions: real functions extracted from client.js + static checks + length budgets
-node tests/host.mjs          # 39 assertions: real index.js driven by a fake ctx
-# 603 offline assertions total, no running DSH required
+node tests/logic.mjs         # 533 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/host.mjs          # 41 assertions: real index.js driven by a fake ctx
+# 585 offline assertions total, no running DSH required
 ```
 
-The i18n dictionary now has **409 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
+The i18n dictionary now has **396 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
 

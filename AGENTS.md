@@ -124,8 +124,8 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 553 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
-node tests/host.mjs          # 39 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
+node tests/logic.mjs         # 533 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
 一条命令跑完:`npm test`。线上(先按 §2.2 换 cookie):
@@ -180,12 +180,12 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **标签不收缩、数值换行**:行布局是 `label { flex: 0 0 auto; nowrap }` + `value { flex: 1 1 auto; textAlign: right }`;反过来会把标签挤成"一字一行"(实测「宿主事件到达」竖排过)。
 - **长文本用块式 + 主动断行**:可能超一行的行(概览、折叠摘要)用"标签独占一行 + 值左对齐 + `white-space: pre-line` 自己给 `\n`",不要赌浏览器宽度(曾断在 `最多` 后面,把 `ChatView 22×` 甩到下一行)。
 - **能不说就不说**:「最多」与「最差那条」名字相同时整行不显示(它只是把同一句话说两遍);说明文字放 `title` 悬停,不占正文。概览两行同理:`overviewLine1()` **已删掉 `(最差那条:未归因)` 后缀** —— 它与紧接着的 `overviewLine2()` 里 `最差那条:<归属>` 的**触发条件完全相同**(都是 `primaryBlame(worst) === null`),相邻两行必然把同一句话说两遍;现在第一行只给 `帧 Xms · LT Yms · 命中 a/b`,「最差那条是谁」只由第二行给,两个口径本该分开读的提醒由第二行自己的标签承担(断言:第一行不含 `未归因`、第二行含)。「最差事件」块同理:`eventValueText(row)` 一行说清三种状态(未开录 → `未开录`;没有事故 → `还没抓到(≥100ms)` —— 阈值写在这一行里,不再另起一行重复;有事故 → `严重/警告 326ms`),`watchFlagText()` 只在"读回 / 裁掉 / 落盘失败"这类**还有话要说**时才返回第二行,未开录与"还没抓到"都不重复。两个一次性说明(`state.copyNote` / `state.pickNote`)由 `resetLayout()` 一并清掉 —— 布局都回到默认了还挂着旧说明,只会让人以为又出错了。
-- **长度预算**:概览两行与**四个**折叠组摘要都有字符上限(36 / 60 / **26** / 30 / 34 / 24,顺序 = 概览两行 + 取证明细 / DOM 与堆 / 宿主与链路 / 工具箱),由 `tests/logic.mjs` 钉住 —— 本会话看不到浏览器渲染,只能靠预算把"又挤成三行"这类回归钉在测试里。改文案必须重跑。**这份清单以断言为准**:AGENTS 里这行曾写成 34(记的是另一组数字),对不上时改文档,不要改断言。⚠️ **第五组「包 × 来源 · 窗口」的摘要(`crossSummary`)没有预算断言** —— 组数从 4 变 5 时漏掉了它;它的名字与来源都可能很长(`dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms` 实测 **53** 字符,在 396px 里会折行),这是已知的债(见 [REVIEW.md](REVIEW.md) §3.4)。补断言时要拿**真实量级**的名字(见 §8 第 13 条)。
+- **长度预算**:概览两行与**五个**折叠组摘要都有字符上限(36 / 60 / **26** / 30 / 34 / 24 / **40**,顺序 = 概览两行 + 取证明细 / DOM 与堆 / 宿主与链路 / 工具箱 / **包 × 来源**),由 `tests/logic.mjs` 钉住 —— 本会话看不到浏览器渲染,只能靠预算把"又挤成三行"这类回归钉在测试里。改文案必须重跑。**这份清单以断言为准**:AGENTS 里这行曾写成 34(记的是另一组数字),对不上时改文档,不要改断言。第五组「包 × 来源 · 窗口」的摘要(`crossSummary`)从"没有预算"补上了 —— 它的名字与来源都可能很长(`dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms` 实测 **53** 字符,在 396px 里会折行),现在用 `clipName()` 把两个名字各自截到 `CROSS_SUMMARY_NAME_MAX` / `CROSS_SUMMARY_SRC_MAX`(14 / 15,完整名字在展开后的交叉表里)。补预算时要拿**真实量级**的名字(见 §8 第 13 条)。
 - **单位一致性**:同一张表里不许一处给 `/s`、另一处给累计;任何"和邻居不同单位"的读数都要有断言(曾出现"上面是 /s、下面给累计")。
 - **折叠组默认不做昂贵分析,现在由 `group()` 的 thunk 保证**:`group(key, label, summary, ...children)` 支持"唯一一个 child 且是个函数"的形式,折叠时**连函数体都不进**;五个调用点(`detail` / `cross` / `dom` / `host` / `tools`)全传 thunk,所以「取证明细」收起时脚本按包 / 交叉表 / 帧条一次都不算。代价要记住:`cross` 那一层仍嵌套在「取证明细」的 thunk 里 —— 一展开「取证明细」,调用方就先构造 `crossTable(scriptPkgTally())` 与 `kids` 数组(4×5 格,代价低),所以窗口聚合那份缓存不能省。
 - **可点 / 不可点的界线(不要做假按钮)**:可点 = 「按来源 / 按包」小表的**具名行**(→ `copyText` 复制「名字 + 毫秒」,成功/失败都照实写进 `state.copyNote`)、工具箱事故清单行(→ 选中)、帧条**有 LoAF 的格子**(→ 钉住那一帧)、组头(→ 折叠)、**可疑脚本的每一行**(→ 复制那条证据行);**不可点** = 堆叠条的**色段**本身(`cursor` 是 `default`)、「其余」那一行(它是合计数,没有单个名字可复制)。
 - **按钮按需出现,不留"点了没反应"的动作**:「全部折叠」只在**有组开着**时渲染(`anyGroupOpen()`),「恢复默认布局」只在 `layoutDirty()` 为真时渲染(有组开着 / 翻帧被钉住 / 手选了事故 / `scope` 不是 `worst` / 挂着一次性说明);两者都无意义时整行不渲染。新加"布局类"按钮前先问:默认状态下点它会发生什么?什么都不会发生就别显示。
-- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键(现在中英各 **409** 键)—— 两条断言钉住这件事(logic.mjs):**键集合必须一致**、**每个键都得有人引用**(撤下界面时留下的死键会被报出来;死键那条只认字面量 `t('…')` / `translate('…')`,真要加动态取键得先放宽它)。**兜底策略跟文档语言**:locale 服务不在时按 `document.documentElement.lang`(取不到退 `navigator.language`)选那本字典,不是中文就用英文 —— 写死中文会让英文用户看到中文,简单反转(`DICT.en ?? key`)又会让中文用户看到英文,两种都错。
+- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键(现在中英各 **396** 键)—— 两条断言钉住这件事(logic.mjs):**键集合必须一致**、**每个键都得有人引用**(撤下界面时留下的死键会被报出来;死键那条只认字面量 `t('…')` / `translate('…')`,真要加动态取键得先放宽它)。**兜底策略跟文档语言**:locale 服务不在时按 `document.documentElement.lang`(取不到退 `navigator.language`)选那本字典,不是中文就用英文 —— 写死中文会让英文用户看到中文,简单反转(`DICT.en ?? key`)又会让中文用户看到英文,两种都错。
 - **插桩必须可还原**:包装 `setTimeout/setInterval/rAF` 与 `appendChild/insertBefore/setAttribute` 时,保存原生引用、只在"当前仍是我们那个 wrapper"时才还原(避免踩掉别人的包装)。
 - **改 `client.js` 一律用带锚点的小批次**:一次替换一个可唯一匹配的片段,失败即整批作废。本项目有**两次**"整段替换吞掉相邻声明"的事故(§8 第 7 条)。
 
@@ -377,14 +377,14 @@ DOM 写入挪进「DOM 与堆」、`回调归因` 未插桩时降级成一行 `�
 分流点只有 `detailContext()` 一处;历史帧条是**导航器**(240 列,每列取该列最差的一帧,点击映射回 `incident.frames` 里的真实记录,
 rAF 挂起的区间留白),四个方向翻帧(没有下一条就禁用),选中帧的分解 / 脚本 / long task / 证据全部只吃那一帧(缺就是缺,不回退);
 归因状态收敛成**已确认 / 可疑 / 未归因**三档并去掉"更像 rAF 被节流"这类把可能写成结论的说法;诊断上下文落盘 `LS_WATCHUI`,
-刷新后仍停在同一条事故的同一帧。`npm test` 现在 **603** 条(attribution 11 / logic 553 / host 39),CI 门禁与文档同步成 `-eq 603`;
+刷新后仍停在同一条事故的同一帧。`npm test` 现在 **585** 条(attribution 11 / logic 533 / host 41),CI 门禁与文档同步成 `-eq 585`;
 真页面验收:`check-panel` / `check-storage` / `check-interaction` / **新增 `tools/check-incident.mjs`** 四个验证器 **ALL PASS**(见 REVIEW §2)。
 
 **仍然存在的债(套件是绿的 ≠ 它们没问题)**:
 
 - ~~`pkgZeroText` 的「0 条定到名(带分母)」分支实际不可达~~ → **已还**:死分支与函数都删了,断言改成实际渲染的数据(见 §7)。
 - `tallyScripts` 算出的 `unresolvedMs` **全仓没有读者**(只有定义处与测试断言引用它)。
-- `stressText` / `pkgWhoText` / `invokerWhoText` 三个函数**零调用点**,却被 `tests/logic.mjs` 覆盖着 —— 这正是"套件绿"与"代码没死"之间的差距:断言只证明函数还算得对,不证明面板还会调它。**2026-10-11 起 `replaySplitText` 也进了这一类**(历史那一支改用逐帧的 `frameSplit` + 时间轴之后,它只剩定义处与一条断言还在引用),要么给它找回落点,要么连同断言一起删。
+- ~~`stressText` / `pkgWhoText` / `invokerWhoText` / `replaySplitText` 等零调用点函数~~ → **已还(2026-10-13)**:`experimentText` / `beyondNoiseText` / `metricList` / `stressText` / `eventTitleText` / `tallyText` / `pkgWhoText` / `invokerWhoText` / `replaySplitText` / `levelDown` 十个函数连同它们在 `tests/logic.mjs` 里的 `extract` / `pieces` / 断言、以及只被它们引用的 13 个词典键一起删了(函数删了断言必须一起删,否则 `extract` 直接抛)。这正是"套件绿"与"代码没死"之间的差距:断言只证明函数还算得对,不证明面板还会调它。死代码不许回来 —— `node tools/dead-code.mjs` 现在是 0 个候选。
 - 悬停联动**停用且辅助代码已删干净**(`hot`/`setHot`/`hotProps`/`hotStyle` 都没了):2026-10-08 会让外壳停用整个条目,2026-10-11 在当前代码上**复现不出来**(163 个元素真实鼠标 + 153 次 JS 派发 `mouseover` 全程存活),既不能证明根因也不能证明已修好 —— 恢复前必须先复现出来(配方在 §7),不要把它当可用特性写进任何文档。
 - **原始源码行号 / 调用栈 / 函数级耗时仍然拿不到**:要解 section 内层 `mappings`(VLQ)或录 Chrome trace。「可疑脚本」只能缩小到"哪个包的哪个文件哪一段"。
 - **函数名经常缺失**:LoAF 的 `sourceFunctionName` 在合并/压缩脚本里常常是空 —— 面板照实写「函数名未记录」,这不是 bug。
@@ -394,7 +394,7 @@ rAF 挂起的区间留白),四个方向翻帧(没有下一条就禁用),选中�
 —— ⚠️ 新建配置**必须在 2 天内完成一次成功发布**,否则作废且无法编辑,所以**别提前配**;
 ② 收录 PR 还没提。
 `release.yml` 对"该版本已在 npm 上"幂等(发布前查 registry,查到就跳过;查询失败照实报错),所以给手工首发那一版建 Release 只会走"跳过"分支,不会再发一次。
-三条新发现的尾巴(A5 还没接进客户端/导出件、D4 的 `stressText()` 死代码、`locale` 的打包边界)也记在 REVIEW §3.2。已完成的验收证据在 REVIEW §2。
+三条新发现的尾巴(A5 还没接进客户端/导出件、~~D4 的 `stressText()` 死代码~~(2026-10-13 已随死代码层删掉;`stress()` 夹具保留,仍然没有可读结果)、`locale` 的打包边界)也记在 REVIEW §3.2。已完成的验收证据在 REVIEW §2。
 
 ---
 
