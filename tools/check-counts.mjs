@@ -24,12 +24,18 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 
-/** 词典的键名:面板正文里出现任何一个,就说明它少了词条、界面上印出了 key(实测踩过 7 个)。 */
+/**
+ * 词典的键名:面板正文里出现任何一个,就说明它少了词条、界面上印出了 key(实测踩过 7 个)。
+ * ⚠️ 必须**求出真对象**再取键:词典里一行常常有**多个**键(`title: '…', off: '…', turnOn: '…',`),
+ * 行首正则只能数到第一个 —— 409 键会被数成 196,漏文案检测就只覆盖不到一半的键(同一个坑:
+ * logic.mjs 的"死键 / 引用必须存在"两条断言用的是真对象,所以它们没被坑到)。
+ */
 const DICT_KEYS = (() => {
 	const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 	const start = source.indexOf('const DICT = {');
-	const block = source.slice(start, source.indexOf('\n\t\t};', start));
-	return [...new Set([...block.matchAll(/^\s{4}([A-Za-z_$][\w$]*):/gm)].map((row) => row[1]))];
+	const end = source.indexOf('\n\t\t};', start) + '\n\t\t};'.length;
+	const DICT = new Function(`${source.slice(start, end)}\nreturn DICT;`)();
+	return Object.keys(DICT.zh);
 })();
 
 /** 某个视图的正文里有没有漏成 key 的文案。
@@ -52,7 +58,7 @@ const clickText = (evaluate, text) => evaluate(`(() => {
 	return 'clicked';
 })()`);
 
-await withPage({}, async ({ evaluate, reload, waitForHud, sleep }) => {
+await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	await waitForHud();
 	check('HUD 挂上了', await evaluate(`typeof window.__perfHud === 'object'`), true);
 
@@ -153,23 +159,26 @@ await withPage({}, async ({ evaluate, reload, waitForHud, sleep }) => {
 	check('诊断包:候选原因每条都带支持与限制、出处三档', pack.causeShape, true);
 	console.log(`     包 = ${pack.files.join(' / ')} · 候选 ${JSON.stringify(pack.causeLeads)}`);
 
-	// ── P1:ZIP 的真实字节验收(页面里生成的 zip 落盘,交给系统 unzip 判)──
+	// ── P1:ZIP 的真实字节验收(页面里生成的 ZIP 落盘,交给系统 unzip 判)──
 	// 先造一条**带备注**的事故:否则"AI 包脱敏 / 完整包保留"这件事根本验不到
 	// ⚠️ 手动标记会被**并进正在等的那一次**(`triggerCapture` 的 pending 分支),那样样本就没备注 ——
-	// 所以先等 pending 空出来。这不是放宽断言,而是让样本真的落在"手动标记"这条路上。
-	for (let attempt = 0; attempt < 20; attempt += 1) {
-		if (await evaluate(`window.__perfHud.watch().pending === null`)) break;
-		await sleep(300);
-	}
+	// 而产品代码把失败**照实回出来**了(`capture()` → `{ok:false, reason}`),所以这里**看返回值重试**,
+	// 不要"等 pending 空就立刻 capture"(等待期间守夜又自己触发一次,标记就被并掉 —— 实测过"有时绿"),
+	// 取样本也必须按 `capture().incident.id` 取回**刚标记那条**,不是"谁有备注就取谁"的启发式。
 	const zipInfo = await evaluate(`(async () => {
-		window.__perfHud.capture('验收:带备注 token=SECRET_NOTE');
-		await new Promise((resolve) => setTimeout(resolve, 900));
-		const list = window.__perfHud.incidents();
-		if (list.length === 0) return null;
-		const withNote = list.find((row) => row.note !== null && row.note !== undefined) ?? list[0];
-		const id = withNote.id;
-		return { id, hasNote: withNote.note !== null && withNote.note !== undefined,
-			ai: window.__perfHud.zip(id, { dropFreeText: true }), full: window.__perfHud.zip(id, { dropFreeText: false }) };
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		let row = null;
+		for (let attempt = 0; attempt < 20 && row === null; attempt += 1) {
+			const result = window.__perfHud.capture('验收:带备注 token=SECRET_NOTE');
+			if (result !== null && result !== undefined && result.ok === true && result.incident !== null && result.incident !== undefined) {
+				await sleep(300);   // 结算后的那一条要落进留存清单
+				row = window.__perfHud.incidents().find((item) => item.id === result.incident.id) ?? null;
+			}
+			if (row === null) await sleep(500);
+		}
+		if (row === null) return null;
+		return { id: row.id, hasNote: row.note !== null && row.note !== undefined,
+			ai: window.__perfHud.zip(row.id, { dropFreeText: true }), full: window.__perfHud.zip(row.id, { dropFreeText: false }) };
 	})()`);
 	check('ZIP:验收样本真的带备注(否则下面两条是空断言)', zipInfo === null ? false : zipInfo.hasNote, true);
 	if (zipInfo !== null) {

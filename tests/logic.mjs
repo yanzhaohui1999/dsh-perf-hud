@@ -195,6 +195,9 @@ process.exitCode = failed === 0 ? 0 : 1;
 	// A2:跨会话基线是"只进导出件"的 —— 两个导出件都要带,面板一个字都不显示
 	check('A2:整机导出件与事故包都带跨会话基线',
 		(source.match(/sessionBaselines: sessionBaselines\(\)/g) ?? []).length, 2);
+	// README 承诺过 `__perfHud.marks()`(撤面板入口时给标记清单留的出口);没有它那句文档就是假的
+	check('控制台 API 暴露 marks 只读 getter(与 README「控制台 API」那一行对齐)',
+		/marks: \(\) => state\.marks/.test(source), true);
 
 	// D5:面板的二级拆分与导出件必须吃同一份字段(否则"按包"两边会算出不同答案)
 	check('D5:面板二级与导出件用同一份字段(packageOfScript(url,charPos) 与 forcedMs)',
@@ -288,6 +291,7 @@ const sandbox = `
 		recorder: '记录器自身',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchManualNote: '手动标记', domWritesShort: 'DOM 写入',
+		watchDetected: '检测', watchKept: '已保存现场', watchLost: '丢失', tallyUnit: ' 份',
 		// P0/P1:严重度必须是**文字**(不能只靠颜色)+ 「最差事件」块那三行的口径词
 		sevBad: '严重', sevWarn: '警告', sevOk: '低于线', sevLabel: '严重度',
 		ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧',
@@ -411,6 +415,8 @@ const newPieces = [
 	'function fallback(',
 	'const WATCH_EVENT_MS = ',
 	'function sessionRecord(',
+	'function readSessionBaselines(',
+	'function mergeSessionBaseline(',
 	'function saveSessionBaseline(',
 	'function sessionBaselines(',
 	'const scriptLines = ',
@@ -435,17 +441,17 @@ const newPieces = [
 	'function linkStats(',
 	'function short(',
 	'function viaLabel(',
-	'function stressText(',
 	'function linkRowText(',
 	'function throughputText(',
 	'function suspectLink(',
 	'function experimentDelta(',
 	'function noiseFloor(',
 	'function significance(',
-	'function metricList(',
 	'const LS_GROUPS = ',
 	'const HOST_ROUTE = ',
 	'const TOP_N = ',
+	'const CROSS_SUMMARY_NAME_MAX = ',
+	'const CROSS_SUMMARY_SRC_MAX ',
 	'const EXPERIMENT_LOAD_BURN_MS = ',
 	'const EXPERIMENT_LOAD_PERIOD_MS = ',
 	'const EXPERIMENT_MAX_CANDIDATES = ',
@@ -526,14 +532,12 @@ const newPieces = [
 	'function detailContext(',
 	'function detailGroupLabel(',
 	'function revealIncident(',
-	'function eventTitleText(',
 	'function eventEvidenceText(',
 	'function eventWindowText(',
 	'function incidentSummaryText(',
 	'function copyText(',
 	'function watchFlagText(',
 	'const rateText = (series) => {',
-	'function beyondNoiseText(',
 	'function isStreaming(',
 	'function idleTick(',
 	'function rate(',
@@ -624,9 +628,9 @@ const box = new Function(`${sandbox}\n${newPieces}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, metricList, beyondNoiseText, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, stressText,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
-		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentFrameBadStep, incidentVerdict, verdictColor, eventVerdictText, eventTitleText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
+		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentFrameBadStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
 		sectionSource, sectionIndex, sectionPath, scriptPosition, viaText, scriptEvidence, evidenceName, evidencePlace, evidenceWhereText, evidenceLine, incidentScriptEvidence, incidentEvidenceAt, incidentEvidenceLines, EVIDENCE_MAX,
 		// 导出脱敏:整机 snapshot 的出口
@@ -1132,10 +1136,6 @@ check('事故归属:一个包名都没定到就是 null(面板照实写未归因
 	EX.incidentOwner({ ...incidentRow, packages: [], summary: { ...incidentRow.summary, topScripts: [{ pkg: null, ms: 9 }] } }), null);
 check('事故归属:空行不抛错', [EX.incidentOwner(null), EX.incidentOwner(undefined)], [null, null]);
 
-check('最差事件标题行:id · 原因 · 发生时刻(「最差」不是「最近」)',
-	EX.eventTitleText(incidentRow), 'i84 · frame · 14:48:03');
-check('最差事件标题行:时间戳读不出来时不编造时间',
-	EX.eventTitleText({ id: 'i1', cause: 'manual', at: 'not-a-date' }), 'i1 · manual');
 check('最差事件证据行:归因状态(文字档位)+ 主要归属(带毫秒)',
 	EX.eventEvidenceText(incidentRow), '归因状态 已确认 · 主要归属 dsh-status-rotator 210ms');
 // §五:没有 JS 证据**不许**说成"浏览器节流" —— 那只是其中一种可能,要挂条件(下面三条钉住)
@@ -1170,13 +1170,11 @@ check('jsNo 文案里不再出现"更像 rAF 被节流"这种把可能性写成�
 	/无\(longtask\/LoAF 都不与它重叠\)/.test(source) && source.includes("jsNo: '无(更像 rAF 被节流)'") === false, true);
 check('最差事件窗口行:单帧 / 累计的分母都写出来(帧数 · LoAF 条数 · 按包覆盖率)',
 	EX.eventWindowText(incidentRow), '窗口 12 帧 · LoAF 3 · 按包 4/6');
-// 这两行是 S.sub(允许换行),所以上限只是"防跑飞";真正必须一行的是上面那个标题行。
-check('最差事件标题行长度(必须一行放得下)',
-	EX.eventTitleText(incidentRow).length <= 30, true);
+// 这两行是 S.sub(允许换行),所以上限只是"防跑飞"。
 check('最差事件证据/窗口行长度上限(可换行,防跑飞)',
 	[EX.eventEvidenceText(incidentRow).length <= 60, EX.eventVerdictText(incidentRow).length <= 130, EX.eventWindowText(incidentRow).length <= 40], [true, true, true]);
-check('最差事件三行:没有事故时标题行照实说还没抓到,证据/窗口行给空串(不摆 0)',
-	[EX.eventTitleText(null), EX.eventEvidenceText(null), EX.eventWindowText(null)], ['还没抓到', '', '']);
+check('最差事件两行:没有事故时证据/窗口行给空串(不摆 0)',
+	[EX.eventEvidenceText(null), EX.eventWindowText(null)], ['', '']);
 
 check('复制摘要:带结论与口径(严重度文字 / JS 证据 / 归属 / 窗口分母)+ 口径与缺口两行',
 	(() => {
@@ -1506,54 +1504,8 @@ check('FPS 也崩了就不甩锅给链路', EX.suspectLink(), false);
 box.state.link = [];
 check('没有样本时不误报', EX.suspectLink(), false);
 
-// 自测必须"点了看得见":三种状态都要有明确文案(曾因清理定时器比渲染间隔短而毫无反应)
-box.state.stress = null;
-check('自测没跑过:只写未采集,不铺说明(说明在按钮 title 里)', EX.stressText(), '自测结果: 未采集');
-box.state.longTasks = [];
-box.state.stress = { at: Date.now(), nodes: 12000 };
-check('已点、长任务还没到:显示进行中', EX.stressText(), '自测进行中: 12000 节点 …');
-box.state.longTasks = [{ t: Date.now(), ms: 128.4, owner: 'dsh-x', component: 'PerfHudStress' }];
-check('长任务到了:给出耗时与组件名', EX.stressText(), '自测结果: 128ms · PerfHudStress (dsh-x)');
-box.setFlushSync(() => {});   // 真实场景里"同步提交"就意味着 flushSync 可用
-box.state.stress = { at: Date.now(), nodes: 12000, sync: true, commitMs: 300 };
-check('同步提交 + 长任务:附带提交耗时与模式',
-	EX.stressText(), '自测结果: 128ms · PerfHudStress (dsh-x) · 提交 300ms(同步)');
-box.setFlushSync(null);
-// 真实现场:React 时间切片 → 没有长任务。状态必须收敛并说明原因,不能永远"进行中"
-box.state.longTasks = [];
-box.state.stress = { at: Date.now(), nodes: 12000, sync: false, commitMs: 420 };
-check('切片提交没有长任务:如实说明并给提交耗时',
-	EX.stressText(), '自测结果: 未观察到长任务 · 提交 420ms(切片) · flushSync 不可用');
-// React 一次 appendChild 把整棵新子树挂上去 → 观察器只看到容器,长任务归属只能到容器;
-// DOM 写入插桩看到了每一个节点,于是能把 PerfHudStress 点名。两个来源都写出来。
-box.setFlushSync(() => {});   // sync:true 的场景里 flushSync 必然可用
-box.state.domWrites = new Map();
-const stressWrites = EX.domWriteSnapshot();
-box.state.domWrites.set('(PerfHudStress)', { count: 1200, ops: 120, components: new Map([['PerfHudStress', 1200]]) });
-box.state.longTasks = [];
-box.state.stress = { at: Date.now(), nodes: 12000, sync: true, commitMs: 11.2, writes0: stressWrites };
-check('没有长任务但有 DOM 写入:指名写入组件',
-	EX.stressText(), '自测结果: 未观察到长任务 · DOM 写入 PerfHudStress · 提交 11.2ms(同步)');
-box.state.longTasks = [{ t: Date.now(), ms: 56, owner: null, component: 'PerfHud' }];
-check('长任务归属与 DOM 写入不一致:两个都写出来',
-	EX.stressText(), '自测结果: 56ms · PerfHud / PerfHudStress(DOM 写入) · 提交 11.2ms(同步)');
-
 // 仪器自检:节点数凑不稳 >50ms,所以明着烧一段,并且必须把"人为燃烧"写在面板上
-box.state.longTasks = [];
-box.state.stress = { at: Date.now(), nodes: 8000, burnMs: 80, sync: true, commitMs: 94 };
-check('没长任务时也要写明人为燃烧', EX.stressText(),
-	'自测结果: 未观察到长任务 · 提交 94ms(同步 · 人为燃烧 80ms)');
-box.state.longTasks = [{ t: Date.now(), ms: 92, owner: null, component: 'PerfHud' }];
-check('有长任务时同样标注人为燃烧', EX.stressText(),
-	'自测结果: 92ms · PerfHud · 提交 94ms(同步 · 人为燃烧 80ms)');
-
 box.setFlushSync(null);
-box.state.stress = { at: Date.now() - 9000, nodes: 12000, sync: false };
-check('8 秒还没有任何结果:超时收敛,不再卡在"进行中"',
-	EX.stressText(), '自测结果: 未观察到长任务(8s) · flushSync 不可用');
-box.state.longTasks = [{ t: Date.now() - 60000, ms: 999, owner: null, component: null }];
-box.state.stress = { at: Date.now(), nodes: 12000, sync: false };
-check('窗口外的老长任务不算这次自测的结果', EX.stressText(), '自测进行中: 12000 节点 …');
 
 // 链路那一行必须自证完整:n= 露出来,吞吐三态都说清楚
 box.state.fps = 60;
@@ -1617,17 +1569,6 @@ check('noiseFloor 取基线间漂移的最大绝对值',
 check('significance 逐指标判断是否超出噪声',
 	EX.significance({ fps: -1, longTasks: 14, domPerMin: 4219, unattrAvg: 8 }, { fps: 3, longTasks: 2, domPerMin: 9, unattrAvg: 2 }),
 	{ fps: false, longTasks: true, domPerMin: true, unattrAvg: true });
-check('metricList 列出超标指标(未归因残差优先,fps 之后)',
-	EX.metricList({ fps: false, longTasks: true, domPerMin: true, unattrAvg: true }), '未归因/LT/DOM');
-check('全部落在噪声内:明确写「无」,不把漂移说成效果',
-	EX.metricList({ fps: false, longTasks: false, domPerMin: false }), '无');
-// 自己声明"该对照不可比"却又列「超出噪声 fps」,等于引诱读者挑数字当结论
-check('窗口含流式:不给超出噪声的结论',
-	EX.beyondNoiseText({ confounded: true, delta: { fps: -1.5 }, significant: { fps: true, longTasks: false, domPerMin: false } }),
-	'不适用(窗口含流式)');
-check('窗口可比:正常给出超标指标',
-	EX.beyondNoiseText({ confounded: false, significant: { fps: false, longTasks: true, domPerMin: true } }), 'LT/DOM');
-check('没有结果时不写结论', EX.beyondNoiseText(null), '未采集');
 
 // ── E:空闲基线门控(含一次真的窗口采集) ─────────────────────────
 box.state.baselineMs = 100;    // 只跑一轮,省时间
@@ -1694,8 +1635,8 @@ check('A2:导出件带跨会话基线(这个盒子里没有帧环 → 空数组,
 	[Array.isArray(exported.context.sessionBaselines.sessions), exported.context.sessionBaselines.sessions.length,
 		exported.context.sessionBaselines.keep, /不是回归判定/.test(exported.context.sessionBaselines.note)],
 	[true, 0, 20, true]);
-check('timeline 带每秒曲线与 60 秒切片',
-	exported.timeline.samples.length === box.state.samplesLength && Array.isArray(exported.timeline.last60s), true);
+check('timeline 带每秒曲线(60 秒切片已删:它是 samples 的子集,没有读者)',
+	exported.timeline.samples.length === box.state.samplesLength && exported.timeline.last60s === undefined, true);
 check('timeline 带场景标记与空闲基线',
 	exported.timeline.marks.length === 1 && exported.timeline.idleBaseline.label === 'idle', true);
 check('导出含 longTasks 段(明细 + 计数)',
@@ -2047,6 +1988,8 @@ const watchPieces = [
 	source.slice(source.indexOf('const LS_SESSIONS'), source.indexOf('\n', source.indexOf('const LS_SESSIONS'))),
 	source.slice(source.indexOf('const SESSION_KEEP'), source.indexOf('\n', source.indexOf('const SESSION_KEEP'))),
 	extract(source, 'function sessionRecord('),
+	extract(source, 'function readSessionBaselines('),
+	extract(source, 'function mergeSessionBaseline('),
 	extract(source, 'function saveSessionBaseline('),
 	extract(source, 'function sessionBaselines('),
 	extract(source, 'function watchInteraction('),
@@ -2054,6 +1997,9 @@ const watchPieces = [
 	`${extract(source, 'const scriptTallyCache = ')};`,
 	// 可疑脚本那一块最多列几条 —— 守夜盒的 evidenceScope 要用
 	source.slice(source.indexOf('const EVIDENCE_MAX'), source.indexOf('\n', source.indexOf('const EVIDENCE_MAX'))),
+	// 「包 × 来源」摘要的名字上限(折叠态那一行不许折成参差的两行)
+	source.slice(source.indexOf('const CROSS_SUMMARY_NAME_MAX'), source.indexOf('\n', source.indexOf('const CROSS_SUMMARY_NAME_MAX'))),
+	source.slice(source.indexOf('const CROSS_SUMMARY_SRC_MAX'), source.indexOf('\n', source.indexOf('const CROSS_SUMMARY_SRC_MAX'))),
 	extract(source, 'function invokerLabel('),
 	extract(source, 'function tallyScripts('),
 	extract(source, 'function scriptPkgTally('),
@@ -2062,8 +2008,6 @@ const watchPieces = [
 		source.slice(source.indexOf('const PLUGIN_URL'), source.indexOf('\n', source.indexOf('const PLUGIN_URL'))),
 	extract(source, 'function ownerOfUrl('),
 	extract(source, 'function unresolvedLabel('),
-	extract(source, 'function pkgWhoText('),
-	extract(source, 'function invokerWhoText('),
 	extract(source, 'function jsBreakdownText('),
 	extract(source, 'function unattrText('),
 	extract(source, 'function hitText('),
@@ -2092,7 +2036,6 @@ const watchPieces = [
 	extract(source, 'function replayScope('),
 	extract(source, 'function replayX('),
 	extract(source, 'function replaySummaryText('),
-	extract(source, 'function replaySplitText('),
 	extract(source, 'function incidentEvidenceAt('),
 	extract(source, 'function evidenceWhereText('),
 	extract(source, 'function locatable('),
@@ -2116,6 +2059,7 @@ const watchPieces = [
 	extract(source, 'function whoRows('),
 	extract(source, 'function crossTable('),
 	extract(source, 'function crossSummary('),
+	extract(source, 'function clipName('),
 	extract(source, 'function barSegments('),
 	extract(source, 'function worstLoaf('),
 	extract(source, 'function frameSeverity('),
@@ -2178,7 +2122,6 @@ const watchPieces = [
 	extract(source, 'function noteTallySeverity('),
 	extract(source, 'function tallyWindow('),
 	extract(source, 'function tallyOfDay('),
-	extract(source, 'function tallyText('),
 	extract(source, 'function tallyTitle('),
 	extract(source, 'function tallyReport('),
 	extract(source, 'function markTallyDirty('),
@@ -2348,11 +2291,11 @@ const watchBox = new Function(`
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		location,
 		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
-		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, frameSeverity, PICK_MIN_MS, unresolvedLabel, crossTable, crossSummary,
+		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, frameSeverity, PICK_MIN_MS, unresolvedLabel, crossTable, crossSummary, clipName,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT, sparkPickMap, sparkCellTitle, markResolved,
-		sessionRecord, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
-		tallyScripts, framePkgTally, pkgWhoText, whoRows, barSegments, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel, invokerWhoText,
-		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident, selectIncident, setIncidentScope, evidenceScope, evidenceFooter, evidenceFooterTitle, evidenceZeroText, incidentScriptEvidence, incidentEvidenceAt, evidenceWhereText, evidenceLine, evidenceName, evidencePlace, replayScope, replayX, replaySummaryText, replaySplitText, evidenceCalls: () => evidenceCalls,
+		sessionRecord, readSessionBaselines, mergeSessionBaseline, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
+		tallyScripts, framePkgTally, whoRows, barSegments, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel,
+		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident, selectIncident, setIncidentScope, evidenceScope, evidenceFooter, evidenceFooterTitle, evidenceZeroText, incidentScriptEvidence, incidentEvidenceAt, evidenceWhereText, evidenceLine, evidenceName, evidencePlace, replayScope, replayX, replaySummaryText, evidenceCalls: () => evidenceCalls,
 		// 诊断上下文 + 历史帧数据层(逐帧回放)
 		diagMode, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, incidentFrameLevel, selectIncidentFrame, incidentFrameStep, incidentFrameBadStep, showLiveMode, replayColumns, replayCellTitle, incidentWallClock, incidentFrameTally, incidentWindowTally, incidentFrameEvidenceRows, incidentLongTasksAt, incidentVerdict, verdictColor, incidentScriptOf, detailContext, incidentFrameHeadingText, liveFrameHeadingText, saveWatchUI, restoreWatchUI, LS_WATCHUI,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
@@ -2372,7 +2315,7 @@ const watchBox = new Function(`
 		crc32, zipStore,
 		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview,
 		// 捕获计数(与留存分离):桶 / 窗口 / 落盘
-		tallyWindow, tallyOfDay, tallyText, tallyTitle, tallyReport, bumpTally, noteTallySeverity, pruneTally,
+		tallyWindow, tallyOfDay, tallyTitle, tallyReport, bumpTally, noteTallySeverity, pruneTally,
 		saveTally, restoreTally, clearTally, tallyDayKey, tallySum, TALLY_FIELDS, TALLY_MINUTES, TALLY_BUCKET_MS, TALLY_DAYS, LS_TALLY,
 	};
 `)();
@@ -2424,6 +2367,9 @@ watch.state.watch.coalesced = 0;
 
 // 自动捕获(整条链):一帧超线 → 切片 → 留存
 // 上面"满环覆盖"那条用例已经把环灌满了,这里按需要重建窗口内的帧。
+// ⚠️ 帧环必须保持"按时间升序"这条不变式(生产里每帧只经 rAF 循环 push 一次):这里用
+// `triggerCapture` 直接起捕获(它不 push),而不是塞一个比最新帧更早的时刻进环 ——
+// 构造出乱序的环会让 slice 的倒扫与正扫给出不同结果,那是假状态,不是真实回归。
 watch.frameRing.reset();
 watch.frameRing.push(5000, 16.66, false);
 watch.frameRing.push(9900, 150, false);
@@ -2432,8 +2378,7 @@ watch.frameRing.push(10020, 8000, true);
 watch.frameRing.push(20000, 17, false);
 watch.state.longTasks.push({ t: Date.now(), at: 9900, ms: 150, owner: 'dsh-x', component: 'ChatRow', source: 'scheduler+render' });
 watch.setNow(100000);            // 远在 until 之后:立即结算
-watch.watchFrame(10000, 150, false);
-const firstIncident = watch.state.watch.incidents[0];
+const firstIncident = watch.triggerCapture('frame', 10000, 150);
 check('超线的一帧自动抓成一次事故', watch.state.watch.incidents.length, 1);
 check('事故带上触发原因与严重度', [firstIncident.cause, firstIncident.severity, firstIncident.kept], ['frame', 150, 'kept']);
 check('事故窗口 = 前摇 + 后摇', [firstIncident.window.fromMs, firstIncident.window.toMs, firstIncident.window.preMs, firstIncident.window.postMs], [0, 13000, 10000, 3000]);
@@ -2568,7 +2513,7 @@ check('事故回放:live 帧环为空(模拟刷新)也照样能回放 —— 数
 		const result = [
 			scope === null ? null : scope.frames.length, scope.span, scope.gaps,
 			scope.worst.ms, scope.split === null ? null : scope.split.total,
-			watch.replaySummaryText(scope), watch.replaySplitText(scope),
+			watch.replaySummaryText(scope),
 		];
 		watch.state.watch.incidents.length = 0;
 		for (const r of savedIncidents) watch.state.watch.incidents.push(r);
@@ -2577,13 +2522,10 @@ check('事故回放:live 帧环为空(模拟刷新)也照样能回放 —— 数
 		return result;
 	})(),
 	[3, 13000, 1, 320, 320,
-		'窗口 13秒 · 3 帧 · p50 20ms · p99 320ms · 最差 320ms · rAF 挂起 1',
-		'最差 320ms: 脚本 100 · 任务 0 · 渲染 100 · 样式+布局+绘制 120']);
+		'窗口 13秒 · 3 帧 · p50 20ms · p99 320ms · 最差 320ms · rAF 挂起 1']);
 check('事故回放横轴按**时间**放:起点 0、终点满宽、中间按比例、越界夹住(不是按序号)',
 	[watch.replayX(1000, 1000, 13000, 1000), watch.replayX(14000, 1000, 13000, 1000), watch.replayX(7500, 1000, 13000, 1000), watch.replayX(0, 1000, 13000, 1000), watch.replayX(999999, 1000, 13000, 1000), watch.replayX(5, 0, 0, 1000)],
 	[0, 1000, 500, 0, 1000, 0]);
-check('事故回放:没有 LoAF 重叠时照实说,不给假的时间分解',
-	watch.replaySplitText({ split: null }), '这一帧附近没有长动画帧记录(窗口里没有 LoAF)');
 
 // ── 历史事故的**逐帧**上下文:上下文隔离 / 帧条映射 / 四个方向的翻帧 ─────────────
 // 这份 fixture 就是"事故包"该有的样子:frames(含一个 gap)、loaf(带存下来的 pkg/file/line)、
@@ -3317,6 +3259,14 @@ check('交叉表:Top3 之间一格交集都没有时不留 null(摘要不能抛,
 		return [cross.top.who, cross.top.src, cross.top.ms, watch.crossSummary(cross)];
 	})(),
 	['A', 's1', 0, 'Top3 之间没有交集']);
+// 这条是补上来的债(REVIEW §3.4 / AGENTS §5):第五组摘要一直**没有**长度预算断言。
+// ⚠️ 必须拿**真实量级**的名字喂它:`dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms`
+// 不截断是 53 字符,而摘要那一行是 label(不收缩)+ value(右对齐),53 字符必然折成参差两行。
+check('「包 × 来源」摘要的长度预算(用真实量级的长包名与长来源名:不截断 = 53 字符)',
+	(() => {
+		const text = watch.crossSummary({ top: { who: 'dsh-client-ui-renderer', src: 'DOMWebSocket.onmessage', ms: 1234 } });
+		return [text.length <= 40, text.includes('…'), text.endsWith('1234ms')];
+	})(), [true, true, true]);
 check('"谁"的两类标签合起来排序(插件包 + 其余来源),堆叠条与交叉表共用',
 	watch.whoRows({ top: [['pkg', 10]], byOther: [['index-abc.js', 90], ['无 URL(内联脚本)', 5]] }),
 	[['index-abc.js', 90], ['pkg', 10], ['无 URL(内联脚本)', 5]]);
@@ -3581,11 +3531,17 @@ check('A2:导出的基线写明"粗参照,不是回归判定",并带全分布字
 })(), [1, 20, 10, true, true]);
 check('A2:同一个会话反复取只占一条(按 since 认人)',
 	[watch.sessionBaselines().sessions.length, watch.sessionBaselines().sessions[0].since === watch.sessionBaselines().sessions[0].since], [1, true]);
+check('A2:sessionBaselines() 是纯读 —— 不写 localStorage(snapshot() 是文档承诺的只读 API)', (() => {
+	watch.store.set('dsh-perf-hud:sessions:v1', JSON.stringify({ v: 1, sessions: [{ since: 'old-session', frames: 1 }] }));
+	const before = watch.store.get('dsh-perf-hud:sessions:v1');
+	const view = watch.sessionBaselines();
+	return [watch.store.get('dsh-perf-hud:sessions:v1') === before, view.sessions.length, view.sessions[view.sessions.length - 1].since !== 'old-session'];
+})(), [true, 2, true]);
 check('A2:最多留最近 20 个会话,更早的被挤出去', (() => {
 	watch.store.set('dsh-perf-hud:sessions:v1', JSON.stringify({ v: 1, sessions: [] }));
 	for (let i = 0; i < 25; i += 1) {
 		watch.state.since = 1700000000000 + i * 1000;
-		watch.sessionBaselines();
+		watch.saveSessionBaseline();
 	}
 	const list = JSON.parse(watch.store.get('dsh-perf-hud:sessions:v1')).sessions;
 	watch.state.since = 0;
@@ -3632,22 +3588,6 @@ check('D5:本帧聚合只吃那一条 LoAF(与窗口分母不同)',
 check('D5:本帧没有脚本时给 0(而不是 null);"没有这一帧"才给 null',
 	[watch.framePkgTally({ t: 1, dur: 10, scripts: [] }).js, watch.framePkgTally(null)],
 	[0, null]);
-check('D5:"是谁"那一段文案:Top3 + 其余 + 定不到包的条数',
-	(() => {
-		watch.pkgByUrl.set('u-c', { pkg: 'dsh-c', via: 'url' });
-		watch.pkgByUrl.set('u-d', { pkg: 'dsh-d', via: 'url' });
-		return [
-			watch.pkgWhoText(watch.tallyScripts([{ scripts: [{ url: 'u-a', ms: 60 }, { url: 'u-b', ms: 30 }, { url: 'u-c', ms: 20 }, { url: 'u-d', ms: 1 }] }])),
-			watch.pkgWhoText({ top: [], unresolved: 2 }),
-			// 有名字但只覆盖一部分:未定名那几条也要说,否则 200ms 会被当成这一层的全部
-			watch.pkgWhoText(watch.tallyScripts([{ scripts: [{ url: 'u-a', ms: 200 }, { url: 'u-zz', ms: 900 }] }])),
-		];
-	})(),
-	['dsh-a 60ms · dsh-b 30ms · dsh-c 20ms · 其余 1', '未定名(未归因 2)', 'dsh-a 200ms · 其余来源 u-zz 900ms']);
-
-check('按包:一个插件包名都没有时,把「其余来源」说出来(不是只剩未定名 N)',
-	watch.pkgWhoText({ top: [], byOther: [['index-abc.js', 266], ['无 URL(内联脚本)', 12]], unresolved: 2, unresolvedMs: 278, byInvoker: [], byPair: {} }),
-	'其余来源 index-abc.js 266ms · 无 URL(内联脚本) 12ms');
 // REVIEW §3.4 记过这条债:旧版这里收敛成一行 `按包:0 条定到名(本帧 1 · 窗口 461 条脚本)· 要深录`
 // —— 但那个分支**永远渲染不到**(外层要求 window.js > 0,而 js > 0 必然有脚本,脚本不是进 top
 // 就是进 byOther,两个条件互斥),套件却因为**直接测那个函数**而一直绿。
@@ -3729,16 +3669,6 @@ check('D5:按来源与按包是同一份脚本耗时的两种切法:按来源合
 		return [tally.byInvoker, sum(tally.byInvoker), tally.js, sum(tally.top)];
 	})(),
 	[[['DOMWebSocket.onmessage', 70], ['setTimeout', 60], ['来源未记录', 20], ['Response.json.then', 10]], 160, 160, 150]);
-check('D5:"按来源"那一段文案:Top3 + 其余;一个来源都没有时给"无"',
-	[
-		watch.invokerWhoText(watch.tallyScripts([{ scripts: [
-			{ ms: 60, invoker: 'DOMWebSocket.onmessage' }, { ms: 30, invoker: 'TimerHandler:setTimeout' },
-			{ ms: 20, invoker: 'Response.json.then' }, { ms: 10, invoker: 'TimerHandler:setInterval' },
-			{ ms: 5, invoker: 'DOMWebSocket.onclose' },
-		] }])),
-		watch.invokerWhoText({ byInvoker: [] }),
-	],
-	['DOMWebSocket.onmessage 60ms · setTimeout 30ms · Response.json.then 20ms · 其余 2', '无']);
 check('D5:脚本三分的文案(本帧与窗口共用同一份);为 0 的那两项不显示',
 	[
 		watch.jsBreakdownText({ exec: 122, forced: 8, pause: 10 }),
@@ -3794,6 +3724,9 @@ check('诊断包:manifest 带 schemaVersion / 能力矩阵 / 缺口清单 / 脱�
 		manifest.range.fromMs === undefined ? manifest.range.from !== undefined : true,
 		manifest.captureTier];
 })(), [1, 'dsh-perf-hud-diagnostic-pack', 1, 3, true, true, 'watch']);
+check('诊断包:manifest 里描述的 files 顺序 == 包里真实的顺序(它是入口,指错等于骗人)',
+	[JSON.parse(pack.files[0].text).files, pack.files.map((file) => file.name)],
+	[['manifest.json', 'summary.md', 'incident.json', 'README.md'], ['manifest.json', 'summary.md', 'incident.json', 'README.md']]);
 check('诊断包:manifest 与事故包**都不含**凭据(端到端:真 location 里塞过 token)',
 	[/SECRET_TOKEN_VALUE/.test(pack.files[0].text), /SECRET_KEY_VALUE/.test(pack.files[2].text), /tester/.test(pack.files[2].text)],
 	[false, false, false]);
@@ -3999,8 +3932,6 @@ watch.clearTally();
 watch.bumpTally('triggered', tallyBase - 120000);
 watch.bumpTally('coalesced', tallyBase - 120000);
 watch.noteTallySeverity(tallyBase - 120000, 326.5);
-check('计数:药丸那一行说的是"检测 N 次",不是留存份数,也不是 coalesced',
-	watch.tallyText(24 * 3600000, tallyBase), '检测 1 次');
 check('计数:悬停把四个数各自的名字与口径都写出来(同串触发不是次数 / 留存受容量限制 / 最长一次)',
 	(() => {
 		const lines = watch.tallyTitle(24 * 3600000, tallyBase).split(String.fromCharCode(10));

@@ -169,6 +169,11 @@ check('没有 confirm 时一次都没写', writes.length === 0);
 const guard = await post({ op: 'setBundle', name: 'dsh-perf-hud', enabled: false, confirm: true });
 check('拒绝动自己(400)', guard.status === 400);
 
+// 安全线有**两条** deny 名单,只测一条等于另一条没人钉(改坏了照样全绿)
+const guardSession = await post({ op: 'setBundle', name: '@deepseek-ai/dsh-session-persistence-jsonl', enabled: false, confirm: true });
+check('拒绝动 session-persistence-jsonl(400)', guardSession.status === 400);
+check('两条 deny 名单都拒绝时一次都没写', writes.length === 0);
+
 const ok = await (await post({ op: 'setBundle', name: 'dsh-status-rotator', enabled: false, confirm: true })).json();
 check('确认后写入并把 ChangeResult 原样带回', ok.result?.application === 'applied' && writes.length === 1,
 	JSON.stringify(writes));

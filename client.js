@@ -37,6 +37,10 @@ window.__ModuleLoader__.load({
 		const LS_UI = 'dsh-perf-hud:collapsed';
 		const RING_MAX = 500;        // 环形缓冲条数(1 条/秒 ≈ 8 分钟)
 		const TOP_N = 3;             // 面板展示的插件条数
+		// 「包 × 来源」摘要里两个名字各自的字符上限:摘要那一行是 label(不收缩)+ value(右对齐),
+		// 不截断就会折成参差的两行(实测 `dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms` = 53 字符)
+		const CROSS_SUMMARY_NAME_MAX = 14;
+		const CROSS_SUMMARY_SRC_MAX = 15;
 		const EVIDENCE_MAX = 4;      // 「可疑脚本」那一块最多列几条(再多就不是"缩小范围"而是列清单了)
 		const LT_WINDOW_MS = 60000;  // longtask 观察窗口
 		const RECENT_MAX = 256;      // 用于 longtask 归因的最近回调(含仍在执行的)
@@ -1200,7 +1204,6 @@ window.__ModuleLoader__.load({
 			copyNote: null,          // 「复制摘要」的结果:成功/失败**原文**都照实显示,失败不许假装成功
 			pickNote: null,          // 「看这一帧」定位不到时的那句如实说明(否则按钮点了像没反应)
 			marks: [],
-			markDraft: '',
 			// D 宿主/链路
 			host: null,
 			hostAt: 0,
@@ -1364,17 +1367,24 @@ window.__ModuleLoader__.load({
 				if (this.size < WATCH_FRAMES) this.size += 1;
 				this.total += 1;
 			},
-			/** 按时间升序取 [from, to] 区间(两端含)。环形里天然升序,所以过了 to 就可以停。 */
+			/**
+			 * 按时间升序取 [from, to] 区间(两端含)。
+			 *
+			 * ⚠️ **从最新一帧往回走**,不是从环头正扫:环容量 WATCH_FRAMES(=12000,60fps ≈ 3.3 分钟)
+			 * 远大于调用方的窗口(帧条只要最近 60 秒 ≈ 3600 条),正扫每 tick 会白扫 ~8400 条 ——
+			 * 「面板自己变成被测开销」正是这个项目最该避免的事。环形里天然按时间升序,
+			 * 所以倒着走遇到 `at < from` 就能停。
+			 */
 			slice(from, to) {
 				const out = [];
-				const first = (this.head - this.size + WATCH_FRAMES) % WATCH_FRAMES;
-				for (let i = 0; i < this.size; i += 1) {
-					const index = (first + i) % WATCH_FRAMES;
+				for (let step = 1; step <= this.size; step += 1) {
+					const index = (this.head - step + WATCH_FRAMES) % WATCH_FRAMES;
 					const at = this.at[index];
-					if (at < from) continue;
-					if (at > to) break;
+					if (at < from) break;
+					if (at > to) continue;
 					out.push({ t: round1(at), ms: round1(this.ms[index]), gap: this.gap[index] === 1 });
 				}
+				out.reverse();
 				return out;
 			},
 			reset() { this.head = 0; this.size = 0; this.total = 0; },
@@ -2183,12 +2193,6 @@ window.__ModuleLoader__.load({
 			return row;
 		}
 
-		/** 面板/摘要用的一行人话:只给"检测到几次"。留存与丢失走 `tallyTitle`。 */
-		function tallyText(ms, atMs) {
-			const row = tallyWindow(ms, atMs);
-			return `${translate('watchDetected')} ${row.detected}${translate('times')}`;
-		}
-
 		/** 悬停给完整口径:四个数各有各的名字,并写清"同一串算一次"与"留存受容量限制"。 */
 		function tallyTitle(ms, atMs) {
 			const row = tallyWindow(ms, atMs);
@@ -2723,21 +2727,36 @@ window.__ModuleLoader__.load({
 			};
 		}
 
+		/** 只读:把落盘的跨会话基线读回来。坏 JSON / 形状不对都当空 —— 不写盘,也不静默改数。 */
+		function readSessionBaselines() {
+			try {
+				const parsed = JSON.parse(localStorage.getItem(LS_SESSIONS) ?? 'null');
+				return parsed !== null && Array.isArray(parsed.sessions) ? parsed.sessions : [];
+			} catch (error) { return []; }
+		}
+
+		/**
+		 * 本次会话 + 已落盘的旧会话合并成一份(按 since 认人去重,只留最近 SESSION_KEEP 条)。
+		 * ⚠️ **纯函数,不写盘** —— 导出件(`snapshot()`)是文档承诺的**只读** API,验收器每轮会调它
+		 * 若干次;那时每调一次就重写一遍 localStorage 是错的语义。落盘只在 `saveSessionBaseline()`
+		 * 里发生,而它只由 `pagehide` 触发。
+		 */
+		function mergeSessionBaseline() {
+			const record = sessionRecord();
+			if (record === null) return [];
+			const kept = readSessionBaselines().filter((row) => row !== null && typeof row === 'object' && row.since !== record.since);
+			kept.push(record);
+			if (kept.length > SESSION_KEEP) kept.splice(0, kept.length - SESSION_KEEP);
+			return kept;
+		}
+
 		/**
 		 * 把本次会话的分布写进跨会话基线(同一个会话只占一条,按 since 认人)。
 		 * 写失败不抛:拿不到跨会话基线不影响本次读数,导出件里就只是少一段。
 		 */
 		function saveSessionBaseline() {
-			const record = sessionRecord();
-			if (record === null) return [];
-			let list = [];
-			try {
-				const parsed = JSON.parse(localStorage.getItem(LS_SESSIONS) ?? 'null');
-				if (parsed !== null && Array.isArray(parsed.sessions)) list = parsed.sessions;
-			} catch (error) { list = []; }
-			const kept = list.filter((row) => row !== null && typeof row === 'object' && row.since !== record.since);
-			kept.push(record);
-			if (kept.length > SESSION_KEEP) kept.splice(0, kept.length - SESSION_KEEP);
+			const kept = mergeSessionBaseline();
+			if (kept.length === 0) return [];
 			try {
 				localStorage.setItem(LS_SESSIONS, JSON.stringify({ v: 1, savedAt: Date.now(), sessions: kept }));
 			} catch (error) { /* 配额满:放弃持久化,不假装成功 */ }
@@ -2753,7 +2772,7 @@ window.__ModuleLoader__.load({
 			return {
 				note: '粗参照,不是回归判定:每个会话的分布只代表那一次(负载、视口、是否插桩都不同,帧数量级也可能差一个数量级);只用来看"这次是不是比平时差一个量级"',
 				keep: SESSION_KEEP,
-				sessions: saveSessionBaseline(),
+				sessions: mergeSessionBaseline(),
 			};
 		}
 
@@ -3004,34 +3023,6 @@ window.__ModuleLoader__.load({
 			return translate('unblamed');
 		}
 
-		/** 自测状态:点了必须看得见进度与结果,否则"毫无反应"就是必然观感。 */
-		function stressText() {
-			const mark = state.stress;
-			if (mark === null) return `${translate('stressDone')}: ${translate('notYet')}`;
-			const hit = state.longTasks
-				.filter((row) => row.t >= mark.at - 500 && row.t <= mark.at + 8000)
-				.reduce((top, row) => (top === null || row.ms > top.ms ? row : top), null);
-			const mode = mark.sync === true ? translate('stressSync') : translate('stressSliced');
-			const flush = flushSync === null ? ` · ${translate('stressNoFlush')}` : '';
-			const burn = typeof mark.burnMs === 'number' && mark.burnMs > 0 ? ` · ${translate('stressBurn')} ${mark.burnMs}ms` : '';
-			const commit = mark.commitMs === undefined ? '' : ` · ${translate('stressCommit')} ${mark.commitMs}ms(${mode}${burn})${flush}`;
-			// 第二个来源:这段时间 DOM 写入最多的组件。React 把整棵新子树一次 appendChild 挂上去,
-			// 观察器只看到"容器变了",fiber 走查因此只能给到容器所属组件;写入插桩则看到了每一个
-			// 节点(含未挂载的),所以能把 PerfHudStress 精确点名。
-			const wrote = mark.writes0 === undefined ? [] : domWriteDelta(mark.writes0);
-			const writeWho = wrote.length === 0 ? null : wrote[0].component ?? null;
-			if (hit !== null) {
-				const who = hit.component === null ? translate('unblamed') : hit.component;
-				const both = writeWho !== null && writeWho !== hit.component ? ` / ${writeWho}(${translate('stressFromDom')})` : '';
-				return `${translate('stressDone')}: ${Math.round(hit.ms)}ms · ${who}${both}${hit.owner === null ? '' : ` (${short(hit.owner)})`}${commit}`;
-			}
-			if (writeWho !== null) return `${translate('stressDone')}: ${translate('stressNoTask')} · ${translate('stressFromDom')} ${writeWho}${commit}`;
-			if (mark.commitMs !== undefined) return `${translate('stressDone')}: ${translate('stressNoTask')}${commit}`;
-			// 状态必须能收敛:以前没有超时出口,一旦没长任务就永远停在"进行中"。
-			if (Date.now() - mark.at > 8000) return `${translate('stressDone')}: ${translate('stressNoTask')}(8s)${flush}`;
-			return `${translate('stressRunning')}: ${mark.nodes} ${translate('nodes')} …`;
-		}
-
 		/** 链路那一行的整句:样本数必须露出来 —— n=1 时 p50 会等于 p99,看着像 bug。 */
 		function linkRowText() {
 			const stats = linkStats();
@@ -3234,12 +3225,6 @@ window.__ModuleLoader__.load({
 			return `${translate('via')} ${translate('notYet')}`;
 		}
 
-		function experimentText() {
-			const parts = [experiment.phase];
-			if (experiment.message !== '') parts.push(experiment.message);
-			return parts.join(' · ');
-		}
-
 		function abortExperiment() {
 			if (experiment.phase !== 'running') return false;
 			experiment.aborted = true;
@@ -3343,28 +3328,6 @@ window.__ModuleLoader__.load({
 				domPerMin: Math.abs(delta.domPerMin) > noise.domPerMin,
 				unattrAvg: Math.abs(delta.unattrAvg ?? 0) > noise.unattrAvg,
 			};
-		}
-
-		/**
-		 * 超出噪声的结论。
-		 * 窗口含流式时**不给结论** —— 自己刚声明"该对照不可比",却又列出「超出噪声 fps」,
-		 * 等于引诱读者挑一个数字当结论(实测第一版就被这么读)。
-		 */
-		function beyondNoiseText(row) {
-			if (row === null || row === undefined) return translate('notYet');
-			if (row.confounded === true) return translate('notApplicable');
-			return metricList(row.significant);
-		}
-
-		/** 超出噪声的指标名单,给面板一行用。 */
-		function metricList(sig) {
-			if (sig === null || sig === undefined) return translate('notYet');
-			const hit = [];
-			if (sig.fps) hit.push('fps');
-			if (sig.unattrAvg) hit.push(translate('unattrShort'));
-			if (sig.longTasks) hit.push('LT');
-			if (sig.domPerMin) hit.push('DOM');
-			return hit.length === 0 ? translate('none') : hit.join('/');
 		}
 
 		async function runExperiment() {
@@ -3930,7 +3893,7 @@ window.__ModuleLoader__.load({
 					'Cookie / Token / 请求头(只读 performance 观察器与自己的宿主路由回执)',
 					'宿主进程的 CPU profile(路由能采,但这份包没有自动采)',
 				],
-				files: ['summary.md', 'manifest.json', 'incident.json', 'README.md'],
+				files: ['manifest.json', 'summary.md', 'incident.json', 'README.md'],
 			};
 			const safe = redactExport(raw, options);
 			safe.redaction = redactionReport(options);
@@ -4143,7 +4106,7 @@ window.__ModuleLoader__.load({
 		// 按键分派:页面地址与脚本地址的规则不同(前者丢查询串,后者要留 rev)
 		const PAGE_KEYS = new Set(['page', 'href']);
 		const SCRIPT_URL_KEYS = new Set(['url', 'urls', 'sourceURL', 'scriptUrl']);
-		const FREE_TEXT_KEYS = new Set(['note', 'markDraft']);
+		const FREE_TEXT_KEYS = new Set(['note']);
 
 		/**
 		 * 深度脱敏:导出件只有这一个出口,规则集中在这里 —— 以后加导出字段不会漏。
@@ -4297,7 +4260,6 @@ window.__ModuleLoader__.load({
 				timeline: {
 					note: '每秒一条(t 是 epoch ms):fps / 最差帧 / longtask 条数 / 节点 / 堆 / 归因 Top3;marks 是场景标记',
 					samples: ring,
-					last60s: ring.slice(-60),
 					marks: state.marks,
 					idleBaseline: state.idleBaseline,
 				},
@@ -4747,13 +4709,6 @@ window.__ModuleLoader__.load({
 			bump();
 		}
 
-		/** 「最差事件」块的标题行:`i84 · frame · 14:48`(发生时刻照实给,"最差"不是"最近")。 */
-		function eventTitleText(row) {
-			if (row === null || row === undefined) return translate('watchNone');
-			const at = Date.parse(row.at);
-			return `${row.id} · ${row.cause}${Number.isFinite(at) ? ` · ${clock(at)}` : ''}`;
-		}
-
 		/**
 		 * 这条事故的**归因状态**:已确认 / 可疑 / 未归因(§五)。三档都从**已测量的字段**算:
 		 *   · `summary.worstFrameJs`  —— 最差那一帧有没有 longtask / LoAF 与它重叠(直接测量);
@@ -5074,6 +5029,8 @@ window.__ModuleLoader__.load({
 			get precise() { return state.precise; },
 			setPrecise(on) { setPrecise(on === true); },
 			mark: addMark,
+			/** 场景标记列表(只读):面板上「标记刚才」写进去的那一串。 */
+			marks: () => state.marks,
 			experiment: runExperiment,
 			abortExperiment,
 			baselines: () => ({ idle: state.idleBaseline, experiment: experiment.baseline }),
@@ -5508,13 +5465,6 @@ window.__ModuleLoader__.load({
 			return parts.join(' · ');
 		}
 
-		/** 最差那一帧的时间去向:复用实时视图同一套 `frameSplit`(四段分区,相加 = 这一帧时长)。 */
-		function replaySplitText(scope) {
-			const split = scope.split;
-			if (split === null) return translate('replayNoLoaf');
-			return `${translate('watchWorst')} ${split.total}ms: ${translate('splitScript')} ${split.js} · ${translate('splitTask')} ${split.taskOther} · ${translate('splitRender')} ${split.render} · ${translate('splitTail')} ${split.tail}`;
-		}
-
 		/**
 		 * 事故包里某一刻的**墙钟**时间。⚠️ 不能用 `wallClock()`:那个用的是**当前页面**的
 		 * timeOrigin,跨会话读回的事故(perf 时间轴已经重开)会被算成"今天的某个时刻"。
@@ -5914,7 +5864,7 @@ window.__ModuleLoader__.load({
 		function crossSummary(cross) {
 			if (cross === null) return translate('crossNone');
 			if (cross.top.who === null || cross.top.ms === 0) return translate('crossNoOverlap');
-			return `${short(cross.top.who)} · ${short(cross.top.src)} ${Math.round(cross.top.ms)}ms`;
+			return `${clipName(short(cross.top.who), CROSS_SUMMARY_NAME_MAX)} · ${clipName(short(cross.top.src), CROSS_SUMMARY_SRC_MAX)} ${Math.round(cross.top.ms)}ms`;
 		}
 
 		function crossTable(tally) {
@@ -5938,42 +5888,6 @@ window.__ModuleLoader__.load({
 			// 否则摘要那行拿到 null 去格式化。退回"最大的那一行 × 最大的那一列",并让 ms = 0 说明是空的。
 			if (best.who === null) best = { who: rows[0], src: cols[0], ms: 0 };
 			return { rows, cols, grid, restCol, restRow, corner, js, top: best };
-		}
-
-		function pkgWhoText(tally) {
-			const others = tally.byOther ?? [];
-			const top = tally.top.slice(0, 3);
-			const rest = tally.top.length - top.length;
-			if (top.length === 0) {
-				// 一个插件包名都没定到:**其余来源**那段(外壳文件名 / 无 URL / 插件批次)也要说出来,
-				// 否则这里只剩"未定名 N",把已知信息丢掉一半。
-				if (others.length === 0) {
-					return `${translate('pkgNone')}${tally.unresolved === 0 ? '' : `(${translate('unblamed')} ${tally.unresolved})`}`;
-				}
-				return `${translate('otherSources')} `
-					+ others.slice(0, 2).map(([name, ms]) => `${name} ${Math.round(ms)}ms`).join(' · ')
-					+ (others.length > 2 ? ` · ${translate('rest')} ${others.length - 2}` : '');
-			}
-			// 定不到插件包名的那部分:能说出是什么就说(外壳文件名 / 无 URL / 插件批次)——
-			// 只写"未定名 + 条数"既丢了已知信息,又和同一行里的 ms 混单位。
-			return top.map(([name, ms]) => `${short(name)} ${Math.round(ms)}ms`).join(' · ')
-				+ (rest > 0 ? ` · ${translate('rest')} ${rest}` : '')
-				+ (others.length === 0 ? '' : ` · ${translate('otherSources')} `
-					+ others.slice(0, 2).map(([name, ms]) => `${name} ${Math.round(ms)}ms`).join(' · ')
-					+ (others.length > 2 ? ` · ${translate('rest')} ${others.length - 2}` : ''));
-		}
-
-		/**
-		 * 「按来源」那一段文案:Top3 调用来源 + 其余(本帧与窗口两行共用)。
-		 * 它与「按包」是同一份脚本耗时的**两种切法**:按来源覆盖全部脚本、按包只覆盖定到
-		 * 包名的那部分 —— 两个合计不相等是正常的,别拿它们互相印证(要看 `js` 那个总数)。
-		 */
-		function invokerWhoText(tally) {
-			const top = tally.byInvoker.slice(0, 3);
-			const rest = tally.byInvoker.length - top.length;
-			if (top.length === 0) return translate('none');
-			return top.map(([name, ms]) => `${name} ${Math.round(ms)}ms`).join(' · ')
-				+ (rest > 0 ? ` · ${translate('rest')} ${rest}` : '');
 		}
 
 		/**
@@ -6065,16 +5979,23 @@ window.__ModuleLoader__.load({
 		function hostSummary() {
 			const eventLoop = state.host === null || state.host === undefined ? null : state.host.eventLoop;
 			const link = linkStats();
-			const host = state.hostError !== null ? translate('hostDown') : eventLoop === null ? translate('notYet') : `${eventLoop.p99}ms`;
-			return `${translate('hostShort')} ${host} · ${translate('linkShort')} ${link.count === 0 ? translate('notYet') : `${link.p99}ms`} · ${infraVerdict().text}`;
+			// ⚠️ 折叠态与展开态必须同一个粒度,否则读者会把 p99 当成均值:展开那一行写的是
+			// `p50 X · p99 Y · 最大 Z`(hostLoopText),这里也照写分位名(RTT 那一行同理)。
+			const host = state.hostError !== null ? translate('hostDown') : eventLoop === null ? translate('notYet') : `p99 ${eventLoop.p99}ms`;
+			return `${translate('hostShort')} ${host} · ${translate('linkShort')} ${link.count === 0 ? translate('notYet') : `p99 ${link.p99}ms`} · ${infraVerdict().text}`;
 		}
 
-		/** 工具箱摘要:这一组现在只装守夜(事故清单 + 备注 + 导出),摘要就照它写。 */
+		/**
+		 * 工具箱摘要:这一组现在只装守夜(事故清单 + 备注 + 导出),摘要就照它写。
+		 * ⚠️ 写的是**折叠态独有**的信息(检测到的次数,跨刷新 24h);「抓到 N 次 · 最差 Xms」
+		 * 由展开后的第一行 `watchPanelText()` 给 —— 两处说同一句话等于白占一行(§5「能不说就不说」)。
+		 */
 		function toolsSummary() {
-			const worst = state.watch.incidents.length === 0 ? null : state.watch.incidents[0];
-			return worst === null
-				? `${translate('watch')} ${translate('watchNone')}`
-				: `${translate('watch')} ${state.watch.incidents.length}${translate('times')} · ${translate('watchWorst')} ${worst.severity.toFixed(0)}ms`;
+			const detected = tallyWindow(TALLY_MINUTES * TALLY_BUCKET_MS).detected;
+			if (state.watch.incidents.length === 0) {
+				return `${translate('watch')} ${translate('watchNone')} · 24h ${translate('watchDetected')} ${detected}${translate('times')}`;
+			}
+			return `${translate('watch')} ${state.watch.incidents.length}${translate('times')} · 24h ${translate('watchDetected')} ${detected}${translate('times')}`;
 		}
 
 		/**
@@ -6337,7 +6258,6 @@ window.__ModuleLoader__.load({
 				framePickFiltered: '值得回看的帧',
 				spark: '60 秒帧条',
 				sparkHint: '最近 60 秒,一格一秒:高度 = 那一秒里最差那一帧的间隔,颜色与导出件的 ASCII 帧条带用同一组阈值(≥100ms 红 / ≥50ms 黄 / 其余正常)。整格都是 rAF 挂起的那一秒画成最矮的灰柱 —— 那是间隙,不是卡顿;空白 = 那一秒没采到',
-				pkgNone: '未定名',
 				pkgHint: '**本帧**(上面那张环的同一帧)里脚本耗时按包汇总(与事故包 incident.packages 同一条 resolve 路:单包 URL 直接读出来,合并批按 sourcemap 分段还原)。合并批里没开「精确」就只能给到那个 58 包的批 URL,这是刻意的,不硬猜',
 				pkgWindowHint: '最近这段 LoAF **窗口**(不是上面那一帧)的同一份按包汇总:它是**累计**,分母写在小标题上;拿它和「本帧」比之前先看平均每帧',
 				pkgStoredHint: '事故包里**这一帧**的脚本耗时按包汇总:包名是**捕获时存下来的**(跨会话读回仍在),不再走当前会话的 sourcemap 缓存 —— 所以刷新之后这里也不会变成"未定名"',
@@ -6349,7 +6269,7 @@ window.__ModuleLoader__.load({
 				splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
 				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', scopeFrame: '本帧',
 				bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本', needDeep: '要深录', invokerUnknown: '来源未记录',
-				otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
+				srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
 				crossIncidentHint: '范围:这条事故**整份包**里的脚本(与上面「·窗口」那两行同一份数据)。两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间";只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 事故窗口的脚本总耗时;格内是毫秒,把鼠标放上去看占比。',
 				crossTable: '包 × 来源 · 窗口', crossCorner: '包 \\ 来源', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', crossUnit: '格内毫秒', crossBiggest: '最重', crossNone: '没有可交叉的脚本', crossHint: '范围:**窗口**(最近 200 条长动画帧的**累计**,与上面那两行「·窗口」是同一份数据,不是某一帧)。两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间"。只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 脚本总耗时;格内是毫秒,把鼠标放上去看占比。', barShareHint: '最大那一段占这条的多少',
 				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每帧脚本',
@@ -6384,7 +6304,7 @@ window.__ModuleLoader__.load({
 				evidenceCopyHint: '点这一行复制「函数 @ 包 · 文件:行 · 耗时 · 来源」',
 				evidenceWhere: '位置', evidenceInvoker: '来源', copyScript: '脚本',
 				evidenceBundleLine: '合并脚本行',
-				replay: '事故回放', replayGaps: 'rAF 挂起', replayNoLoaf: '这一帧附近没有长动画帧记录(窗口里没有 LoAF)',
+				replay: '事故回放', replayGaps: 'rAF 挂起',
 				replayFailed: '事故回放算不出来',
 				replayHint: '这块是**捕获时存下来的窗口**(来自事故包,所以刷新生效),不是实时那条 60 秒帧环:横轴按**时间**放,一格可能有多帧(取最差的那一帧),点击选中的一定是 `incident.frames` 里**真实存在**的那一帧;整段 rAF 被挂起的地方留白(那是“没在测”,不是“没卡”,不补桩)。帧间隔与 LoAF 都是直接测量。⚠️ LoAF 不给每帧内脚本的起止时间,所以这里**不排帧内执行顺序**;要看逐帧明细请「导出事故包」+ tools/inspect-incident.mjs。',
 				replayScopeNote: '口径:帧间隔 / 分位 / 最差帧都来自捕获时那 13 秒的切片,不是实时读数,也不代表现在的状况;缺口 = 那段时间 rAF 被挂起。',
@@ -6408,7 +6328,7 @@ window.__ModuleLoader__.load({
 				groupDetail: '取证明细', groupDom: 'DOM 与堆', groupHost: '宿主与链路', groupTools: '工具箱', nodesSuffix: ' 节点',
 				stream: '状态', running: '流式', idle: '空闲', idleBase: '空闲基线(60s)', idleWriter: '空闲也在加节点的是',
 				notYet: '未采集', hostLoop: '宿主 event-loop',
-				notApplicable: '不适用(窗口含流式)', hostDown: '宿主不可用', link: '链路 RTT',
+				hostDown: '宿主不可用', link: '链路 RTT',
 				hostEvents: '宿主事件到达', hostEventsHint: '宿主半用公开接口 ctx.on(\'session/event\') 记每条事件「提交(event.time)→到达监听器」的延迟;第一版想包 Context.emit,线上实测根本抓不到(该事件走带作用域过滤的派发),故改口径且写明',
 				notInstalled: '未安装', waiting: '已装,等事件',
 				sampling: '吞吐采样中', failed: '吞吐失败',
@@ -6416,8 +6336,7 @@ window.__ModuleLoader__.load({
 				renderErrorHint: '采集没停:上面是错误原文;点「重试」恢复面板,或直接导出(errors 段里也有)',
 				linkHint: '每 10 秒一次 1KB 同源探测(带 cache-buster)算 RTT,n 是最近 60 秒的样本数;吞吐每 60 秒一次 64KB(启动后 3 秒先补一次)。p99 > 300ms 且 FPS 正常且 n≥2 才判「疑似链路」',
 				suspect: '疑似链路',
-				stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点',
-				stressNoTask: '未观察到长任务', stressCommit: '提交', stressBurn: '人为燃烧', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
+				stressFromDom: 'DOM 写入',
 				via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
 				unattrShort: '未归因', markPlaceholder: '备注(可选)',
 				// 守夜层(默认常开、不插桩):面板上只露一行状态 + 工具箱里的清单与两个按钮
@@ -6449,8 +6368,8 @@ window.__ModuleLoader__.load({
 				viewIncident: '卡顿详情', backHint: '回到主界面(那一屏只回答五个问题)',
 				packFilesLabel: '诊断包内容', packFilesHint: '给 AI 的那条:格式说明 + 摘要 + 原始证据 + 怎么读',
 				packFilesValue: 'manifest.json · summary.md · incident.json · README.md',
-				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / map',
-				storageKeysHint: '清状态时按需删;map 是那份 12MB sourcemap 的分段表缓存(按 rev 存)',
+				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / marks / groups / on / collapsed / deep / precise / map',
+				storageKeysHint: '清状态时按需删;on / deep / precise 就是采集档位(守夜 / 深录 / 精确归因),这三个会改变面板贵不贵;map 是那份 12MB sourcemap 的分段表缓存(按 rev 存)',
 				// 本轮:原因说人话(包名收进展开区)、两条导出路径、分享前预览
 				causePlainScript: '某个脚本模块的耗时偏高', causePlainLongTask: '这一段时间里有较重的渲染任务',
 				causePlainHost: '宿主进程那侧偏忙', causePlainUnknown: '缺少能解释这次停顿的 JS 证据',
@@ -6547,7 +6466,6 @@ window.__ModuleLoader__.load({
 				framePickFiltered: 'frames above the line',
 				spark: '60s frame strip',
 				sparkHint: 'Last 60 seconds, one bar per second: height = the worst frame interval in that second, and the colours use the same thresholds as the ASCII frame strip in the export (>=100ms red / >=50ms yellow / otherwise normal). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall; blank = nothing sampled in that second',
-				pkgNone: 'unnamed',
 				pkgHint: 'Script time in **this frame** (the same frame as the donut above), summed per package (the same resolve path as incident.packages: read straight off single-package URLs, restored from sourcemap sections for combo batches). Without precise attribution a combo batch can only be named as its 58-package batch URL — that is deliberate, nothing is guessed',
 				pkgWindowHint: 'The same per-package sum for the recent LoAF **window** (not the frame above): this is a **cumulative** figure, its denominator is on the section heading; check avg script per frame before comparing it with "this frame"',
 				pkgStoredHint: 'Script time in **this frame** of the incident, summed per package: the package names were **stored at capture time** (they survive a reload) instead of going through this session\'s sourcemap cache, so they do not turn into "unnamed" after a reload',
@@ -6559,7 +6477,7 @@ window.__ModuleLoader__.load({
 				splitScript: 'script', splitTask: 'task', splitRender: 'render', splitTail: 'style+layout+paint',
 				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', scopeFrame: 'this frame',
 				bySource: 'by source', byPkg: 'by package', pkgZeroNamed: '0 resolved', scriptsUnit: 'scripts', needDeep: 'needs deep', invokerUnknown: 'source not recorded',
-				otherSources: 'other sources', srcNoUrl: 'no URL (inline)', srcBatch: 'plugin batch (not split)',
+				srcNoUrl: 'no URL (inline)', srcBatch: 'plugin batch (not split)',
 				crossIncidentHint: 'Scope: the scripts of the incident\'s **whole pack** (the same data as the two "· window" rows above). The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time"; Top3 × Top3 is expanded and the rest is folded into the "rest" row/column (by subtraction), the four blocks adding up to the incident window\'s script total. Cells are milliseconds; hover for the share.',
 				crossTable: 'pkg × source · window', crossCorner: 'pkg \\ src', crossNoOverlap: 'no overlap between the top 3', crossFailed: 'cross table failed', splitFailed: 'script breakdown failed for this frame', crossUnit: 'ms per cell', crossBiggest: 'heaviest', crossNone: 'nothing to cross-tabulate', crossHint: 'Scope: the **window** (the **cumulative** total of the last 200 long animation frames, the same data as the two "· window" rows above — not a single frame). The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time". Top3 × Top3 is expanded, the rest is folded into the "rest" row/column (by subtraction) and the four blocks add up to the script total. Cells are milliseconds; hover for the share.', barShareHint: 'share of the largest segment in this bar',
 				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
@@ -6591,7 +6509,7 @@ window.__ModuleLoader__.load({
 				evidenceCopyHint: 'Click to copy "function @ package · file:line · cost · invoker"',
 				evidenceWhere: 'where', evidenceInvoker: 'invoked by', copyScript: 'script',
 				evidenceBundleLine: 'line in merged script',
-				replay: 'incident replay', replayGaps: 'rAF suspended', replayNoLoaf: 'no long animation frame recorded near this frame (no LoAF in the window)',
+				replay: 'incident replay', replayGaps: 'rAF suspended',
 				replayFailed: 'incident replay could not be computed',
 				replayHint: 'This is the **captured window** (it comes from the incident pack, so it survives a reload), not the live 60-second strip: the x axis is **time**, a column may hold several frames (the worst one is kept) and a click always selects a frame that **really exists** in `incident.frames`; stretches where rAF was suspended stay blank (that is "not measured", not "no stall" — nothing is fabricated). Frame intervals and LoAF entries are directly measured. ⚠️ LoAF gives no per-script start/end inside a frame, so this **does not order execution within a frame**; for per-frame detail use "Export incident" + tools/inspect-incident.mjs.',
 				replayScopeNote: 'Scope: frame intervals / quantiles / worst frame all come from the captured 13 seconds, not from live readings, and do not describe right now; a gap means rAF was suspended during that stretch.',
@@ -6614,7 +6532,7 @@ window.__ModuleLoader__.load({
 				groupDetail: 'forensics', groupDom: 'DOM & heap', groupHost: 'host & link', groupTools: 'toolbox', nodesSuffix: ' nodes',
 				stream: 'state', running: 'streaming', idle: 'idle', idleBase: 'idle baseline (60s)', idleWriter: 'still adding nodes while idle',
 				notYet: 'n/a', hostLoop: 'host event-loop',
-				notApplicable: 'n/a (window had streaming)', hostDown: 'host n/a', link: 'link RTT',
+				hostDown: 'host n/a', link: 'link RTT',
 				hostEvents: 'host event arrival', hostEventsHint: 'The host half uses the public ctx.on(\'session/event\') and records commit(event.time)→listener arrival lag; the earlier attempt to wrap Context.emit never fired (that event uses scope-filtered dispatch)',
 				notInstalled: 'not installed', waiting: 'installed, waiting for events',
 				sampling: 'throughput sampling', failed: 'throughput failed',
@@ -6622,8 +6540,7 @@ window.__ModuleLoader__.load({
 				renderErrorHint: 'Collection keeps running: the raw error is above. Retry to restore, or export (also in the errors section)',
 				linkHint: 'A 1KB same-origin probe (cache-busted) every 10s gives RTT; n is the sample count over the last 60s. Throughput is a 64KB fetch every 60s (one extra 3s after start). \"Link suspected\" needs p99 > 300ms, normal FPS, and n >= 2',
 				suspect: 'link suspected',
-				stressRunning: 'self-test running', stressDone: 'self-test result', nodes: 'nodes',
-				stressNoTask: 'no long task observed', stressCommit: 'commit', stressBurn: 'synthetic burn', stressSync: 'sync', stressSliced: 'sliced', stressNoFlush: 'flushSync unavailable', stressFromDom: 'DOM write',
+				stressFromDom: 'DOM write',
 				via: 'channel', viaRemote: 'ctx.remote (client remote)', viaRoute: 'host route /api/dsh-perf-hud/host',
 				unattrShort: 'unattr', markPlaceholder: 'note (optional)',
 				watch: 'Night watch', watchCaught: 'caught', watchWorst: 'worst', watchRestored: 'restored',
@@ -6651,8 +6568,8 @@ window.__ModuleLoader__.load({
 				viewIncident: 'Stall detail', backHint: 'Back to the overview (that screen only answers five questions)',
 				packFilesLabel: 'diagnostic pack', packFilesHint: 'the AI path: format note + summary + raw evidence + how to read it',
 				packFilesValue: 'manifest.json · summary.md · incident.json · README.md',
-				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / map',
-				storageKeysHint: 'delete as needed when clearing state; map is the section-table cache for that 12MB sourcemap (keyed by rev)',
+				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / marks / groups / on / collapsed / deep / precise / map',
+				storageKeysHint: 'delete as needed when clearing state; on / deep / precise are the capture tier (night watch / deep / precise attribution) and change how expensive the panel is; map is the section-table cache for that 12MB sourcemap (keyed by rev)',
 				// this round: plain-language causes (package names behind a disclosure), two export paths, pre-share preview
 				causePlainScript: 'one script module is spending an unusual amount of time', causePlainLongTask: 'a heavy render task happened in this window',
 				causePlainHost: 'the host process side looks busy', causePlainUnknown: 'no JS evidence that explains this stall',
@@ -7721,7 +7638,7 @@ window.__ModuleLoader__.load({
 
 		/**
 		 * 合并判色:FPS 与最差帧**任一触发即降色**。
-		 * 原来只看 fps(levelDown),于是 54.2fps 是绿的、而同期最差帧 130ms —— 绿点掩盖了卡顿。
+		 * 只看 fps 会让 54.2fps 显示成绿的、而同期最差帧 130ms —— 绿点掩盖了卡顿。
 		 */
 		function frameLevel(fps, frameWorst) {
 			if (fps <= 30 || frameWorst >= 200) return 'bad';
@@ -7736,13 +7653,6 @@ window.__ModuleLoader__.load({
 			return 'var(--dsw-alias-state-success-primary)';
 		}
 
-		/** 阈值配色(越大越好:FPS):<= bad 变红,<= warn 变黄。 */
-		function levelDown(value, warn, bad) {
-			if (value <= bad) return 'var(--dsw-alias-state-error-primary)';
-			if (value <= warn) return 'var(--dsw-alias-state-warn-primary)';
-			return 'var(--dsw-alias-state-success-primary)';
-		}
-
 		/**
 		 * 只去掉 @scope/ 前缀,不截断 —— 截断过的包名根本认不出来("dsh-better-sideb…"),
 		 * 放不下就换行(面板宽度 + overflowWrap 已经接得住)。
@@ -7751,6 +7661,16 @@ window.__ModuleLoader__.load({
 			// ⚠️ 必须防 null/undefined:id 来自"谁是最大那一格"这类推导,可能一个都没有 ——
 			// 老写法 `id.replace(...)` 在这种情况下直接抛,把整块面板打成错误边界(实测被报"闪退")。
 			return typeof id === 'string' ? id.replace(/^@[^/]+\//, '') : '';
+		}
+
+		/**
+		 * 折叠**摘要**里的名字:超过 `max` 就省略号截断。
+		 * 摘要是 group 那一行(`label` 不收缩 + `value` 右对齐),长名字会把值那一侧折成参差的两行;
+		 * 完整名字在展开后的交叉表 / 堆叠条里都有,所以这里截断不丢信息。
+		 */
+		function clipName(name, max) {
+			const text = typeof name === 'string' ? name : '';
+			return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 		}
 
 		const rateText = (series) => {
@@ -7851,10 +7771,7 @@ window.__ModuleLoader__.load({
 			const link = linkStats();
 			const linkSuspect = suspectLink();
 			const idleBase = state.idleBaseline;
-			const v = verification();
-			const unexplained = unexplainedFrame();
 			const infra = infraVerdict();
-			const tally = longTaskTally();
 			const rows = pluginTable();
 			const top = rows.slice(0, TOP_N);
 			const rest = rows.slice(TOP_N);
