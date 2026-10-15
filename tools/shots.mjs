@@ -48,18 +48,30 @@ await withPage({ port, url: undefined }, async (page) => {
 	mkdirSync(OUT, { recursive: true });
 	await page.waitForHud();
 
-	// 先造一条**带备注**的真实事故:否则"卡顿详情"与"最差事件"两屏是空的
-	for (let attempt = 0; attempt < 20; attempt += 1) {
-		if (await page.evaluate(`window.__perfHud.watch().pending === null`)) break;
-		await page.sleep(300);
-	}
-	await page.evaluate(`window.__perfHud.capture('截图样本:主界面卡了一下 token=demo-not-a-real-token')`);
-	await page.sleep(900);
-	const incident = await page.evaluate(`(() => {
-		const list = window.__perfHud.incidents();
-		return list.length === 0 ? null : { id: list[0].id, n: list.length };
+	// 先造一条**带备注**的真实事故:否则"卡顿详情"与"最差事件"两屏是空的。
+	// ⚠️ 先把页面里已有的事故清掉(`clearIncidents()`,不动计数桶):一是 README 的图里不该出现
+	// 使用者真实会话留下的证据(id / 时刻 / 备注),二是手动标记的 severity 是 0,留存清单(最差 10 +
+	// 每天最差 1)里只要已有 8~10 条真实卡顿,这条标记会被**挤掉**、截图样本就不成立。
+	// ⚠️ 与 check-counts 同一个坑:等 `pending === null` 就立刻 capture,等待期间守夜可能又触发一次,
+	// 标记被并进 pending、备注就丢了(样本不带备注,截图里那一行是空的)。所以看 `capture()` 的
+	// 返回值重试,并按 `capture().incident.id` 取回**刚标记那条**(不是"谁有备注就取谁")。
+	await page.evaluate(`window.__perfHud.clearIncidents()`);
+	const incident = await page.evaluate(`(async () => {
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		for (let attempt = 0; attempt < 20; attempt += 1) {
+			const result = window.__perfHud.capture('截图样本:主界面卡了一下 token=demo-not-a-real-token');
+			if (result !== null && result !== undefined && result.ok === true && result.incident !== null && result.incident !== undefined) {
+				await sleep(300);
+				const list = window.__perfHud.incidents();
+				const row = list.find((item) => item.id === result.incident.id) ?? null;
+				if (row !== null) return { id: row.id, n: list.length, note: row.note !== null && row.note !== undefined };
+			}
+			await sleep(500);
+		}
+		return null;
 	})()`);
 	if (incident === null) throw new Error('没抓到事故 —— 截图样本不成立');
+	if (incident.note !== true) throw new Error('样本没带上备注 —— 截图里的备注那一行会是空的');
 	console.log(`样本:${incident.n} 条事故,取 ${incident.id}`);
 
 	const frames = [

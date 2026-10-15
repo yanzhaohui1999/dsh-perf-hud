@@ -301,9 +301,9 @@ the offline suites assert its shape directly — a future UI rewrite or MCP serv
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 533 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 534 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 41 assertions: real index.js driven by a fake ctx
-# 585 offline assertions total, no running DSH required
+# 586 offline assertions total, no running DSH required
 ```
 
 The i18n dictionary now has **396 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).

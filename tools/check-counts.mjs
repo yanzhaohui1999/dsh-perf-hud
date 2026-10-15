@@ -38,9 +38,17 @@ const DICT_KEYS = (() => {
 	return Object.keys(DICT.zh);
 })();
 
+/**
+ * 「原始数据」屏**故意**把 localStorage 键位印在正文里,而键名与词典键会重名:
+ * `sessions` 既是词典键(`sessions: '会话列表'`),又是 `dsh-perf-hud:sessions:v1` 这个键名 ——
+ * 按字面比就是假阳性(实测)。**只放确实会被当真数据打印的名字**,不放宽成"按前缀忽略";
+ * 表里的键也必须真的还在词典里(下面有一条断言钉住,否则它会悄悄过期)。
+ */
+const DATA_LIKE_KEYS = new Set(['sessions']);
+
 /** 某个视图的正文里有没有漏成 key 的文案。
  * ⚠️ 要按**标识符边界**比:直接 `includes` 会把 `watchui` 里的 `watch` 也算成漏文案(实测的假阳性)。 */
-const leakedKeys = (text) => DICT_KEYS.filter((key) => new RegExp(`(^|[^A-Za-z0-9_$])${key}([^A-Za-z0-9_$]|$)`).test(text));
+const leakedKeys = (text) => DICT_KEYS.filter((key) => DATA_LIKE_KEYS.has(key) === false && new RegExp(`(^|[^A-Za-z0-9_$])${key}([^A-Za-z0-9_$]|$)`).test(text));
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -60,6 +68,9 @@ const clickText = (evaluate, text) => evaluate(`(() => {
 
 await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	await waitForHud();
+	// 白名单不许有过期条目(它按**键名**放行,键改名 / 撤下之后必须跟着收走)
+	check('漏文案白名单没有过期条目(名字都还在词典里)',
+		[...DATA_LIKE_KEYS].filter((key) => DICT_KEYS.includes(key) === false), []);
 	check('HUD 挂上了', await evaluate(`typeof window.__perfHud === 'object'`), true);
 
 	// ── 导出脱敏:把凭据塞进**真的** location,再看它会不会被带出去 ──
@@ -160,11 +171,18 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	console.log(`     包 = ${pack.files.join(' / ')} · 候选 ${JSON.stringify(pack.causeLeads)}`);
 
 	// ── P1:ZIP 的真实字节验收(页面里生成的 ZIP 落盘,交给系统 unzip 判)──
-	// 先造一条**带备注**的事故:否则"AI 包脱敏 / 完整包保留"这件事根本验不到
-	// ⚠️ 手动标记会被**并进正在等的那一次**(`triggerCapture` 的 pending 分支),那样样本就没备注 ——
-	// 而产品代码把失败**照实回出来**了(`capture()` → `{ok:false, reason}`),所以这里**看返回值重试**,
-	// 不要"等 pending 空就立刻 capture"(等待期间守夜又自己触发一次,标记就被并掉 —— 实测过"有时绿"),
-	// 取样本也必须按 `capture().incident.id` 取回**刚标记那条**,不是"谁有备注就取谁"的启发式。
+	// 先造一条**带备注**的事故:否则"AI 包脱敏 / 完整包保留"这件事根本验不到。
+	// ⚠️ 三件事都做过,才叫"样本真的落在手动标记这条路上":
+	//   ① **先清掉页面里已有的事故**(`clearIncidents()`,不动计数桶):手动标记的 severity 是 **0**,
+	//      而留存策略是"最差 10 + 每天最差 1" —— 上一轮验收器 / 上一张截图留下的 8~9 条真实卡顿
+	//      会把这条标记**挤掉**(`keepIncident` → 'dropped'),那样样本根本不在清单里。
+	//      ⚠️ 这一条正是"上次的残留让这次看起来对"的假绿灯:不清的话,`list.find(有备注的)` 会取到
+	//      **别人留下的那条**,后面三条 ZIP 断言验的就不是这次的标记(实测:接在 shots.mjs 之后跑就翻车)。
+	//   ② 手动标记会被**并进正在等的那一次**(`triggerCapture` 的 pending 分支),那样样本就没备注 ——
+	//      产品代码把失败照实回出来了(`capture()` → `{ok:false, reason}`),所以**看返回值重试**,
+	//      而不是"等 pending 空就立刻 capture"(等待期间守夜又自己触发一次,标记就被并掉)。
+	//   ③ 取样本按 `capture().incident.id` 取回**刚标记那条**,不用"谁有备注就取谁"的启发式。
+	await evaluate(`window.__perfHud.clearIncidents()`);
 	const zipInfo = await evaluate(`(async () => {
 		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 		let row = null;

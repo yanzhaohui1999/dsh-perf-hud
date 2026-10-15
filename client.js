@@ -5982,7 +5982,10 @@ window.__ModuleLoader__.load({
 			// ⚠️ 折叠态与展开态必须同一个粒度,否则读者会把 p99 当成均值:展开那一行写的是
 			// `p50 X · p99 Y · 最大 Z`(hostLoopText),这里也照写分位名(RTT 那一行同理)。
 			const host = state.hostError !== null ? translate('hostDown') : eventLoop === null ? translate('notYet') : `p99 ${eventLoop.p99}ms`;
-			return `${translate('hostShort')} ${host} · ${translate('linkShort')} ${link.count === 0 ? translate('notYet') : `p99 ${link.p99}ms`} · ${infraVerdict().text}`;
+			// 判定(`infraVerdict()`)刻意**不进摘要**:它已经是展开后的第一行(标签 `宿主 event-loop · 判定`),
+			// 摘要再说一遍就是同一句话说两遍(§5);而且它最长那句(`链路已排除(宿主与隧道均正常)`,16 字)
+			// 会把这一行顶到 43 字符,在 396px 里必然折行 —— 摘要 34 字符的预算容不下它。
+			return `${translate('hostShort')} ${host} · ${translate('linkShort')} ${link.count === 0 ? translate('notYet') : `p99 ${link.p99}ms`}`;
 		}
 
 		/**

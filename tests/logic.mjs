@@ -1089,6 +1089,18 @@ box.state.mutations = 36250;
 box.state.unattrAvg = 17.3;
 check('四个折叠组摘要的长度预算(按真实量级:五位数 + 小数)', [EX.detailSummary().length <= 26, EX.domSummary().length <= 30, EX.hostSummary().length <= 34, EX.toolsSummary().length <= 24],
 	[true, true, true, true]);
+// ⚠️ 上面那条用的是桩里的小数字,**挡不住真实量级** —— 实测过一次:折叠摘要按 p99 标的长度
+// 是紧的(桩喂 120ms / `未采集` 时 30 字符,真实数据 1234.5ms 时能顶到 34)。这里专门喂真实量级。
+check('宿主摘要的长度预算(真实量级:四位数 + 小数;判定不进摘要,它是展开后的第一行)', (() => {
+	const host0 = box.state.host;
+	const link0 = box.state.link;
+	box.state.host = { eventLoop: { p50: 12.3, p99: 1234.5, max: 2000 } };
+	box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 1234.5 }, { t: Date.now(), kind: 'rtt', rtt: 1200 }];
+	const text = EX.hostSummary();
+	box.state.host = host0;
+	box.state.link = link0;
+	return [text.length <= 34, text.includes('p99'), text.includes('1234.5ms'), text.includes('判定' ) === false];
+})(), [true, true, true, true]);
 box.state.mutations = 0;
 box.state.unattrAvg = 0;
 
