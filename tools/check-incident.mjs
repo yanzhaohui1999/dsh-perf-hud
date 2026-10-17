@@ -9,10 +9,11 @@
  *
  * 覆盖(对应任务书里的验收场景):
  *   1. 打开一条历史事故:历史回放与详情说的是同一条事故
- *   2. 帧条 / 上一帧 / 下一帧 / 上一异常帧 / 下一异常帧:标题与耗时同步更新
+ *   2. 帧条 / 上一帧 / 下一帧 / 「只看异常」:标题与耗时同步更新,过滤器只落在达线的帧上
  *   3. 绿色档位以外的帧:按钮该禁用就禁用(没有"点了没反应")
  *   4. 刷新之后仍然能打开、还停在同一帧
  *   5. 切回实时:实时帧条与实时读数回来,历史帧块消失
+ *   6. 卡顿详情那一屏只留结论层:技术读数收在「技术细节」里,默认收起(普通用户先看到的是结论)
  *
  * 与 `check-panel.mjs` 一样:**不是离线门禁**(要真浏览器 + 本机跑着 `dsh web`),
  * `npm test` 与 CI 里都没有它。
@@ -50,7 +51,9 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 
 	// 先清一遍:验收要的是"这一次真的抓到了",不是上一个 profile 里留下的记录。
 	// 用 clearIncidents(只清事故)+ 刷新:刷新会顺带把上下文选择归零(没有事故就回实时)。
-	await page.evaluate(`window.__perfHud.clearIncidents()`);
+	// ⚠️ 折叠状态是**落盘**的(`dsh-perf-hud:groups`),上一次跑留在"技术细节展开"会让下面那条
+	// "默认收起"的断言假红 —— 所以这里连折叠状态一起清掉,验收从**默认布局**的第一屏开始。
+	await page.evaluate(`(() => { window.__perfHud.clearIncidents(); localStorage.removeItem('dsh-perf-hud:groups'); return true; })()`);
 	await page.reload();
 	await page.waitForHud();
 	// 同步烧 400ms → 帧环里真的出现一条达线的帧(不是造数据:事故包的帧只有真烧出来的才算数,
@@ -80,6 +83,22 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 		return { head, back };
 	})()`)).back === true, '');
 	check('事故回放的时间轴在场(历史帧条)', (await frameCount(page)) > 0);
+	// 层次:普通用户落到的这一屏默认只有**结论层**(时间轴 + 这条事故的两个动作),
+	// 技术读数(帧内分解 / 脚本拆解 / 重叠 long task / 可疑脚本 / 交叉表)全收在「技术细节」里。
+	// 顺带钉住"同屏不再有两个返回":以前标题栏一个、动作行一个。
+	const layers = await page.evaluate(`(() => {
+		const text = document.querySelector('#dsh-perf-hud-root').innerText;
+		return {
+			pill: text.includes('▸ 技术细节'),
+			leaked: ['帧里花在哪', '可疑脚本', '按包', 'Long Task', '交叉表'].filter((needle) => text.includes(needle)),
+			timeline: text.includes('历史帧时间轴'),
+			actions: ['复制摘要', '导出事故包'].filter((label) => text.includes(label)).length,
+			back: [...document.querySelectorAll('#dsh-perf-hud-root button')].filter((node) => node.textContent.trim() === '← 返回').length,
+		};
+	})()`);
+	check('卡顿详情分层:结论层在场(时间轴 + 复制摘要 + 导出事故包),技术读数默认收起在「技术细节」里',
+		layers.pill === true && layers.leaked.length === 0 && layers.timeline === true && layers.actions === 2, JSON.stringify(layers));
+	check('同屏只有一个「← 返回」(返回只属于标题栏)', layers.back === 1, String(layers.back));
 	check('面板没有渲染错误', (await errors(page)).length === 0, JSON.stringify(await errors(page)));
 
 	// 帧条:点一根柱子 → 选中的帧必须换(标题与耗时同步更新)
@@ -103,14 +122,23 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 		step1 === 'clicked' && step2 === 'clicked' && afterNext !== afterPick && afterPrev === afterPick,
 		`${JSON.stringify(afterPick)} → ${JSON.stringify(afterNext)} → ${JSON.stringify(afterPrev)}`);
 
-	// 上一/下一异常帧:必须走到一条帧间隔 ≥ 100ms 的帧上(异常档位是"警告"或"严重")
-	const badNext = await clickText(page, '下一异常帧 ⏭');
+	// 「只看异常」是**导航过滤器**(以前是第二对箭头按钮:上一异常帧 / 下一异常帧):
+	// 开着时 ◀ ▶ 只落在帧间隔 ≥ 100ms 的帧上,档位文字必须给"警告/严重"。
+	const onlyBadOn = await clickText(page, '只看异常');
+	const badNext = await clickText(page, '下一帧 ▶');
 	const afterBad = await contextBar(page);
 	const hot = await page.evaluate(`(() => {
 		const bar = document.querySelector('#dsh-perf-hud-root [data-ctx-bar="1"]');
-		return /(严重|警告)/.test(bar.parentElement.innerText);
+		return {
+			level: /(严重|警告)/.test(bar.parentElement.innerText),
+			filter: [...document.querySelectorAll('#dsh-perf-hud-root button')].some((node) => node.textContent.trim() === '只看异常✓'),
+		};
 	})()`);
-	check('下一异常帧落到的是一条达线的帧(档位文字给出"警告/严重")', badNext === 'clicked' && hot === true, JSON.stringify(afterBad));
+	check('「只看异常」开着时「下一帧」落到的是一条达线的帧(档位文字给出"警告/严重"),而且开关自己显示为开着',
+		onlyBadOn === 'clicked' && badNext === 'clicked' && hot.level === true && hot.filter === true, JSON.stringify([afterBad, hot]));
+	// 再点一次取消:它是开关,不是一次性动作(而且下面的"一路点到最后一帧"必须回到逐帧语义)
+	const onlyBadOff = await clickText(page, '只看异常✓');
+	check('「只看异常」再点一次即取消', onlyBadOff === 'clicked', onlyBadOff);
 
 	// 禁用态:一路点到最后一帧之后,"下一帧"必须是禁用的(不许点不动却还在)。
 	// ⚠️ 两次 evaluate 必须分开:React 18 把这次状态更新排在**微任务**里,同一次同步执行里

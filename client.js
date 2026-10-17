@@ -1330,7 +1330,7 @@ window.__ModuleLoader__.load({
 			baselineMs: null,        // 覆盖空闲基线窗口长度(默认 BASELINE_MS),自测用
 			errors: [],              // 面板自己捕获的渲染错误(导出件里能读到)
 			// 分组折叠:常显只有"现在顺不顺 + 谁的锅",过程/取证/工具默认收起(头部带摘要)
-			groups: { detail: false, cross: false, dom: false, host: false, tools: false },
+			groups: { detail: false, cross: false, dom: false, host: false, tools: false, tech: false },
 			stress: null,            // 最近一次自测 { at, nodes, burnMs, sync, commitMs }
 			stressBurn: 0,           // 自测渲染时显式燃烧的毫秒数
 			// G 守夜层:默认常开,不包装任何原型;开关跟着总开关走
@@ -1349,6 +1349,10 @@ window.__ModuleLoader__.load({
 				// 历史事故里选中的那一帧的 t(存 t 不存下标:同一份事故包的位置才是稳定的)。
 				// null = 自动跟着这条事故里最差的那一帧。
 				frameT: null,
+				// 「只看异常」:历史帧导航的**过滤器**,不是第二对箭头 —— 开着时 ◀ ▶ 只落在
+				// 帧间隔 ≥ 守夜触发线的帧上。以前是四个按钮(上一帧/下一帧/上一异常帧/下一异常帧),
+				// 两对箭头做同一件事、只是步长不同,读的人先要弄清"异常帧"是什么才敢按。
+				onlyBad: false,
 				// 用户在事故清单里**选中**的事故 id(null = 自动,跟 scope 指定的那条)。
 				// 「最差事件」块 / 工具箱清单 / 取证明细的翻帧共享这一个上下文 —— 否则三处各说各的。
 				// 存 id 不存下标:新事故进来会按严重度重排,下标会悄悄指到另一条事故上。
@@ -2906,6 +2910,7 @@ window.__ModuleLoader__.load({
 					selId: state.watch.selId,
 					frameT: state.watch.frameT,
 					scope: state.watch.scope,
+					onlyBad: state.watch.onlyBad === true,
 				}));
 			} catch (error) { /* 记不住就本次会话有效 */ }
 		}
@@ -2918,6 +2923,7 @@ window.__ModuleLoader__.load({
 			if (parsed === null || typeof parsed !== 'object') return;
 			if (parsed.mode === 'incident') watch.mode = 'incident';
 			if (parsed.scope === 'latest') watch.scope = 'latest';
+			if (parsed.onlyBad === true) watch.onlyBad = true;
 			if (typeof parsed.selId === 'string') watch.selId = parsed.selId;
 			if (typeof parsed.frameT === 'number' && Number.isFinite(parsed.frameT)) watch.frameT = parsed.frameT;
 			// 落盘的 id 已经不在留存清单里(被更差的挤掉了 / 另一台机器写的)→ 退回自动,
@@ -4933,25 +4939,24 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * 历史帧的导航状态(序号 / 总数 / 四个方向有没有下一条)。渲染侧**只读它**来决定按钮的
+		 * 历史帧的导航状态(序号 / 总数 / 上一条 / 下一条有没有)。渲染侧**只读它**来决定按钮的
 		 * 可用性 —— 没有上一条就禁用,不留一个"点了没反应"的动作。
+		 * `onlyBad`(「只看异常」开着)时,能不能走**按异常帧判**:按钮上写的是什么,判据就是什么。
 		 */
-		function incidentFrameNav(row, frame) {
+		function incidentFrameNav(row, frame, onlyBad) {
 			const frames = incidentFrameRows(row);
 			const at = frame === null || frame === undefined ? -1 : frames.findIndex((item) => item.t === frame.t);
-			let hasPrevBad = false;
-			let hasNextBad = false;
-			if (at !== -1) {
-				for (let i = at - 1; i >= 0; i -= 1) if (incidentFrameHot(frames[i])) { hasPrevBad = true; break; }
-				for (let i = at + 1; i < frames.length; i += 1) if (incidentFrameHot(frames[i])) { hasNextBad = true; break; }
-			}
+			const reachable = (dir) => {
+				for (let i = at + dir; i >= 0 && i < frames.length; i += dir) {
+					if (onlyBad !== true || incidentFrameHot(frames[i])) return true;
+				}
+				return false;
+			};
 			return {
 				index: at === -1 ? 0 : at + 1,
 				count: frames.length,
-				hasPrev: at > 0,
-				hasNext: at !== -1 && at < frames.length - 1,
-				hasPrevBad,
-				hasNextBad,
+				hasPrev: at === -1 ? false : reachable(-1),
+				hasNext: at === -1 ? false : reachable(1),
 			};
 		}
 
@@ -4966,27 +4971,27 @@ window.__ModuleLoader__.load({
 		/**
 		 * 历史帧翻帧:按**时间序**走一步 —— 帧条是从左到右读的,◀ ▶ 也按时间走(不是按严重度),
 		 * 否则"下一帧"会在时间轴上乱跳。到头就停住(按钮那时是禁用的)。
+		 * 「只看异常」开着时步长落在**异常帧**上,判据与 `incidentFrameNav` 同一个函数 ——
+		 * 所以"按钮亮着"与"按下去会到哪一条"永远是同一件事,不会出现亮着却走不动。
 		 */
 		function incidentFrameStep(delta) {
 			const row = selectedIncident().row;
 			const frames = incidentFrameRows(row);
 			if (frames.length === 0) return;
+			const onlyBad = state.watch.onlyBad === true;
 			const current = selectedIncidentFrame(row);
 			const at = current === null ? -1 : frames.findIndex((frame) => frame.t === current.t);
-			const next = Math.min(frames.length - 1, Math.max(0, (at === -1 ? 0 : at) + delta));
-			selectIncidentFrame(frames[next].t);
+			const base = at === -1 ? 0 : at;
+			for (let i = Math.max(0, base + delta); i >= 0 && i < frames.length; i += delta) {
+				if (onlyBad !== true || incidentFrameHot(frames[i])) { selectIncidentFrame(frames[i].t); return; }
+			}
 		}
 
-		/** 上一条 / 下一条**异常帧**(帧间隔 ≥ 守夜触发线):没有就什么都不做(按钮已在禁用态)。 */
-		function incidentFrameBadStep(delta) {
-			const row = selectedIncident().row;
-			const frames = incidentFrameRows(row);
-			if (frames.length === 0) return;
-			const current = selectedIncidentFrame(row);
-			const at = current === null ? -1 : frames.findIndex((frame) => frame.t === current.t);
-			for (let i = at + delta; i >= 0 && i < frames.length; i += delta) {
-				if (incidentFrameHot(frames[i])) { selectIncidentFrame(frames[i].t); return; }
-			}
+		/** 「只看异常」开关:只是导航过滤器,不动选中的帧,也不动采集。 */
+		function setOnlyBad(on) {
+			state.watch.onlyBad = on === true;
+			saveWatchUI();
+			bump();
 		}
 
 		/**
@@ -5955,7 +5960,7 @@ window.__ModuleLoader__.load({
 				const loaf = frame === null ? null : incidentLoafAt(row, frame);
 				return {
 					kind: 'incident', row, frame, loaf,
-					nav: incidentFrameNav(row, frame),
+					nav: incidentFrameNav(row, frame, state.watch.onlyBad === true),
 					split: frameSplit(loaf),
 					tallyFrame: frame === null ? null : incidentFrameTally(row, frame),
 					tallyWindow: incidentWindowTally(row),
@@ -6505,6 +6510,7 @@ window.__ModuleLoader__.load({
 		function layoutDirty() {
 			if (anyGroupOpen()) return true;
 			if (state.watch.mode === 'incident') return true;
+			if (state.watch.onlyBad === true) return true;
 			if (state.watch.frameT !== null) return true;
 			if (state.watch.pickT !== null) return true;
 			if (state.watch.selId !== null) return true;
@@ -6525,6 +6531,7 @@ window.__ModuleLoader__.load({
 			// 诊断上下文也是"布局/上下文"的一部分:回到默认=回到实时那一支、历史帧退回自动
 			state.watch.mode = 'live';
 			state.watch.frameT = null;
+			state.watch.onlyBad = false;
 			// 两个"一次性说明"也清掉:布局都回到默认了,还挂着一句"帧环里没有…"只会让人以为又出错了
 			state.copyNote = null;
 			state.pickNote = null;
@@ -6620,9 +6627,12 @@ window.__ModuleLoader__.load({
 				ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧',
 				backToLive: '回到实时', backToLiveHint: '回到实时帧上下文(实时采集数据与历史那一侧的选中都不动)',
 				historyHint: '切到历史事故上下文:取证明细整块换成这条事故的窗口、历史帧、帧内分解与证据',
-				frameNavHint: '历史帧按**时间**翻(帧条从左到右就是这个顺序);异常帧 = 帧间隔 ≥ 守夜触发线的那几条',
-				frameNavPrev: '上一帧', frameNavNext: '下一帧', frameNavPrevBad: '上一异常帧', frameNavNextBad: '下一异常帧',
-				frameNoLoaf: '这一帧没有长动画帧记录(只存了帧间隔):没有帧内分解与脚本证据,不拿别的帧顶上',
+				frameNavHint: '历史帧按**时间**翻(帧条从左到右就是这个顺序);「只看异常」开着时,步长落在帧间隔 ≥ 守夜触发线的那些帧上',
+				frameNavPrev: '上一帧', frameNavNext: '下一帧',
+				onlyBad: '只看异常', onlyBadHint: '把「上一帧 / 下一帧」的步长限制在异常帧上(帧间隔 ≥100ms,即守夜触发线);再点一次取消。它只是导航过滤器:不动选中的帧,也不动采集',
+				techFrameNone: '这一帧没有长动画帧记录(只存了帧间隔):没有帧内分解,与窗口内的 long task 也不重叠 —— 不拿别的帧顶上',
+				techFrameNoneShort: '这一帧没有记录',
+				techNoneHint: '为什么没有:长动画帧(LoAF)只上报 ≥50ms 的那些,这一帧没被上报;它的帧间隔仍然留在上面的时间轴上',
 				frameEvidenceMissing: '这一帧没有脚本记录:下面给的是事故窗口内的切片,不是这一帧的',
 				frameLtTitle: '与这一帧重叠的 Long Task', frameLtNone: '这一帧与窗口内的 long task 都不重叠',
 				frameLtWindow: '窗口内 long task',
@@ -6666,7 +6676,7 @@ window.__ModuleLoader__.load({
 				worstOne: '最差那条',
 				unexplained: '该帧几乎无 JS 解释', unexplainedHint: '样式/布局/绘制/vsync;可用 Rendering 面板的 Paint flashing 交叉验证',
 				verdict: '判定', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)',
-				groupDetail: '取证明细', groupDom: 'DOM 与堆', groupHost: '宿主与链路', groupTools: '工具箱', nodesSuffix: ' 节点',
+				groupDetail: '取证明细', groupTech: '技术细节', groupDom: 'DOM 与堆', groupHost: '宿主与链路', groupTools: '工具箱', nodesSuffix: ' 节点',
 				stream: '状态', running: '流式', idle: '空闲', idleBase: '空闲基线(60s)', idleWriter: '空闲也在加节点的是',
 				notYet: '未采集', hostLoop: '宿主 event-loop',
 				hostDown: '宿主不可用', hostUnsupported: '宿主未采到', hostWarming: '等宿主样本', hostUnknown: '宿主数据不足', hostStale: '已过期', link: '链路 RTT',
@@ -6827,9 +6837,12 @@ window.__ModuleLoader__.load({
 				ctxLive: 'live', ctxFrame: 'current frame', ctxIncident: 'incident', ctxHistoryFrame: 'history frame',
 				backToLive: 'back to live', backToLiveHint: 'return to the live frame context (live capture data and the incident-side selection are untouched)',
 				historyHint: 'switch to the incident context: the forensics block becomes this incident\'s window, history frame, frame breakdown and evidence',
-				frameNavHint: 'history frames step in **time** order (the same order as the strip, left to right); an anomalous frame is one whose interval is at or over the night-watch trigger',
-				frameNavPrev: 'prev frame', frameNavNext: 'next frame', frameNavPrevBad: 'prev bad frame', frameNavNextBad: 'next bad frame',
-				frameNoLoaf: 'no long animation frame recorded for this frame (only the interval was stored): no breakdown and no script evidence, and no other frame is substituted',
+				frameNavHint: 'history frames step in **time** order (the same order as the strip, left to right); with "only bad" on, steps land on frames whose interval is at or over the night-watch trigger',
+				frameNavPrev: 'prev frame', frameNavNext: 'next frame',
+				onlyBad: 'only bad', onlyBadHint: 'Restricts prev / next to anomalous frames (interval >=100ms, the night-watch trigger); click again to clear. It is a navigation filter only: it does not move the selection or the capture',
+				techFrameNone: 'no long animation frame was recorded for this frame (only the interval was stored): no breakdown here, and it overlaps none of the window\'s long tasks — no other frame is substituted',
+				techFrameNoneShort: 'no record for this frame',
+				techNoneHint: 'Why: long animation frames (LoAF) are only reported at or above 50ms and this frame was not reported; its interval is still on the timeline above',
 				frameEvidenceMissing: 'this frame has no script records: what follows is the in-window slice of the incident, not this frame\'s',
 				frameLtTitle: 'long tasks overlapping this frame', frameLtNone: 'this frame overlaps none of the window\'s long tasks',
 				frameLtWindow: 'long tasks in window',
@@ -6870,7 +6883,7 @@ window.__ModuleLoader__.load({
 				worstOne: 'worst one',
 				unexplained: 'no JS explanation for that frame', unexplainedHint: 'style/layout/paint/vsync; cross-check with Paint flashing in the Rendering panel',
 				verdict: 'verdict', linkShort: 'RTT', suspectSuffix: ' suspect', cleared: 'link cleared (host and tunnel both normal)',
-				groupDetail: 'forensics', groupDom: 'DOM & heap', groupHost: 'host & link', groupTools: 'toolbox', nodesSuffix: ' nodes',
+				groupDetail: 'forensics', groupTech: 'technical details', groupDom: 'DOM & heap', groupHost: 'host & link', groupTools: 'toolbox', nodesSuffix: ' nodes',
 				stream: 'state', running: 'streaming', idle: 'idle', idleBase: 'idle baseline (60s)', idleWriter: 'still adding nodes while idle',
 				notYet: 'n/a', hostLoop: 'host event-loop',
 				hostDown: 'host n/a', hostUnsupported: 'host not sampled', hostWarming: 'waiting for host sample', hostUnknown: 'not enough host data', hostStale: 'stale', link: 'link RTT',
@@ -7429,10 +7442,10 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.blockValue, title: t('trendHint') }, trendText(trendMs)),
 				props.why !== true ? null : (trendRaw === null ? null : h('div', { style: { ...S.sub, fontFamily: MONO_FONT } }, trendRaw)),
 				h('div', { style: S.sub }, t('trendScope'))));
-			// 入口
+			// 入口:只留一个 —— 「设置」在标题栏里常驻(每个视图都在),主界面再放一个就是同一个动作
+			// 在同屏出现两次。
 			kids.push(h('div', { style: { ...S.sep, display: 'flex', gap: 8, flexWrap: 'wrap' } },
-				h('button', { type: 'button', style: S.btn, title: t('devEntryHint'), onClick: () => props.onDev() }, t('devEntry')),
-				h('button', { type: 'button', style: S.btn, title: t('settingsHint'), onClick: () => props.onSettings() }, t('viewSettings'))));
+				h('button', { type: 'button', style: S.btn, title: t('devEntryHint'), onClick: () => props.onDev() }, t('devEntry'))));
 			return kids;
 		}
 
@@ -7509,11 +7522,11 @@ window.__ModuleLoader__.load({
 		 * 段间留 1.4px 缝(小段扣不起缝就不扣)。
 		 * 实时与历史事故**共用这一个函数**,只是喂进来的 `split` 不同:同一个口径、同一套颜色。
 		 */
-		function ringBlock(split, missingText) {
+		function ringBlock(split) {
 			const t = translate;
 			if (split === null) return h('div', { style: S.row },
 				h('span', { style: S.label, title: t('splitHint') }, t('split')),
-				h('span', { style: S.num }, missingText ?? t('splitNoLoaf')));
+				h('span', { style: S.num }, t('splitNoLoaf')));
 			const R = 34;
 			const C = 2 * Math.PI * R;
 			const GAP = 1.4;
@@ -7797,14 +7810,14 @@ window.__ModuleLoader__.load({
 			// 选中帧的标记:一条从顶到底的蓝线(盖在柱子上;柱子自己的颜色仍然表达它的档位)
 			const selX = Math.min(REPLAY_COLS - 1.5, Math.max(0, replayX(frame.t, timeline.from, timeline.span, REPLAY_COLS)));
 			bars.push(h('rect', { key: 'sel', x: selX, y: 0, width: 1.5, height: SPARK_REPLAY_HEIGHT, fill: 'var(--dsw-alias-state-business-primary)' }));
+			const startAt = incidentWallClock(row, timeline.from);
+			const endAt = incidentWallClock(row, timeline.to);
+			const level = severityLevel(frame.ms ?? 0);
 			const btn = (label, enabled, onClick) => h('button', {
 				type: 'button', disabled: enabled === false, title: t('frameNavHint'),
 				style: enabled === false ? { ...S.btn, opacity: 0.45, cursor: 'default' } : S.btn,
 				onClick: enabled === false ? undefined : onClick,
 			}, label);
-			const startAt = incidentWallClock(row, timeline.from);
-			const endAt = incidentWallClock(row, timeline.to);
-			const level = severityLevel(frame.ms ?? 0);
 			return h('div', { style: S.card },
 				h('div', { style: S.cardTitle, title: t('replayTimelineHint') }, t('replayTimeline')),
 				h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 2 } },
@@ -7814,16 +7827,20 @@ window.__ModuleLoader__.load({
 					width: '100%', height: SPARK_REPLAY_HEIGHT, viewBox: `0 0 ${REPLAY_COLS} ${SPARK_REPLAY_HEIGHT}`,
 					preserveAspectRatio: 'none', style: { display: 'block', marginTop: 2 },
 				}, bars),
-				h('div', { style: { ...S.sub, marginTop: 4 } },
-					`${t('ctxHistoryFrame')} ${nav.index}/${nav.count} · `,
-					h('span', { style: { ...S.hero, fontSize: 16 } }, `${Math.round(frame.ms ?? 0)}ms`),
-					' · ',
-					h('span', { style: { color: severityColor(level) } }, severityText(level))),
-				h('div', { style: { display: 'flex', gap: 6, marginTop: 5, flexWrap: 'wrap' } },
+				// 帧号与毫秒**只在上面那行上下文标题里给一次**(这里曾把同一句话说第二遍);
+				// 三个导航控件并成一行:两对箭头做的是同一件事、只是步长不同,读的人得先弄清
+				// "异常帧"是什么才敢按 —— 现在「只看异常」是一个过滤器,箭头还是那两个箭头。
+				h('div', { style: { display: 'flex', gap: 6, marginTop: 5, flexWrap: 'wrap', alignItems: 'center' } },
+					h('span', { style: { ...S.sub, marginTop: 0, color: severityColor(level) }, title: t('sevBadHint') }, severityText(level)),
+					h('span', { style: { flex: '1 1 auto' } }),
 					btn(`◀ ${t('frameNavPrev')}`, nav.hasPrev, () => incidentFrameStep(-1)),
 					btn(`${t('frameNavNext')} ▶`, nav.hasNext, () => incidentFrameStep(1)),
-					btn(`⏮ ${t('frameNavPrevBad')}`, nav.hasPrevBad, () => incidentFrameBadStep(-1)),
-					btn(`${t('frameNavNextBad')} ⏭`, nav.hasNextBad, () => incidentFrameBadStep(1))));
+					h('button', {
+						type: 'button',
+						title: t('onlyBadHint'),
+						style: { ...S.btn, color: state.watch.onlyBad === true ? 'var(--dsw-alias-state-business-primary)' : undefined },
+						onClick: () => setOnlyBad(state.watch.onlyBad !== true),
+					}, `${t('onlyBad')}${state.watch.onlyBad === true ? '✓' : ''}`)));
 			} catch (error) {
 				// 与其它派生块同一条安全线:算炸只降级成一行可见原文,不许带走整块面板
 				recordError(error);
@@ -7868,11 +7885,58 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * 「技术细节」收起时的那一行摘要。
+		 * **只从已经算好的 detail 里读**(不重新采、不重新解析):折叠组的摘要即使收起也会被求值
+		 * (见 group() 的说明),所以它必须是常数级代价。真实量级下长度有预算(`tests/logic.mjs`)。
+		 */
+		function techSummary(detail) {
+			const t = translate;
+			if (detail === null || detail === undefined) return t('notYet');
+			if (detail.split === null || detail.split === undefined) return t('techFrameNoneShort');
+			const lt = Array.isArray(detail.longTasks) ? detail.longTasks.length : 0;
+			return `${detail.split.total}ms · ${t('splitScript')} ${detail.split.js}ms · LT ${lt}`;
+		}
+
+		/**
+		 * 「技术细节」:环 / 脚本拆解 / 重叠 long task / 可疑脚本 / 包×来源 / 口径。
+		 *
+		 * 为什么要有它:**这一屏普通用户也会看到**(主界面「看这一次」的落点),而上面这些是给
+		 * 开发者的读数。以前它们在卡顿详情里是**平铺**的 —— 同一份内容在开发者详情里反而收在
+		 * 「取证明细」折叠里,于是"开发者的屏比普通用户的屏还简洁"。现在两边共用这一个组:
+		 * 收起只留一行摘要,展开就是全部技术读数(能力一个都没删)。
+		 */
+		function techGroup(detail) {
+			const t = translate;
+			return group('tech', t('groupTech'), techSummary(detail), () => {
+				// 这一帧没有 LoAF(只存了帧间隔)时,帧内分解与"重叠的 long task"都无从谈起 ——
+				// 合成**一行**,而不是两个块各说一遍自己那份缺失(以前这里连着四行都在说"没有")。
+				const noLoaf = detail.split === null || detail.split === undefined;
+				const kids = [];
+				if (noLoaf) {
+					kids.push(h('div', { style: { ...S.sub, marginTop: 4 }, title: t('techNoneHint') }, t('techFrameNone')));
+				} else {
+					kids.push(ringBlock(detail.split));
+				}
+				// 脚本侧:本帧 + 事故窗口。窗口那一份即使这一帧没有记录也照给(它来自整份事故包)。
+				kids.push(h('div', null, scriptBreakdownRows(detail.tallyFrame, detail.tallyWindow,
+					t('ctxHistoryFrame'), t('pkgStoredHint'), t('incidentWindowScopeHint'), t('pkgIncidentWindowHint'))));
+				if (noLoaf === false) kids.push(longTaskBlock(detail.row, detail.frame));
+				kids.push(evidenceBlock(detail.evidence));
+				kids.push(crossBlock(detail.tallyWindow, t('crossIncidentHint')));
+				kids.push(h('div', { style: { ...S.sub, marginTop: 8 }, title: t('replayHint') }, t('replayScopeNote')));
+				return kids;
+			});
+		}
+
+		/**
 		 * **历史事故上下文**的取证明细。数据全部来自 `detailContext()`(只吃事故包:
 		 * `incident.frames` / `incident.loaf` / `summary` / `longTasks` / `urls`),所以:
 		 *   · 刷新生效(事故落盘 + 上下文落盘),零新增采集;
 		 *   · 实时帧环里别的帧、实时窗口聚合、记录器自身 / 最差那秒 / 帧内未归因 —— **一个都不进来**;
 		 *   · 某一帧缺东西时写明缺什么,不回退去拿别的帧或实时数据顶上。
+		 *
+		 * 屏幕上分两层:**结论层**(上下文标题 / 这条事故的两个动作 / 回放范围 / 归因状态 /
+		 * 时间轴)普通用户就够用;技术读数全在 `techGroup` 里,默认收起。
 		 */
 		function incidentDetail(detail) {
 			const t = translate;
@@ -7885,6 +7949,11 @@ window.__ModuleLoader__.load({
 				incidentFrameHeadingText(row, frame, nav),
 				frame === null ? null : `${Math.round(frame.ms ?? 0)}ms`,
 				h('button', { type: 'button', style: S.btn, title: t('backToLiveHint'), onClick: showLiveMode }, t('backToLive'))));
+			// 这一屏**唯一**的动作条:返回在标题栏(每个视图都有),这里只回答"这条事故怎么办"。
+			// 以前它在视图外面又写了一份返回 + 这两个动作 —— 同屏两个「← 返回」,位置还不一样。
+			kids.push(h('div', { style: S.buttons },
+				h('button', { type: 'button', style: S.btn, title: t('copySummaryHint'), onClick: () => copyText(incidentSummaryText(row), t('copySummary')) }, t('copySummary')),
+				h('button', { type: 'button', style: S.btn, title: t('exportIncidentBtnHint'), onClick: () => exportIncident(row.id) }, t('exportIncidentBtn'))));
 			// 采集本身丢过记录时,这一屏必须自己说出来 —— 否则"没看到证据"会被读成"没有证据"。
 			if (row.integrity?.captureComplete === false) {
 				const drop = row.integrity;
@@ -7893,8 +7962,9 @@ window.__ModuleLoader__.load({
 			}
 			const scope = replayScope();
 			if (scope !== null) {
+				// 事故 id 只在上面那行上下文标题里出现一次(这里曾重复印一遍)
 				kids.push(h('div', { style: S.block, title: t('replayHint') },
-					h('div', { style: S.blockLabel }, `${t('replay')} · ${row.id}`),
+					h('div', { style: S.blockLabel }, t('replay')),
 					h('div', { style: S.blockValue }, replaySummaryText(scope))));
 			}
 			kids.push(verdictBlock(row));
@@ -7904,16 +7974,10 @@ window.__ModuleLoader__.load({
 				kids.push(h('div', { style: S.sub, title: t('replayHint') }, t('replayScopeNote')));
 				return kids;
 			}
+			// 时间轴是**导航器**:帧号与耗时在上面的上下文标题里,这里只留档位与翻帧控件
 			kids.push(timelineBlock(row, frame, nav));
-			// 这一帧的时间去向:这一帧自己的 LoAF(没有就写缺失 —— 不拿最差那一帧、更不拿实时帧顶)
-			kids.push(ringBlock(detail.split, t('frameNoLoaf')));
-			// 脚本侧:这一帧 + 事故窗口。与实时共用同一个渲染函数(只是 tally 与范围标签不同)
-			kids.push(h('div', null, scriptBreakdownRows(detail.tallyFrame, detail.tallyWindow,
-				t('ctxHistoryFrame'), t('pkgStoredHint'), t('incidentWindowScopeHint'), t('pkgIncidentWindowHint'))));
-			kids.push(longTaskBlock(row, frame));
-			kids.push(evidenceBlock(detail.evidence));
-			kids.push(crossBlock(detail.tallyWindow, t('crossIncidentHint')));
-			kids.push(h('div', { style: { ...S.sub, marginTop: 8 }, title: t('replayHint') }, t('replayScopeNote')));
+			// 往下全是技术读数,默认收起(展开就是原来那一整套,一个都没删)
+			kids.push(techGroup(detail));
 			return kids;
 		}
 
@@ -8141,12 +8205,14 @@ window.__ModuleLoader__.load({
 				view === 'main' ? null : h('button', { type: 'button', style: S.btn, title: t('backHint'), onClick: () => setView('main') }, t('back')),
 				h('span', { style: { ...S.label, color: scene.color } }, scene.text),
 				h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(1)} fps`),
-				h('button', {
+				// 「深录」是插桩开关(有代价、默认关):它只属于**开发者详情**那一屏与设置页。
+				// 以前它在每个视图的标题栏里都有一份,普通用户在卡顿详情里看到它只能猜。
+				view === 'dev' ? h('button', {
 					type: 'button',
 					style: { ...S.btn, color: state.deep ? 'var(--dsw-alias-brand-primary)' : undefined },
 					title: t('deepHint'),
 					onClick: () => setDeep(state.deep === false),
-				}, `${t('deepShort')}${state.deep ? '✓' : ''}`),
+				}, `${t('deepShort')}${state.deep ? '✓' : ''}`) : null,
 				h('button', { type: 'button', style: S.btn, title: t('settingsHint'), onClick: () => setView(view === 'settings' ? 'main' : 'settings') }, t('viewSettings')),
 				h('button', { type: 'button', style: S.btn, title: open ? t('collapse') : t('expand'), onClick: toggle }, open ? '–' : '+'),
 				h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff')));
@@ -8205,11 +8271,11 @@ window.__ModuleLoader__.load({
 					selectedRow === null ? null : h('div', { style: S.buttons },
 						// 上下文切换:**实时 ⇄ 历史事故**。两种模式各有一个"去另一边"的动作,
 						// 当前在哪一边由取证明细第一行的上下文标题与这里一起说清。
+						// 「复制摘要 / 导出事故包」**不在这里** —— 它们是"对这条事故做什么",属于
+						// 卡顿详情那一屏自己的动作条(同一屏出现两份只会让人猜哪一份是真的)。
 						diagMode() === 'incident'
 							? h('button', { type: 'button', style: S.btn, title: t('backToLiveHint'), onClick: showLiveMode }, t('backToLive'))
-							: h('button', { type: 'button', style: S.btn, title: t('viewEvidenceHint'), onClick: () => revealIncident(selectedRow.id) }, t('viewEvidence')),
-						h('button', { type: 'button', style: S.btn, title: t('exportIncidentBtnHint'), onClick: () => exportIncident(selectedRow.id) }, t('exportIncidentBtn')),
-						h('button', { type: 'button', style: S.btn, title: t('copySummaryHint'), onClick: () => copyText(incidentSummaryText(selectedRow), t('copySummary')) }, t('copySummary'))),
+							: h('button', { type: 'button', style: S.btn, title: t('viewEvidenceHint'), onClick: () => revealIncident(selectedRow.id) }, t('viewEvidence'))),
 					state.copyNote === null ? null : h('div', { style: S.sub }, state.copyNote),
 					watchFlagText() === null ? null : h('div', { style: { ...S.sub, title: t('watchHint') } }, watchFlagText())),
 
@@ -8333,11 +8399,9 @@ window.__ModuleLoader__.load({
 							onChange: (event) => setDraft(event.target.value),
 							style: S.input,
 						}),
-						h('button', { type: 'button', style: S.btn, disabled: state.watch.on === false, title: t('watchMarkHint'), onClick: () => { W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft); setDraft(''); } }, t('watchMark')),
-						h('button', { type: 'button', style: S.btn, disabled: state.watch.incidents.length === 0, title: t('watchExportHint'), onClick: () => W.__perfHud.exportIncident('latest') }, t('watchExport'))),
-					h('div', { style: { ...S.sep, display: 'flex', gap: 6 } },
-						h('button', { type: 'button', style: S.btn, title: t('exportJsonHint'), onClick: exportJson }, t('exportJson')),
-						h('button', { type: 'button', style: S.btn, onClick: () => W.__perfHud.clear() }, t('clear'))),
+						h('button', { type: 'button', style: S.btn, disabled: state.watch.on === false, title: t('watchMarkHint'), onClick: () => { W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft); setDraft(''); } }, t('watchMark'))),
+					// 导出 / 清空**只在「原始数据」那一页**(见 devRaw):同四个按钮在相邻两个标签页
+					// 各摆一份,点错地方只是白点一次,读的人还要先弄清两页有什么区别。
 				]),
 			];
 
@@ -8353,10 +8417,8 @@ window.__ModuleLoader__.load({
 					h('button', { type: 'button', style: S.btn, title: t('exportFullHint'), disabled: selectedRow === null, onClick: () => exportPack(selectedRow === null ? 'latest' : selectedRow.id, { dropFreeText: false }) }, t('exportFullBtn')),
 					h('button', { type: 'button', style: S.btn, disabled: selectedRow === null, onClick: () => copyText(JSON.stringify(packPreview(selectedRow === null ? 'latest' : selectedRow.id, {}), null, 2), t('exportPreviewCopy')) }, t('exportPreviewCopy'))),
 				h('div', { style: S.buttons },
-					h('button', { type: 'button', style: S.btn, title: t('exportIncidentBtnHint'), disabled: state.watch.incidents.length === 0, onClick: () => exportIncident('latest') }, t('watchExport')),
-					h('button', { type: 'button', style: S.btn, title: t('exportJsonHint'), onClick: exportJson }, t('exportJson'))),
-				h('div', { style: { ...S.sep, display: 'flex', gap: 6 } },
-					h('button', { type: 'button', style: S.btn, title: t('watchMarkHint'), disabled: state.watch.on === false, onClick: () => { W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft); setDraft(''); } }, t('watchMark')),
+					h('button', { type: 'button', style: S.btn, title: t('watchExportHint'), disabled: state.watch.incidents.length === 0, onClick: () => exportIncident('latest') }, t('watchExport')),
+					h('button', { type: 'button', style: S.btn, title: t('exportJsonHint'), onClick: exportJson }, t('exportJson')),
 					h('button', { type: 'button', style: S.btn, title: t('clearHint'), onClick: () => W.__perfHud.clear() }, t('clear'))),
 				h('div', { style: S.sub, title: t('storageKeysHint') }, t('storageKeys')),
 			];
@@ -8391,15 +8453,8 @@ window.__ModuleLoader__.load({
 					onWhy: setCauseOpen,
 					onRange: setTrendMs,
 					onDev: () => setView('dev'),
-					onSettings: () => setView('settings'),
 				}) : null,
-				view === 'incident' ? [
-					h('div', { key: 'actions', style: S.buttons },
-						h('button', { type: 'button', style: S.btn, onClick: () => setView('main') }, t('back')),
-						h('button', { type: 'button', style: S.btn, title: t('copySummaryHint'), disabled: selectedRow === null, onClick: () => copyText(incidentSummaryText(selectedRow), t('copySummary')) }, t('copySummary')),
-						h('button', { type: 'button', style: S.btn, title: t('exportIncidentBtnHint'), disabled: selectedRow === null, onClick: () => exportIncident(selectedRow === null ? 'latest' : selectedRow.id) }, t('exportIncidentBtn'))),
-					incidentDetail(detailContext()),
-				] : null,
+				view === 'incident' ? incidentDetail(detailContext()) : null,
 				view === 'dev' ? h('div', null, devTabRow({ tab: state.devTab, onTab: setDevTab }), devKids) : null,
 				view === 'settings' ? settingsView({
 					trend,

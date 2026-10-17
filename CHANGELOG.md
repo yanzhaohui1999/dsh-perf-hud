@@ -4,6 +4,14 @@
 
 ## 未发布
 
+### 面板(2026-10-17,卡顿详情分层与界面去重)
+
+- **卡顿详情那一屏分两层**:结论层常显(上下文标题 / 复制摘要 / 导出事故包 / 回放范围 / 归因状态 / 历史帧时间轴),技术读数收进**默认折叠**的「技术细节」(`state.groups.tech`)—— 与开发者详情**共用同一份渲染**(`techGroup`)。以前同一份 `incidentDetail` 在开发者详情里是可折叠的、在普通用户点「查看这次卡顿」落到的那一屏却是**全平铺**的(实测一屏 12 个按钮、约 10 块,含三行"这一帧没有记录"),方向正好反了。
+- **同屏重复删掉**:视图外那一行动作里的第二个「← 返回」删除(返回只属于标题栏);事故 id 与"这一帧多少 ms"只在上下文标题里印一次(时间轴卡里不再重复);这一帧没有 LoAF 时,「帧里花在哪」「重叠的 long task」「可疑脚本」那三行"没有记录"合并成一行 `techFrameNone`,收起时那一组摘要给 `techFrameNoneShort`。
+- **翻帧从四个按钮收敛成两个箭头 + 一个过滤器**:`incidentFrameNav(row, frame, onlyBad)` 与 `incidentFrameStep(±1)` **共用 `incidentFrameHot` 一个判据**,所以"按钮亮着"与"按下去会到哪一条"永远是同一件事(以前是两对箭头做同一件事、只是步长不同);`onlyBad` 与 `mode` / `selId` / `frameT` / `scope` 一起落在 `LS_WATCHUI`,`layoutDirty()` / `resetLayout()` 也认它。真页面验收器同步改成:打开「只看异常」→「下一帧」必须落在达线帧上 → 再点一次取消。
+- **开关与按钮各归其位**:「深录」只在**开发者详情标题栏**与设置页(以前每个视图的标题栏都挂着一份,普通用户在卡顿详情里看到它只能猜);主界面的「设置」入口删掉(标题栏常驻,同屏不必两份);「最差事件」块只留上下文切换按钮(复制摘要 / 导出事故包属于卡顿详情自己的动作条);「工具箱」只留守夜状态 + 事故清单 + 标记刚才,导出与清空只在「原始数据」。
+- **测试与文档**:断言 604 → **606**(attribution 11 / logic **554** / host 41 —— 补「只看异常」的可用性判据与步长落点两条,加「技术细节」摘要的长度预算);词典各 402 → **405**(删 `frameNavPrevBad` / `frameNavNextBad` / `frameNoLoaf`,增 `groupTech` / `techFrameNone` / `techFrameNoneShort` / `techNoneHint` / `onlyBad` / `onlyBadHint`);`tools/check-incident.mjs` 起手连折叠状态一起清掉,验收从**默认布局**的第一屏开始;`tools/shots.mjs` 起手强制写 `dsh-perf-hud:on=1` 再刷新 —— 那个 Chrome profile 里落盘的 `'0'` 会让造样本那一步只报"没抓到事故",真因是 `capture()` 回 `not-recording(HUD 关闭时不记录)`;九张 README 截图重出。
+
 ### 可靠性(2026-10-17,参考 DSH 自带开发者工具)
 
 - **异步读取全部有 deadline 与代际**:`hostOp` / `probeLink` / sourcemap / 脚本文本读取原来都是裸 `fetch`,宿主挂住时面板会一直显示旧数、`text-pending` 会永远停着,`stop()` 也不 abort 在途请求。现在统一走 `fetchTextWithin` / `fetchJsonWithin`(宿主 5s / map 与脚本文本 20s / probe 30s),失败只写 `timeout` / `cancelled`;`start()` 递增 `state.epoch` 并建 `AbortController`,`stop()` abort 当前代,旧代结果一律丢弃。补静态断言:源码里的 `fetch(` 必须带 `signal:`。

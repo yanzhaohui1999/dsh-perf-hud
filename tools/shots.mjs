@@ -38,7 +38,11 @@ const shot = async (page, file) => {
 };
 
 // 每张图先写死状态再刷新 —— 状态写不进"读数",只写视图 / 标签页 / 折叠(见 client.js 的 LS_VIEW)
+// ⚠️ `dsh-perf-hud:on` 也要写死:它落盘在**同一个 Chrome profile** 里(`/tmp/dsh-perf-hud-chrome-<port>`),
+// 上一次跑(或真人在那个 profile 里点过「关闭」)留下的 `'0'` 会让面板根本不挂 HUD,先炸的是造样本那一步
+// —— 实测踩过:报的是"没抓到事故",真因是 `capture()` 回 `not-recording(HUD 关闭时不记录)`。
 const setState = (page, view, tab, collapsed) => page.evaluate(`(() => {
+	localStorage.setItem('dsh-perf-hud:on', '1');
 	localStorage.setItem('dsh-perf-hud:collapsed', ${JSON.stringify(collapsed ? '1' : '0')});
 	localStorage.setItem('dsh-perf-hud:view:v1', JSON.stringify({ v: 1, view: ${JSON.stringify(view)}, devTab: ${JSON.stringify(tab ?? 'frames')}, trendMs: 3600000 }));
 	return true;
@@ -46,6 +50,10 @@ const setState = (page, view, tab, collapsed) => page.evaluate(`(() => {
 
 await withPage({ port, url: undefined }, async (page) => {
 	mkdirSync(OUT, { recursive: true });
+	await page.waitForHud();
+	// 先把"总开关"打开并走一次刷新:采集没开的话下面造样本那一步必然失败(而且报的是别的错)。
+	await page.evaluate(`(() => { localStorage.setItem('dsh-perf-hud:on', '1'); return true; })()`);
+	await page.reload();
 	await page.waitForHud();
 
 	// 先造一条**带备注**的真实事故:否则"卡顿详情"与"最差事件"两屏是空的。

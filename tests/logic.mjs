@@ -260,7 +260,7 @@ process.exitCode = failed === 0 ? 0 : 1;
 		// 盖不到它们 —— 这里对它们单独跑同一条分析(§8 第 7 条那类事故的回归)。
 		const helpers = ['function contextBar(', 'function ringBlock(', 'function scriptBreakdownRows(', 'function evidenceBlock(',
 			'function crossBlock(', 'function liveFramePickRow(', 'function timelineBlock(', 'function longTaskBlock(',
-			'function verdictBlock(', 'function incidentDetail(', 'function liveDetail(',
+			'function verdictBlock(', 'function techGroup(', 'function techSummary(', 'function incidentDetail(', 'function liveDetail(',
 			// 方案 1 的视图函数(同样定义在 `function PerfHud(` 之前)
 			'function mainView(', 'function settingsView(', 'function devTabRow('];
 		const text = helpers.map((header) => extract(source, header)).join('\n');
@@ -318,7 +318,9 @@ const sandbox = `
 		// P0/P1:严重度必须是**文字**(不能只靠颜色)+ 「最差事件」块那三行的口径词
 		sevBad: '严重', sevWarn: '警告', sevOk: '低于线', sevLabel: '严重度',
 		ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧',
-		groupDetail: '取证明细',
+		groupDetail: '取证明细', groupTech: '技术细节',
+		// 摘要那几条断言量的是**人看到的字**:这里给真串,长度才对得上(不然量的是 key)
+		splitScript: '脚本', techFrameNoneShort: '这一帧没有记录',
 		jsEvidence: 'JS 证据', jsYes: '有(longtask/LoAF 与它重叠)', jsNo: '无(longtask/LoAF 都不与它重叠)',
 		// 归因状态三档(§五):文字 + 档位色两样一起给
 		verdictLabel: '归因状态', verdictConfirmed: '已确认', verdictSuspected: '可疑', verdictUnattributed: '未归因',
@@ -516,6 +518,7 @@ const newPieces = [
 	'function overviewLine2(',
 	'function unattrText(',
 	'function detailSummary(',
+	'function techSummary(',
 	'function domSummary(',
 	'function displayKey(',
 	'function bump(',
@@ -556,7 +559,7 @@ const newPieces = [
 	'function incidentFrameNav(',
 	'function selectIncidentFrame(',
 	'function incidentFrameStep(',
-	'function incidentFrameBadStep(',
+	'function setOnlyBad(',
 	'function showLiveMode(',
 	'function incidentVerdict(',
 	'function verdictColor(',
@@ -671,9 +674,9 @@ const box = new Function(`${sandbox}\n${newPieces}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
-		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentFrameBadStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
+		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
 		sectionSource, sectionIndex, sectionPath, scriptPosition, viaText, scriptEvidence, evidenceName, evidencePlace, evidenceWhereText, evidenceLine, incidentScriptEvidence, incidentEvidenceAt, incidentEvidenceLines, EVIDENCE_MAX,
 		// 导出脱敏:整机 snapshot 的出口
@@ -1158,6 +1161,14 @@ box.state.mutations = 36250;
 box.state.unattrAvg = 17.3;
 check('四个折叠组摘要的长度预算(按真实量级:五位数 + 小数)', [EX.detailSummary().length <= 26, EX.domSummary().length <= 30, EX.hostSummary().length <= 34, EX.toolsSummary().length <= 24],
 	[true, true, true, true]);
+// 「技术细节」是卡顿详情那一屏唯一的技术读数入口(普通用户也会经过它),摘要不收缩就会把那行折成两行:
+// 按真实量级喂它 —— 分位数级的帧(1234.5ms)+ 两位数条数。
+check('「技术细节」摘要的长度预算(真实量级:四位数 + 小数 + 两位数 LT)',
+	(() => {
+		const text = EX.techSummary({ split: { total: 1234.5, js: 1234.5, taskOther: 0, render: 0, tail: 0 }, longTasks: new Array(12).fill({}) });
+		const none = EX.techSummary({ split: null });
+		return [text.length <= 30, text.includes('1234.5ms'), text.includes('12'), none.length <= 12];
+	})(), [true, true, true, true]);
 // ⚠️ 上面那条用的是桩里的小数字,**挡不住真实量级** —— 实测过一次:折叠摘要按 p99 标的长度
 // 是紧的(桩喂 120ms / `未采集` 时 30 字符,真实数据 1234.5ms 时能顶到 34)。这里专门喂真实量级。
 check('宿主摘要的长度预算(真实量级:四位数 + 小数;判定不进摘要,它是展开后的第一行)', (() => {
@@ -1178,7 +1189,7 @@ box.state.unattrAvg = 0;
 
 // ── 面板分层:折叠状态与摘要 ───────────────────────────────────────
 check('默认全部收起(过程/取证/工具不占常显篇幅)',
-	JSON.stringify(box.state.groups), JSON.stringify({ detail: false, cross: false, dom: false, host: false, tools: false }));
+	JSON.stringify(box.state.groups), JSON.stringify({ detail: false, cross: false, dom: false, host: false, tools: false, tech: false }));
 EX.toggleGroup('dom');
 check('toggle 展开', box.state.groups.dom, true);
 check('折叠选择被记住', JSON.parse(box.storage.getItem('dsh-perf-hud:groups')).dom, true);
@@ -1444,7 +1455,7 @@ check('全部折叠:组全收起并落盘,但**不动**翻帧与事故选中',
 		box.state.watch.pickT = null;
 		box.state.watch.selId = null;
 		return result;
-	})(), ['{"detail":false,"cross":false,"dom":false,"host":false,"tools":false}', 123, 'i84', false]);
+	})(), ['{"detail":false,"cross":false,"dom":false,"host":false,"tools":false,"tech":false}', 123, 'i84', false]);
 check('恢复默认布局:再清掉翻帧钉住与事故选中(真正回到干净首屏)',
 	(() => {
 		for (const key of Object.keys(box.state.groups)) box.state.groups[key] = true;
@@ -1454,7 +1465,7 @@ check('恢复默认布局:再清掉翻帧钉住与事故选中(真正回到干�
 		box.state.pickNote = '帧环里没有这条事故附近的帧';
 		EX.resetLayout();
 		return [JSON.stringify(box.state.groups), box.state.watch.pickT, box.state.watch.selId, box.state.copyNote, box.state.pickNote];
-	})(), ['{"detail":false,"cross":false,"dom":false,"host":false,"tools":false}', null, null, null, null]);
+	})(), ['{"detail":false,"cross":false,"dom":false,"host":false,"tools":false,"tech":false}', null, null, null, null]);
 
 // ── 事故 ⇒ 历史帧:切到历史事故上下文,选中这条事故里最差的那一帧 ──────────────
 // 以前这里走的是"在当前帧环里找一条离事故最近、且落在窗口内的帧"(就近定位)—— 那条路
@@ -2173,7 +2184,7 @@ const watchPieces = [
 	extract(source, 'function incidentFrameNav('),
 	extract(source, 'function selectIncidentFrame('),
 	extract(source, 'function incidentFrameStep('),
-	extract(source, 'function incidentFrameBadStep('),
+	extract(source, 'function setOnlyBad('),
 	extract(source, 'function showLiveMode('),
 	extract(source, 'function incidentWallClock('),
 	extract(source, 'function replayColumns('),
@@ -2385,7 +2396,7 @@ const watchBox = new Function(`
 		tallyScripts, framePkgTally, whoRows, barSegments, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel,
 		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident, selectIncident, setIncidentScope, evidenceScope, evidenceFooter, evidenceFooterTitle, evidenceZeroText, incidentScriptEvidence, incidentEvidenceAt, evidenceWhereText, evidenceLine, evidenceName, evidencePlace, replayScope, replayX, replaySummaryText, evidenceCalls: () => evidenceCalls,
 		// 诊断上下文 + 历史帧数据层(逐帧回放)
-		diagMode, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, incidentFrameLevel, selectIncidentFrame, incidentFrameStep, incidentFrameBadStep, showLiveMode, replayColumns, replayCellTitle, incidentWallClock, incidentFrameTally, incidentWindowTally, incidentFrameEvidenceRows, incidentLongTasksAt, incidentVerdict, verdictColor, incidentScriptOf, detailContext, incidentFrameHeadingText, liveFrameHeadingText, saveWatchUI, restoreWatchUI, LS_WATCHUI,
+		diagMode, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, incidentFrameLevel, selectIncidentFrame, incidentFrameStep, setOnlyBad, showLiveMode, replayColumns, replayCellTitle, incidentWallClock, incidentFrameTally, incidentWindowTally, incidentFrameEvidenceRows, incidentLongTasksAt, incidentVerdict, verdictColor, incidentScriptOf, detailContext, incidentFrameHeadingText, liveFrameHeadingText, saveWatchUI, restoreWatchUI, LS_WATCHUI,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
 		replayCols: REPLAY_COLS,
@@ -2692,13 +2703,23 @@ check('历史帧:钉住之后就是那一帧(存 t 不存下标)', (() => {
 check('历史帧 ↔ LoAF:按**时间重叠**取那一条(这一帧没有重叠就是 null,不借别帧的)',
 	[watch.incidentLoafAt(frameRow, { t: 3000, ms: 984 }).dur, watch.incidentLoafAt(frameRow, { t: 2000, ms: 21 }), watch.incidentLoafAt(frameRow, { t: 13500, ms: 60 })],
 	[984, null, null]);
-check('历史帧导航:序号 / 总数 / 四个方向有没有下一条(没有就禁用,不留假按钮)',
+check('历史帧导航:序号 / 总数 / 上下一条有没有(没有就禁用,不留假按钮)',
 	(() => {
-		const nav = watch.incidentFrameNav(frameRow, { t: 3000, ms: 984 });
-		const last = watch.incidentFrameNav(frameRow, { t: 13500, ms: 60 });
-		return [nav.index, nav.count, nav.hasPrev, nav.hasNext, nav.hasPrevBad, nav.hasNextBad, last.hasNext, last.hasPrevBad];
+		const nav = watch.incidentFrameNav(frameRow, { t: 3000, ms: 984 }, false);
+		const last = watch.incidentFrameNav(frameRow, { t: 13500, ms: 60 }, false);
+		return [nav.index, nav.count, nav.hasPrev, nav.hasNext, last.hasNext, last.hasPrev];
 	})(),
-	[3, 5, true, true, false, true, false, true]);
+	[3, 5, true, true, false, true]);
+// 「只看异常」不是一个装饰开关:nav 的可用性判据与 step 的落点必须是同一件事,
+// 否则会出现"按钮亮着、按下去不动"(那正是四个箭头并存时最容易出的错)。
+check('历史帧导航:「只看异常」开着时,可用性按**异常帧**判(不是按"还有没有下一帧")',
+	(() => {
+		const hot = watch.incidentFrameNav(frameRow, { t: 3000, ms: 984 }, true);
+		const tail = watch.incidentFrameNav(frameRow, { t: 13500, ms: 60 }, true);
+		const mid = watch.incidentFrameNav(frameRow, { t: 2000, ms: 21 }, true);
+		return [hot.hasPrev, hot.hasNext, tail.hasNext, tail.hasPrev, mid.hasPrev, mid.hasNext];
+	})(),
+	[false, true, false, true, false, true]);
 check('历史帧翻帧:按**时间序**走一步(与帧条从左到右同一个方向),到头停住',
 	withIncident(() => {
 		const seq = [];
@@ -2709,15 +2730,20 @@ check('历史帧翻帧:按**时间序**走一步(与帧条从左到右同一个�
 		watch.incidentFrameStep(-1); seq.push(watch.state.watch.frameT);
 		return seq;
 	}), [13000, 13500, 13500, 13000]);
-check('上一/下一异常帧:帧间隔 ≥ 守夜触发线才算异常帧(到不了就什么都不做)',
+check('「只看异常」:过滤器开着时 ◀ ▶ 只落在帧间隔 ≥ 守夜触发线的那些帧上(到不了就不动),关掉即恢复逐帧',
 	withIncident(() => {
 		watch.state.watch.frameT = 2000;
-		watch.incidentFrameBadStep(1); const next = watch.state.watch.frameT;
-		watch.incidentFrameBadStep(1); const second = watch.state.watch.frameT;   // 下一异常帧:13000
-		watch.incidentFrameBadStep(1); const none = watch.state.watch.frameT;      // 已是最后一个异常帧:不动
-		watch.incidentFrameBadStep(-1); const back = watch.state.watch.frameT;  // 回到 t=3000 那一条
-		return [next, second, none, back];
-	}), [3000, 13000, 13000, 3000]);
+		watch.setOnlyBad(true);
+		watch.incidentFrameStep(1); const next = watch.state.watch.frameT;        // 2000 → 3000(异常)
+		watch.incidentFrameStep(1); const second = watch.state.watch.frameT;      // 3000 → 13000(异常)
+		watch.incidentFrameStep(1); const none = watch.state.watch.frameT;        // 已是最后一条异常帧:不动
+		watch.incidentFrameStep(-1); const back = watch.state.watch.frameT;       // 回 3000
+		watch.state.watch.frameT = 13000;
+		watch.incidentFrameStep(1); const blocked = watch.state.watch.frameT;     // 后面只剩不达线的帧:不动
+		watch.setOnlyBad(false);
+		watch.incidentFrameStep(1); const all = watch.state.watch.frameT;         // 关掉之后又是逐帧走
+		return [next, second, none, back, blocked, all, watch.state.watch.onlyBad];
+	}), [3000, 13000, 13000, 3000, 13000, 13500, false]);
 check('事件横轴的墙钟:用**事故包自带的 perfOrigin**,不是当前页面的 timeOrigin(跨会话读回才算得对)',
 	watch.incidentWallClock(frameRow, 3000), 1700000000000 + 3000);
 
