@@ -1,0 +1,938 @@
+{
+  "incident": {
+    "id": "i3",
+    "cause": "manual",
+    "note": "fixture: real capture, sanitized",
+    "kept": "kept",
+    "severity": 137.1,
+    "atPerfMs": 487.4,
+    "at": "2026-10-17T09:15:30.263Z",
+    "window": {
+      "fromMs": -9512.6,
+      "toMs": 3487.4,
+      "preMs": 10000,
+      "postMs": 3000,
+      "from": "2026-10-17T09:15:20.263Z",
+      "to": "2026-10-17T09:15:33.263Z"
+    },
+    "integrity": {
+      "captureComplete": true,
+      "loafDropped": 0,
+      "longTaskDropped": 0,
+      "loafKept": 21,
+      "longTaskKept": 2,
+      "reasons": []
+    },
+    "summary": {
+      "worstFrameMs": 137.1,
+      "worstFrameAt": "2026-10-17T09:15:30.460Z",
+      "frames": 74,
+      "framesOver50Ms": 28,
+      "framesOver100Ms": 1,
+      "hiddenGaps": 0,
+      "loafEntries": 21,
+      "blockingMs": 250.7,
+      "pkgCoverage": {
+        "resolved": 1,
+        "total": 10
+      },
+      "pkgVia": {
+        "url": 1,
+        "precise-off": 8,
+        "not-plugin": 1
+      },
+      "longTasksInWindow": 2,
+      "interactionsInWindow": 0,
+      "topScripts": [
+        {
+          "at": 259.4,
+          "u": 1,
+          "ms": 231.2,
+          "fn": null,
+          "invoker": "SCRIPT[src=\"plugins/??@deepseek-ai/dsh-api-gateway/client.js,@deepseek-ai/dsh-cl",
+          "invokerType": "event-listener",
+          "charPos": 25533,
+          "pkg": "@deepseek-ai/dsh-client-modules",
+          "pkgVia": "url",
+          "file": "/plugins/@deepseek-ai/dsh-client-modules/client.js",
+          "line": null,
+          "lineVia": "text-not-fetched",
+          "lineScope": null
+        },
+        {
+          "at": 547.5,
+          "u": 2,
+          "ms": 91,
+          "fn": "received",
+          "invoker": "DOMWebSocket.onmessage",
+          "invokerType": "event-listener",
+          "charPos": 20901,
+          "pkg": null,
+          "pkgVia": "precise-off",
+          "file": null,
+          "line": null,
+          "lineVia": "text-not-fetched",
+          "lineScope": null
+        },
+        {
+          "at": 187.7,
+          "u": 0,
+          "ms": 71.2,
+          "fn": null,
+          "invoker": "TimerHandler:setTimeout",
+          "invokerType": "user-callback",
+          "charPos": 789880,
+          "pkg": null,
+          "pkgVia": "not-plugin",
+          "file": "/assets/index-CN7NIWNw.js",
+          "line": null,
+          "lineVia": "text-not-fetched",
+          "lineScope": null
+        },
+        {
+          "at": 1206.2,
+          "u": 3,
+          "ms": 41.2,
+          "fn": null,
+          "invoker": "Response.json.then",
+          "invokerType": "resolve-promise",
+          "charPos": 1959318,
+          "pkg": null,
+          "pkgVia": "precise-off",
+          "file": null,
+          "line": null,
+          "lineVia": "text-not-fetched",
+          "lineScope": null
+        },
+        {
+          "at": 3038.9,
+          "u": 2,
+          "ms": 6.4,
+          "fn": "received",
+          "invoker": "DOMWebSocket.onmessage",
+          "invokerType": "event-listener",
+          "charPos": 20901,
+          "pkg": null,
+          "pkgVia": "precise-off",
+          "file": null,
+          "line": null,
+          "lineVia": "text-not-fetched",
+          "lineScope": null
+        }
+      ],
+      "p50": 48.1,
+      "p90": 51.8,
+      "p99": 137.1,
+      "worstFrameJs": "js",
+      "worstFrameNeighboursMs": 35.5,
+      "suspectedThrottle": false,
+      "streaming": false,
+      "visibility": "visible"
+    },
+    "urls": [
+      "/assets/index-CN7NIWNw.js",
+      "/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=73be9f6f158c",
+      "/plugins/??@deepseek-ai/dsh-api-gateway/client.js,@deepseek-ai/dsh-client-ui-open-in-app/client.js,@deepseek-ai/dsh-api-job-controller/client.js,@deepseek-ai/dsh-api-terminal-controller/client.js,@deepseek-ai/dsh-api-workspace-files/client.js,@deepseek-ai/dsh-client-ui-settings-account/client.js,@deepseek-ai/dsh-client-hmr/client.js,@deepseek-ai/dsh-cordis-client-runner/client.js,@deepseek-ai/dsh-client-ui-theme/client.js,@deepseek-ai/dsh-client-locale/client.js,@deepseek-ai/dsh-client-shortcuts/client.js,@deepseek-ai/dsh-client-ui-shortcuts/client.js,@deepseek-ai/dsh-client-ui-layout/client.js,@deepseek-ai/dsh-client-ui-renderer/client.js,@deepseek-ai/dsh-client-ui-session/client.js,@deepseek-ai/dsh-client-resources/client.js,@deepseek-ai/dsh-client-ui-sidebar/client.js,@deepseek-ai/dsh-client-ui-sidebar-right/client.js,@deepseek-ai/dsh-client-ui-sidebar-documentpreview/client.js,@deepseek-ai/dsh-client-ui-sidebar-terminal/client.js,@deepseek-ai/dsh-client-ui-sidebar-files/client.js,@deepseek-ai/dsh-client-ui-settings/client.js,@deepseek-ai/dsh-client-ui-settings-general/client.js,@deepseek-ai/dsh-client-ui-settings-models/client.js,@deepseek-ai/dsh-client-ui-plugin-manager/client.js,@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client.js,@deepseek-ai/dsh-client-ui-conversation/client.js,@deepseek-ai/dsh-client-ui-approval/client.js,@deepseek-ai/dsh-client-ui-chat/client.js,@deepseek-ai/dsh-client-ui-brand-official/client.js,@deepseek-ai/dsh-client-ui-attachment/client.js,@deepseek-ai/dsh-client-ui-tool/client.js,@deepseek-ai/dsh-client-ui-cordis/client.js,@deepseek-ai/dsh-client-ui-workspace/client.js,@deepseek-ai/dsh-client-ui-workflow-run/client.js,@deepseek-ai/dsh-client-ui-input-trigger/client.js,@deepseek-ai/dsh-client-ui-commands/client.js,@deepseek-ai/dsh-client-ui-skill/client.js,@deepseek-ai/dsh-client-ui-subagent/client.js,@deepseek-ai/dsh-client-ui-reference/client.js,@deepseek-ai/dsh-client-ui-secret-mask/client.js,@deepseek-ai/dsh-client-ui-jobs/client.js,@deepseek-ai/dsh-client-ui-schedule/client.js,@deepseek-ai/dsh-client-ui-goal/client.js,@deepseek-ai/dsh-client-ui-message-feedback/client.js,@deepseek-ai/dsh-client-ui-model-selection/client.js,@deepseek-ai/dsh-client-ui-permission-presets/client.js,@deepseek-ai/dsh-client-ui-agent-preset/client.js,@deepseek-ai/dsh-client-ui-settings-session-log/client.js,@deepseek-ai/dsh-client-ui-settings-plugins/client.js,@deepseek-ai/dsh-client-ui-settings-shell/client.js,@deepseek-ai/dsh-client-ui-settings-agent-loop/client.js,@deepseek-ai/dsh-client-ui-settings-subagent/client.js,@deepseek-ai/dsh-client-ui-settings-web-search/client.js,@deepseek-ai/dsh-client-ui-plan/client.js,@deepseek-ai/dsh-client-ui-user-questions/client.js,@deepseek-ai/dsh-client-ui-trajectory/client.js,dsh-notify-me/client.js&rev=ef0d20fded37",
+      "/plugins/??dsh-perf-hud/client.js,@deepseek-ai/dsh-api-remote-access/client.js,@deepseek-ai/dsh-session-log-export/client.js,@deepseek-ai/dsh-client-file-upload/client.js,@deepseek-ai/dsh-api-remotes/client.js,@deepseek-ai/dsh-client-ui-deliverables/client.js,dsh-free-search/client.js,dsh-pocket/client.js,@deepseek-ai/dsh-typert-registry/client.js,@deepseek-ai/dsh-client-connection/client.js,dshmarket/client.js,dsh-context/client.js,@deepseek-ai/dsh-api-workspace-controller/client.js,@deepseek-ai/dsh-api-session-controller/client.js,dsh-better-sidebar/client.js,dsh-cost-meter/client.js,@deepseek-ai/dsh-client-ui-directory-picker-native/client.js&rev=07f43fa91bc1"
+    ],
+    "packages": [
+      {
+        "pkg": "@deepseek-ai/dsh-client-modules",
+        "ms": 231.2,
+        "count": 1
+      }
+    ],
+    "frames": [
+      {
+        "t": 536.7,
+        "ms": 45.1,
+        "gap": false
+      },
+      {
+        "t": 547.3,
+        "ms": 10.6,
+        "gap": false
+      },
+      {
+        "t": 684.4,
+        "ms": 137.1,
+        "gap": false
+      },
+      {
+        "t": 695.6,
+        "ms": 11.2,
+        "gap": false
+      },
+      {
+        "t": 738.9,
+        "ms": 43.3,
+        "gap": false
+      },
+      {
+        "t": 774.4,
+        "ms": 35.5,
+        "gap": false
+      },
+      {
+        "t": 805.5,
+        "ms": 31.1,
+        "gap": false
+      },
+      {
+        "t": 851.1,
+        "ms": 45.6,
+        "gap": false
+      },
+      {
+        "t": 908.3,
+        "ms": 57.2,
+        "gap": false
+      },
+      {
+        "t": 922.4,
+        "ms": 14.1,
+        "gap": false
+      },
+      {
+        "t": 972.7,
+        "ms": 50.3,
+        "gap": false
+      },
+      {
+        "t": 1005.6,
+        "ms": 32.9,
+        "gap": false
+      },
+      {
+        "t": 1055.4,
+        "ms": 49.8,
+        "gap": false
+      },
+      {
+        "t": 1105.4,
+        "ms": 50,
+        "gap": false
+      },
+      {
+        "t": 1157.2,
+        "ms": 51.8,
+        "gap": false
+      },
+      {
+        "t": 1205.3,
+        "ms": 48.1,
+        "gap": false
+      },
+      {
+        "t": 1275.7,
+        "ms": 70.4,
+        "gap": false
+      },
+      {
+        "t": 1305.5,
+        "ms": 29.8,
+        "gap": false
+      },
+      {
+        "t": 1322.1,
+        "ms": 16.6,
+        "gap": false
+      },
+      {
+        "t": 1412.1,
+        "ms": 90,
+        "gap": false
+      },
+      {
+        "t": 1422.3,
+        "ms": 10.2,
+        "gap": false
+      },
+      {
+        "t": 1472.2,
+        "ms": 49.9,
+        "gap": false
+      },
+      {
+        "t": 1522.1,
+        "ms": 49.9,
+        "gap": false
+      },
+      {
+        "t": 1572.4,
+        "ms": 50.3,
+        "gap": false
+      },
+      {
+        "t": 1588.8,
+        "ms": 16.4,
+        "gap": false
+      },
+      {
+        "t": 1622.2,
+        "ms": 33.4,
+        "gap": false
+      },
+      {
+        "t": 1672.6,
+        "ms": 50.4,
+        "gap": false
+      },
+      {
+        "t": 1722,
+        "ms": 49.4,
+        "gap": false
+      },
+      {
+        "t": 1755.4,
+        "ms": 33.4,
+        "gap": false
+      },
+      {
+        "t": 1788.7,
+        "ms": 33.3,
+        "gap": false
+      },
+      {
+        "t": 1805.4,
+        "ms": 16.7,
+        "gap": false
+      },
+      {
+        "t": 1838.7,
+        "ms": 33.3,
+        "gap": false
+      },
+      {
+        "t": 1888.8,
+        "ms": 50.1,
+        "gap": false
+      },
+      {
+        "t": 1940.2,
+        "ms": 51.4,
+        "gap": false
+      },
+      {
+        "t": 1977,
+        "ms": 36.8,
+        "gap": false
+      },
+      {
+        "t": 1988.8,
+        "ms": 11.8,
+        "gap": false
+      },
+      {
+        "t": 2038.8,
+        "ms": 50,
+        "gap": false
+      },
+      {
+        "t": 2091.5,
+        "ms": 52.7,
+        "gap": false
+      },
+      {
+        "t": 2105.4,
+        "ms": 13.9,
+        "gap": false
+      },
+      {
+        "t": 2122,
+        "ms": 16.6,
+        "gap": false
+      },
+      {
+        "t": 2172.1,
+        "ms": 50.1,
+        "gap": false
+      },
+      {
+        "t": 2222.1,
+        "ms": 50,
+        "gap": false
+      },
+      {
+        "t": 2272.7,
+        "ms": 50.6,
+        "gap": false
+      },
+      {
+        "t": 2305.5,
+        "ms": 32.8,
+        "gap": false
+      },
+      {
+        "t": 2355.4,
+        "ms": 49.9,
+        "gap": false
+      },
+      {
+        "t": 2388.8,
+        "ms": 33.4,
+        "gap": false
+      },
+      {
+        "t": 2438.7,
+        "ms": 49.9,
+        "gap": false
+      },
+      {
+        "t": 2489.2,
+        "ms": 50.5,
+        "gap": false
+      },
+      {
+        "t": 2538.9,
+        "ms": 49.7,
+        "gap": false
+      },
+      {
+        "t": 2572,
+        "ms": 33.1,
+        "gap": false
+      },
+      {
+        "t": 2622.1,
+        "ms": 50.1,
+        "gap": false
+      },
+      {
+        "t": 2638.8,
+        "ms": 16.7,
+        "gap": false
+      },
+      {
+        "t": 2688.7,
+        "ms": 49.9,
+        "gap": false
+      },
+      {
+        "t": 2738.7,
+        "ms": 50,
+        "gap": false
+      },
+      {
+        "t": 2788.7,
+        "ms": 50,
+        "gap": false
+      },
+      {
+        "t": 2839.2,
+        "ms": 50.5,
+        "gap": false
+      },
+      {
+        "t": 2855.4,
+        "ms": 16.2,
+        "gap": false
+      },
+      {
+        "t": 2872.1,
+        "ms": 16.7,
+        "gap": false
+      },
+      {
+        "t": 2888.7,
+        "ms": 16.6,
+        "gap": false
+      },
+      {
+        "t": 2922,
+        "ms": 33.3,
+        "gap": false
+      },
+      {
+        "t": 2972.5,
+        "ms": 50.5,
+        "gap": false
+      },
+      {
+        "t": 2988.7,
+        "ms": 16.2,
+        "gap": false
+      },
+      {
+        "t": 3038.8,
+        "ms": 50.1,
+        "gap": false
+      },
+      {
+        "t": 3133.8,
+        "ms": 95,
+        "gap": false
+      },
+      {
+        "t": 3152.3,
+        "ms": 18.5,
+        "gap": false
+      },
+      {
+        "t": 3205.4,
+        "ms": 53.1,
+        "gap": false
+      },
+      {
+        "t": 3222.1,
+        "ms": 16.7,
+        "gap": false
+      },
+      {
+        "t": 3272.1,
+        "ms": 50,
+        "gap": false
+      },
+      {
+        "t": 3288.8,
+        "ms": 16.7,
+        "gap": false
+      },
+      {
+        "t": 3340.4,
+        "ms": 51.6,
+        "gap": false
+      },
+      {
+        "t": 3372.6,
+        "ms": 32.2,
+        "gap": false
+      },
+      {
+        "t": 3412,
+        "ms": 39.4,
+        "gap": false
+      },
+      {
+        "t": 3422,
+        "ms": 10,
+        "gap": false
+      },
+      {
+        "t": 3472.5,
+        "ms": 50.5,
+        "gap": false
+      }
+    ],
+    "loaf": [
+      {
+        "t": 187.7,
+        "dur": 71.5,
+        "blocking": 21.3,
+        "renderStart": 259.2,
+        "styleAndLayoutStart": 259.2,
+        "scripts": [
+          {
+            "u": 0,
+            "fn": null,
+            "invoker": "TimerHandler:setTimeout",
+            "invokerType": "user-callback",
+            "charPos": 789880,
+            "ms": 71.2,
+            "forcedMs": 0,
+            "pauseMs": 0,
+            "pkg": null,
+            "pkgVia": "not-plugin",
+            "file": "/assets/index-CN7NIWNw.js",
+            "line": null,
+            "lineVia": "text-not-fetched",
+            "lineScope": null
+          }
+        ]
+      },
+      {
+        "t": 259.4,
+        "dur": 234.3,
+        "blocking": 183.7,
+        "renderStart": 491.4,
+        "styleAndLayoutStart": 491.7,
+        "scripts": [
+          {
+            "u": 1,
+            "fn": null,
+            "invoker": "SCRIPT[src=\"plugins/??@deepseek-ai/dsh-api-gateway/client.js,@deepseek-ai/dsh-cl",
+            "invokerType": "event-listener",
+            "charPos": 25533,
+            "ms": 231.2,
+            "forcedMs": 1.2,
+            "pauseMs": 0,
+            "pkg": "@deepseek-ai/dsh-client-modules",
+            "pkgVia": "url",
+            "file": "/plugins/@deepseek-ai/dsh-client-modules/client.js",
+            "line": null,
+            "lineVia": "text-not-fetched",
+            "lineScope": null
+          }
+        ]
+      },
+      {
+        "t": 547.5,
+        "dur": 141,
+        "blocking": 45.7,
+        "renderStart": 683.8,
+        "styleAndLayoutStart": 684.4,
+        "scripts": [
+          {
+            "u": 2,
+            "fn": "received",
+            "invoker": "DOMWebSocket.onmessage",
+            "invokerType": "event-listener",
+            "charPos": 20901,
+            "ms": 91,
+            "forcedMs": 0,
+            "pauseMs": 0,
+            "pkg": null,
+            "pkgVia": "precise-off",
+            "file": null,
+            "line": null,
+            "lineVia": "text-not-fetched",
+            "lineScope": null
+          }
+        ]
+      },
+      {
+        "t": 851.1,
+        "dur": 57.3,
+        "blocking": 0,
+        "renderStart": 908.3,
+        "styleAndLayoutStart": 908.3,
+        "scripts": []
+      },
+      {
+        "t": 1055.5,
+        "dur": 50.2,
+        "blocking": 0,
+        "renderStart": 1105.4,
+        "styleAndLayoutStart": 1105.5,
+        "scripts": []
+      },
+      {
+        "t": 1106,
+        "dur": 51.2,
+        "blocking": 0,
+        "renderStart": 1157.1,
+        "styleAndLayoutStart": 1157.2,
+        "scripts": []
+      },
+      {
+        "t": 1206.2,
+        "dur": 70.8,
+        "blocking": 0,
+        "renderStart": 1275.7,
+        "styleAndLayoutStart": 1275.8,
+        "scripts": [
+          {
+            "u": 3,
+            "fn": null,
+            "invoker": "Response.json.then",
+            "invokerType": "resolve-promise",
+            "charPos": 1959318,
+            "ms": 41.2,
+            "forcedMs": 4.7,
+            "pauseMs": 0,
+            "pkg": null,
+            "pkgVia": "precise-off",
+            "file": null,
+            "line": null,
+            "lineVia": "text-not-fetched",
+            "lineScope": null
+          }
+        ]
+      },
+      {
+        "t": 1322.3,
+        "dur": 90.1,
+        "blocking": 0,
+        "renderStart": 1412.1,
+        "styleAndLayoutStart": 1412.1,
+        "scripts": []
+      },
+      {
+        "t": 1522.5,
+        "dur": 50.1,
+        "blocking": 0,
+        "renderStart": 1572.3,
+        "styleAndLayoutStart": 1572.4,
+        "scripts": []
+      },
+      {
+        "t": 1622.4,
+        "dur": 50.3,
+        "blocking": 0,
+        "renderStart": 1672.6,
+        "styleAndLayoutStart": 1672.7,
+        "scripts": []
+      },
+      {
+        "t": 1838.8,
+        "dur": 50.1,
+        "blocking": 0,
+        "renderStart": 1888.7,
+        "styleAndLayoutStart": 1888.8,
+        "scripts": []
+      },
+      {
+        "t": 1889,
+        "dur": 51.4,
+        "blocking": 0,
+        "renderStart": 1940.2,
+        "styleAndLayoutStart": 1940.2,
+        "scripts": []
+      },
+      {
+        "t": 2038.9,
+        "dur": 52.6,
+        "blocking": 0,
+        "renderStart": 2091.5,
+        "styleAndLayoutStart": 2091.5,
+        "scripts": []
+      },
+      {
+        "t": 2172.2,
+        "dur": 50.1,
+        "blocking": 0,
+        "renderStart": 2222.1,
+        "styleAndLayoutStart": 2222.1,
+        "scripts": []
+      },
+      {
+        "t": 2222.5,
+        "dur": 50.4,
+        "blocking": 0,
+        "renderStart": 2272.7,
+        "styleAndLayoutStart": 2272.7,
+        "scripts": []
+      },
+      {
+        "t": 2438.9,
+        "dur": 50.6,
+        "blocking": 0,
+        "renderStart": 2489.2,
+        "styleAndLayoutStart": 2489.3,
+        "scripts": []
+      },
+      {
+        "t": 2789,
+        "dur": 50.4,
+        "blocking": 0,
+        "renderStart": 2839.2,
+        "styleAndLayoutStart": 2839.2,
+        "scripts": []
+      },
+      {
+        "t": 2922.2,
+        "dur": 50.4,
+        "blocking": 0,
+        "renderStart": 2972.5,
+        "styleAndLayoutStart": 2972.5,
+        "scripts": []
+      },
+      {
+        "t": 3038.9,
+        "dur": 95.2,
+        "blocking": 0,
+        "renderStart": 3133.8,
+        "styleAndLayoutStart": 3133.8,
+        "scripts": [
+          {
+            "u": 2,
+            "fn": "received",
+            "invoker": "DOMWebSocket.onmessage",
+            "invokerType": "event-listener",
+            "charPos": 20901,
+            "ms": 6.4,
+            "forcedMs": 0,
+            "pauseMs": 0,
+            "pkg": null,
+            "pkgVia": "precise-off",
+            "file": null,
+            "line": null,
+            "lineVia": "text-not-fetched",
+            "lineScope": null
+          },
+          {
+            "u": 2,
+            "fn": "received",
+            "invoker": "DOMWebSocket.onmessage",
+            "invokerType": "event-listener",
+            "charPos": 20901,
+            "ms": 5.8,
+            "forcedMs": 0,
+            "pauseMs": 0,
+            "pkg": null,
+            "pkgVia": "precise-off",
+            "file": null,
+            "line": null,
+            "lineVia": "text-not-fetched",
+            "lineScope": null
+          },
+          {
+            "u": 2,
+            "fn": "received",
+            "invoker": "DOMWebSocket.onmessage",
+            "invokerType": "event-listener",
+            "charPos": 20901,
+            "ms": 6.1,
+            "forcedMs": 0,
+            "pauseMs": 0,
+            "pkg": null,
+            "pkgVia": "precise-off",
+            "file": null,
+            "line": null,
+            "lineVia": "text-not-fetched",
+            "lineScope": null
+          },
+          {
+            "u": 2,
+            "fn": "received",
+            "invoker": "DOMWebSocket.onmessage",
+            "invokerType": "event-listener",
+            "charPos": 20901,
+            "ms": 5.6,
+            "forcedMs": 0,
+            "pauseMs": 0,
+            "pkg": null,
+            "pkgVia": "precise-off",
+            "file": null,
+            "line": null,
+            "lineVia": "text-not-fetched",
+            "lineScope": null
+          },
+          {
+            "u": 2,
+            "fn": "received",
+            "invoker": "DOMWebSocket.onmessage",
+            "invokerType": "event-listener",
+            "charPos": 20901,
+            "ms": 6.1,
+            "forcedMs": 0,
+            "pauseMs": 0,
+            "pkg": null,
+            "pkgVia": "precise-off",
+            "file": null,
+            "line": null,
+            "lineVia": "text-not-fetched",
+            "lineScope": null
+          },
+          {
+            "u": 2,
+            "fn": "received",
+            "invoker": "DOMWebSocket.onmessage",
+            "invokerType": "event-listener",
+            "charPos": 20901,
+            "ms": 5.2,
+            "forcedMs": 0,
+            "pauseMs": 0,
+            "pkg": null,
+            "pkgVia": "precise-off",
+            "file": null,
+            "line": null,
+            "lineVia": "text-not-fetched",
+            "lineScope": null
+          }
+        ]
+      },
+      {
+        "t": 3152.7,
+        "dur": 52.9,
+        "blocking": 0,
+        "renderStart": 3205.4,
+        "styleAndLayoutStart": 3205.5,
+        "scripts": []
+      },
+      {
+        "t": 3288.9,
+        "dur": 51.6,
+        "blocking": 0,
+        "renderStart": 3340.4,
+        "styleAndLayoutStart": 3340.4,
+        "scripts": []
+      }
+    ],
+    "longTasks": [
+      {
+        "seq": 1,
+        "t": 1792228530312,
+        "at": 259.9,
+        "ms": 231,
+        "owner": null,
+        "component": null,
+        "subtreeComponent": null,
+        "domComponent": null,
+        "source": "none"
+      },
+      {
+        "seq": 2,
+        "t": 1792228530471,
+        "at": 592.8,
+        "ms": 91,
+        "owner": null,
+        "component": "AnimatedRows",
+        "subtreeComponent": "ProjectRowItem",
+        "domComponent": null,
+        "source": "render"
+      }
+    ],
+    "interactions": [],
+    "baseline": null,
+    "host": {
+      "at": "2026-10-17T09:15:33.082Z",
+      "snapshotAgeMs": -2818,
+      "eventLoop": {
+        "p50": 1.14,
+        "p99": 28.93,
+        "max": 255.07,
+        "seconds": 60
+      }
+    },
+    "env": {
+      "domNodes": 1159,
+      "heapUsedBytes": 75486558,
+      "instrumented": false,
+      "deep": false,
+      "precise": false,
+      "perfOrigin": "2026-10-17T09:15:29.776Z",
+      "viewport": "1400×757",
+      "utcOffsetMin": 480,
+      "devicePixelRatio": 1,
+      "hardwareConcurrency": 10,
+      "visibility": "visible"
+    },
+    "day": "2026-10-17",
+    "tier": "worst"
+  },
+  "thresholds": {
+    "triggerMs": 100,
+    "gapMs": 1000,
+    "preMs": 10000,
+    "postMs": 3000,
+    "keep": 10,
+    "dailyDays": 7,
+    "keepMax": 17,
+    "reactionMs": 3000
+  },
+  "redaction": {
+    "rule": "导出时做减法,不做匿名化;applied / kept / neverCollected 三个数组说明做了什么、没做什么",
+    "applied": [
+      "page / href:只保留 origin + path,查询串整段丢弃(DSH 首屏的 ?token=… 就在这里)",
+      "url / urls / sourceURL:去掉协议与主机,保留路径与 rev;这些键名的值会被替换成 <redacted>:token / accessToken / access_token / refresh_token / id_token / api_key / apikey / api-key / key / secret / client_secret / password / passwd / pwd / auth / authorization / bearer / session / sessionid / sid / sig / signature / credential / code",
+      "其余字符串:/Users/<用户名>、/home/<用户名>、C:\\Users\\<用户名> 一律换成 ~",
+      "userAgent:只保留浏览器主版本 + 操作系统(完整 UA 能指纹到具体机器)",
+      "自由文本(note / 场景标记的 note):原样保留(用户自己敲的字,可能含敏感内容)"
+    ],
+    "kept": [
+      "性能数值本身(毫秒、计数、分位、帧序列)—— 不含个人信息,丢了这份文件就没用了",
+      "插件的包名 / 源文件路径 / 行号 —— 这是归因的全部价值,路径只做了 ~ 降级",
+      "viewport / devicePixelRatio / hardwareConcurrency / 时区 —— 解读帧耗时与分位要用"
+    ],
+    "neverCollected": [
+      "聊天正文与提示词(本插件从不读取被测量的 DOM 内容)",
+      "Cookie / Token / 请求头(只读 performance 观察器与自己的宿主路由回执)",
+      "宿主进程内存 / 磁盘 / 进程树(那是 dsh-perf-lens 的地盘)"
+    ],
+    "freeText": [
+      "incident.note",
+      "timeline.marks[].note"
+    ]
+  }
+}

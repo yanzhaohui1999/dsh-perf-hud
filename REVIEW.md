@@ -16,9 +16,9 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ 这是市场收录**最常见的被拒原因**;`cordis.patch.yml` 形态正确 |
 | 4 | 公开仓库 + `dsh-plugin` topic + 创建满 1 天 | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场(2026-10-11 `gh repo view` 实测 `PUBLIC`) |
 | 5 | 产物无死链 | ✅ README / AGENTS 链接到的文档全在 `files` 里;`release.yml` 的 Pack and inspect 逐份 grep,而且 **`tools/` 与 `locale/` 按目录核**(以后加验证器或加语言文件不会漏检),显式清单 + 目录共覆盖包内全部 **18** 个文件(含 `package.json`),漏一份就失败 |
-| 6 | 门禁全绿 | ✅ 586 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ 604 条离线断言;CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ⬜ 只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条 |
-| 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS) |
+| 8 | 兼容性声明 | ✅ 三个客户端 inject 包与 `engines.dsh` 统一 `>=0.2.0-rc.2 <0.3.0-0`(按预检口径 `satisfies(host, range, {includePrelease:true})` 实测 PASS);本机 `0.2.1-rc.1` 下五个真页面验收器全绿 |
 
 其余来自 awesome-dsh-plugin contributing.md 的核对项:仓库要有真实可跑代码、描述与实际代码一致(评审逐句核对);
 官方 `@deepseek-ai/*` 建议声明为 `peerDependencies` 且范围带显式预发布分支(已在 §8 行覆盖);
@@ -34,7 +34,7 @@
 
 | 判据 | 怎么验 | 最新实测 |
 |---|---|---|
-| 离线断言全绿 | `npm test` | **586** 条(attribution 11 / logic 534 / host 41) |
+| 离线断言全绿 | `npm test` | **604** 条(attribution 11 / logic 552 / host 41) |
 | 面板能渲染、不自我崩 | 真实页面 `snapshot().errors` | **0**(CDP 反复打开真实页面验过;自带 `HudBoundary` 兜底) |
 | 守夜层能自动抓 | `__perfHud.watch()` | 真实会话:captured **25** · coalesced 102 · dropped 18 · kept 10 |
 | 守夜默认**零插桩** | `snapshot().instrumented` 在三种模式下的取值 | 默认(不插桩)档:`precise: false` / `instrumented: false`,`errors: 0` —— 守夜档仍然零插桩;点「深录」→ `true / true`;点回去 → `false / false`,`errors` 全程 0 |
@@ -192,5 +192,40 @@
 - **`installStyle()` 是面板唯一的一处样式表**,而且用 `!important` 覆盖行内样式(面板其余样式全在行内)。它是纯 CSS,没有 JS 鼠标状态;要再加样式优先改行内,别往这张表里堆规则。
 - **验收器依赖两个约定**:根节点 `id="dsh-perf-hud-root"`(样式作用域与选择器)与详情区第一行的 `data-ctx-bar="1"`。它们不是给用户看的,但**改名字会让 `check-incident.mjs` / 悬停扫场失败** —— 改之前先看 `tools/check-incident.mjs`。
 - ~~**第 5 个折叠组「包 × 来源 · 窗口」的摘要没有长度预算断言**~~ → **已还(2026-10-13)**:`crossSummary` 的名字与来源都可能很长(`dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms` = **53** 字符),在 396px 里会折行。现在 `clipName()` 把两个名字各截到 `CROSS_SUMMARY_NAME_MAX` / `CROSS_SUMMARY_SRC_MAX`(14 / 15,完整名字在展开后的交叉表里),并补上**用真实量级名字**喂的预算断言(≤ 40 字符 + 必须出现省略号)。改文案时这条与另外五组一起跑。
+
+### 3.6 官方开发者工具参考与可靠性改造(2026-10-17)
+
+**参考对象**:DSH `0.2.1-rc.1` 的 `@deepseek-ai/dsh-experimental-inspector-profile`(插件管理器官方分组「开发者工具」,默认关闭)。它挂两个插件:
+
+- `NodeJS 诊断`:底部面板内嵌官方 Chrome DevTools(`chrome-devtools-frontend@1.0.1638082`),Worker 监听 `127.0.0.1:9230`,CDP 连 Host;Elements 是 **Cordis 树**,Performance / Memory 采 **Host** CPU / 堆,Network 是 Host fetch 抓包(含密钥、不脱敏);
+- `会话数据诊断`:Sidebar tab,原始 session 日志 / chat group-node 树。
+
+**边界(决定它不替代我们)**:Client 侧只有 Console 求值与只读 `lib/client.js` Sources,**没有页面渲染 trace / 堆 / 帧数据**;Performance 只采 Host CPU;界面只有英文;没有帧级留存 / 事故回放 / 事故包。它的强项是"现在为什么慢"的前台检查,我们的强项是"刚刚那一下多慢、是谁、能不能复盘"的常开记录。
+
+| 能力 | 官方开发者工具 | dsh-perf-hud |
+|---|---|---|
+| 客户端帧 / LoAF / 长任务 / 事件计时 | 无 | 核心 |
+| 常开、零插桩、事后回看 | 无(手动打开、实时) | 守夜默认常开 |
+| 事故留存 / 逐帧回放 / 事故包 | 无 | 最差 10 + 每天 1,四件套 |
+| Host console / 断点 / Sources / 网络 | 有 | 无(刻意不做) |
+| Host CPU / 堆 | 有(交互式) | A5 路由可采 CPU,客户端未接线 |
+| Cordis 树 / Session 原始日志 | 有 | 无 |
+| 中英文 | 英文 | 中英 |
+
+**本轮采纳的三条可靠性规则**(不是抄功能,是抄"记录器"的工程纪律;实现见 AGENTS §7.1):
+
+1. **异步必须有 deadline 与代际**:它每个异步都有 `startupTimeoutMs` / `clientRuntimeTimeoutMs` / `queryTimeoutMs`,而且已关闭的 generation 不许再发布迟到结果。我们的 `hostOp` / `probeLink` / sourcemap / 脚本文本读取原来都没有 `signal`,宿主挂住时面板会一直显示旧数、`text-pending` 会永远停着;`stop()` 也不 abort 在途请求。现在统一走 `fetchTextWithin` / `fetchJsonWithin`,失败只写 `timeout` / `cancelled`。
+2. **宿主快照四态**:它断联时保留最后一棵树但加 `disconnected`。我们原来在 `eventLoop` 对象存在、但 ring 还空时会把 `p50/p99` 渲染成 `nullms`,更糟的是 `infraVerdict()` 会在**零样本**时返回「链路已排除」。现在 `live / warming / stale / unsupported` 四态,过期标「Ns 前」,零样本不给正常结论,宿主恢复后重试事件监听。
+3. **事故窗口完整性**:它用 `firstSequence` / `expectedSequence` / `droppedBefore` 对不上就要求 resnapshot,不静默接受缺口。我们的 LoAF / longtask 环也会挤掉记录,事故包却只有 `hiddenGaps`(rAF 挂起),没有"采集本身丢了记录"。现在条目带 `seq`,落定算 `expected - kept`,写进 `incident.integrity = { captureComplete, loafDropped, longTaskDropped, reasons }`;不完整时 `missing` 加一行、manifest 标 `complete:false`、面板写「现场不完整」。
+
+**明确不抄**:不内嵌 DevTools / 不连它的 CDP / Worker / 不发布到 `ctx.inspector.publish`(experimental、可选、偏重,会破坏"零运行时依赖 + 默认常开便宜");不做它那 20 多个配置字段;不包 `globalThis.fetch`;不做底部 dock 面板;不把 UI 退成英文单语。它的 Worker 是为了 CDP 状态与 Host 暂停下的调试,我们的宿主探针只有 1 秒直方图 + 一个监听器,加 Worker 只会多一份生命周期债(它自己就记着"没有 Worker 自动重启")。
+
+**本轮顺手落地的三件小事**:
+
+- **快捷键**:`ctx.inject(['shortcuts'], …)` 可选注入,macOS / Windows 绑 `Cmd/Ctrl+Shift+U`;Linux Web 平台白名单只允许极少数组合,不硬塞默认绑定。收起/展开**不抢焦点** —— 实测外壳在键盘命令之后会把焦点还给输入框,硬抢只会让用户丢焦点(所以没有照抄 Inspector 的 focus restore)。
+- **map 缓存淘汰**:`MAP_CACHE_MAX = 8` + LRU 索引(`dsh-perf-hud:map:index`);配额失败先淘汰最旧 rev 再重试一次,失败只留内存并记 `mapCache.failed`。内存 `bundleMaps` 同样走 LRU。
+- **真事故 fixture**:`tests/fixtures/incident-real.json` 是真页面 `capture` → `report` → 脱敏后的切片(74 帧 / 21 条 LoAF / 2 条 longtask / `integrity.captureComplete=true`);离线套件断言它的形状、完整性字段,以及"不完整现场"时 summary/manifest 的措辞。
+
+**深录 sourcemap 解析实测(决定要不要 Worker)**:在当前构建(17 个 section,不是早期 58 个)上清掉 map 缓存 → `setPrecise(true)` → 等 `bundleMap` ready,整段墙钟 **514ms**(含网络),**没有 >50ms 的 longtask**;所以本轮**不**把解析搬进 Worker。它仍可能随包数增长,后续要动就先重测这一条(阈值:出现 >50ms 的自有长任务)。
 
 **时机**:0.4.0 已于 2026-10-11 发到 npm(手工首发,见 §3.1);发布这件事只剩两件:下次发版前配 Trusted Publisher、提收录 PR。

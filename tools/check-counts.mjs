@@ -68,6 +68,14 @@ const clickText = (evaluate, text) => evaluate(`(() => {
 
 await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	await waitForHud();
+	// 其它验收器 / 用户可能把 HUD 留在折叠态或非主界面;这里先归一,再重载。
+	await evaluate(`(() => {
+		localStorage.setItem('dsh-perf-hud:collapsed', '0');
+		localStorage.setItem('dsh-perf-hud:view:v1', JSON.stringify({ v: 1, view: 'main', devTab: 'frames', trendMs: 3600000 }));
+		return true;
+	})()`);
+	await reload();
+	await waitForHud();
 	// 白名单不许有过期条目(它按**键名**放行,键改名 / 撤下之后必须跟着收走)
 	check('漏文案白名单没有过期条目(名字都还在词典里)',
 		[...DATA_LIKE_KEYS].filter((key) => DICT_KEYS.includes(key) === false), []);
@@ -164,7 +172,7 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	check('诊断包:凭据进不去(真 location 里塞了 token / api_key)', pack.hasSecret, false);
 	check('诊断包:摘要五段齐全', pack.sections, 5);
 	check('诊断包:manifest 带 schemaVersion / 能力矩阵 / 脱敏 / 不含清单',
-		[pack.manifest[0], pack.manifest[1], pack.manifest[2], pack.manifest[3] > 0], [1, 1, true, true]);
+		[pack.manifest[0], pack.manifest[1], pack.manifest[2], pack.manifest[3] > 0], [2, 1, true, true]);
 	check('诊断包:能力矩阵 renderer 一组齐全(>= 6 个叶子)', pack.capLeaves >= 6, true);
 	check('诊断包:预览列出文件与排除项', [pack.previewFiles, pack.previewExcludes >= 3], [4, true]);
 	check('诊断包:候选原因每条都带支持与限制、出处三档', pack.causeShape, true);
@@ -186,7 +194,14 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	const zipInfo = await evaluate(`(async () => {
 		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 		let row = null;
-		for (let attempt = 0; attempt < 20 && row === null; attempt += 1) {
+		for (let attempt = 0; attempt < 60 && row === null; attempt += 1) {
+			// 先等自动捕获的后摇结束:手动标记会被并进 pending,那样样本不带备注。
+			// 每次尝试前再清一次留存清单:severity=0 的手动标记会被"最差 10 条"挤掉。
+			if (window.__perfHud.watch().pending !== null) {
+				await sleep(500);
+				continue;
+			}
+			window.__perfHud.clearIncidents();
 			const result = window.__perfHud.capture('验收:带备注 token=SECRET_NOTE');
 			if (result !== null && result !== undefined && result.ok === true && result.incident !== null && result.incident !== undefined) {
 				await sleep(300);   // 结算后的那一条要落进留存清单

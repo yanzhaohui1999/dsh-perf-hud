@@ -50,6 +50,8 @@ window.__ModuleLoader__.load({
 		const LS_DEEP = 'dsh-perf-hud:deep';
 		const LS_PRECISE = 'dsh-perf-hud:precise';
 		const LS_MAP = 'dsh-perf-hud:map';     // 按 rev 缓存的 section 分段表
+		const LS_MAP_INDEX = 'dsh-perf-hud:map:index';   // 上面那些键的 LRU 索引(只留最近 N 个 rev)
+		const MAP_CACHE_MAX = 8;
 		const LS_MARKS = 'dsh-perf-hud:marks';
 		const LS_GROUPS = 'dsh-perf-hud:groups';
 		const LS_INCIDENTS = 'dsh-perf-hud:incidents:v1';   // 守夜层留存的事故(要活过刷新)
@@ -67,6 +69,8 @@ window.__ModuleLoader__.load({
 		const HOST_ROUTE = '/api/dsh-perf-hud/host';
 		const RTT_INTERVAL_MS = 10000;
 		const LOAD_INTERVAL_MS = 60000;
+		// 宿主快照超过 2.5 个轮询周期就算过期(轮询是 10s;留一次重试的余量)。
+		const HOST_STALE_MS = RTT_INTERVAL_MS * 2.5;
 		const LOAD_BYTES = 65536;
 		const MUT_WINDOW_MS = 2000;            // fiber 归因只看最近 2 秒被改动的节点
 		const BASELINE_MS = 60000;
@@ -139,6 +143,82 @@ window.__ModuleLoader__.load({
 			requestAnimationFrame: W.requestAnimationFrame.bind(W),
 			cancelAnimationFrame: W.cancelAnimationFrame.bind(W),
 		};
+
+		// ───────────────────────── 有 deadline 的同源读取 ─────────────────────────
+		// 参考点:官方 Inspector 的每个异步都有显式上限(startup/clientRuntime/query timeout),
+		// 而且已关闭的 generation 不许再发布迟到结果。这里同一套纪律:
+		//   · 所有会 pending 的 fetch 都走 fetchTextWithin / fetchJsonWithin,各自有命名上限;
+		//   · stop() 会 abort 当前代(state.abort),旧代(state.epoch 变了)的结果一律丢弃;
+		//   · 失败只写 timeout / cancelled,不把"永远 text-pending"留在面板上。
+		const FETCH_TIMEOUT_MS = { host: 5000, bundle: 30000, map: 20000, script: 20000, probe: 30000 };
+
+		function timeoutError(ms) {
+			const error = new Error(`timeout ${ms}ms`);
+			error.name = 'TimeoutError';
+			return error;
+		}
+
+		function cancelledError() {
+			const error = new Error('cancelled');
+			error.name = 'AbortError';
+			return error;
+		}
+
+		function isAbortError(error) {
+			return error !== null && typeof error === 'object' && error.name === 'AbortError';
+		}
+
+		function fetchFailureText(error, ms) {
+			if (isAbortError(error)) return 'cancelled';
+			if (error !== null && typeof error === 'object' && error.name === 'TimeoutError') return `timeout ${ms}ms`;
+			return error instanceof Error ? error.message : String(error);
+		}
+
+		/**
+		 * 同源 fetch + 读取 body,并受两个上限约束:单次 `ms` 与当前采集代。
+		 * ⚠️ 读 body 也包在 deadline 里 —— 只把 `fetch()` resolve 当完成会让慢 body 永远 pending。
+		 */
+		async function fetchTextWithin(url, options, ms) {
+			const epoch = state.epoch;
+			const controller = new AbortController();
+			let timedOut = false;
+			const timer = natives.setTimeout(() => {
+				timedOut = true;
+				controller.abort();
+			}, ms);
+			const outer = state.abort === null || state.abort === undefined ? null : state.abort.signal;
+			const onAbort = () => controller.abort();
+			if (outer !== null) {
+				if (outer.aborted) controller.abort();
+				else outer.addEventListener('abort', onAbort, { once: true });
+			}
+			try {
+				const response = await fetch(url, { ...options, signal: controller.signal });
+				const text = await response.text();
+				if (state.epoch !== epoch) throw cancelledError();
+				return { response, text };
+			} catch (error) {
+				if (timedOut) throw timeoutError(ms);
+				if (outer !== null && outer.aborted) throw cancelledError();
+				if (state.epoch !== epoch) throw cancelledError();
+				throw error;
+			} finally {
+				natives.clearTimeout(timer);
+				if (outer !== null) outer.removeEventListener('abort', onAbort);
+			}
+		}
+
+		/** 同源 JSON 读取:HTTP 状态由调用方判断,但 body 必须是合法 JSON。 */
+		async function fetchJsonWithin(url, options, ms) {
+			const { response, text } = await fetchTextWithin(url, options, ms);
+			let data;
+			try {
+				data = JSON.parse(text);
+			} catch (error) {
+				throw new Error(`invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			return { response, data };
+		}
 
 		// ───────────────────────── 归因:script URL → 插件 id ─────────────────────────
 		// 默认栈深 10 帧,插件把调度藏在几层包装后面时会丢归属;抬到 30 帧。
@@ -246,10 +326,24 @@ window.__ModuleLoader__.load({
 		 */
 		function bundleMap(key) {
 			const existing = bundleMaps.get(key);
-			if (existing !== undefined) return existing;
+			if (existing !== undefined) {
+				// 上一代被 stop() 取消的条目不留成永久失败:下次开启精确归因时重新排队。
+				if (existing.state === 'failed' && existing.reason === 'cancelled') bundleMaps.delete(key);
+				else {
+					// 访问即刷新 LRU 位置(内存缓存也有上限)。
+					bundleMaps.delete(key);
+					bundleMaps.set(key, existing);
+					return existing;
+				}
+			}
 			const scriptUrl = absolutePluginUrl(key.slice(BUNDLE_PREFIX.length));
 			const entry = { state: 'pending', offsets: null, names: null, paths: null, count: 0, reason: '', source: '' };
 			bundleMaps.set(key, entry);
+			while (bundleMaps.size > MAP_CACHE_MAX) {
+				const oldest = bundleMaps.keys().next().value;
+				if (oldest === key) break;
+				bundleMaps.delete(oldest);
+			}
 			const revMatch = /[?&]rev=([^&#]*)/.exec(scriptUrl);
 			const signature = `v1:${revMatch === null ? 'norev' : revMatch[1]}:${scriptUrl.length}`;
 			const storageKey = `${LS_MAP}:${signature}`;
@@ -273,6 +367,101 @@ window.__ModuleLoader__.load({
 			return entry;
 		}
 
+		/**
+		 * map 缓存的 LRU 索引。为什么必须有上限:rev 每次构建都变,`localStorage` 里的
+		 * `dsh-perf-hud:map:<rev>:<len>` 只写不删,几个月后会悄悄吃配额,而写失败被 catch 掉。
+		 * 保留最近 `MAP_CACHE_MAX` 个 rev;写入配额失败时先淘汰可重建的 map 缓存,再重试一次。
+		 */
+		function readMapIndex() {
+			try {
+				const parsed = JSON.parse(localStorage.getItem(LS_MAP_INDEX) ?? 'null');
+				return parsed !== null && Array.isArray(parsed.keys) ? parsed.keys : [];
+			} catch (error) { return []; }
+		}
+
+		function writeMapIndex(keys) {
+			try { localStorage.setItem(LS_MAP_INDEX, JSON.stringify({ v: 1, keys })); } catch (error) { /* 索引写不进就下次重建 */ }
+		}
+
+		/** 纯函数:按 at 降序留最近 max 个;坏的条目丢掉。 */
+		function pruneMapIndex(keys, max = MAP_CACHE_MAX) {
+			const list = (Array.isArray(keys) ? keys : [])
+				.filter((row) => row !== null && typeof row === 'object' && typeof row.key === 'string')
+				.map((row) => ({ key: row.key, at: typeof row.at === 'number' ? row.at : 0 }))
+				.sort((a, b) => b.at - a.at);
+			return { keep: list.slice(0, max), evicted: list.slice(max) };
+		}
+
+		function evictMapEntries(count) {
+			const index = readMapIndex();
+			const keepCount = Math.max(0, index.length - Math.max(0, count));
+			const pruned = pruneMapIndex(index, keepCount);
+			for (const row of pruned.evicted) {
+				try { localStorage.removeItem(row.key); } catch (error) { /* 删不掉就交给配额错误 */ }
+			}
+			writeMapIndex(pruned.keep);
+			state.mapCache.evicted += pruned.evicted.length;
+			return pruned.evicted.length;
+		}
+
+		function touchMapCache(storageKey) {
+			const index = readMapIndex().filter((row) => row.key !== storageKey);
+			index.push({ key: storageKey, at: Date.now() });
+			const pruned = pruneMapIndex(index, MAP_CACHE_MAX);
+			for (const row of pruned.evicted) {
+				try { localStorage.removeItem(row.key); } catch (error) { /* 同上 */ }
+			}
+			writeMapIndex(pruned.keep);
+			state.mapCache.evicted += pruned.evicted.length;
+		}
+
+		/** 写一份 map 缓存;配额失败时先淘汰最旧的 map(它们可重建),仍失败则只留内存。 */
+		function saveMapCache(storageKey, payload) {
+			const text = JSON.stringify(payload);
+			try {
+				localStorage.setItem(storageKey, text);
+				touchMapCache(storageKey);
+				return true;
+			} catch (error) {
+				if (evictMapEntries(2) > 0) {
+					try {
+						localStorage.setItem(storageKey, text);
+						touchMapCache(storageKey);
+						return true;
+					} catch (retryError) { /* 落到下面记失败 */ }
+				}
+				state.mapCache.failed += 1;
+				return false;
+			}
+		}
+
+		/** 启动时清一次旧 rev;老安装没有索引时按 localStorage 的插入顺序保留最近 N 个。 */
+		function pruneMapCache() {
+			const index = readMapIndex();
+			if (index.length === 0) {
+				try {
+					if (typeof localStorage.key !== 'function') return;
+					const keys = [];
+					for (let i = 0; i < localStorage.length; i += 1) {
+						const key = localStorage.key(i);
+						if (typeof key === 'string' && key.startsWith(`${LS_MAP}:`) && key !== LS_MAP_INDEX) keys.push(key);
+					}
+					const extra = keys.length - MAP_CACHE_MAX;
+					if (extra > 0) {
+						for (const key of keys.slice(0, extra)) localStorage.removeItem(key);
+						state.mapCache.evicted += extra;
+					}
+				} catch (error) { /* 扫不了就算了,不影响功能 */ }
+				return;
+			}
+			const pruned = pruneMapIndex(index, MAP_CACHE_MAX);
+			for (const row of pruned.evicted) {
+				try { localStorage.removeItem(row.key); } catch (error) { /* 同上 */ }
+			}
+			writeMapIndex(pruned.keep);
+			state.mapCache.evicted += pruned.evicted.length;
+		}
+
 		async function loadBundleMap(entry, scriptUrl) {
 			const url = mapUrlOf(scriptUrl);
 			if (url === null) {
@@ -282,9 +471,9 @@ window.__ModuleLoader__.load({
 				return;
 			}
 			try {
-				const response = await fetch(url, { credentials: 'same-origin' });
+				const { response, text } = await fetchTextWithin(url, { credentials: 'same-origin' }, FETCH_TIMEOUT_MS.map);
 				if (response.ok === false) throw new Error(`HTTP ${response.status}`);
-				const document = JSON.parse(await response.text());
+				const document = JSON.parse(text);
 				const sections = Array.isArray(document?.sections) ? document.sections : null;
 				if (sections === null || sections.length === 0) throw new Error('没有 sections');
 				// 一次建成**三列对齐**的表,再一起排序 —— 原来只 sort offsets、names 没跟着动,
@@ -309,12 +498,17 @@ window.__ModuleLoader__.load({
 				entry.state = 'ready';
 				markResolved();
 				entry.source = 'sourcemap';
-				try {
-					// 只留 offsets/names/paths,原始 JSON 立刻丢掉(58 段时 paths 只多几百字节)。
-					localStorage.setItem(entry.storageKey, JSON.stringify({ v: 1, offsets, names, paths }));
-				} catch (error) { /* 配额不够就只留内存 */ }
+				// 只留 offsets/names/paths,原始 JSON 立刻丢掉(58 段时 paths 只多几百字节)。
+				// 写不进配额时会先淘汰最旧的 map(可重建),再重试一次;失败只留内存并计数。
+				saveMapCache(entry.storageKey, { v: 1, offsets, names, paths });
 			} catch (error) {
-				entry.reason = error instanceof Error ? error.message : String(error);
+				if (isAbortError(error)) {
+					entry.state = 'failed';
+					entry.reason = 'cancelled';
+					markResolved();
+					return;
+				}
+				entry.reason = fetchFailureText(error, FETCH_TIMEOUT_MS.map);
 				await loadBundleMapByProbe(entry, scriptUrl);
 			}
 		}
@@ -327,18 +521,18 @@ window.__ModuleLoader__.load({
 				const ids = list[1].split(',').map((item) => item.replace(/\/[^/,]+\.js(\.map)?$/, '')).filter(Boolean);
 				const revMatch = /[?&]rev=([^&#]*)/.exec(scriptUrl);
 				const suffix = revMatch === null ? '' : `&rev=${revMatch[1]}`;
-				const [text, probes] = await Promise.all([
-					fetch(scriptUrl, { credentials: 'same-origin' }).then((response) => response.text()),
+				const [merged, probes] = await Promise.all([
+					fetchTextWithin(scriptUrl, { credentials: 'same-origin' }, FETCH_TIMEOUT_MS.probe),
 					Promise.all(ids.map(async (id) => {
 						try {
-							const response = await fetch(`${location.origin}/plugins/??${id}/client.js${suffix}`, { credentials: 'same-origin' });
-							const body = await response.text();
-							return { id, head: body.slice(0, 200) };
+							const { text } = await fetchTextWithin(`${location.origin}/plugins/??${id}/client.js${suffix}`, { credentials: 'same-origin' }, FETCH_TIMEOUT_MS.probe);
+							return { id, head: text.slice(0, 200) };
 						} catch (error) {
 							return { id, head: '' };
 						}
 					})),
 				]);
+				const text = merged.text;
 				const hits = [];
 				for (const probe of probes) {
 					if (probe.head === '') continue;
@@ -365,11 +559,11 @@ window.__ModuleLoader__.load({
 				entry.state = 'ready';
 				markResolved();
 				entry.source = 'probe';
-				try { localStorage.setItem(entry.storageKey, JSON.stringify({ v: 1, offsets, names: entry.names })); } catch (error) { /* 同上 */ }
+				saveMapCache(entry.storageKey, { v: 1, offsets, names: entry.names });
 			} catch (error) {
 				entry.state = 'failed';
 				markResolved();
-				entry.reason = error instanceof Error ? error.message : String(error);
+				entry.reason = isAbortError(error) ? 'cancelled' : fetchFailureText(error, FETCH_TIMEOUT_MS.probe);
 			}
 		}
 
@@ -457,9 +651,8 @@ window.__ModuleLoader__.load({
 			const entry = { state: 'pending', starts: null, reason: '' };
 			scriptLines.set(url, entry);
 			try {
-				const response = await fetch(url, { credentials: 'same-origin' });
+				const { response, text } = await fetchTextWithin(url, { credentials: 'same-origin' }, FETCH_TIMEOUT_MS.script);
 				if (response.ok === false) throw new Error(`HTTP ${response.status}`);
-				const text = await response.text();
 				// 逐 UTF-16 code unit 扫 —— 与 V8 给的 sourceCharPosition 同一套计数,
 				// 不能用 code point(遇到 emoji 一类会整体错位)
 				const starts = [0];
@@ -470,8 +663,10 @@ window.__ModuleLoader__.load({
 				markResolved();
 			} catch (error) {
 				entry.state = 'failed';
+				entry.reason = isAbortError(error) ? 'cancelled' : fetchFailureText(error, FETCH_TIMEOUT_MS.script);
+				// 取消的条目不留在缓存里:下次还能重新预取(否则永远是 failed)。
+				if (isAbortError(error)) scriptLines.delete(url);
 				markResolved();
-				entry.reason = error instanceof Error ? error.message : String(error);
 			}
 			if (scriptLines.size > SCRIPT_LINES_MAX) {
 				const oldest = scriptLines.keys().next().value;
@@ -1097,8 +1292,10 @@ window.__ModuleLoader__.load({
 			linkText: '',
 			stressNodes: 0,
 			ltObserver: null,
-			longTasks: [],           // { t, at, ms, owner }
+			longTasks: [],           // { t, at, ms, owner, seq }
 			ltTotal: 0,              // 观察到的 longtask 条数
+			ltSeq: 0,                // longtask 序号(窗口完整性:seq 断档 = 环挤掉了记录)
+			ltDropped: 0,            // 被 200 条上限挤掉的 longtask 总数
 			ltNames: new Map(),      // 归属名字的累计计数(与 ltTotal 同窗口,不受 200 条明细上限影响)
 			ltLegs: { fiber: 0, subtree: 0, dom: 0, owner: 0, none: 0 },   // 四条腿的累计命中数
 			ltBlamed: 0,             // 其中成功指认出"谁干的"的条数
@@ -1123,6 +1320,7 @@ window.__ModuleLoader__.load({
 			selfCount: 0,
 			selfMax: 0,
 			bundleKeys: new Set(),   // 见过的多包 URL
+			mapCache: { evicted: 0, failed: 0 },   // map 缓存淘汰 / 写失败计数(只进导出件)
 			// B fiber
 			idleBaseline: null,
 			streaming: false,
@@ -1139,6 +1337,8 @@ window.__ModuleLoader__.load({
 			watch: {
 				on: false,
 				loaf: [],                // 最近的 LoAF 摘要(时间升序)
+				loafSeq: 0,              // LoAF 序号(窗口完整性:seq 断档 = 环挤掉了记录)
+				loafDropped: 0,          // 被 WATCH_LOAF_MAX 挤掉的 LoAF 总数
 				loafObserver: null,
 				pickT: null,             // 用户用 ◀ ▶ 选中的那一帧的 t(null = 自动跟着最差那条)
 				// ── 诊断上下文(本次改版的核心)──
@@ -1200,6 +1400,9 @@ window.__ModuleLoader__.load({
 				timer: 0,                // 合并落盘的定时器:一次卡顿里 coalesced 会连加很多次
 			},
 			requestRender: null,     // 面板挂载时注册:用户动作要立刻重渲染,不能等 0.5 秒的定时器
+			toggleHud: null,         // 面板挂载时注册:快捷键调用同一个 toggle(与点标题栏按钮同一条路)
+			epoch: 0,                // 每个采集代递增:异步结果跨代一律丢弃(见 fetchTextWithin)
+			abort: null,             // 当前采集代的 AbortController;stop() 时 abort
 			displayKey: '',          // 面板显示值的指纹:没变就跳过这次 tick 的渲染
 			copyNote: null,          // 「复制摘要」的结果:成功/失败**原文**都照实显示,失败不许假装成功
 			pickNote: null,          // 「看这一帧」定位不到时的那句如实说明(否则按钮点了像没反应)
@@ -1489,7 +1692,9 @@ window.__ModuleLoader__.load({
 		/** 收一条长动画帧。触发按 blockingDuration —— 它才是"这一帧挡了多久",纯渲染不算卡。 */
 		function watchLoaf(entry) {
 			const watch = state.watch;
+			watch.loafSeq += 1;
 			const row = {
+				seq: watch.loafSeq,
 				t: round1(entry.startTime),
 				dur: round1(entry.duration),
 				blocking: round1(entry.blockingDuration ?? 0),
@@ -1498,7 +1703,11 @@ window.__ModuleLoader__.load({
 				scripts: loafScripts(entry),
 			};
 			watch.loaf.push(row);
-			if (watch.loaf.length > WATCH_LOAF_MAX) watch.loaf.splice(0, watch.loaf.length - WATCH_LOAF_MAX);
+			if (watch.loaf.length > WATCH_LOAF_MAX) {
+				const dropped = watch.loaf.length - WATCH_LOAF_MAX;
+				watch.loaf.splice(0, dropped);
+				watch.loafDropped += dropped;
+			}
 			const severity = watchTrigger(row.blocking);
 			if (severity !== null) triggerCapture('loaf', entry.startTime, severity);
 		}
@@ -1621,7 +1830,16 @@ window.__ModuleLoader__.load({
 				bumpTally('coalesced', Date.now());
 				return null;
 			}
-			watch.pending = { cause, at, severity: round1(severity), note: note ?? null, until: at + WATCH_POST_MS };
+			watch.pending = {
+				cause, at, severity: round1(severity), note: note ?? null, until: at + WATCH_POST_MS,
+				// 窗口完整性的起点状态:环满 + 确实丢过记录 + 最老一条晚于窗口起点 ⇒ 前摇已经丢了记录。
+				loafFull: watch.loaf.length >= WATCH_LOAF_MAX,
+				loafDroppedAtTrigger: watch.loafDropped,
+				loafOldestAt: watch.loaf.length === 0 ? null : watch.loaf[0].t,
+				longTaskFull: state.longTasks.length >= 200,
+				longTaskDroppedAtTrigger: state.ltDropped,
+				longTaskOldestAt: state.longTasks.length === 0 ? null : state.longTasks[0].at,
+			};
 			// 起一次新捕获 = 检测到一次卡顿(同一串里的后续触发会走上面的 coalesced,不重复计)
 			bumpTally('triggered', Date.now());
 			const delay = Math.max(0, watch.pending.until - performance.now());
@@ -1689,6 +1907,25 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * 窗口完整性:用序号断档判断"环是不是把记录挤掉了"。
+		 * `rows` 已按时间升序;`dropped = 末序号 − 首序号 + 1 − 实际条数` 精确回答"中间缺了几条"。
+		 * `preOverflow` 是另一件事:窗口起点早于环里最老的一条、环当时是满的**且确实丢过记录** —— 开头那段已经丢了,
+		 * 但丢了几条无从得知(不编数字,只标原因)。老数据没有 seq 时返回 0,不假装算过。
+		 */
+		function windowIntegrity(rows, oldestAt, ringFull, droppedAtTrigger, from) {
+			const list = Array.isArray(rows) ? rows : [];
+			// 环满 ≠ 丢过记录:只有真的丢过(droppedAtTrigger>0)才谈"前摇滚出环"。
+			const preOverflow = ringFull === true && droppedAtTrigger > 0 && typeof oldestAt === 'number' && oldestAt > from;
+			if (list.length === 0) return { dropped: 0, preOverflow };
+			const first = list[0];
+			const last = list[list.length - 1];
+			if (typeof first.seq !== 'number' || typeof last.seq !== 'number' || last.seq < first.seq) {
+				return { dropped: 0, preOverflow: false };
+			}
+			return { dropped: Math.max(0, last.seq - first.seq + 1 - list.length), preOverflow };
+		}
+
+		/**
 		 * 把一个事件窗口切成事故包:前摇 WATCH_PRE_MS + 后摇 WATCH_POST_MS,原样带上帧序列、
 		 * LoAF 条目、窗口内的 longtask 明细。严重度取"触发时的值"与"窗口里最差帧"的较大者 ——
 		 * 手动标记传进来的 0 因此不会因为"不够差"而被留存策略丢掉。
@@ -1730,6 +1967,22 @@ window.__ModuleLoader__.load({
 			const longTasks = state.longTasks.filter((row) => row.at >= from && row.at <= to);
 			// A4:窗口内的交互延迟(端到端时长;页面内没有帧内拆分,见 watchInteraction 的说明)
 			const interactions = (state.watch.interactions ?? []).filter((row) => row.at >= from && row.at <= to);
+			// 窗口完整性:和官方 Inspector 的 sequence gap 同一条纪律 —— 缺口必须显式,不许静默。
+			const loafIntegrity = windowIntegrity(rows, pending.loafOldestAt, pending.loafFull, pending.loafDroppedAtTrigger, from);
+			const longTaskIntegrity = windowIntegrity(longTasks, pending.longTaskOldestAt, pending.longTaskFull, pending.longTaskDroppedAtTrigger, from);
+			const integrityReasons = [];
+			if (loafIntegrity.dropped > 0) integrityReasons.push('loaf-ring-overflow');
+			if (longTaskIntegrity.dropped > 0) integrityReasons.push('longtask-ring-overflow');
+			if (loafIntegrity.preOverflow) integrityReasons.push('loaf-pre-window-overflow');
+			if (longTaskIntegrity.preOverflow) integrityReasons.push('longtask-pre-window-overflow');
+			const integrity = {
+				captureComplete: integrityReasons.length === 0,
+				loafDropped: loafIntegrity.dropped,
+				longTaskDropped: longTaskIntegrity.dropped,
+				loafKept: rows.length,
+				longTaskKept: longTasks.length,
+				reasons: integrityReasons,
+			};
 			let worst = null;
 			let live = 0;
 			let over50 = 0;
@@ -1819,6 +2072,8 @@ window.__ModuleLoader__.load({
 					preMs: WATCH_PRE_MS, postMs: WATCH_POST_MS,
 					from: wallClock(from), to: wallClock(to),
 				},
+				// 这份现场**采全了没有**。false 时不要把它当完整证据:面板、missing、manifest 都会标。
+				integrity,
 				summary: {
 					worstFrameMs: worst === null ? null : worst.ms,
 					worstFrameAt: worst === null ? null : wallClock(worst.t),
@@ -2432,7 +2687,9 @@ window.__ModuleLoader__.load({
 			const subtreeComponent = subtreeOwner();
 			state.ltTotal += 1;
 			state.ltThisSecond += 1;
+			state.ltSeq += 1;
 			state.longTasks.push({
+				seq: state.ltSeq,
 				t: Date.now(),
 				at: round1(entry.startTime),
 				ms: round1(entry.duration),
@@ -2447,7 +2704,11 @@ window.__ModuleLoader__.load({
 			// (旧版这里漏了 dom 腿:只有 DOM 写入归因的长任务进了分布、却没进命中数)
 			if (legOf(record) !== 'none') state.ltBlamed += 1;
 			applyLongTaskStats(record);
-			if (state.longTasks.length > 200) state.longTasks.splice(0, state.longTasks.length - 200);
+			if (state.longTasks.length > 200) {
+				const dropped = state.longTasks.length - 200;
+				state.longTasks.splice(0, dropped);
+				state.ltDropped += dropped;
+			}
 			state.displayKey = displayKey();
 		}
 
@@ -2695,6 +2956,8 @@ window.__ModuleLoader__.load({
 			restoreTally();
 			restoreWatchUI();
 			restoreView();
+			// 老 rev 的 sourcemap 分段表可重建;启动时清一次,别让它静默吃满配额。
+			pruneMapCache();
 		}
 
 		function flush(force) {
@@ -2798,20 +3061,19 @@ window.__ModuleLoader__.load({
 					return { ok: true, via: 'remote', result: await manager.setBundleEnabled(args.name, args.enabled) };
 				}
 			}
-			const payload = await hostOp(args);
+			const payload = await hostOp(args, FETCH_TIMEOUT_MS.bundle);
 			return { ...payload, via: 'route' };
 		}
 
 		/** 一次宿主请求:GET 兼作 RTT/吞吐探针,POST 走 op 分发。 */
-		async function hostOp(body) {
-			const response = await fetch(HOST_ROUTE, {
+		async function hostOp(body, ms = FETCH_TIMEOUT_MS.host) {
+			const { data } = await fetchJsonWithin(HOST_ROUTE, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify(body),
 				credentials: 'same-origin',
-			});
-			const payload = await response.json();
-			return payload;
+			}, ms);
+			return data;
 		}
 
 		/** RTT 探针:请求带 1KB cache-buster(别缓存,也别让代理吞掉);吞吐探针多要 64KB。 */
@@ -2821,9 +3083,8 @@ window.__ModuleLoader__.load({
 				? `?t=${Date.now()}&bytes=${LOAD_BYTES}`
 				: `?t=${Date.now()}&pad=${'x'.repeat(1024)}`;
 			try {
-				const response = await fetch(`${HOST_ROUTE}${query}`, { cache: 'no-store', credentials: 'same-origin' });
+				const { response, data: payload } = await fetchJsonWithin(`${HOST_ROUTE}${query}`, { cache: 'no-store', credentials: 'same-origin' }, FETCH_TIMEOUT_MS.host);
 				if (response.ok === false) throw new Error(`HTTP ${response.status}`);
-				const payload = await response.json();
 				const rtt = round1(performance.now() - started);
 				if (kind === 'load') {
 					const bytes = payload.pad === undefined ? 0 : payload.pad.length;
@@ -2836,13 +3097,18 @@ window.__ModuleLoader__.load({
 					state.link.push({ t: Date.now(), kind, rtt });
 				}
 				if (state.link.length > 300) state.link.shift();
+				const recovered = state.hostError !== null;
 				state.host = payload.host ?? null;
 				state.hostAt = Date.now();
 				state.hostError = null;
 				if (payload.host?.eventWatch !== undefined) state.hostEvents = payload.host.eventWatch;
+				// 第一次探测时宿主半可能还没加载(404),不能因此永久放弃事件监听。
+				if (recovered && state.hostEvents?.installed !== true) state.hostWatchAsked = false;
 				await requestHostEventWatch();
 			} catch (error) {
-				state.hostError = error instanceof Error ? error.message : String(error);
+				// 用户关掉 HUD 时 abort 是预期动作,不记成宿主错误,也不伪造一条 RTT 样本。
+				if (isAbortError(error)) return;
+				state.hostError = fetchFailureText(error, FETCH_TIMEOUT_MS.host);
 				if (kind === 'load') state.loadState = 'failed';
 				state.link.push({ t: Date.now(), kind, rtt: null, error: state.hostError });
 				if (state.link.length > 300) state.link.shift();
@@ -2867,9 +3133,31 @@ window.__ModuleLoader__.load({
 				const payload = await hostOp({ op: 'watchEvents', enable: true });
 				state.hostEvents = payload.eventWatch ?? { installed: false, reason: '无回执', stats: {} };
 			} catch (error) {
-				state.hostEvents = { installed: false, reason: error instanceof Error ? error.message : String(error), stats: {} };
+				// stop() 取消这一代时允许下次重新请求;真正的失败才记进面板。
+				if (isAbortError(error)) {
+					state.hostWatchAsked = false;
+					return;
+				}
+				state.hostEvents = { installed: false, reason: fetchFailureText(error, FETCH_TIMEOUT_MS.host), stats: {} };
 			}
 			dirty = true;
+		}
+
+		/**
+		 * 宿主快照的**四态**(外加路由不可达)。
+		 * 参考官方 Inspector 的 `disconnected` 标记:保留最后的快照,但必须说明它已经过期 / 没采到,
+		 * 不能把旧数字当成"现在" —— 零样本时更不能给出「链路已排除」。
+		 */
+		function hostFreshness(now = Date.now()) {
+			const loop = state.host === null || state.host === undefined ? null : state.host.eventLoop ?? null;
+			if (state.hostError !== null) return { state: 'unreachable', loop: null, ageMs: null };
+			if (loop === null) return { state: state.hostAt === 0 ? 'warming' : 'unsupported', loop: null, ageMs: null };
+			const ageMs = state.hostAt > 0 ? Math.max(0, now - state.hostAt) : null;
+			if (state.host.eventLoopLive === false) return { state: 'unsupported', loop, ageMs };
+			if (ageMs === null) return { state: 'warming', loop, ageMs };
+			if (ageMs > HOST_STALE_MS) return { state: 'stale', loop, ageMs };
+			if (loop.seconds === 0 || loop.p50 === null || loop.p99 === null) return { state: 'warming', loop, ageMs };
+			return { state: 'live', loop, ageMs };
 		}
 
 		/**
@@ -2879,8 +3167,20 @@ window.__ModuleLoader__.load({
 		 */
 		function hostLoopText(loop) {
 			if (loop === null || loop === undefined) return translate('notYet');
+			if (loop.p50 === null || loop.p50 === undefined || loop.p99 === null || loop.p99 === undefined) return translate('notYet');
 			const head = `p50 ${loop.p50}ms · p99 ${loop.p99}ms`;
 			return loop.max === undefined || loop.max === null ? head : `${head} · ${translate('maxLabel')} ${loop.max}ms`;
+		}
+
+		/** 宿主那一行的**带状态**文案:不可达 / 未采到 / 等样本 / 过期 / 正常。 */
+		function hostLoopStateText() {
+			const fresh = hostFreshness();
+			if (fresh.state === 'unreachable') return `${translate('hostDown')}:${String(state.hostError).slice(0, 26)}`;
+			if (fresh.state === 'unsupported') return translate('hostUnsupported');
+			if (fresh.state === 'warming') return translate('hostWarming');
+			const text = hostLoopText(fresh.loop);
+			if (fresh.state === 'stale') return `${text} · ${translate('hostStale')} ${Math.max(1, Math.round(fresh.ageMs / 1000))}s`;
+			return text;
 		}
 
 		function hostEventsText() {
@@ -3614,6 +3914,11 @@ window.__ModuleLoader__.load({
 			} else {
 				missing.push(`host-cpuprofile:宿主进程的 CPU 火焰图**没有自动采** —— 路由已经能采(POST {op:'profileStart', seconds} / {op:'profileGet'},真宿主实测 1 秒 = 292 节点 / 223 采样 / 82KB),但客户端还没接线,要的话手动打一次;而这份宿主快照是${incident.host.snapshotAgeMs >= 0 ? `事故前 ${incident.host.snapshotAgeMs}ms` : `事故**后** ${-incident.host.snapshotAgeMs}ms`}采的(每 10 秒一次),未必覆盖卡顿瞬间;别把它当"宿主没问题"的证据`);
 			}
+			if (incident !== null && incident.integrity?.captureComplete === false) {
+				const drop = incident.integrity;
+				missing.push(`window-integrity:这份现场不完整 —— LoAF 丢 ${drop.loafDropped} 条 / longtask 丢 ${drop.longTaskDropped} 条(${drop.reasons.join(' · ')})`);
+				howToAdd.push('窗口的事后补采不了:下次卡顿前不要清空 HUD,也不要在 13 秒窗口内刷新 / 触发 HMR;要完整证据只能等下一次');
+			}
 			howToAdd.push('零成本、当场可做:chrome://gpu 看是不是落到了软件渲染;DevTools → Rendering 打开 Frame Rendering Stats(FPS 表)与 Paint flashing —— 页面完全静止时帧率是否也上不去');
 			howToAdd.push('判定"主线程之外":Performance 面板录 5 秒,看 Main 轨道自身的忙碌时间是否远小于墙钟 —— 注意 blocking=0 / scripts 为空**不能**当证据(见上面的读取说明),要看 Main 轨道本身');
 			howToAdd.push('宿主火焰图:插件自带路由就能采 —— 带宿主 cookie(见 AGENTS §2.2)POST /api/dsh-perf-hud/host {op:"profileStart", seconds:5},再 POST {op:"profileGet"} 取回标准 .cpuprofile(speedscope 打开);退一步也可以 kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record');
@@ -3854,7 +4159,8 @@ window.__ModuleLoader__.load({
 		 * ⚠️ 包内**不含**聊天正文、提示词、Cookie、Token、请求头 —— 不是"筛掉了",是本来就没采
 		 * (`capabilities` / `redactionReport` 里都照实写着)。
 		 */
-		const PACK_SCHEMA_VERSION = 1;
+		// v2:incident 增加 `integrity`(captureComplete / loafDropped / longTaskDropped / reasons)。
+		const PACK_SCHEMA_VERSION = 2;
 
 		function manifestFor(row, options) {
 			const caps = capabilities();
@@ -3878,12 +4184,15 @@ window.__ModuleLoader__.load({
 				language: docLang(),
 				exportedAt: new Date().toISOString(),
 				range: win === null ? null : { from: win.from ?? null, to: win.to ?? null, preMs: win.preMs ?? null, postMs: win.postMs ?? null },
+				// null = 老包(没有 integrity 字段):不知道,不许冒充"完整"
+				complete: row === null || row === undefined || row.integrity === undefined ? null : row.integrity.captureComplete !== false,
 				incident: row === null || row === undefined ? null : {
 					id: row.id, at: row.at, cause: row.cause, severity: row.severity,
 					frames: Array.isArray(row.frames) ? row.frames.length : 0,
 					loafEntries: Array.isArray(row.loaf) ? row.loaf.length : 0,
 					longTasks: Array.isArray(row.longTasks) ? row.longTasks.length : 0,
 					interactions: Array.isArray(row.interactions) ? row.interactions.length : 0,
+					integrity: row.integrity ?? null,
 				},
 				tally: tallyReport(),
 				capabilities: caps,
@@ -3918,6 +4227,9 @@ window.__ModuleLoader__.load({
 			const noteText = note === '' ? '' : (opts.dropFreeText === true ? ` · ${t('previewNotesDropped')}` : ` · ${redactPath(scrubParams(note))}`);
 			lines.push(`- ${t('worstEvent')}:${row.at}${noteText}`);
 			lines.push(`- ${t('evWindow')}:${span === null ? t('none') : `${Math.round(span)}ms`} · ${Array.isArray(row.frames) ? row.frames.length : 0}${t('framesUnit')}`);
+			if (row.integrity?.captureComplete === false) {
+				lines.push(`- ${t('integrityIncomplete')}:LoAF ${row.integrity.loafDropped} · longtask ${row.integrity.longTaskDropped}(${row.integrity.reasons.join(' · ')})`);
+			}
 			lines.push(`- ${t('verdictLabel')}:${t(verdict.level === 'confirmed' ? 'verdictConfirmed' : verdict.level === 'suspected' ? 'verdictSuspected' : 'verdictUnattributed')}`);
 			lines.push('');
 			// 假设
@@ -4184,6 +4496,8 @@ window.__ModuleLoader__.load({
 							label: bundleLabel(key), state: entry.state, source: entry.source, sections: entry.count,
 						})),
 					},
+					// sourcemap 缓存是可重建的:淘汰 / 写失败都计数,别让它静默吃满 localStorage
+					mapCache: { max: MAP_CACHE_MAX, evicted: state.mapCache.evicted, failed: state.mapCache.failed },
 					host: {
 						route: HOST_ROUTE,
 						reachable: state.hostError === null,
@@ -4359,7 +4673,7 @@ window.__ModuleLoader__.load({
 			const payload = {
 				plugin: PKG,
 				kind: 'perf-hud-incident',
-				schema: 2,                      // 2 = 脚本 URL 抽成 incident.urls + scripts[].u
+				schema: 3,                      // 3 = incident.integrity(窗口完整性);2 = URLs 抽表
 				exportedAt: new Date().toISOString(),
 				context: {
 					page: location.href,
@@ -4397,6 +4711,7 @@ window.__ModuleLoader__.load({
 						'incident.interactions 是窗口内 ≥100ms 的交互(event timing):ms 是**端到端**时长(到下一次渲染更新),waitMs / handlerMs 是推导出来的两段;**它不拆帧内**(输入延迟/处理/呈现要 DevTools Interactions 轨道)',
 						'incident.packages 是按包汇总的脚本耗时(降序),summary.pkgCoverage 是有名字的脚本占比 —— 覆盖率不到 100% 时别把第一行当成全部',
 						'脚本侧再往下拆一层:scripts[].forcedMs(forcedStyleAndLayoutDuration)是脚本耗时里"强制样式布局"那部分 —— **它已经算在 ms 里**,别再相加;它是"来源是样式而不是业务逻辑"的同步布局。面板「取证明细」里那两行(脚本按包 / 纯 JS 与强制布局)就是这两件事',
+						'incident.integrity.captureComplete 为 false 时,这份现场**采集本身丢过记录**(loafDropped / longTaskDropped 是窗口内的条数;reasons 写明是环形缓冲溢出还是前摇已经滚出环)—— 它仍是一份真实切片,但不能当成"完整的那 13 秒";hiddenGaps 是另一回事(rAF 被挂起,不是我们丢数据)',
 						'incident.summary 是上面几块的汇总(含窗口自己的 p50/p90/p99),方便直接和 incident.baseline 比;这一层不做推断,结论请自己下',
 						'context.watch.kept 按**严重度降序**,不是时间序;带 restored 的条目来自上一次会话(时间靠 env.perfOrigin 对齐),所以 id 与时间看起来会跳',
 						'context.watch.kept[].tier 说明这条是靠哪一档留下来的:worst = 全局最差那一档(前 10 条)、daily = 它那一天最差的一条(最多留最近 7 天)、both = 两档都占。留存是**两档并集**,所以条数上限是 10 + 7 而不是 10 —— 单靠全局最差档时,"昨天下午那次卡"会被同一小时里的 10 次挤掉',
@@ -4803,6 +5118,9 @@ window.__ModuleLoader__.load({
 				`${translate('evOwner')} ${owner === null ? translate('unblamed') : `${owner.name} ${Math.round(owner.ms)}ms`}`,
 				`${translate('evWindow')} ${summary.frames ?? 0}${translate('framesUnit')} · LoAF ${summary.loafEntries ?? 0} · ${translate('byPkg')} ${cov.resolved}/${cov.total}`,
 			];
+			if (row.integrity?.captureComplete === false) {
+				lines.push(`${translate('integrityIncomplete')} · LoAF ${row.integrity.loafDropped} · longtask ${row.integrity.longTaskDropped}(${row.integrity.reasons.join(' · ')})`);
+			}
 			// 事件来源:窗口里 ≥100ms 的交互(端到端)。没有就整段不写,不摆 0。
 			const interactions = Array.isArray(row.interactions) ? row.interactions : [];
 			if (interactions.length > 0) {
@@ -4901,6 +5219,9 @@ window.__ModuleLoader__.load({
 		function start() {
 			if (state.on) return;
 			state.on = true;
+			// 新一代:上一代在途的 fetch 结果即使回来了也不许再改状态(fetchTextWithin 检查 epoch)。
+			state.epoch += 1;
+			state.abort = typeof AbortController === 'function' ? new AbortController() : null;
 			applyProbeState();
 			state.windowStart = performance.now();
 			state.windowFrames = 0;
@@ -4926,6 +5247,12 @@ window.__ModuleLoader__.load({
 		function stop() {
 			if (state.on === false) return;
 			state.on = false;
+			// 当前代作废:在途的宿主 / map / 脚本文本请求一律 abort,旧代结果不许再改状态。
+			state.epoch += 1;
+			if (state.abort !== null) {
+				state.abort.abort();
+				state.abort = null;
+			}
 			// 关掉 HUD 不能把插件留在"被隔离"的状态:正在跑的实验立刻走恢复流程。
 			if (experiment.phase === 'running') abortExperiment();
 			applyProbeState();   // state.on 已经置 false,这里必然走"卸"的分支
@@ -5144,10 +5471,17 @@ window.__ModuleLoader__.load({
 
 		/** 宿主与链路的**判定**(不是只摆数字):两者都正常时直接说"链路已排除"。 */
 		function infraVerdict() {
-			const eventLoop = state.host === null || state.host === undefined ? null : state.host.eventLoop;
+			const fresh = hostFreshness();
 			const link = linkStats();
-			if (state.hostError !== null) return { text: translate('hostDown'), color: 'var(--dsw-alias-state-warn-primary)', bad: true };
-			const hostBad = eventLoop !== null && eventLoop.p99 > 50;
+			if (fresh.state === 'unreachable') return { text: translate('hostDown'), color: 'var(--dsw-alias-state-warn-primary)', bad: true };
+			// 零样本 / 还在等第一个样本:**不许**给「链路已排除」。这不是"正常",是"不知道"。
+			if (fresh.state === 'warming' || fresh.state === 'unsupported') {
+				return { text: translate('hostUnknown'), color: 'var(--dsw-alias-label-secondary)', bad: false };
+			}
+			if (fresh.state === 'stale') {
+				return { text: `${translate('hostShort')} ${translate('hostStale')}`, color: 'var(--dsw-alias-state-warn-primary)', bad: true };
+			}
+			const hostBad = fresh.loop.p99 > 50;
 			const linkBad = link.count > 0 && link.p99 > 100;
 			if (hostBad || linkBad) {
 				const parts = [];
@@ -5977,11 +6311,15 @@ window.__ModuleLoader__.load({
 		}
 
 		function hostSummary() {
-			const eventLoop = state.host === null || state.host === undefined ? null : state.host.eventLoop;
+			const fresh = hostFreshness();
 			const link = linkStats();
 			// ⚠️ 折叠态与展开态必须同一个粒度,否则读者会把 p99 当成均值:展开那一行写的是
 			// `p50 X · p99 Y · 最大 Z`(hostLoopText),这里也照写分位名(RTT 那一行同理)。
-			const host = state.hostError !== null ? translate('hostDown') : eventLoop === null ? translate('notYet') : `p99 ${eventLoop.p99}ms`;
+			const host = fresh.state === 'unreachable' ? translate('hostDown')
+				: fresh.state === 'unsupported' ? translate('hostUnsupported')
+					: fresh.state === 'warming' ? translate('hostWarming')
+						: fresh.state === 'stale' ? `${translate('hostStale')} ${Math.max(1, Math.round(fresh.ageMs / 1000))}s`
+							: `p99 ${fresh.loop.p99}ms`;
 			// 判定(`infraVerdict()`)刻意**不进摘要**:它已经是展开后的第一行(标签 `宿主 event-loop · 判定`),
 			// 摘要再说一遍就是同一句话说两遍(§5);而且它最长那句(`链路已排除(宿主与隧道均正常)`,16 字)
 			// 会把这一行顶到 43 字符,在 396px 里必然折行 —— 摘要 34 字符的预算容不下它。
@@ -6233,7 +6571,7 @@ window.__ModuleLoader__.load({
 		// ───────────────────────────────── 文案 ─────────────────────────────────
 		const DICT = {
 			zh: {
-				title: '性能 HUD', off: '已关', turnOn: '开启', turnOff: '关闭',
+				title: '性能 HUD', shortcutToggle: '展开或收起性能 HUD', off: '已关', turnOn: '开启', turnOff: '关闭',
 				frameWorst: '最差帧', blame: '回调归因(耗时·下界)',
 				rest: '其余', dom: 'DOM 节点', none: '无', exportJson: '导出 JSON', clear: '清空',
 				collapse: '折叠', expand: '展开', sessions: '会话列表', messages: '消息区', perMin: '/分',
@@ -6331,7 +6669,7 @@ window.__ModuleLoader__.load({
 				groupDetail: '取证明细', groupDom: 'DOM 与堆', groupHost: '宿主与链路', groupTools: '工具箱', nodesSuffix: ' 节点',
 				stream: '状态', running: '流式', idle: '空闲', idleBase: '空闲基线(60s)', idleWriter: '空闲也在加节点的是',
 				notYet: '未采集', hostLoop: '宿主 event-loop',
-				hostDown: '宿主不可用', link: '链路 RTT',
+				hostDown: '宿主不可用', hostUnsupported: '宿主未采到', hostWarming: '等宿主样本', hostUnknown: '宿主数据不足', hostStale: '已过期', link: '链路 RTT',
 				hostEvents: '宿主事件到达', hostEventsHint: '宿主半用公开接口 ctx.on(\'session/event\') 记每条事件「提交(event.time)→到达监听器」的延迟;第一版想包 Context.emit,线上实测根本抓不到(该事件走带作用域过滤的派发),故改口径且写明',
 				notInstalled: '未安装', waiting: '已装,等事件',
 				sampling: '吞吐采样中', failed: '吞吐失败',
@@ -6352,7 +6690,7 @@ window.__ModuleLoader__.load({
 				hostSnapshotNotInstant: '这份宿主快照每 10 秒采一次,未必覆盖卡顿瞬间',
 				strengthStrong: '线索较强', strengthMedium: '线索中等', strengthWeak: '线索较弱', strengthNone: '证据不足',
 				provenanceMeasured: '直接测量', provenanceInferred: '归因推断', provenanceUnknown: '无法确认',
-				packSummaryTitle: '# 性能事故诊断摘要', packSecSummary: '## 1. 摘要',
+				packSummaryTitle: '# 性能事故诊断摘要', packSecSummary: '## 1. 摘要', integrityIncomplete: '现场不完整',
 				packSecCandidates: '## 2. 最可能的假设(最多 3 条,每条都带支持与限制)', packSecMissing: '## 3. 缺失的证据',
 				packSecNext: '## 4. 下一步验证', packSecMeta: '## 5. 元信息',
 				packCauseLabel: '假设', packSupport: '支持', packLimits: '限制', packProvenance: '出处', packTier: '采集档位',
@@ -6371,7 +6709,7 @@ window.__ModuleLoader__.load({
 				viewIncident: '卡顿详情', backHint: '回到主界面(那一屏只回答五个问题)',
 				packFilesLabel: '诊断包内容', packFilesHint: '给 AI 的那条:格式说明 + 摘要 + 原始证据 + 怎么读',
 				packFilesValue: 'manifest.json · summary.md · incident.json · README.md',
-				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / marks / groups / on / collapsed / deep / precise / map',
+				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / marks / groups / on / collapsed / deep / precise / map / map:index',
 				storageKeysHint: '清状态时按需删;on / deep / precise 就是采集档位(守夜 / 深录 / 精确归因),这三个会改变面板贵不贵;map 是那份 12MB sourcemap 的分段表缓存(按 rev 存)',
 				// 本轮:原因说人话(包名收进展开区)、两条导出路径、分享前预览
 				causePlainScript: '某个脚本模块的耗时偏高', causePlainLongTask: '这一段时间里有较重的渲染任务',
@@ -6441,7 +6779,7 @@ window.__ModuleLoader__.load({
 				envPickHint: '点一条事故就切过去;当前选中的那条前面有 ●',
 			},
 			en: {
-				title: 'Perf HUD', off: 'off', turnOn: 'on', turnOff: 'off',
+				title: 'Perf HUD', shortcutToggle: 'Toggle the performance HUD', off: 'off', turnOn: 'on', turnOff: 'off',
 				frameWorst: 'worst frame', blame: 'attribution (time · lower bound)',
 				rest: 'rest', dom: 'DOM nodes', none: 'n/a', exportJson: 'Export JSON', clear: 'Clear',
 				collapse: 'Collapse', expand: 'Expand', sessions: 'Sessions', messages: 'Messages', perMin: '/min',
@@ -6535,7 +6873,7 @@ window.__ModuleLoader__.load({
 				groupDetail: 'forensics', groupDom: 'DOM & heap', groupHost: 'host & link', groupTools: 'toolbox', nodesSuffix: ' nodes',
 				stream: 'state', running: 'streaming', idle: 'idle', idleBase: 'idle baseline (60s)', idleWriter: 'still adding nodes while idle',
 				notYet: 'n/a', hostLoop: 'host event-loop',
-				hostDown: 'host n/a', link: 'link RTT',
+				hostDown: 'host n/a', hostUnsupported: 'host not sampled', hostWarming: 'waiting for host sample', hostUnknown: 'not enough host data', hostStale: 'stale', link: 'link RTT',
 				hostEvents: 'host event arrival', hostEventsHint: 'The host half uses the public ctx.on(\'session/event\') and records commit(event.time)→listener arrival lag; the earlier attempt to wrap Context.emit never fired (that event uses scope-filtered dispatch)',
 				notInstalled: 'not installed', waiting: 'installed, waiting for events',
 				sampling: 'throughput sampling', failed: 'throughput failed',
@@ -6555,7 +6893,7 @@ window.__ModuleLoader__.load({
 				hostSnapshotNotInstant: 'the host snapshot is taken every 10s and may not cover the stall itself',
 				strengthStrong: 'strong lead', strengthMedium: 'moderate lead', strengthWeak: 'weak lead', strengthNone: 'not enough evidence',
 				provenanceMeasured: 'measured', provenanceInferred: 'inferred', provenanceUnknown: 'unknown',
-				packSummaryTitle: '# Performance incident summary', packSecSummary: '## 1. Summary',
+				packSummaryTitle: '# Performance incident summary', packSecSummary: '## 1. Summary', integrityIncomplete: 'incomplete capture',
 				packSecCandidates: '## 2. Most likely hypotheses (up to 3, each with support and limits)', packSecMissing: '## 3. Missing evidence',
 				packSecNext: '## 4. How to verify next', packSecMeta: '## 5. Meta',
 				packCauseLabel: 'hypothesis', packSupport: 'support', packLimits: 'limits', packProvenance: 'provenance', packTier: 'capture tier',
@@ -6571,7 +6909,7 @@ window.__ModuleLoader__.load({
 				viewIncident: 'Stall detail', backHint: 'Back to the overview (that screen only answers five questions)',
 				packFilesLabel: 'diagnostic pack', packFilesHint: 'the AI path: format note + summary + raw evidence + how to read it',
 				packFilesValue: 'manifest.json · summary.md · incident.json · README.md',
-				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / marks / groups / on / collapsed / deep / precise / map',
+				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / marks / groups / on / collapsed / deep / precise / map / map:index',
 				storageKeysHint: 'delete as needed when clearing state; on / deep / precise are the capture tier (night watch / deep / precise attribution) and change how expensive the panel is; map is the section-table cache for that 12MB sourcemap (keyed by rev)',
 				// this round: plain-language causes (package names behind a disclosure), two export paths, pre-share preview
 				causePlainScript: 'one script module is spending an unusual amount of time', causePlainLongTask: 'a heavy render task happened in this window',
@@ -7547,6 +7885,12 @@ window.__ModuleLoader__.load({
 				incidentFrameHeadingText(row, frame, nav),
 				frame === null ? null : `${Math.round(frame.ms ?? 0)}ms`,
 				h('button', { type: 'button', style: S.btn, title: t('backToLiveHint'), onClick: showLiveMode }, t('backToLive'))));
+			// 采集本身丢过记录时,这一屏必须自己说出来 —— 否则"没看到证据"会被读成"没有证据"。
+			if (row.integrity?.captureComplete === false) {
+				const drop = row.integrity;
+				kids.push(h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } },
+					`${t('integrityIncomplete')} · LoAF ${drop.loafDropped} · LT ${drop.longTaskDropped}${drop.reasons.length === 0 ? '' : ` · ${drop.reasons.join(' · ')}`}`));
+			}
 			const scope = replayScope();
 			if (scope !== null) {
 				kids.push(h('div', { style: S.block, title: t('replayHint') },
@@ -7748,6 +8092,7 @@ window.__ModuleLoader__.load({
 				return () => {
 					natives.clearInterval(id);
 					state.requestRender = null;
+					state.toggleHud = null;
 				};
 			}, []);
 
@@ -7761,7 +8106,9 @@ window.__ModuleLoader__.load({
 				state.collapsed = next === false;
 				try { localStorage.setItem(LS_UI, next ? '0' : '1'); } catch (error) { /* 折叠状态记不住无所谓 */ }
 			};
-
+			// 快捷键走同一个 toggle(不另写一份展开状态,否则两处会不同步)。
+			state.toggleHud = toggle;
+			// 收起/展开不抢焦点:外壳在键盘命令之后会把焦点还给输入框;与它抢只会让用户丢焦点。
 			if (state.on === false) {
 				return h('div', { ref: setRoot, id: ROOT_ID, style: S.root(false) },
 					h('div', { style: S.head },
@@ -7770,11 +8117,11 @@ window.__ModuleLoader__.load({
 			}
 
 			const worst = worstLongTask();
-			const loop = state.host === null ? null : state.host.eventLoop;
 			const link = linkStats();
 			const linkSuspect = suspectLink();
 			const idleBase = state.idleBaseline;
 			const infra = infraVerdict();
+			const hostFresh = hostFreshness();
 			const rows = pluginTable();
 			const top = rows.slice(0, TOP_N);
 			const rest = rows.slice(TOP_N);
@@ -7943,9 +8290,8 @@ window.__ModuleLoader__.load({
 						h('span', { style: { ...S.num, color: infra.color } }, infra.text)),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('hostLoop')),
-						h('span', { style: { ...S.num, color: loop === null ? undefined : levelUp(loop.p99, 50, 200) } },
-							state.hostError !== null ? `${t('hostDown')}:${state.hostError.slice(0, 26)}`
-								: hostLoopText(loop))),
+						h('span', { style: { ...S.num, color: hostFresh.state === 'live' ? levelUp(hostFresh.loop.p99, 50, 200) : hostFresh.state === 'stale' || hostFresh.state === 'unreachable' ? 'var(--dsw-alias-state-warn-primary)' : undefined } },
+							hostLoopStateText())),
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('hostEventsHint') }, t('hostEvents')),
 						h('span', { style: S.num }, hostEventsText())),
@@ -8132,6 +8478,34 @@ window.__ModuleLoader__.load({
 
 			if (state.want) start();
 			ctx.effect(() => () => { stop(); }, 'perf-hud: instrumentation');
+
+			// 快捷键:可选注入 —— shortcuts 服务不在时插件照常工作,只是没有这个键。
+			// 走平台命令仲裁(而不是裸 keydown),这样输入框 / 终端 / 其它插件的绑定不会被抢。
+			ctx.inject(['shortcuts'], (shortcutCtx) => {
+				const shortcuts = shortcutCtx.shortcuts;
+				if (shortcuts === null || shortcuts === undefined || typeof shortcuts.register !== 'function') return;
+				shortcutCtx.effect(() => shortcuts.register({
+					id: 'perf-hud.toggle',
+					label: () => translate('shortcutToggle'),
+					aliases: ['perf', 'hud', 'fps'],
+					// Linux Web 的快捷键只允许极少数组合,不硬塞一个不可用的绑定;
+					// macOS / Windows 用 Cmd/Ctrl+Shift+U(KeyH 等被平台保留,不能占用)。
+					defaults: {
+						'web:macos': { code: 'KeyU', modifiers: ['primary', 'shift'] },
+						'web:windows': { code: 'KeyU', modifiers: ['primary', 'shift'] },
+					},
+					regions: ['page', 'editable', 'terminal'],
+					modals: [],
+					resolve: () => ({
+						status: 'handled',
+						run: () => {
+							if (typeof state.toggleHud !== 'function') return;
+							state.toggleHud();
+						},
+					}),
+				}), 'perf-hud: shortcut');
+			});
+
 			ctx.slots.inject('shell.overlay', () => ctx.slots.register({
 				name: 'shell.overlay',
 				id: PKG,

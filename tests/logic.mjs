@@ -10,6 +10,9 @@
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+// 一份**真的**事故切片(真页面手动 capture → report() → 脱敏后落盘),不是合成的形状;
+// 用来钉住"文件格式与真实数据对得上",而不是只测我们想象出来的字段。
+const realFixture = JSON.parse(readFileSync(new URL('./fixtures/incident-real.json', import.meta.url), 'utf8'));
 
 /** 按 header 抽出"从 header 起到配对右括号"的源码;识别字符串/模板串与行注释。 */
 function extract(text, header) {
@@ -198,7 +201,27 @@ process.exitCode = failed === 0 ? 0 : 1;
 	// README 承诺过 `__perfHud.marks()`(撤面板入口时给标记清单留的出口);没有它那句文档就是假的
 	check('控制台 API 暴露 marks 只读 getter(与 README「控制台 API」那一行对齐)',
 		/marks: \(\) => state\.marks/.test(source), true);
+	// 快捷键:可选注入(服务不在也不影响加载);Linux Web 不支持这个组合,不硬塞默认绑定
+	check('快捷键走 ctx.shortcuts 可选注入,只声明 macOS / Windows 的默认绑定',
+		/ctx\.inject\(\['shortcuts'\]/.test(source) && /state\.toggleHud = toggle/.test(source)
+		&& /'web:macos': \{ code: 'KeyU'/.test(source) && /'web:linux'/.test(source) === false, true);
 
+	// P0-1:任何 fetch 都必须带 signal(或经 fetchTextWithin / fetchJsonWithin)。
+	// 只对代码行做检查:注释里的 `fetch()` 不是调用;helper 自己那一处带 signal: controller.signal。
+	{
+		const codeOnly = source.split('\n').filter((line) => {
+			const text = line.trim();
+			return text.startsWith('//') === false && text.startsWith('*') === false && text.startsWith('/*') === false;
+		}).join('\n');
+		const missing = [];
+		for (const match of codeOnly.matchAll(/(?<![.\w$])fetch\s*\(/g)) {
+			if (/\bsignal\s*:/.test(codeOnly.slice(match.index, match.index + 320)) === false) missing.push(match.index);
+		}
+		check('所有 fetch 都带 signal 或经有 deadline 的 helper', missing, []);
+	}
+	// P1:map 缓存写入必须走 saveMapCache(配额失败会先淘汰最旧 rev),不许直接 setItem
+	check('map 缓存写入走 saveMapCache(配额淘汰有入口)',
+		/saveMapCache\(entry\.storageKey/.test(source) && /localStorage\.setItem\(entry\.storageKey/.test(source) === false, true);
 	// D5:面板的二级拆分与导出件必须吃同一份字段(否则"按包"两边会算出不同答案)
 	check('D5:面板二级与导出件用同一份字段(packageOfScript(url,charPos) 与 forcedMs)',
 		/packageOfScript\(script\.url, script\.charPos\)/.test(source)
@@ -267,7 +290,7 @@ const sandbox = `
 	const markResolved = () => { resolveSeq += 1; };
 	const document = { documentElement: {}, querySelector: () => (streamingFlag ? {} : null) };
 	const localStorage = { store: new Map(), getItem(k) { return this.store.has(k) ? this.store.get(k) : null; }, setItem(k, v) { this.store.set(String(k), String(v)); } };
-	const natives = { setTimeout: (fn, ms) => setTimeout(fn, ms), setInterval: () => 0, clearInterval: () => {} };
+	const natives = { setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (id) => clearTimeout(id), setInterval: () => 0, clearInterval: () => {} };
 	// A2 的跨会话基线要吃帧环:这个盒子里不测帧环(有专门的盒子),给个"一帧都没有"的桩
 	const frameRing = { size: 0, stats: () => null };
 	const sleep = (ms) => new Promise((resolve) => natives.setTimeout(resolve, ms));
@@ -340,12 +363,12 @@ const sandbox = `
 		strengthStrong: '线索较强', strengthMedium: '线索中等', strengthWeak: '线索较弱', strengthNone: '证据不足',
 		provenanceMeasured: '直接测量', provenanceInferred: '归因推断', provenanceUnknown: '无法确认',
 		pkgNamed: '定到包', scriptsUnit: '条脚本', maxLabel: '最大', hostShort: '宿主', cumulative: '累计', blame: '回调归因(耗时·下界)',
-		packSummaryTitle: '# 性能事故诊断摘要', packSecSummary: '## 1. 摘要',
+		packSummaryTitle: '# 性能事故诊断摘要', packSecSummary: '## 1. 摘要', integrityIncomplete: '现场不完整',
 		packSecCandidates: '## 2. 最可能的假设(最多 3 条,每条都带支持与限制)', packSecMissing: '## 3. 缺失的证据',
 		packSecNext: '## 4. 下一步验证', packSecMeta: '## 5. 元信息',
 		packCauseLabel: '假设', packSupport: '支持', packLimits: '限制', packProvenance: '出处', packTier: '采集档位',
 		packNoCandidate: '没有足够证据给出候选原因。', packPreviewNote: '导出前先看这份清单。',
-		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', needDeep: '要深录', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
+		none: '无', notApplicable: '不适用(窗口含流式)', unattrShort: '未归因', needDeep: '要深录', perSec: '/s', peak: '峰', legSubtree: '子树', legDom: 'DOM写入', perMin: '/分', nodesSuffix: ' 节点', messages: '消息区', hostShort: '宿主', hostDown: '宿主不可用', hostUnsupported: '宿主未采到', hostWarming: '等宿主样本', hostUnknown: '宿主数据不足', hostStale: '已过期', isolation: '隔离实验', marks: '场景标记', domWrites: 'DOM 写入(按插件)', worstSecondShort: '最差秒', overviewFrame: '帧', overviewBlame: '归属', maxBlame: '最多', hit: '命中', times: ' 次', cumulative: '累计', restHint: '其余 = 除 Top3 之外的归属方合计', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)', streaming: '流式', running: '流式', idle: '空闲',
 	})[key] ?? key;
 	const experiment = { phase: 'idle', startedAt: 0, results: [], candidates: [], candidateState: [], restored: null, baseline: null, message: '', via: null };
 	const TARGETS = [
@@ -408,6 +431,22 @@ const newPieces = [
 	'function selfStats(',
 	'function recorderText(',
 	'const LS_MAP = ',
+	'const LS_MAP_INDEX = ',
+	'const MAP_CACHE_MAX = ',
+	'function readMapIndex(',
+	'function writeMapIndex(',
+	'function pruneMapIndex(',
+	'function evictMapEntries(',
+	'function touchMapCache(',
+	'function saveMapCache(',
+	'function pruneMapCache(',
+	'const FETCH_TIMEOUT_MS = ',
+	'function timeoutError(',
+	'function cancelledError(',
+	'function isAbortError(',
+	'function fetchFailureText(',
+	'async function fetchTextWithin(',
+	'async function fetchJsonWithin(',
 	'const LS_SESSIONS = ',
 	'const SESSION_KEEP = ',
 	'const DICT = {',
@@ -449,6 +488,8 @@ const newPieces = [
 	'function significance(',
 	'const LS_GROUPS = ',
 	'const HOST_ROUTE = ',
+	'const RTT_INTERVAL_MS = ',
+	'const HOST_STALE_MS = ',
 	'const TOP_N = ',
 	'const CROSS_SUMMARY_NAME_MAX = ',
 	'const CROSS_SUMMARY_SRC_MAX ',
@@ -483,8 +524,10 @@ const newPieces = [
 	'function unexplainedFrame(',
 	'function frameLevel(',
 	'function levelFrame(',
+	'function hostFreshness(',
 	'function hostSummary(',
 	'function hostLoopText(',
+	'function hostLoopStateText(',
 	'function toolsSummary(',
 	// P0/P1:事故选中上下文 + 「最差事件」入口 + 布局动作(严重度必须文字与颜色两样都给)
 	'function pickIncident(',
@@ -628,7 +671,7 @@ const box = new Function(`${sandbox}\n${newPieces}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentFrameBadStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -761,6 +804,16 @@ check('scriptLineOf:charPos 0 在第 1 行', EX.scriptLineOf(comboUrl, 0), 1);
 check('scriptLineOf:换行符本身算下一行起点', [EX.scriptLineOf(comboUrl, 3), EX.scriptLineOf(comboUrl, 4), EX.scriptLineOf(comboUrl, 8)], [1, 2, 3]);
 check('scriptLineOf:文本没到位就是 null(不猜)', EX.scriptLineOf('http://h/plugins/??x,y/client.js', 5), null);
 check('scriptLineOf:字符位置超出文本 → -1', EX.scriptLineOf(comboUrl, 999), -1);
+check('fetch 失败文案:timeout / cancelled 分开报(不把主动关闭写成错误)',
+	[EX.fetchFailureText(EX.timeoutError(5000), 5000), EX.fetchFailureText(EX.cancelledError(), 5000), EX.isAbortError(EX.cancelledError()), EX.isAbortError(new Error('boom'))],
+	['timeout 5000ms', 'cancelled', true, false]);
+check('map 缓存 LRU:只留最近 8 个 rev,淘汰最旧的',
+	(() => {
+		const keys = Array.from({ length: 10 }, (_, i) => ({ key: `k${i}`, at: i }));
+		const pruned = EX.pruneMapIndex(keys, 8);
+		return [pruned.keep.map((row) => row.key), pruned.evicted.map((row) => row.key)];
+	})(),
+	[['k9', 'k8', 'k7', 'k6', 'k5', 'k4', 'k3', 'k2'], ['k1', 'k0']]);
 check('packageOfScript:非插件脚本 → not-plugin', EX.packageOfScript('http://h/assets/index.js', 10), { pkg: null, via: 'not-plugin' });
 check('packageOfScript:单包 URL 直接读出包名', EX.packageOfScript('http://h/plugins/??dsh-x/client.js&rev=1', 10), { pkg: 'dsh-x', via: 'url' });
 check('packageOfScript:没有 URL → no-url', EX.packageOfScript('', 10), { pkg: null, via: 'no-url' });
@@ -893,16 +946,32 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 	check('指纹:折叠状态变化也算变', EX.displayKey() !== stableKey, true);
 	box.state.groups.detail = false;
 
-	// 判定而不是只摆数字:两者都正常时必须给出结论
+	// 判定而不是只摆数字:两者都正常时必须给出结论(快照要新鲜、有样本,才是 live)
 	box.state.hostError = null;
-	box.state.host = { eventLoop: { p50: 1.2, p99: 4.3 }, nodeVersion: 'v24' };
+	box.state.host = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, nodeVersion: 'v24', eventLoopLive: true };
+	box.state.hostAt = Date.now();
 	box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 13 }];
 	check('宿主与链路都正常 → 直接说链路已排除', EX.infraVerdict().text, '链路已排除(宿主与隧道均正常)');
 	box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 400 }, { t: Date.now(), kind: 'rtt', rtt: 400 }];
 	check('RTT p99 超阈值 → 判为链路存疑', EX.infraVerdict().bad, true);
-	box.state.host = { eventLoop: { p50: 1.2, p99: 120 } };
+	box.state.host = { eventLoop: { p50: 1.2, p99: 120, seconds: 30 }, eventLoopLive: true };
 	box.state.link = [];
 	check('宿主 p99 超阈值 → 判为宿主存疑', EX.infraVerdict().bad, true);
+	// 零样本 / 过期 / 未采到:不许给「链路已排除」
+	box.state.host = { eventLoop: { p50: null, p99: null, max: 0, seconds: 0 }, eventLoopLive: true };
+	box.state.hostAt = Date.now();
+	check('宿主还没有样本 → 不能说链路已排除', EX.infraVerdict().text, '宿主数据不足');
+	check('宿主还没有样本 → 四态是 warming', EX.hostFreshness().state, 'warming');
+	box.state.host = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, eventLoopLive: true };
+	box.state.hostAt = Date.now() - 60000;
+	check('宿主快照过期 → 四态是 stale', EX.hostFreshness().state, 'stale');
+	check('宿主快照过期 → 判定不能说正常', EX.infraVerdict().bad, true);
+	box.state.host = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, eventLoopLive: false };
+	box.state.hostAt = Date.now();
+	check('宿主探针没跑起来 → 四态是 unsupported', EX.hostFreshness().state, 'unsupported');
+	check('宿主探针没跑起来 → 文案是"宿主未采到"', EX.hostLoopStateText(), '宿主未采到');
+	box.state.host = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, eventLoopLive: true };
+	box.state.hostAt = Date.now();
 	// 未解释帧:最差帧 130ms 而帧内未归因峰值也是 130ms → 那一帧完全没有 JS 解释
 	// (这一条只在插桩下成立:没插桩时 unattr 恒等于帧间隔,那会得出"每条长帧都无 JS 解释")
 	box.state.deep = true;
@@ -1093,11 +1162,14 @@ check('四个折叠组摘要的长度预算(按真实量级:五位数 + 小数)'
 // 是紧的(桩喂 120ms / `未采集` 时 30 字符,真实数据 1234.5ms 时能顶到 34)。这里专门喂真实量级。
 check('宿主摘要的长度预算(真实量级:四位数 + 小数;判定不进摘要,它是展开后的第一行)', (() => {
 	const host0 = box.state.host;
+	const hostAt0 = box.state.hostAt;
 	const link0 = box.state.link;
-	box.state.host = { eventLoop: { p50: 12.3, p99: 1234.5, max: 2000 } };
+	box.state.host = { eventLoop: { p50: 12.3, p99: 1234.5, max: 2000, seconds: 30 }, eventLoopLive: true };
+	box.state.hostAt = Date.now();
 	box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 1234.5 }, { t: Date.now(), kind: 'rtt', rtt: 1200 }];
 	const text = EX.hostSummary();
 	box.state.host = host0;
+	box.state.hostAt = hostAt0;
 	box.state.link = link0;
 	return [text.length <= 34, text.includes('p99'), text.includes('1234.5ms'), text.includes('判定' ) === false];
 })(), [true, true, true, true]);
@@ -1661,6 +1733,8 @@ check('isolation 段带候选/基线/结果/恢复字段',
 	Array.isArray(exported.isolation.candidates) && Array.isArray(exported.isolation.results)
 	&& exported.isolation.restored === null && exported.isolation.baseline === null, true);
 check('导出含 host 与链路', exported.host.last.eventLoop.p99 === 9.9 && exported.link.stats60s.count === 1, true);
+check('导出带 mapCache 上限与淘汰计数(不让缓存无声膨胀)',
+	[exported.context.mapCache.max, exported.context.mapCache.evicted, exported.context.mapCache.failed], [8, 0, 0]);
 check('导出带宿主事件计时回执',
 	exported.host.eventWatch.installed === true && exported.verification.hostEvents.eventNames[0] === 'session/event', true);
 check('verification 段声明了三段导出',
@@ -2035,6 +2109,7 @@ const watchPieces = [
 	extract(source, 'function keepIncident('),
 	extract(source, 'function pruneIncidents('),
 	extract(source, 'function dayKeyOf('),
+	extract(source, 'function windowIntegrity('),
 	extract(source, 'function assembleIncident('),
 	extract(source, 'function captureNow('),
 	extract(source, 'function watchStatus('),
@@ -2254,7 +2329,7 @@ const watchBox = new Function(`
 		hourUnit: '小时', minUnit: '分', secUnit: '秒', framesUnit: ' 帧',
 		replayGaps: 'rAF 挂起', replayNoLoaf: '这一帧附近没有长动画帧记录(窗口里没有 LoAF)',
 		// 诊断包那一段用到的词条(缺了会退回 key,断言就看不到真词)
-		packSummaryTitle: '# 性能事故诊断摘要', packSecSummary: '## 1. 摘要',
+		packSummaryTitle: '# 性能事故诊断摘要', packSecSummary: '## 1. 摘要', integrityIncomplete: '现场不完整',
 		packSecCandidates: '## 2. 最可能的假设(最多 3 条,每条都带支持与限制)', packSecMissing: '## 3. 缺失的证据',
 		packSecNext: '## 4. 下一步验证', packSecMeta: '## 5. 元信息',
 		packCauseLabel: '假设', packSupport: '支持', packLimits: '限制', packProvenance: '出处', packTier: '采集档位',
@@ -2292,17 +2367,18 @@ const watchBox = new Function(`
 		dom: { total: 1234 },
 		bundleKeys: new Set(),
 		longTasks: [],
+		ltSeq: 0, ltDropped: 0,
 		// 捕获计数的时间桶(与 client.js 的 state.tally 同形;手写桩,加字段要同步)
 		tally: { minute: new Map(), day: new Map(), expiredBuckets: 0, expiredDays: 0, prunedMinute: -1, loadError: null, savedAt: 0, dirty: false, timer: 0 },
 		view: 'main', devTab: 'frames', trendMs: TALLY_TREND_SHORT_MS,
-		watch: { on: true, loaf: [], loafObserver: null, loafState: 'on', pickT: null, selId: null, mode: 'live', frameT: null, scope: 'worst', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
+		watch: { on: true, loaf: [], loafSeq: 0, loafDropped: 0, loafObserver: null, loafState: 'on', pickT: null, selId: null, mode: 'live', frameT: null, scope: 'worst', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
 			// A4:交互计时的状态位(eventObserver 由 startInteractions 自己写)
 			eventObserver: null, eventState: 'not-started', eventSupported: [], interactions: [], eventCount: 0, elementCount: 0 },
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		location,
-		keepIncident, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
+		keepIncident, windowIntegrity, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, frameSeverity, PICK_MIN_MS, unresolvedLabel, crossTable, crossSummary, clipName,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT, sparkPickMap, sparkCellTitle, markResolved,
 		sessionRecord, readSessionBaselines, mergeSessionBaseline, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
@@ -3024,6 +3100,38 @@ check('事故切片:topScripts 带上 file / line / lineVia(证据链落到包�
 		return [watch.evidenceCalls() > before, script.file, script.line, script.lineVia, script.lineScope];
 	})(),
 	[true, '/plugins/stub/client.js', 7, 'stub-text', 'file']);
+// 窗口完整性:序号断档 = 环挤掉了记录,必须写进 incident.integrity(不许静默)
+check('windowIntegrity:序号连续 = 没丢;断档 = 精确算出差了几条',
+	[
+		watch.windowIntegrity([{ seq: 1 }, { seq: 2 }, { seq: 3 }], null, false, 0, 0),
+		watch.windowIntegrity([{ seq: 1 }, { seq: 3 }, { seq: 4 }], null, false, 0, 0),
+		watch.windowIntegrity([], 5, true, 1, 0),
+		watch.windowIntegrity([], 5, true, 0, 0),
+	],
+	[{ dropped: 0, preOverflow: false }, { dropped: 1, preOverflow: false }, { dropped: 0, preOverflow: true }, { dropped: 0, preOverflow: false }]);
+check('事故切片:环挤掉记录时 integrity.captureComplete=false,并把原因与条数写进包', (() => {
+	const saved = watch.state.watch.incidents.slice();
+	const savedLoaf = watch.state.watch.loaf.slice();
+	const savedTasks = watch.state.longTasks.slice();
+	watch.state.watch.incidents.length = 0;
+	watch.state.watch.loaf.length = 0;
+	watch.state.longTasks.length = 0;
+	for (const row of [
+		{ seq: 1, t: 100, dur: 200, blocking: 10, renderStart: 0, styleAndLayoutStart: 0, scripts: [] },
+		{ seq: 2, t: 200, dur: 200, blocking: 10, renderStart: 0, styleAndLayoutStart: 0, scripts: [] },
+		{ seq: 4, t: 400, dur: 200, blocking: 10, renderStart: 0, styleAndLayoutStart: 0, scripts: [] },
+	]) watch.state.watch.loaf.push(row);
+	watch.state.longTasks.push({ seq: 1, at: 100, ms: 60, owner: null, component: null });
+	watch.state.longTasks.push({ seq: 3, at: 300, ms: 60, owner: null, component: null });
+	const incident = watch.assembleIncident({ at: 1000, until: 2000, cause: 'manual', note: null, severity: 200, loafFull: false, loafOldestAt: 100, longTaskFull: false, longTaskOldestAt: 100 });
+	watch.state.watch.incidents.length = 0;
+	for (const row of saved) watch.state.watch.incidents.push(row);
+	watch.state.watch.loaf.length = 0;
+	for (const row of savedLoaf) watch.state.watch.loaf.push(row);
+	watch.state.longTasks.length = 0;
+	for (const row of savedTasks) watch.state.longTasks.push(row);
+	return [incident.integrity.captureComplete, incident.integrity.loafDropped, incident.integrity.longTaskDropped, incident.integrity.reasons];
+})(), [false, 1, 1, ['loaf-ring-overflow', 'longtask-ring-overflow']]);
 // 「自动」跟哪一条:最差(默认)还是最近 —— 两个都要够得着,又不许多一张清单
 check('事故 scope:默认跟最差;切到「最近」之后跟时刻最新那条,并且清掉手选',
 	(() => {
@@ -3734,11 +3842,49 @@ check('诊断包:manifest 带 schemaVersion / 能力矩阵 / 缺口清单 / 脱�
 	return [manifest.schemaVersion, manifest.kind, manifest.capabilities.schema,
 		manifest.notIncluded.length, manifest.redaction.applied.length > 0,
 		manifest.range.fromMs === undefined ? manifest.range.from !== undefined : true,
-		manifest.captureTier];
-})(), [1, 'dsh-perf-hud-diagnostic-pack', 1, 3, true, true, 'watch']);
+		manifest.captureTier, manifest.complete];
+})(), [2, 'dsh-perf-hud-diagnostic-pack', 1, 3, true, true, 'watch', null]);
 check('诊断包:manifest 里描述的 files 顺序 == 包里真实的顺序(它是入口,指错等于骗人)',
 	[JSON.parse(pack.files[0].text).files, pack.files.map((file) => file.name)],
 	[['manifest.json', 'summary.md', 'incident.json', 'README.md'], ['manifest.json', 'summary.md', 'incident.json', 'README.md']]);
+// ── P2:真事故 fixture(真页面 capture → report → 脱敏落盘)──
+check('golden fixture:真事故切片的形状完整(frames / loaf / longTasks / summary / urls)',
+	(() => {
+		const row = realFixture.incident;
+		return [Array.isArray(row.frames) && row.frames.length > 0,
+			Array.isArray(row.loaf) && row.loaf.length > 0,
+			Array.isArray(row.longTasks),
+			Array.isArray(row.urls), Array.isArray(row.summary.topScripts),
+			typeof row.window.fromMs === 'number' && typeof row.window.toMs === 'number',
+			typeof row.env.perfOrigin === 'string'];
+	})(),
+	[true, true, true, true, true, true, true]);
+check('golden fixture:integrity 是真采集写进来的(不是测试补的),且字段齐全',
+	(() => {
+		const i = realFixture.incident.integrity;
+		return [i !== undefined, typeof i.captureComplete === 'boolean', typeof i.loafDropped === 'number', typeof i.longTaskDropped === 'number', Array.isArray(i.reasons)];
+	})(),
+	[true, true, true, true, true]);
+check('golden fixture:完整现场 → manifest.complete=true,摘要五段齐全、不写"现场不完整"',
+	(() => {
+		const manifest = EX.manifestFor(realFixture.incident);
+		const summary = EX.diagnosticSummary(realFixture.incident);
+		return [manifest.complete, manifest.incident.integrity.captureComplete,
+			['## 1. 摘要', '## 2. 最可能的假设', '## 3. 缺失的证据', '## 4. 下一步验证', '## 5. 元信息'].every((head) => summary.includes(head)),
+			summary.includes('现场不完整')];
+	})(),
+	[true, true, true, false]);
+check('不完整现场:manifest.complete=false,摘要与 missing 都点名,不把缺口藏起来',
+	(() => {
+		const row = {
+			...realFixture.incident,
+			integrity: { captureComplete: false, loafDropped: 2, longTaskDropped: 1, loafKept: 19, longTaskKept: 1, reasons: ['loaf-ring-overflow', 'longtask-ring-overflow'] },
+		};
+		const manifest = EX.manifestFor(row);
+		const summary = EX.diagnosticSummary(row);
+		return [manifest.complete, summary.includes('现场不完整'), summary.includes('window-integrity:')];
+	})(),
+	[false, true, true]);
 check('诊断包:manifest 与事故包**都不含**凭据(端到端:真 location 里塞过 token)',
 	[/SECRET_TOKEN_VALUE/.test(pack.files[0].text), /SECRET_KEY_VALUE/.test(pack.files[2].text), /tester/.test(pack.files[2].text)],
 	[false, false, false]);

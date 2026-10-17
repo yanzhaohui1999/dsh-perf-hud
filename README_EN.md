@@ -10,7 +10,7 @@
 <p>
 <img alt="status" src="https://img.shields.io/badge/status-v0.4.0%20%C2%B7%20released-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
-<img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.0--rc.2-4d6bfe" />
+<img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1-4d6bfe" />
 </p>
 
 > ✅ **v0.4.0 is on npm** — install with `dsh plugin --profile web add dsh-perf-hud` (release gates and
@@ -70,6 +70,19 @@ timing only observes elements carrying the `elementtiming` attribute, which DSH'
 | Which plugin is quietly busy? | Per-plugin callback rate (`/s`), peak rate, sync time; DOM write counts and writers |
 | Is it a plugin, the host, or the link? | Host event-loop p50/p99/max and link RTT/throughput, with threshold colours and an explicit "link ruled out" verdict |
 | Did disabling that plugin actually help? | The isolation experiment: 60s off, compared against its nearest baseline, with a noise floor |
+
+## 🧭 Division of labour with DSH's built-in developer tools
+
+DSH ships an experimental **Developer Tools** bundle (official group in the plugin manager: `NodeJS Inspector` / `Session data inspector`). It is a **foreground microscope**: breakpoints, Host console, network capture, raw session logs and the Cordis tree. This plugin is a **dashcam**: always-on, records frames / LoAF / event timing, and hands you an incident pack afterwards.
+
+| Question | Use |
+|---|---|
+| Why is it slow right now / breakpoints / network / session log / Cordis tree | Developer Tools |
+| How slow was that stall, who did it, can I review it afterwards | this plugin |
+
+They do not depend on each other. Developer Tools' Performance panel profiles the **Host CPU only**; on the Client side it offers Console evaluation and read-only Sources, **not a page rendering trace or frame data**. So this plugin's `devtools-trace` gap stays honest — installing Developer Tools does not close it. It also captures **every Host fetch, secrets included**, while this plugin's exports are redacted by subtraction; the two data models are deliberately separate.
+
+Shortcut: `Cmd/Ctrl+Shift+U` expands or collapses the HUD (macOS / Windows; Linux web does not allow this combination, so it is unbound; toggling does not steal focus from the composer).
 
 ## Install
 
@@ -259,7 +272,12 @@ is expensive in some usage", so do not read it as a causal proof.
    tunnel's own RTT p50 can be tens to hundreds of milliseconds while `curl` on the host takes a few. That is why
    the panel has a "link suspected" verdict and an explicit "link ruled out (host and tunnel both normal)" line —
    the number is not a bug.
-9. **All three hover linkages stay disabled, and their helper code has been deleted** (donut ↔ by-source/by-package
+10. **Host snapshots go stale; an incident window can be incomplete.** Host data arrives every 10s; after 25s it is
+    labelled "stale" and the verdict is downgraded, and with zero samples the panel never says "link ruled out".
+    `incident.integrity.captureComplete=false` means the capture itself dropped records (ring overflow or the
+    pre-window rolled out), and `manifest.complete` is `false` too — the file is still readable, but it is not the
+    complete 13 seconds; `hiddenGaps` is separate (rAF suspension, not data loss).
+11. **All three hover linkages stay disabled, and their helper code has been deleted** (donut ↔ by-source/by-package
    stacked bars ↔ cross table): the 2026-10-08 symptom was that moving a real mouse over the cross table's row
    labels made the **shell deactivate the whole panel entry** (the panel disappears, with `errors` empty,
    `window.onerror` silent and `__perfHud.enabled` still `true`) — it does **not** go through our own error
@@ -301,12 +319,12 @@ the offline suites assert its shape directly — a future UI rewrite or MCP serv
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 534 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 552 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 41 assertions: real index.js driven by a fake ctx
-# 586 offline assertions total, no running DSH required
+# 604 offline assertions total, no running DSH required
 ```
 
-The i18n dictionary now has **396 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
+The i18n dictionary now has **402 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
 
 Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
 

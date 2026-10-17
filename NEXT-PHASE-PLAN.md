@@ -19,7 +19,7 @@
 
 **下一轮(收尾)**:方案 1 已经落地(见上表):四个视图 + 开发者详情五标签页 + 设置,**现有能力一个都没删**。仍然留给下一轮的是:
 - **导出对话**:现在导出入口在「原始数据」标签页(整机 JSON / 事故包 / 诊断包 + 预览),概念图里那种"两个卡片 + 导出前预览"的独立对话**没做** —— 它要一次下载多个文件,而自研 store-only zip 两个都要用,两件事一起做更划算;
-- **P1**:~~自研 store-only zip(零依赖 + CRC32)~~ → **已落地**(`f92399e`,断言 591 → 603;`exportPack(id)` 现在一次下载一个 `-ai` / `-full` zip,预览给压缩包总大小)。仍然待做:可移植 Agent Skill(`skills/dsh-perf-diagnosis/`)、黄金样本;
+- **P1**:~~自研 store-only zip(零依赖 + CRC32)~~ → **已落地**(`f92399e`,断言 591 → 603;`exportPack(id)` 现在一次下载一个 `-ai` / `-full` zip,预览给压缩包总大小)。~~黄金样本~~ → **已落地**(`tests/fixtures/incident-real.json`:真页面 capture → report → 脱敏切片 + 形状/完整性断言;当前总数 604)。仍然待做:可移植 Agent Skill(`skills/dsh-perf-diagnosis/`);
 - **P2**:只读 MCP(等真实需求;`capabilities()` 与 `manifest.schemaVersion` 就是留给它的接口)。
 
 ---

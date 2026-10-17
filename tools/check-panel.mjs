@@ -33,6 +33,25 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	const errors = await page.evaluate(`window.__perfHud.snapshot().errors`);
 	check('面板渲染 0 错误(HudBoundary 没兜到东西)', Array.isArray(errors) && errors.length === 0, JSON.stringify(errors ?? null));
 
+	// macOS / Windows 的快捷键:真的发一次物理键,断言折叠态翻转,再翻回来。
+	// Linux Web 平台白名单不允许这个组合,不在这里测(客户端也没绑)。
+	if (process.platform === 'darwin' || process.platform === 'win32') {
+		const modifiers = process.platform === 'darwin' ? 12 : 10;   // meta+shift / ctrl+shift
+		const press = async () => {
+			await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'u', code: 'KeyU', windowsVirtualKeyCode: 85, nativeVirtualKeyCode: 85, modifiers });
+			await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'u', code: 'KeyU', windowsVirtualKeyCode: 85, nativeVirtualKeyCode: 85, modifiers });
+			await new Promise((resolve) => setTimeout(resolve, 250));
+		};
+		const collapsed = () => page.evaluate(`localStorage.getItem('dsh-perf-hud:collapsed') === '1'`);
+		const before = await collapsed();
+		await press();
+		const toggled = await collapsed();
+		check('快捷键 Cmd/Ctrl+Shift+U 切换折叠态', toggled !== before, JSON.stringify({ before, toggled }));
+		await press();
+		const back = await collapsed();
+		check('快捷键再按一次回到原状态', back === before, JSON.stringify({ before, back }));
+	}
+
 	// 只求值一次:**布尔**当断言(`false` 即失败),其它类型当诊断读数(打印出来,不影响通过)
 	const value = await page.evaluate(`(() => { try { return (${expression}); } catch (error) { return 'expr-threw: ' + error.message; } })()`);
 	const threw = typeof value === 'string' && value.startsWith('expr-threw: ');

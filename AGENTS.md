@@ -36,6 +36,27 @@
 - 不写任何自己的持久化状态到 profile;面板状态只进 `localStorage`。
 - 不改 `cordis.patch.yml`(它只负责把本包挂进组合),不改 profile 的持久化配置行。
 
+### 0.2 与 DSH 自带开发者工具的分工(2026-10-17)
+
+本机 DSH `0.2.1-rc.1` 里有一个实验性的**开发者工具**组合包(`@deepseek-ai/dsh-experimental-inspector-profile`,默认关闭):
+`NodeJS 诊断`(底部面板内嵌 Chrome DevTools:Host console / 断点 / Sources / Network / Performance / Memory / Cordis 树)
+与`会话数据诊断`(原始 session 日志 / chat group-node 树)。它是**前台显微镜**,不是记录器;边界也很明确:
+Client 侧只有 Console 求值与只读的 `lib/client.js` Sources,**没有页面渲染 trace / 堆 / 帧数据**;Performance 只采 Host CPU;
+界面只有英文;Host fetch 抓包不脱敏。
+
+两边**不重合**,也不允许互相依赖:
+
+| 想回答 | 用 |
+|---|---|
+| 现在为什么慢 / 断点 / 网络 / 原始会话日志 / Cordis 树 | 官方开发者工具 |
+| 刚刚那一下有多慢、是谁、能不能复盘 | 本插件 |
+| 回归 / 治理 / bisection | `dsh-performance-guard` / `dsh-perf-lens` / `@linxin666/dsh-perf` |
+
+三条硬性:① **不内嵌 DevTools、不连它的 CDP / Worker、不发布到 `ctx.inspector.publish`** —— 它是 experimental、可选、偏重,
+本插件的边界是"零运行时依赖 + 默认常开便宜";② 它抓全量 fetch **含密钥**,本插件的导出件继续走"减法脱敏";③
+它不给 Client 渲染 trace,所以事故包里的 `devtools-trace` 缺失**仍然成立**,不要把"装了开发者工具"写成"缺口已补"。
+完整对照与本轮采纳的三条可靠性规则见 [REVIEW.md](REVIEW.md) §3.6 与本文 §7.1。
+
 ---
 
 ## 1. 仓库硬约束
@@ -50,7 +71,7 @@
 
 ## 2. 环境与改动生效方式(决定你能不能验证)
 
-基线环境:DSH **`0.2.0-rc.2`**,profile 目录 `~/.dsh/profiles/web`,本仓库以 `link:` 装进该 profile
+基线环境:DSH **`0.2.1-rc.1`**,profile 目录 `~/.dsh/profiles/web`,本仓库以 `link:` 装进该 profile
 (`dsh plugin --profile web add /Users/y/workspace/dsh-perf-hud`)—— **宿主加载的就是这个检出**,所以下面这张表直接决定"你改的东西什么时候真的在跑":
 
 | 改动 | 生效方式 |
@@ -124,7 +145,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 534 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 552 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -185,8 +206,11 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **折叠组默认不做昂贵分析,现在由 `group()` 的 thunk 保证**:`group(key, label, summary, ...children)` 支持"唯一一个 child 且是个函数"的形式,折叠时**连函数体都不进**;五个调用点(`detail` / `cross` / `dom` / `host` / `tools`)全传 thunk,所以「取证明细」收起时脚本按包 / 交叉表 / 帧条一次都不算。代价要记住:`cross` 那一层仍嵌套在「取证明细」的 thunk 里 —— 一展开「取证明细」,调用方就先构造 `crossTable(scriptPkgTally())` 与 `kids` 数组(4×5 格,代价低),所以窗口聚合那份缓存不能省。
 - **可点 / 不可点的界线(不要做假按钮)**:可点 = 「按来源 / 按包」小表的**具名行**(→ `copyText` 复制「名字 + 毫秒」,成功/失败都照实写进 `state.copyNote`)、工具箱事故清单行(→ 选中)、帧条**有 LoAF 的格子**(→ 钉住那一帧)、组头(→ 折叠)、**可疑脚本的每一行**(→ 复制那条证据行);**不可点** = 堆叠条的**色段**本身(`cursor` 是 `default`)、「其余」那一行(它是合计数,没有单个名字可复制)。
 - **按钮按需出现,不留"点了没反应"的动作**:「全部折叠」只在**有组开着**时渲染(`anyGroupOpen()`),「恢复默认布局」只在 `layoutDirty()` 为真时渲染(有组开着 / 翻帧被钉住 / 手选了事故 / `scope` 不是 `worst` / 挂着一次性说明);两者都无意义时整行不渲染。新加"布局类"按钮前先问:默认状态下点它会发生什么?什么都不会发生就别显示。
-- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键(现在中英各 **396** 键)—— 两条断言钉住这件事(logic.mjs):**键集合必须一致**、**每个键都得有人引用**(撤下界面时留下的死键会被报出来;死键那条只认字面量 `t('…')` / `translate('…')`,真要加动态取键得先放宽它)。**兜底策略跟文档语言**:locale 服务不在时按 `document.documentElement.lang`(取不到退 `navigator.language`)选那本字典,不是中文就用英文 —— 写死中文会让英文用户看到中文,简单反转(`DICT.en ?? key`)又会让中文用户看到英文,两种都错。
+- **i18n 词典成对改**:`DICT.zh` 与 `DICT.en` 同时加键(现在中英各 **402** 键)—— 两条断言钉住这件事(logic.mjs):**键集合必须一致**、**每个键都得有人引用**(撤下界面时留下的死键会被报出来;死键那条只认字面量 `t('…')` / `translate('…')`,真要加动态取键得先放宽它)。**兜底策略跟文档语言**:locale 服务不在时按 `document.documentElement.lang`(取不到退 `navigator.language`)选那本字典,不是中文就用英文 —— 写死中文会让英文用户看到中文,简单反转(`DICT.en ?? key`)又会让中文用户看到英文,两种都错。
 - **插桩必须可还原**:包装 `setTimeout/setInterval/rAF` 与 `appendChild/insertBefore/setAttribute` 时,保存原生引用、只在"当前仍是我们那个 wrapper"时才还原(避免踩掉别人的包装)。
+- **异步读取统一走 `fetchTextWithin` / `fetchJsonWithin`**(各自有命名 deadline;`stop()` abort 当前代;失败只写 `timeout` / `cancelled`)。源码里的 `fetch(` 必须带 `signal:`,有静态断言;不许再出现裸 fetch。
+- **缓存有上限**:sourcemap 分段表只留最近 `MAP_CACHE_MAX`(8)个 rev,写满配额时先淘汰可重建的 map;内存 `bundleMaps` 同样走 LRU,别让一次长会话把旧 rev 全留住。
+- **快捷键只走 `ctx.shortcuts` 可选注入**:macOS / Windows 绑 `Cmd/Ctrl+Shift+U`;Linux Web 的平台白名单不允许这个组合,不硬塞默认绑定。收起/展开**不抢焦点** —— 外壳在键盘命令之后会把焦点还给输入框,跟它抢只会让用户丢焦点。
 - **改 `client.js` 一律用带锚点的小批次**:一次替换一个可唯一匹配的片段,失败即整批作废。本项目有**两次**"整段替换吞掉相邻声明"的事故(§8 第 7 条)。
 
 ---
@@ -292,6 +316,20 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **判色阈值同时写进导出 JSON 的 `context.thresholds`**;导出件还带场景 / 空闲秒数 / 精确归因与每个 map 的状态 / 宿主路由与 profile、Node、插件版本 / 实验候选与方法 —— 这是"文件离开现场后仍能自证口径"的设计,改读数口径时**必须同步改它**。
 - **隔离实验**:所有窗口注入同一份合成负载(每 250ms 燃烧 8ms,走未插桩的 `natives.setInterval`,只烧 CPU 不动 DOM 以免污染归因表);每个候选只跟**紧邻基线**对照(A/B/A),**噪声底** = 基线↔基线漂移的最大绝对值,Δ 小于它一律标「噪声内」;窗口含流式标「不可比」且**不给结论**。它测的是**固定开销**,不是"该插件在某种用法下才贵"。
 
+### 7.1 记录器可靠性三条(2026-10-17,来自官方 Inspector 的参考)
+
+1. **异步必须有 deadline 与代际**:所有会 pending 的网络读取都走 `fetchTextWithin` / `fetchJsonWithin`
+   (各自有命名上限:宿主 5s、sourcemap / 脚本文本 20s、probe 30s);`stop()` abort 当前代,旧代的结果一律丢弃。
+   失败只允许写成 `timeout` / `cancelled`,不允许永远停在 `text-pending`。静态断言:源码里的 `fetch(` 必须带
+   `signal:` 或经上述 helper(`tests/logic.mjs`)。
+2. **宿主快照四态**:`live` / `warming` / `stale` / `unsupported`。没有样本时 `p50/p99` 不许渲染成 `nullms`,
+   `infraVerdict()` 不许在零样本时给「链路已排除」。`hostAt` 超过 2.5 个轮询周期标「Ns 前」并降级判定;
+   `eventLoopLive=false` 写"宿主未采到";宿主恢复后事件监听要重试(不能因为第一次 404 就永久 `hostWatchAsked`)。
+3. **事故窗口要盖完整性章**:LoAF / longtask 条目带 `seq`;窗口落定时算 `expected - kept`,写进
+   `incident.integrity = { captureComplete, loafDropped, longTaskDropped, reasons }`。`captureComplete=false` 时
+   事故包 `missing` 加一行、manifest 标 `complete:false`、面板写「现场不完整」。`hiddenGaps`(rAF 挂起)是
+   另一个维度,不混进 `captureComplete`。改这个结构要升 `PACK_SCHEMA_VERSION`。
+
 ---
 
 ## 8. 已知坑与已证伪的死路
@@ -377,7 +415,7 @@ DOM 写入挪进「DOM 与堆」、`回调归因` 未插桩时降级成一行 `�
 分流点只有 `detailContext()` 一处;历史帧条是**导航器**(240 列,每列取该列最差的一帧,点击映射回 `incident.frames` 里的真实记录,
 rAF 挂起的区间留白),四个方向翻帧(没有下一条就禁用),选中帧的分解 / 脚本 / long task / 证据全部只吃那一帧(缺就是缺,不回退);
 归因状态收敛成**已确认 / 可疑 / 未归因**三档并去掉"更像 rAF 被节流"这类把可能写成结论的说法;诊断上下文落盘 `LS_WATCHUI`,
-刷新后仍停在同一条事故的同一帧。`npm test` 现在 **586** 条(attribution 11 / logic 534 / host 41),CI 门禁与文档同步成 `-eq 586`;
+刷新后仍停在同一条事故的同一帧。`npm test` 现在 **604** 条(attribution 11 / logic 552 / host 41),CI 门禁与文档同步成 `-eq 604`;
 真页面验收:`check-panel` / `check-storage` / `check-interaction` / **新增 `tools/check-incident.mjs`** 四个验证器 **ALL PASS**(见 REVIEW §2)。
 
 **仍然存在的债(套件是绿的 ≠ 它们没问题)**:

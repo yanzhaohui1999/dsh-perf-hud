@@ -58,7 +58,13 @@ await withPage({ port, url: undefined }, async (page) => {
 	await page.evaluate(`window.__perfHud.clearIncidents()`);
 	const incident = await page.evaluate(`(async () => {
 		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-		for (let attempt = 0; attempt < 20; attempt += 1) {
+		for (let attempt = 0; attempt < 60; attempt += 1) {
+			// 先等自动捕获的后摇结束;每次尝试前清一次留存清单(severity=0 的手动标记会被挤掉)。
+			if (window.__perfHud.watch().pending !== null) {
+				await sleep(500);
+				continue;
+			}
+			window.__perfHud.clearIncidents();
 			const result = window.__perfHud.capture('截图样本:主界面卡了一下 token=demo-not-a-real-token');
 			if (result !== null && result !== undefined && result.ok === true && result.incident !== null && result.incident !== undefined) {
 				await sleep(300);
