@@ -270,6 +270,33 @@ process.exitCode = failed === 0 ? 0 : 1;
 			bare.filter((name) => !declared.has(name) && !GLOBALS.has(name) && !CSS_FUNCS.has(name)), []);
 	}
 
+	// ── 头部工具条:一行永不换行、显式分组、只有标题可以让位 ─────────────────────
+	// 回归的是这个 bug:工具条里每个元素都是 `flex: 0 0 auto`(§5「标签不收缩」原本是给**数据行**
+	// 写的规则),宽度一超,浏览器就按 DOM 顺序把尾部三个控件丢到第二行、还左对齐 —— 于是它们看着
+	// 像下面那一块的按钮。主界面一行放得下、卡顿详情放不下,所以"两个头部的按钮位置关系不一样",
+	// 而它们本来是同一类全局控件。
+	{
+		const headLine = line('head: {');
+		const brandLine = line('brand: {');
+		const headAt = source.indexOf("const head = h('div'");
+		const headEnd = source.indexOf('if (open === false) {', headAt);
+		const headBlock = headAt === -1 || headEnd === -1 ? '' : source.slice(headAt, headEnd);
+		check('头部一行永不换行,且显式分成左右两组(不再靠某个元素上的 margin-left:auto 假装分组)',
+			[/wrap/.test(headLine), /S\.headLeft/.test(headBlock), /S\.headRight/.test(headBlock), /marginLeft: 'auto'/.test(headBlock)],
+			[false, true, true, false]);
+		check('头部只有标题可以让位(min-width:0 + ellipsis + nowrap),控件永远留在第一行',
+			[/minWidth: 0/.test(brandLine), /textOverflow: 'ellipsis'/.test(brandLine), /whiteSpace: 'nowrap'/.test(brandLine)],
+			[true, true, true]);
+		check('头部按钮预算 ≤4 个(返回 / 设置 / 收起 / 关闭 —— 任何视图都一样)',
+			(headBlock.match(/h\('button'/g) ?? []).length <= 4, true);
+		check('「深录」不进标题栏(它在开发者详情的标签页行与设置页;标题栏是不可换行的那一行)',
+			[/deepShort/.test(headBlock), /deepShort/.test(extract(source, 'function devTabRow('))], [false, true]);
+		check('头部"文字让位、控件不让位":标题与场景标签都可省略(场景那一格 flex 从 0 0 auto 改成可收缩)',
+			[/(?:\.\.\.S\.label)[^)]*flex: '0 1 auto'/.test(headBlock), /textOverflow: 'ellipsis'/.test(headBlock)], [true, true]);
+		check('子页标题不再拼品牌名(品牌名进悬停;标题与下面那行上下文标题不再重复说"我在哪")',
+			[/t\('title'\)\} · /.test(headBlock)], [false]);
+	}
+
 	// A4:交互延迟这一层"只进导出件",而且必须两个导出件都带(事故包只带窗口内的)
 	check('A4:交互延迟进两个导出件(事故包按窗口过滤)',
 		[/interactionsInWindow: interactions\.length/, /const interactions = \(state\.watch\.interactions \?\? \[\]\)\.filter/, /records: state\.watch\.interactions,/].every((re) => re.test(source)), true);
@@ -782,6 +809,12 @@ check('正文文案不含 markdown 记号(`**` / 反引号),带记号的一律�
 		.filter((key) => MARKDOWN_TITLE_ONLY.has(key) === false), []);
 check('上面那份黑白名单没有过期条目(键都还在词典里)',
 	[...MARKDOWN_TITLE_ONLY].filter((key) => Object.hasOwn(box.DICT.zh, key) === false), []);
+// 头部标题(= 视图名)的长度预算:它是那一行里唯一**可以让位**的文字,所以它超预算时界面会
+// 悄悄出省略号而不是报错 —— 这条断言把"又写长了"变成红灯。en 那一档按最长的 `Developer details` 定。
+check('头部视图名的长度预算(zh ≤5 字 / en ≤17 字符;品牌名不再拼进标题)',
+	[['viewDev', 'viewIncident', 'viewSettings'].every((key) => box.DICT.zh[key].length <= 5),
+		['viewDev', 'viewIncident', 'viewSettings'].every((key) => box.DICT.en[key].length <= 17)],
+	[true, true]);
 check('C2:兜底跟文档语言走(zh → 中文,其余含认不出来 → 英文),不是写死中文', (() => {
 	const read = (lang, navLang) => {
 		box.document.documentElement.lang = lang;

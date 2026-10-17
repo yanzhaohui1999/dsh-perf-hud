@@ -77,9 +77,9 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 
 	const ctxIncident = await contextBar(page);
 	check('详情区第一行是**历史事故**上下文(不是实时那一支)', typeof ctxIncident === 'string' && ctxIncident.includes('历史事故') && ctxIncident.includes('历史帧'), JSON.stringify(ctxIncident));
-	check('卡顿详情视图是独立一屏(标题带视图名,而且有「← 返回」)', (await page.evaluate(`(() => {
+	check('卡顿详情视图是独立一屏(标题带视图名,而且有返回箭头)', (await page.evaluate(`(() => {
 		const head = document.querySelector('#dsh-perf-hud-root').innerText.split(String.fromCharCode(10))[0];
-		const back = [...document.querySelectorAll('#dsh-perf-hud-root button')].some((node) => node.textContent.trim() === '← 返回');
+		const back = [...document.querySelectorAll('#dsh-perf-hud-root button')].some((node) => node.textContent.trim() === '←');
 		return { head, back };
 	})()`)).back === true, '');
 	check('事故回放的时间轴在场(历史帧条)', (await frameCount(page)) > 0);
@@ -93,12 +93,12 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 			leaked: ['帧里花在哪', '可疑脚本', '按包', 'Long Task', '交叉表'].filter((needle) => text.includes(needle)),
 			timeline: text.includes('历史帧时间轴'),
 			actions: ['复制摘要', '导出事故包'].filter((label) => text.includes(label)).length,
-			back: [...document.querySelectorAll('#dsh-perf-hud-root button')].filter((node) => node.textContent.trim() === '← 返回').length,
+			back: [...document.querySelectorAll('#dsh-perf-hud-root button')].filter((node) => node.textContent.trim() === '←').length,
 		};
 	})()`);
 	check('卡顿详情分层:结论层在场(时间轴 + 复制摘要 + 导出事故包),技术读数默认收起在「技术细节」里',
 		layers.pill === true && layers.leaked.length === 0 && layers.timeline === true && layers.actions === 2, JSON.stringify(layers));
-	check('同屏只有一个「← 返回」(返回只属于标题栏)', layers.back === 1, String(layers.back));
+	check('同屏只有一个返回键(返回只属于标题栏)', layers.back === 1, String(layers.back));
 	check('面板没有渲染错误', (await errors(page)).length === 0, JSON.stringify(await errors(page)));
 
 	// 帧条:点一根柱子 → 选中的帧必须换(标题与耗时同步更新)
@@ -174,11 +174,11 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 		`${JSON.stringify(beforeReload)} → ${JSON.stringify(afterReload)}`);
 	check('刷新之后面板依然没有渲染错误', (await errors(page)).length === 0, JSON.stringify(await errors(page)));
 
-	// 三个视图都真的能进:「← 返回」→ 主界面 → 开发者详情(5 个标签页)→ 设置
-	const leave = await clickText(page, '← 返回');
+	// 三个视图都真的能进:「←」→ 主界面 → 开发者详情(5 个标签页)→ 设置
+	const leave = await clickText(page, '←');
 	const mainView = await page.evaluate(`(() => {
 		const text = document.querySelector('#dsh-perf-hud-root').innerText;
-		return { has: text.includes('当前状态') && text.includes('可能原因'), back: [...document.querySelectorAll('#dsh-perf-hud-root button')].some((node) => node.textContent.trim() === '← 返回') };
+		return { has: text.includes('当前状态') && text.includes('可能原因'), back: [...document.querySelectorAll('#dsh-perf-hud-root button')].some((node) => node.textContent.trim() === '←') };
 	})()`);
 	check('「← 返回」回到主界面(那一屏只回答五个问题,不再挂返回按钮)',
 		leave === 'clicked' && mainView.has === true && mainView.back === false, JSON.stringify(mainView));

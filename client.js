@@ -6712,7 +6712,7 @@ window.__ModuleLoader__.load({
 				packReadmePrivacy: '包内不含聊天正文、提示词、Cookie、Token 与请求头(不是筛掉了,是本来就没采);页面地址只保留 origin + path,用户目录降级成 ~,UA 只留主版本与系统。这是减法,不是匿名化。',
 				packReadmeNotes: '在别的工具里读 incident.json 时:帧的 t 是页面时间轴毫秒,要靠 incident.env.perfOrigin 换成墙钟;loaf 与 frames 是同一信号的两个视图,别相加;blocking 可以是 0 而这一帧仍然很重。',
 				// ── 视图模型(方案 1:主界面 / 卡顿详情 / 开发者详情 / 设置)──
-				viewDev: '开发者详情', viewSettings: '设置', back: '← 返回',
+				viewDev: '开发者详情', viewSettings: '设置', back: '←',
 				// ⚠️ 这一组是补上来的:上一轮它们**只被引用、没进词典**,面板上直接印出了 key 名
 				// (viewIncident / packFilesLabel / storageKeys …)。新加的"引用的键必须在词典里"那条断言
 				// 专门挡这一类 —— 死键断言管不到它。
@@ -6918,7 +6918,7 @@ window.__ModuleLoader__.load({
 				packReadmePrivacy: 'The pack contains no chat text, prompts, cookies, tokens or request headers (never collected, not filtered out); page URLs keep origin + path only, home directories become ~, and the UA keeps just the major version and OS. This is subtraction, not anonymisation.',
 				packReadmeNotes: 'When reading incident.json elsewhere: frame t is page-timeline milliseconds and needs incident.env.perfOrigin to become wall clock; loaf and frames are two views of one signal, never add them; blocking can be 0 while the frame is still heavy.',
 				// view model (scheme 1: main / incident detail / developer details / settings)
-				viewDev: 'Developer details', viewSettings: 'Settings', back: '← Back',
+				viewDev: 'Developer details', viewSettings: 'Settings', back: '←',
 				viewIncident: 'Stall detail', backHint: 'Back to the overview (that screen only answers five questions)',
 				packFilesLabel: 'diagnostic pack', packFilesHint: 'the AI path: format note + summary + raw evidence + how to read it',
 				packFilesValue: 'manifest.json · summary.md · incident.json · README.md',
@@ -7033,8 +7033,19 @@ window.__ModuleLoader__.load({
 					? { width: 396, maxHeight: '82vh', overflowY: 'auto', overflowX: 'hidden', padding: '10px 12px' }
 					: { padding: '6px 10px' }),
 			}),
-			head: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-			brand: { fontWeight: 700, fontSize: 14, color: 'var(--dsw-alias-label-primary)' },
+			// ⚠️ **头部一行永不换行**(以前是 flexWrap: 'wrap'):那一行里每个元素都是 `flex: 0 0 auto`
+			// (见下面 label / btn 那两条"不收缩"规则),一旦总宽超了就按 DOM 顺序把**尾部的控件整组**
+			// 丢到第二行、还左对齐 —— 看上去像下面那一块的按钮。现在分成显式两组:左组可压缩
+			// (标题 ellipsis 先让位),右组是不可让步的控件。分组也不再靠某个元素上的 margin-left:auto
+			// (那个技巧只在它所在的那一行生效,一换行就散)。
+			head: { display: 'flex', alignItems: 'center', gap: 6 },
+			headLeft: { display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 auto', minWidth: 0, overflow: 'hidden' },
+			headRight: { display: 'flex', alignItems: 'center', gap: 6, flex: '0 0 auto' },
+			// 工具条的按钮比正文里的按钮窄一点(padding 8→6):这一行是不可换行的,省下的 4px × 3
+			// 就是"标题还能不能完整显示"的差价(实测:不收紧时 zh 详情页差 14px,标题被裁到 48px)
+			headBtn: { padding: '2px 6px' },
+			// 标题是这一行里唯一可以让步的元素:窄了出省略号,而不是把控件挤到第二行。
+			brand: { fontWeight: 700, fontSize: 14, color: 'var(--dsw-alias-label-primary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 			row: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginTop: 4 },
 			// 标签不换行、不收缩(原来 flex:1 1 auto 会被长数值挤成一字一行);
 			// 数值占满剩余宽度、右对齐、必要时在自己那一列换行。
@@ -7449,7 +7460,13 @@ window.__ModuleLoader__.load({
 			return kids;
 		}
 
-		/** 开发者详情的标签页行:一次看一组,不把技术数据全铺在一屏(能力一个都没删)。 */
+		/**
+		 * 开发者详情的标签页行:一次看一组,不把技术数据全铺在一屏(能力一个都没删)。
+		 * 尾部跟着「深录」—— 它是插桩开关(有代价、默认关),只属于这一屏与设置页。**它不放在
+		 * 标题栏里**:那一行是不可换行的工具条(见 S.head 的说明),而它是唯一"只在某一屏出现"的
+		 * 控件 —— 实测把这一屏的标题挤到 21px(≈1.5 字)。这一行本来就换行(五个标签页本来就两行),
+		 * 多它一个不增高。
+		 */
 		function devTabRow(props) {
 			const t = translate;
 			const tab = props.tab;
@@ -7464,7 +7481,13 @@ window.__ModuleLoader__.load({
 				row('dom', t('devTabDom'), t('devTabDomHint')),
 				row('host', t('devTabHost'), t('devTabHostHint')),
 				row('tools', t('devTabTools'), t('devTabToolsHint')),
-				row('raw', t('devTabRaw'), t('devTabRawHint')));
+				row('raw', t('devTabRaw'), t('devTabRawHint')),
+				h('button', {
+					type: 'button',
+					style: { ...S.btn, color: state.deep ? 'var(--dsw-alias-brand-primary)' : undefined },
+					title: t('deepHint'),
+					onClick: () => setDeep(state.deep === false),
+				}, `${t('deepShort')}${state.deep ? '✓' : ''}`));
 		}
 
 		/**
@@ -7950,7 +7973,7 @@ window.__ModuleLoader__.load({
 				frame === null ? null : `${Math.round(frame.ms ?? 0)}ms`,
 				h('button', { type: 'button', style: S.btn, title: t('backToLiveHint'), onClick: showLiveMode }, t('backToLive'))));
 			// 这一屏**唯一**的动作条:返回在标题栏(每个视图都有),这里只回答"这条事故怎么办"。
-			// 以前它在视图外面又写了一份返回 + 这两个动作 —— 同屏两个「← 返回」,位置还不一样。
+			// 以前它在视图外面又写了一份返回 + 这两个动作 —— 同屏两个「←」返回,位置还不一样。
 			kids.push(h('div', { style: S.buttons },
 				h('button', { type: 'button', style: S.btn, title: t('copySummaryHint'), onClick: () => copyText(incidentSummaryText(row), t('copySummary')) }, t('copySummary')),
 				h('button', { type: 'button', style: S.btn, title: t('exportIncidentBtnHint'), onClick: () => exportIncident(row.id) }, t('exportIncidentBtn'))));
@@ -8201,21 +8224,19 @@ window.__ModuleLoader__.load({
 			const view = state.view === 'incident' && state.watch.mode !== 'incident' ? 'main' : state.view;
 			const viewTitle = view === 'dev' ? t('viewDev') : view === 'settings' ? t('viewSettings') : t('viewIncident');
 			const head = h('div', { style: S.head },
-				h('span', { style: S.brand }, view === 'main' ? t('title') : `${t('title')} · ${viewTitle}`),
-				view === 'main' ? null : h('button', { type: 'button', style: S.btn, title: t('backHint'), onClick: () => setView('main') }, t('back')),
-				h('span', { style: { ...S.label, color: scene.color } }, scene.text),
-				h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(1)} fps`),
-				// 「深录」是插桩开关(有代价、默认关):它只属于**开发者详情**那一屏与设置页。
-				// 以前它在每个视图的标题栏里都有一份,普通用户在卡顿详情里看到它只能猜。
-				view === 'dev' ? h('button', {
-					type: 'button',
-					style: { ...S.btn, color: state.deep ? 'var(--dsw-alias-brand-primary)' : undefined },
-					title: t('deepHint'),
-					onClick: () => setDeep(state.deep === false),
-				}, `${t('deepShort')}${state.deep ? '✓' : ''}`) : null,
-				h('button', { type: 'button', style: S.btn, title: t('settingsHint'), onClick: () => setView(view === 'settings' ? 'main' : 'settings') }, t('viewSettings')),
-				h('button', { type: 'button', style: S.btn, title: open ? t('collapse') : t('expand'), onClick: toggle }, open ? '–' : '+'),
-				h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff')));
+				h('div', { style: S.headLeft },
+					// 子页只写视图名:「性能 HUD ·」那一段与下面第一行的上下文标题(`历史事故 i35xx · 历史帧 …`)
+					// 说的是同一件事(我在哪),而它是这一行里唯一能让位的文字。品牌名进悬停。
+					h('span', { style: S.brand, title: t('title') }, view === 'main' ? t('title') : viewTitle),
+					view === 'main' ? null : h('button', { type: 'button', style: { ...S.btn, ...S.headBtn }, title: t('backHint'), onClick: () => setView('main') }, t('back')),
+					// 场景标签与标题一样是**文字**,一样可以让位(先出省略号):不变的是控件。
+					// 少了这一条,开发者详情那一屏(返回 + 深录 + 设置 + 收起 + 关闭)在 zh 下仍会超 ~16px。
+					h('span', { style: { ...S.label, color: scene.color, flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, scene.text),
+					h('span', { style: { ...S.num, flex: '0 0 auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(1)} fps`)),
+				h('div', { style: S.headRight },
+					h('button', { type: 'button', style: { ...S.btn, ...S.headBtn }, title: t('settingsHint'), onClick: () => setView(view === 'settings' ? 'main' : 'settings') }, t('viewSettings')),
+					h('button', { type: 'button', style: { ...S.btn, ...S.headBtn }, title: open ? t('collapse') : t('expand'), onClick: toggle }, open ? '–' : '+'),
+					h('button', { type: 'button', style: { ...S.btn, ...S.headBtn }, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff'))));
 
 			if (open === false) {
 				// 折叠不是"看不见":至少留下 fps / 最差帧 / 最差 longtask 三个读数。

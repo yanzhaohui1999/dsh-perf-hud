@@ -93,12 +93,23 @@ export async function withPage(options, run) {
 			}
 			return out.result.value;
 		};
-		/** 等 HUD 挂上、面板渲染出来(首次加载要跑完 web boot)。 */
+		/**
+		 * 等 HUD 挂上、面板渲染出来(首次加载要跑完 web boot)。
+		 * ⚠️ 判据是**根节点存在且文本非空**,不是"文本里含『性能 HUD』":子页标题现在只写视图名
+		 * (品牌名进了悬停),而 profile 里落盘的视图是滚动的 —— 认文案的写法会在"上次停在开发者详情"
+		 * 时报"boot 失败,或槽位条目被外壳停用",把人指向完全错误的方向(实测踩过)。
+		 * `#dsh-perf-hud-root` 是稳定的 DOM 约定(见 AGENTS §2.2),关面板 / 药丸 / 渲染错误三种降级态
+		 * 也都有它,所以"根节点在 + 文本非空"就等于"条目渲染出来了"。
+		 */
 		const waitForHud = async (tries = 60) => {
 			for (let i = 0; i < tries; i += 1) {
 				await sleep(500);
 				try {
-					const ready = await evaluate(`typeof window.__perfHud !== 'undefined' && document.body.innerText.includes('性能 HUD')`);
+					const ready = await evaluate(`(() => {
+						if (typeof window.__perfHud === 'undefined') return false;
+						const node = document.getElementById('dsh-perf-hud-root');
+						return node !== null && node.innerText.trim() !== '';
+					})()`);
 					if (ready === true) return true;
 				} catch { /* 文档还在换 */ }
 			}

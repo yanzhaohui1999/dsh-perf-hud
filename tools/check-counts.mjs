@@ -283,12 +283,12 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	const devLeaks = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
 	check('开发者详情 / 原始数据这一屏没有漏成 key 的文案(引用的键都在词典里)',
 		leakedKeys(devLeaks), []);
-	await clickText(evaluate, '← 返回');
+	await clickText(evaluate, '←');
 	await clickText(evaluate, '查看这次卡顿').catch(() => 'missing');
 	const incidentLeaks = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
 	check('卡顿详情这一屏也没有漏成 key 的文案',
 		leakedKeys(incidentLeaks), []);
-	await clickText(evaluate, '卡顿详情 ← 返回').catch(() => 'missing');
+	await clickText(evaluate, '卡顿详情 ←').catch(() => 'missing');
 
 
 	// ── 活过刷新:以**落盘的那份**为基准(活页面读数会继续涨) ──

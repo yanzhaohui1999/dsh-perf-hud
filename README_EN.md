@@ -112,7 +112,7 @@ The panel has **four views**, one at a time (only the view name is persisted, ne
 | View | For | Answers |
 |---|---|---|
 | **Overview** (default) | everyday users | Is it smooth right now / how long was the last stall and when / what might have caused it (each candidate with its **support and limits**) / how many stalls in the last hour or 24 hours and whether a lead repeats; the two primary actions are "view this stall" and "export the diagnostic report" |
-| **Stall detail** | looking at that one stall | Its own screen with "← Back"; **the conclusion layer only** — window scope, attribution state, the real timeline with its navigation (◀ prev / next ▶ plus an "only bad" filter) and the two actions for this incident (copy summary / export pack). **All technical readings sit in a collapsed "technical details" group** (frame breakdown / script split / overlapping long tasks / suspect scripts / package × source / definitions); the data still comes from **its own** incident pack |
+| **Stall detail** | looking at that one stall | Its own screen with a back arrow ("←", hover says "back to the overview"); **the conclusion layer only** — window scope, attribution state, the real timeline with its navigation (◀ prev / next ▶ plus an "only bad" filter) and the two actions for this incident (copy summary / export pack). **All technical readings sit in a collapsed "technical details" group** (frame breakdown / script split / overlapping long tasks / suspect scripts / package × source / definitions); the data still comes from **its own** incident pack |
 | **Developer details** | developers | 5 tabs: **Frames & blame** / **DOM & heap** / **Host & link** / **Toolbox** / **Raw data** — nothing was removed, it moved from one long screen with folded groups into one group per tab (the "deep" switch lives in this screen's title bar and in Settings) |
 | **Settings** | everyone | Capture mode (night watch always on / deep recording explicit), retention policy, privacy and redaction |
 
@@ -137,7 +137,7 @@ The five tabs of **developer details** (nothing was removed, it is just split in
 ### How to reach each screen
 
 1. **Expand** the pill with `+` → the **overview** (the pill shows fps / worst frame / stalls detected in the last 24 hours);
-2. **That one stall**: "view this stall" → **stall detail** ("← Back" returns to the overview);
+2. **That one stall**: "view this stall" → **stall detail** ("←" returns to the overview);
 3. **Technical data**: "developer details" at the bottom → five tabs; the "settings" button in the header → settings;
 4. **Hand it to an AI**: "export diagnostic report" → a **preview card** first (four files + zip size + "notes: blanked") → "generate and export" downloads **one zip**;
 5. **Local debugging**: developer details · raw data has "full technical export (keeps notes)" — that one **keeps** the notes you typed, it is not redacted, so do not hand it out as-is.
@@ -160,7 +160,7 @@ so it has to be cheap, switchable and reversible itself:
 |---|---|---|---|
 | **Night watch** (default) | always on | per-frame ring buffer + LoAF observer + interaction timing; keeps the worst 10 stalls plus one worst-per-day | **zero instrumentation**: only the rAF loop that is already running and two `PerformanceObserver`s; patches nothing |
 | **Live view** | you open the panel | overview / worst event / top-3 callback attribution / the night-watch line; the other five groups collapse | **the same tier as night watch** — opening the panel does not change what is measured |
-| **Deep record** | the "deep" switch in the Developer-details title bar / Settings | only then are `setTimeout` / `setInterval` / `rAF` and the DOM-write hooks wrapped, and the 12MB combo sourcemap is fetched (precise attribution) | has a cost and must be turned on explicitly; switching it off restores the natives immediately |
+| **Deep record** | the "deep" switch in the Developer-details tab row / Settings | only then are `setTimeout` / `setInterval` / `rAF` and the DOM-write hooks wrapped, and the 12MB combo sourcemap is fetched (precise attribution) | has a cost and must be turned on explicitly; switching it off restores the natives immediately |
 
 The panel is layered: only "is it smooth + whose fault" is always visible; the other **five** groups
 (forensics / technical details / pkg × source / DOM & heap / host & link / toolbox — "pkg × source" is nested inside
