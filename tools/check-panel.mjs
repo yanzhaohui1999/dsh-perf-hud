@@ -8,8 +8,9 @@
  * 参数:`--expr=<js>`(布尔表达式,`false` 即失败)、`--url=`、`--port=`、`--keep`(留着 Chrome 看现场)。
  *
  * 这不是离线门禁:`npm test` / CI 里没有它 —— 它要真浏览器 + 本机跑着 `dsh web`(token 从
- * `~/Library/Logs/ai.dsh.web.log` 取,见 tools/cdp.mjs 的说明)。它挡的是 AGENTS §8 第 14 条那类
- * 事故:文件语法没错、三套件全绿,但插件激活或渲染在浏览器里失败,面板整块消失。
+ * `~/Library/Logs/ai.dsh.web.log` 取,见 tools/cdp.mjs 的说明)。它挡的是 AGENTS §8 与
+ * docs/dead-ends.md 第 14 条那类事故:文件语法没错、三套件全绿,但插件激活或渲染在浏览器里
+ * 失败,面板整块消失。
  */
 import { withPage } from './cdp.mjs';
 

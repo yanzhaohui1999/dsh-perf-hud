@@ -10,7 +10,7 @@
  *
  * ⚠️ 与 `tools/check-*.mjs` 一样:**不是离线门禁**(要真浏览器 + 本机跑着 `dsh web`)。
  * ⚠️ 被强杀的验收器会留下 headless Chrome 占着 profile 与端口,让后续跑**挂死** ——
- *    先 `pkill -f 'remote-debugging-port=93'`,再 `rm -rf /tmp/dsh-perf-hud-chrome-*`(见 AGENTS §2.2)。
+ *    先 `pkill -f 'remote-debugging-port=93'`,再 `rm -rf /tmp/dsh-perf-hud-chrome-*`(见 docs/verification.md 的残留 Chrome 处置)。
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { withPage } from './cdp.mjs';

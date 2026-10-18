@@ -2,7 +2,7 @@
  * 真实页面的验证底座:起一个 headless Chrome,用 CDP 直连把 DSH 页面交给调用方。
  *
  * 为什么需要它:离线三套件只抽纯函数,**不跑 `apply()` / `start()` / 渲染**。所以"改完面板
- * 路径要真打开一次页面"这条规矩(AGENTS §8 第 14 条)得有个可复用的实现,而不是每次手写一段 CDP。
+ * 路径要真打开一次页面"这条规矩(AGENTS §8;那两次代价见 docs/dead-ends.md 第 14 条)得有个可复用的实现,而不是每次手写一段 CDP。
  *
  * 它**不是离线门禁**:需要本机跑着 `dsh web`(默认 `127.0.0.1:3080`)、装着 Chrome。`npm test`
  * 里没有它,CI 里也没有 —— 用它的是 `tools/check-*.mjs`。
@@ -98,7 +98,7 @@ export async function withPage(options, run) {
 		 * ⚠️ 判据是**根节点存在且文本非空**,不是"文本里含『性能 HUD』":子页标题现在只写视图名
 		 * (品牌名进了悬停),而 profile 里落盘的视图是滚动的 —— 认文案的写法会在"上次停在开发者详情"
 		 * 时报"boot 失败,或槽位条目被外壳停用",把人指向完全错误的方向(实测踩过)。
-		 * `#dsh-perf-hud-root` 是稳定的 DOM 约定(见 AGENTS §2.2),关面板 / 药丸 / 渲染错误三种降级态
+		 * `#dsh-perf-hud-root` 是稳定的 DOM 约定(见 docs/verification.md 的验收器 DOM 约定),关面板 / 药丸 / 渲染错误三种降级态
 		 * 也都有它,所以"根节点在 + 文本非空"就等于"条目渲染出来了"。
 		 */
 		const waitForHud = async (tries = 60) => {

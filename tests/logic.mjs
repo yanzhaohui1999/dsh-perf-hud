@@ -287,7 +287,7 @@ process.exitCode = failed === 0 ? 0 : 1;
 	}
 	{
 		// 新加的那几个渲染辅助函数定义在 `function PerfHud(` **之前**,所以旧的"渲染区裸调用"静态检查
-		// 盖不到它们 —— 这里对它们单独跑同一条分析(§8 第 7 条那类事故的回归)。
+		// 盖不到它们 —— 这里对它们单独跑同一条分析(docs/dead-ends.md 第 7 条那类事故的回归)。
 		const helpers = ['function contextBar(', 'function ringBlock(', 'function scriptBreakdownRows(', 'function evidenceBlock(',
 			'function crossBlock(', 'function liveFramePickRow(', 'function timelineBlock(', 'function longTaskBlock(',
 			'function verdictBlock(', 'function techGroup(', 'function techSummary(', 'function incidentDetail(', 'function liveDetail(',

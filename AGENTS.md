@@ -215,15 +215,14 @@ URL 形态、分段换算、四条腿边界、宿主 API、`locale/` 的 ENOENT 
 
 ## 8. 已知坑
 
-最容易付代价的几条:
+最容易付代价的几条(**规则本身在 §1 / §5,这里只记症状与代价**):
 
-1. **不凭记忆写 API** —— 每一步都来自当场读源码或实测。
-2. **改 `client.js` 用带锚点的小批次** —— 两次"整段替换吞掉相邻声明",面板整块被外壳停用。
-3. **插桩必须可还原** —— 只在"当前仍是我们那个 wrapper"时才还原。
-4. **改渲染 / `apply()` / `start()` 必须真开一次页面** —— `node --check` 与三套件看不出模块作用域的裸标识符,也看不出只在该路径抛的错。
-5. **改 `client.js` 时不要同时跑受控实测** —— HMR 会换实例,seq 归零。
+1. **不凭记忆写 API**(§1)—— 每一步都来自当场读源码或实测。
+2. **改 `client.js` 的纪律** —— 带锚点的小批次、插桩可还原,两条规则见 §5;违反的代价是"整段替换吞掉相邻声明"把面板整块搞没(两次),以及"按次数替换"把自计时插进了没有那个变量的 `start()`(见 [死路](docs/dead-ends.md) 的「整段替换吞掉相邻声明」与「批量替换会改到同名调用点」)。
+3. **改渲染 / `apply()` / `start()` 必须真开一次页面** —— `node --check` 与三套件看不出模块作用域的裸标识符,也看不出只在该路径抛的错。
+4. **改 `client.js` 时不要同时跑受控实测** —— HMR 会换实例,seq 归零。
 
-完整清单(17 条:caret 上界静默禁用、buffered 重放、`blocking=0`、单帧尖刺、inspector 多会话、profile 采样密度…)见 [已知坑与已证伪的死路](docs/dead-ends.md)。
+完整清单(19 条:caret 上界静默禁用、buffered 重放、`blocking=0`、单帧尖刺、inspector 多会话、profile 采样密度…)见 [已知坑与已证伪的死路](docs/dead-ends.md)。
 
 ---
 
@@ -250,7 +249,7 @@ URL 形态、分段换算、四条腿边界、宿主 API、`locale/` 的 ENOENT 
 | [docs/panel-rules.md](docs/panel-rules.md) | 面板布局 / 文案 / 交互约定(改渲染 / 文案前必读) |
 | [docs/verification.md](docs/verification.md) | cookie、验收器、401/404、残留 Chrome、worktree 验证 |
 | [docs/mechanisms.md](docs/mechanisms.md) | 归因机制:URL / sourcemap / 四条腿 / 宿主 API |
-| [docs/dead-ends.md](docs/dead-ends.md) | 17 条已知坑与已证伪的路 |
+| [docs/dead-ends.md](docs/dead-ends.md) | 19 条已知坑与已证伪的路 |
 | [docs/release.md](docs/release.md) | npm 发版、staged publishing、Trusted Publisher |
 | [docs/landscape.md](docs/landscape.md) | 官方开发者工具对照、竞品、市场数据 |
 | [docs/plans/](docs/plans/) | 历史档案:按日期的决策与实测证据,**不是必读** |
