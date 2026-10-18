@@ -31,7 +31,8 @@ import { tmpdir } from 'node:os';
  * logic.mjs 的"死键 / 引用必须存在"两条断言用的是真对象,所以它们没被坑到)。
  */
 const DICT_KEYS = (() => {
-	const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+	// 词典已搬到 client.i18n.js 分片(纯数据)。
+	const source = readFileSync(new URL('../client.i18n.js', import.meta.url), 'utf8');
 	const start = source.indexOf('const DICT = {');
 	const end = source.indexOf('\n\t\t};', start) + '\n\t\t};'.length;
 	const DICT = new Function(`${source.slice(start, end)}\nreturn DICT;`)();

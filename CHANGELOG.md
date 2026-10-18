@@ -12,26 +12,31 @@
 - 分片用 `window.__ModuleLoader__.load({ id, chunk, factory })` 注册(与官方 `dsh-client-ui-sidebar-documentpreview` 的 `client.excel.js` 同一条路);
 - `package.json#files` 与 `release.yml` 的产物核对覆盖 `client.*.js`(漏发分片 = 启动 404)。
 
-**结果**:`client.js` **8,595 → 4,698 行**,分成四块:
+**结果**:`client.js` **8,595 → 3,723 行**,拆成 1 主 + 6 片:
 
 | 文件 | 行数 | 内容 | 加载时机 |
 |---|---:|---|---|
-| `client.js` | 4,698 | 采集 / 归因 / 守夜捕获 / 宿主探针 / apply + 同步包装 | 启动 |
-| `client.model.js` | 3,148 | 归因证据链 / 能力矩阵 / 可能原因 / 诊断包 / 视图模型与摘要(159 个函数) | `apply()` 与面板渲染前(采集路径也吃它) |
+| `client.js` | 3,723 | 采集 / 归因 / 宿主探针 / 面板状态 / apply + 同步包装 | 启动 |
+| `client.model.js` | 3,148 | 证据链 / 能力矩阵 / 可能原因 / 诊断包 / 视图模型(159 个函数) | apply 与渲染前 |
 | `client.ui.js` | 1,230 | 全部渲染(PerfHud / 四视图 / 各 block) | `PerfHudGate` |
-| `client.pack.js` | 135 | zip(CRC32 / store-only) | `PerfHudGate` |
+| `client.watch.js` | 726 | 守夜层:observer 回调 / 事故组装 / 落盘(20 个函数) | apply(采集前) |
+| `client.i18n.js` | 431 | 中英词典(各 405 键,纯数据) | 最前(locale 注册) |
 | `client.tools.js` | 230 | 隔离实验 | 首次 `__perfHud.experiment()` |
+| `client.pack.js` | 135 | zip(CRC32 / store-only) | `PerfHudGate` |
 
-**依赖是显式的,不做反向 import**:`createModel(deps)` 收 96 个、`createUi(deps)` 收 153 个、`createToolsApi(deps)` 收 16 个;主文件保留同名同步包装,分片没到位时抛出明确错误而不是静默返回空值。
+**依赖是显式的,不做反向 import**:`createModel(deps)` 收 96 个、`createWatch(deps)` 收 31 个、`createUi(deps)` 收 153 个、`createToolsApi(deps)` 收 16 个;主文件保留同名同步包装,分片没到位时抛明确错误而不是静默返回空值。
 
-**两处必须记住的坑**:
+**装载顺序有依赖**:`apply()` 里 `Promise.all([loadI18n(), loadModel(), loadWatch()])` 之后才 `restore()` 与 `start()` —— 守夜捕获会调模型层的 `scriptEvidence` / `packageOfScript`,`restore()` 会调 `pruneMapCache`。
+
+**三处必须记住的坑**:
 
 - `HudBoundary` 是 `class`,按 function/const 收集依赖时会漏 —— `h(HudBoundary)` 拿到 undefined → React 抛 `Element type is invalid` → 外壳把整个条目停用(面板消失、`errors` 为空),与 dead-ends 第 7 条同一形态;
-- 采集路径(`assembleIncident` → `scriptEvidence`)也吃模型层,所以 `restore()` / `start()` 都改到 `loadModel()` 之后再跑。
+- `Promise.all` 的 then 里 `createUi` 抛错不会被 rejection 处理器接到,补了 `.catch` 落账(否则面板空白、`errors` 却是空的);
+- 新增一个 `await` 进 `Promise.all` 后**解构位置要跟着改** —— 词典排第一时 `([, model, pack, ui])` 曾经错位成 `([model, pack, ui])`,报的是 `ui.createUi is not a function`。
 
-**离线套件跟着走**:`logic.mjs` 的 `extract()` 改成分片优先(同 header 在 model 分片里能找到就抽那份),静态检查用 `allSource`;`attribution.mjs` 从 model 分片抽 `ownerOfUrl` / `isCore`;`renderSource` 覆盖渲染层。
+**离线套件跟着走**:`logic.mjs` 的 `extract()` 分片优先(model → i18n → watch),静态检查用 `allSource`(主文件 + 四个分片);`attribution.mjs` 从 model 分片抽 `ownerOfUrl` / `isCore`;`tools/check-counts.mjs` 的词典键从 i18n 分片读。
 
-**证据**:`npm test` 613 条全绿;`check-panel` / `check-incident` / `check-counts` / `check-storage` / `check-interaction` 全绿;`dead-code` 0 候选;真页面按 chunk 请求四个分片、面板 0 错误。
+**证据**:`npm test` 613 条全绿;`check-panel` / `check-incident` / `check-counts` / `check-storage` / `check-interaction` 全绿;`dead-code` 0 候选;真页面按 chunk 请求六个分片、面板 0 错误。
 
 ### 文档(2026-10-18,档案拆分与上下文瘦身)
 

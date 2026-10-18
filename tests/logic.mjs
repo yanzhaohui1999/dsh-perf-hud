@@ -13,11 +13,15 @@ const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 // 诊断 / 视图模型的实现在包内分片里(主文件只剩同名同步包装):extract 先找分片,
 // 找不到再回主文件 —— 这样箱子测的仍然是线上那份实现,而不是包装器。
 const modelSource = readFileSync(new URL('../client.model.js', import.meta.url), 'utf8');
+// 词典在 client.i18n.js 分片里(纯数据)。
+const i18nSource = readFileSync(new URL('../client.i18n.js', import.meta.url), 'utf8');
+// 守夜层实现在 client.watch.js 分片里(与下面那个 watchSource 常量片段区分开)。
+const watchChunkSource = readFileSync(new URL('../client.watch.js', import.meta.url), 'utf8');
 // 渲染层在包内分片 client.ui.js 里;静态检查与渲染区断言要扫两份源码。
 const uiSource = readFileSync(new URL('../client.ui.js', import.meta.url), 'utf8');
 const renderSource = source + '\n' + uiSource;
 // 主文件 + 分片:静态检查要能看见搬家之后的实现
-const allSource = source + '\n' + uiSource + '\n' + modelSource;
+const allSource = source + '\n' + uiSource + '\n' + modelSource + '\n' + i18nSource + '\n' + watchChunkSource;
 // 包内分片:zip 在 client.pack.js 里。测试也读线上那份源码,不另写一份实现。
 const packSource = readFileSync(new URL('../client.pack.js', import.meta.url), 'utf8');
 function loadPackChunk() {
@@ -38,9 +42,11 @@ const realFixture = JSON.parse(readFileSync(new URL('./fixtures/incident-real.js
  * 所以**分片优先**:同一个 header 在分片里能找到就抽分片那份,否则回主文件。
  */
 function extract(text, header) {
-	const fromModel = text === source && modelSource.indexOf(header) !== -1;
-	const body = fromModel ? modelSource : text;
-	const start = fromModel ? modelSource.indexOf(header) : text.indexOf(header);
+	const inModel = text === source && modelSource.indexOf(header) !== -1;
+	const inI18n = text === source && !inModel && i18nSource.indexOf(header) !== -1;
+	const inWatch = text === source && !inModel && !inI18n && watchChunkSource.indexOf(header) !== -1;
+	const body = inModel ? modelSource : (inI18n ? i18nSource : (inWatch ? watchChunkSource : text));
+	const start = inModel ? modelSource.indexOf(header) : (inI18n ? i18nSource.indexOf(header) : (inWatch ? watchChunkSource.indexOf(header) : text.indexOf(header)));
 	if (start === -1) throw new Error(`extract: missing ${header}`);
 	let depth = 0;
 	let quote = null;
@@ -1324,7 +1330,7 @@ check('最差事件说明行:把"凭什么"摊开(未归因时就是那句校准
 	EX.eventVerdictText({ ...incidentRow, packages: [], summary: { ...incidentRow.summary, worstFrameJs: 'none' } }).startsWith('未归因:未观察到足以解释该帧的 JS 阻塞证据'),
 	true);
 check('jsNo 文案里不再出现"更像 rAF 被节流"这种把可能性写成结论的说法',
-	/无\(longtask\/LoAF 都不与它重叠\)/.test(source) && source.includes("jsNo: '无(更像 rAF 被节流)'") === false, true);
+	/无\(longtask\/LoAF 都不与它重叠\)/.test(allSource) && allSource.includes("jsNo: '无(更像 rAF 被节流)'") === false, true);
 check('最差事件窗口行:单帧 / 累计的分母都写出来(帧数 · LoAF 条数 · 按包覆盖率)',
 	EX.eventWindowText(incidentRow), '窗口 12 帧 · LoAF 3 · 按包 4/6');
 // 这两行是 S.sub(允许换行),所以上限只是"防跑飞"。

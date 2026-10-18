@@ -64,9 +64,20 @@
 | `package.json` 的 `dsh.client` / `dsh.bundle` | 重装或重启 |
 | 纯文档 | 无需操作 |
 
-**代码分片**(DSH 的 package-local chunk,零构建):`client.model.js`(诊断 / 证据链 / 视图模型,159 个函数)、`client.ui.js`(全部渲染)、`client.pack.js`(zip)、`client.tools.js`(隔离实验,首次调用才加载)。分片用 `__ModuleLoader__.load({ id, chunk, factory })` 注册,主文件用 `require.async('./client.<name>.js')`,依赖一律**显式传入**(`createModel(deps)` / `createUi(deps)` / `createToolsApi(deps)`),不做反向 import。改分片后主文件的 `client.js` 要一起被 touch/改到,否则 rev 不变。
+**代码分片**(DSH 的 package-local chunk,零构建):
 
-⚠️ **模型层在采集路径上**:`assembleIncident` 会调 `scriptEvidence` 等,所以 `apply()` 里 `restore()` 与 `start()` 都排在 `loadModel()` 之后。加新的采集期调用前先确认它不在模型层,或在 `loadModel()` 之后调用。
+| 分片 | 内容 | 何时装载 |
+|---|---|---|
+| `client.model.js` | 证据链 / 能力矩阵 / 可能原因 / 诊断包 / 视图模型(159 个函数) | `apply()` 与渲染前 |
+| `client.watch.js` | 守夜层:observer 回调 / 事故组装 / 落盘(20 个函数) | 同上(采集前) |
+| `client.ui.js` | 全部渲染 | `PerfHudGate` |
+| `client.i18n.js` | 中英词典(各 405 键,纯数据) | 最前(locale 注册要用) |
+| `client.pack.js` | zip(store 模式) | `PerfHudGate` |
+| `client.tools.js` | 隔离实验 | 首次 `__perfHud.experiment()` |
+
+分片用 `__ModuleLoader__.load({ id, chunk, factory })` 注册,主文件用 `require.async('./client.<name>.js')`;依赖一律**显式传入**(`createModel(deps)` / `createWatch(deps)` / `createUi(deps)` / `createToolsApi(deps)`),不做反向 import。主文件保留同名同步包装,分片没到位时抛明确错误。改分片后主文件的 `client.js` 要一起被 touch/改到,否则 rev 不变。
+
+⚠️ **装载顺序有依赖**:`apply()` 里 `Promise.all([loadI18n(), loadModel(), loadWatch()])` 之后才 `restore()` 与 `start()` —— 守夜捕获会调模型层的 `scriptEvidence` / `packageOfScript`,`restore()` 会调 `pruneMapCache`。加新的采集期调用前先确认它所在的层已经到位。
 
 ⚠️ **重启会杀死当前会话的 bash 进程**(它在 `dsh web` 里):把重启排在报告之后,或交给用户。worktree 里的 `client.js` 浏览器看不到(profile 指向主检出)。真页面验收器要浏览器 + 本机 `dsh web`,不进 CI;改面板 / `apply()` / `start()` 后至少跑 `node tools/check-panel.mjs`。
 
@@ -93,7 +104,7 @@ DSH_COOKIE=… node tests/live-host.mjs        # 真实路由;退出码 3 = 宿�
 
 测试写法约定:
 
-- **测线上那份代码**:`logic.mjs` 用 `new Function(source + 'return {…}')` 把真函数抽进最小环境,新增函数想被测就加进 `pieces` 列表 + 在桩里补它用到的键。**不要另写一份等价实现来测。** 诊断 / 视图模型已搬进 `client.model.js`:`extract()` 是**分片优先**(同 header 在分片里能找到就抽分片那份),静态检查用 `allSource`(主文件 + ui + model)。
+- **测线上那份代码**:`logic.mjs` 用 `new Function(source + 'return {…}')` 把真函数抽进最小环境,新增函数想被测就加进 `pieces` 列表 + 在桩里补它用到的键。**不要另写一份等价实现来测。** 诊断 / 视图模型、守夜层、词典已搬进 `client.model.js` / `client.watch.js` / `client.i18n.js`:`extract()` 是**分片优先**(同 header 在任一分片里能找到就抽那份),静态检查用 `allSource`(主文件 + 四个分片)。
 - ⚠️ **`logic.mjs` 里有三个沙箱**(纯函数盒 / 导出盒 `newPieces` / 守夜盒 `watchBox`),各有自己的 `pieces` 列表与桩。往 `client.js` 加一个函数或常量之后,要把它加进**每一个用到它的盒子** —— 漏一个不会立刻报错,而是等那个盒子跑起来才 `ReferenceError`(实测:`WATCH_EVENT_MS` 只在导出盒里被 `snapshot()` 引用,守夜盒里反而先绿;`pruneIncidents` 漏在守夜盒里时,前面的断言全过、最后一个盒子才炸)。守夜盒的 `state` 是**手写桩**,新状态位还要在桩里补上。
 - **口径有歧义就加断言,不要加注释**:注释不能防回归,断言能。
 - **词典两条断言是一对(2026-10-13 补)**:死键那条管"词典里没人用",**反向那条**管"用了但词典里没有" —— 后者更隐蔽:`translate` 会退回 key 本身,面板 / 导出件上**直接印出** `exportPreviewCopy` / `viewIncident` 这种内部键名,而三套件与死键断言都不响(实测一次踩了 8 个)。加文案时两条都要绿。

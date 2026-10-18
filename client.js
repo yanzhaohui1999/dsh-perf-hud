@@ -712,6 +712,86 @@ window.__ModuleLoader__.load({
 			}
 			return modelPromise;
 		}
+		// ───────────── 守夜层:在 client.watch.js 分片里 ─────────────
+		let watchFactory = null;
+		let watchApi = null;
+		let watchPromise = null;
+		function watchDeps() {
+			return {
+				BUNDLE_PREFIX,
+				LS_INCIDENTS,
+				W,
+				WATCH_DAILY_DAYS,
+				WATCH_EVENT_MAX,
+				WATCH_EVENT_MS,
+				WATCH_FRAMES,
+				WATCH_GAP_MS,
+				WATCH_INCIDENT_MAX,
+				WATCH_KEEP_MAX,
+				WATCH_LOAF_MAX,
+				WATCH_PERSIST_MAX_BYTES,
+				WATCH_POST_MS,
+				WATCH_PRE_MS,
+				WATCH_REACTION_MS,
+				WATCH_SCRIPT_MAX,
+				WATCH_TRIGGER_MS,
+				bumpTally,
+				bundleMap,
+				ensureScriptLines,
+				frame,
+				frameRing,
+				natives,
+				noteTallySeverity,
+				ownerOfUrl,
+				push,
+				ring,
+				round1,
+				scriptEvidence,
+				start,
+				state,
+			};
+		}
+		function watch() {
+			if (watchApi !== null) return watchApi;
+			if (watchFactory === null) throw new Error('perf-hud: client.watch.js 还没加载完');
+			watchApi = watchFactory.createWatch(watchDeps());
+			return watchApi;
+		}
+		function loadWatch() {
+			if (watchApi !== null) return Promise.resolve(watchApi);
+			if (watchPromise === null) {
+				watchPromise = require.async('./client.watch.js').then((module) => {
+					watchFactory = module;
+					return watch();
+				}, (error) => {
+					watchPromise = null;
+					state.errors.push({ at: Date.now(), where: 'watch-chunk', message: String(error) });
+					throw error;
+				});
+			}
+			return watchPromise;
+		}
+		function watchTrigger(...args) { return watch().watchTrigger(...args); }
+		function perfOrigin(...args) { return watch().perfOrigin(...args); }
+		function wallClock(...args) { return watch().wallClock(...args); }
+		function loafScripts(...args) { return watch().loafScripts(...args); }
+		function watchLoaf(...args) { return watch().watchLoaf(...args); }
+		function startLoaf(...args) { return watch().startLoaf(...args); }
+		function watchInteraction(...args) { return watch().watchInteraction(...args); }
+		function startInteractions(...args) { return watch().startInteractions(...args); }
+		function watchFrame(...args) { return watch().watchFrame(...args); }
+		function triggerCapture(...args) { return watch().triggerCapture(...args); }
+		function keepIncident(...args) { return watch().keepIncident(...args); }
+		function dayKeyOf(...args) { return watch().dayKeyOf(...args); }
+		function pruneIncidents(...args) { return watch().pruneIncidents(...args); }
+		function windowIntegrity(...args) { return watch().windowIntegrity(...args); }
+		function assembleIncident(...args) { return watch().assembleIncident(...args); }
+		function settleCapture(...args) { return watch().settleCapture(...args); }
+		function saveIncidents(...args) { return watch().saveIncidents(...args); }
+		function restoreIncidents(...args) { return watch().restoreIncidents(...args); }
+		function captureNow(...args) { return watch().captureNow(...args); }
+		function watchStatus(...args) { return watch().watchStatus(...args); }
+
 		function timeoutError(...args) { return model().timeoutError(...args); }
 		function cancelledError(...args) { return model().cancelledError(...args); }
 		function isAbortError(...args) { return model().isAbortError(...args); }
@@ -1005,6 +1085,8 @@ window.__ModuleLoader__.load({
 		};
 
 		// ───────────── G. 守夜层:帧级环形缓冲 + LoAF(默认常开,不插桩)─────────────
+
+		// 守夜层的实现在 client.watch.js 分片里;下面只留同名同步包装。
 		// 它解决的问题只有一个:卡顿发生时你不在看面板,事后还要能把它捞出来。
 		// 所以这一层**不包装任何原型**(不碰 setTimeout/rAF/DOM 方法),只用本来就在跑的
 		// rAF 循环 + 一个 PerformanceObserver —— 代价接近零,因此可以默认开着。
@@ -1093,677 +1175,6 @@ window.__ModuleLoader__.load({
 				};
 			},
 		};
-
-		/**
-		 * 触发判据:低于 WATCH_TRIGGER_MS 的帧不配叫卡顿。纯函数,便于单测,
-		 * 也便于回答"为什么这次没抓到"。返回严重度,不触发返回 null。
-		 */
-		function watchTrigger(ms) {
-			return typeof ms === 'number' && ms >= WATCH_TRIGGER_MS ? round1(ms) : null;
-		}
-
-		/** 本页性能时钟的原点(墙上时间毫秒)。跨会话读事故时,perf 毫秒要靠它才能对齐。 */
-		function perfOrigin() {
-			return typeof performance.timeOrigin === 'number' && performance.timeOrigin > 0
-				? performance.timeOrigin
-				: Date.now() - performance.now();
-		}
-
-		/** perf 时间 → 墙上时间。 */
-		function wallClock(perfMs) {
-			return new Date(perfOrigin() + perfMs).toISOString();
-		}
-
-		/** 一条 LoAF 里最多记 WATCH_SCRIPT_MAX 个脚本:只用于回答"谁",不做统计。 */
-		function loafScripts(entry) {
-			const out = [];
-			try {
-				const scripts = Array.isArray(entry.scripts) ? entry.scripts : [];
-				for (const script of scripts) {
-					if (out.length >= WATCH_SCRIPT_MAX) break;
-					const scriptUrl = typeof script.sourceURL === 'string' ? script.sourceURL : null;
-					// 只要 URL 是**组合**(`plugins/??…`)就预取脚本文本 —— 单包组合
-					// (`??<一个包>/client.js`)也算:它的 charPos 同样要靠文本才能换成行号。
-					// 以前判据是 `indexOf(',') !== -1`(只看多包),单包组合于是永远停在 text-pending。
-					if (scriptUrl !== null && state.precise === true && /\/plugins\/\?\?/.test(scriptUrl)) {
-						// 多包:后台把脚本文本与分段表准备好。这两个请求都是浏览器内存缓存命中,
-						// 但走的是异步,所以只预取、不在这里等。
-						ensureScriptLines(scriptUrl);
-						const owner = ownerOfUrl(scriptUrl);
-						if (owner !== null && owner.startsWith(BUNDLE_PREFIX)) bundleMap(owner);
-					}
-					out.push({
-						url: scriptUrl,
-						fn: typeof script.sourceFunctionName === 'string' && script.sourceFunctionName !== '' ? script.sourceFunctionName : null,
-						invoker: typeof script.invoker === 'string' ? script.invoker.slice(0, 80) : null,
-						invokerType: script.invokerType ?? null,
-						charPos: typeof script.sourceCharPosition === 'number' ? script.sourceCharPosition : null,
-						ms: round1(script.duration ?? 0),
-						forcedMs: round1(script.forcedStyleAndLayoutDuration ?? 0),
-						pauseMs: round1(script.pauseDuration ?? 0),
-					});
-				}
-			} catch (error) { /* 条目形状变了:宁可少记,不要抛 */ }
-			return out;
-		}
-
-		/** 收一条长动画帧。触发按 blockingDuration —— 它才是"这一帧挡了多久",纯渲染不算卡。 */
-		function watchLoaf(entry) {
-			const watch = state.watch;
-			watch.loafSeq += 1;
-			const row = {
-				seq: watch.loafSeq,
-				t: round1(entry.startTime),
-				dur: round1(entry.duration),
-				blocking: round1(entry.blockingDuration ?? 0),
-				renderStart: round1(entry.renderStart ?? 0),
-				styleAndLayoutStart: round1(entry.styleAndLayoutStart ?? 0),
-				scripts: loafScripts(entry),
-			};
-			watch.loaf.push(row);
-			if (watch.loaf.length > WATCH_LOAF_MAX) {
-				const dropped = watch.loaf.length - WATCH_LOAF_MAX;
-				watch.loaf.splice(0, dropped);
-				watch.loafDropped += dropped;
-			}
-			const severity = watchTrigger(row.blocking);
-			if (severity !== null) triggerCapture('loaf', entry.startTime, severity);
-		}
-
-		/** 装上 LoAF 观察器(可还原:stop() 里 disconnect)。返回状态串,照实写进导出件。 */
-		function startLoaf() {
-			const watch = state.watch;
-			if (watch.loafObserver !== null) return watch.loafState;
-			const Observer = W.PerformanceObserver;
-			if (typeof Observer !== 'function') return (watch.loafState = 'unsupported:no-PerformanceObserver');
-			const supported = Observer.supportedEntryTypes;
-			if (Array.isArray(supported) && supported.indexOf('long-animation-frame') === -1) {
-				return (watch.loafState = 'unsupported:no-long-animation-frame');
-			}
-			try {
-				const observer = new Observer((list) => {
-					for (const entry of list.getEntries()) watchLoaf(entry);
-				});
-				// 不带 buffered:每次重新挂观察器(disable→enable、HMR 重载)都会把最近 200 条重放
-				// 一遍,同一个 startTime 于是被重新触发 —— 实测同一次卡顿裂成了 i2 / i29 / i31
-				// 三条不同 id 的事故(时间戳一模一样)。挂上之前的帧我们本来也没采,不需要它。
-				observer.observe({ type: 'long-animation-frame' });
-				watch.loafObserver = observer;
-				watch.loafState = 'on';
-			} catch (error) {
-				watch.loafState = `error:${error instanceof Error ? error.message : String(error)}`;
-			}
-			return watch.loafState;
-		}
-
-		/**
-		 * A4(页面内那一半):交互延迟。
-		 *
-		 * `event` timing 是页面内**唯一**能拿到"这一下点了多久才反应"的 API:它给端到端时长
-		 * (`duration`)与 `processingStart/End`,所以能说清"有多少是排在主线程后面等出来的"。
-		 * ⚠️ **不承诺帧内拆分** —— 输入延迟 / 处理 / 呈现这三段的进一步拆分页面内没有 API
-		 * (要拆只能看 DevTools 的 Interactions 轨道,已写进 missing)。
-		 * `element` timing 只观察带 `elementtiming` 属性的元素,DSH 的 DOM 上没有这个属性,
-		 * 所以这一路**大概率恒为 0** —— 照实记 0 并写进导出件,不假装采到了。
-		 */
-		function watchInteraction(entry) {
-			const watch = state.watch;
-			const isElement = entry.entryType === 'element';
-			if (isElement) watch.elementCount += 1;
-			else watch.eventCount += 1;
-			const start = entry.startTime ?? 0;
-			const processingStart = entry.processingStart ?? start;
-			const processingEnd = entry.processingEnd ?? processingStart;
-			watch.interactions.push({
-				type: entry.entryType,
-				// 事件名(click / keydown…)或元素选择器
-				name: String(isElement ? (entry.element ?? entry.name ?? '?') : (entry.name ?? '?')).slice(0, 60),
-				at: round1(start),
-				ms: round1(entry.duration ?? 0),      // 端到端(到下一次渲染更新为止)
-				// 下面两个是推导值,但读文件的人第一眼要的就是它们:多少是排队等出来的、多少是处理
-				waitMs: round1(processingStart - start),          // 输入延迟:事件发生 → 处理器真正开始
-				handlerMs: round1(processingEnd - processingStart),   // 处理器本身
-				processingStart: round1(entry.processingStart ?? 0),
-				processingEnd: round1(entry.processingEnd ?? 0),
-				interactionId: typeof entry.interactionId === 'number' ? entry.interactionId : null,
-				// interactionId > 0 才是"一次交互"里的那一批;0 的是 pointerover 这类被动事件
-				isInteraction: typeof entry.interactionId === 'number' && entry.interactionId > 0,
-				renderTime: isElement ? round1(entry.renderTime ?? 0) : undefined,
-			});
-			if (watch.interactions.length > WATCH_EVENT_MAX) watch.interactions.splice(0, watch.interactions.length - WATCH_EVENT_MAX);
-		}
-
-		/** 装上交互计时观察器(可还原:stop() 里 disconnect)。返回状态串,照实写进导出件。 */
-		function startInteractions() {
-			const watch = state.watch;
-			if (watch.eventObserver !== null) return watch.eventState;
-			const Observer = W.PerformanceObserver;
-			if (typeof Observer !== 'function') return (watch.eventState = 'unsupported:no-PerformanceObserver');
-			const supported = Array.isArray(Observer.supportedEntryTypes) ? Observer.supportedEntryTypes : [];
-			watch.eventSupported = supported.filter((type) => type === 'event' || type === 'element');
-			if (watch.eventSupported.length === 0) return (watch.eventState = 'unsupported:no-event-timing');
-			try {
-				const observer = new Observer((list) => {
-					for (const entry of list.getEntries()) watchInteraction(entry);
-				});
-				// 也不带 buffered:挂上之前的事件不属于这段时间的交互(同 LoAF 那条的理由)
-				for (const type of watch.eventSupported) {
-					if (type === 'event') observer.observe({ type: 'event', durationThreshold: WATCH_EVENT_MS });
-					else observer.observe({ type: 'element' });
-				}
-				watch.eventObserver = observer;
-				watch.eventState = 'on';
-			} catch (error) {
-				watch.eventState = `error:${error instanceof Error ? error.message : String(error)}`;
-			}
-			return watch.eventState;
-		}
-
-		/**
-		 * 每帧一次(从 FPS 循环里调)。
-		 * 帧间隔超过 WATCH_GAP_MS 说明 rAF 被挂起(标签页隐藏/系统休眠):那是间隙,
-		 * 既不算卡顿也不触发 —— 否则每次切回标签页都会"抓到"一次几百秒的假事故。
-		 */
-		function watchFrame(at, ms, isGap) {
-			if (state.watch.on === false) return;
-			frameRing.push(at, ms, isGap);
-			if (isGap) return;
-			const severity = watchTrigger(ms);
-			if (severity !== null) triggerCapture('frame', at, severity);
-		}
-
-		/**
-		 * 起一次捕获。同时只留一个 pending:一次卡顿通常是一串,归并成一条比抓成一堆碎
-		 * 事件有用(被归并的次数记进 coalesced,不假装没发生)。
-		 */
-		function triggerCapture(cause, at, severity, note) {
-			const watch = state.watch;
-			if (watch.on === false) return null;
-			if (watch.pending !== null) { watch.coalesced += 1; bumpTally('coalesced', Date.now()); return null; }
-			// 这个时刻已经被上一份事故的窗口覆盖了(证据就在那份包里),别再另立一份 ——
-			// 实测过一次卡顿裂成两份(第二份其实只是又碰了一下同一段窗口)。
-			// 手动标记例外:那是明确意图,哪怕落在窗口里也收。
-			if (cause !== 'manual' && watch.coveredUntil > 0 && at <= watch.coveredUntil) {
-				watch.coalesced += 1;
-				bumpTally('coalesced', Date.now());
-				return null;
-			}
-			watch.pending = {
-				cause, at, severity: round1(severity), note: note ?? null, until: at + WATCH_POST_MS,
-				// 窗口完整性的起点状态:环满 + 确实丢过记录 + 最老一条晚于窗口起点 ⇒ 前摇已经丢了记录。
-				loafFull: watch.loaf.length >= WATCH_LOAF_MAX,
-				loafDroppedAtTrigger: watch.loafDropped,
-				loafOldestAt: watch.loaf.length === 0 ? null : watch.loaf[0].t,
-				longTaskFull: state.longTasks.length >= 200,
-				longTaskDroppedAtTrigger: state.ltDropped,
-				longTaskOldestAt: state.longTasks.length === 0 ? null : state.longTasks[0].at,
-			};
-			// 起一次新捕获 = 检测到一次卡顿(同一串里的后续触发会走上面的 coalesced,不重复计)
-			bumpTally('triggered', Date.now());
-			const delay = Math.max(0, watch.pending.until - performance.now());
-			if (delay <= 0) return settleCapture();
-			watch.pendingTimer = natives.setTimeout(settleCapture, Math.ceil(delay));
-			return null;
-		}
-
-		/**
-		 * 留存策略:两档并集。
-		 *   ① 全局最差 WATCH_INCIDENT_MAX 条;
-		 *   ② 每天最差 1 条,最多最近 WATCH_DAILY_DAYS 天。
-		 * 只有 ① 时,短时间里连抓 10 次就把更早的整天挤掉了;② 保证"每天至少留一条证据"。
-		 * "抓到了但没留存"和"没抓到"是两件事,所以 dropped 单独计数,不混进 captured。
-		 */
-		function keepIncident(incident) {
-			const watch = state.watch;
-			const list = watch.incidents;
-			const previous = list.slice();
-			const kept = pruneIncidents(previous.concat(incident));
-			const survived = kept.indexOf(incident) !== -1;
-			const displaced = previous.some((row) => kept.indexOf(row) === -1);
-			list.length = 0;
-			for (const row of kept) list.push(row);
-			if (survived === false) { watch.dropped += 1; bumpTally('dropped', Date.now()); return 'dropped'; }
-			return displaced ? 'replaced' : 'kept';
-		}
-
-		/** 事故发生在哪一天(本地日期)—— 只用于"每天最差一条"那个档位;取不到时间算 null。 */
-		function dayKeyOf(row) {
-			const at = Date.parse(row === null || row === undefined ? '' : row.at);
-			if (Number.isFinite(at) === false) return null;
-			const d = new Date(at);
-			// 补零:日期键要按字符串排序取"最近 N 天",'2026-10-8' > '2026-10-10' 是错的
-			const p = (n) => String(n).padStart(2, '0');
-			return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-		}
-
-		/**
-		 * 按两档策略裁一次,并给活下来的每条写上 `tier`(它是靠哪一档留下的)。
-		 * 出入都按**严重度降序** —— 落盘的字节裁切(`list.pop()` 丢最弱的)依赖这个不变量。
-		 */
-		function pruneIncidents(list) {
-			const sorted = list.slice().sort((a, b) => b.severity - a.severity);
-			const worst = sorted.slice(0, WATCH_INCIDENT_MAX);
-			const bestOfDay = new Map();
-			for (const row of sorted) {
-				const key = row.day ?? dayKeyOf(row);
-				row.day = key;
-				// 降序遍历:每天碰到的第一条就是当天最差
-				if (key === null || bestOfDay.has(key)) continue;
-				bestOfDay.set(key, row);
-			}
-			const days = [...bestOfDay.keys()].sort().slice(-WATCH_DAILY_DAYS);   // 最近的 N 天
-			const kept = new Set(worst);
-			for (const key of days) kept.add(bestOfDay.get(key));
-			const daily = new Set(days.map((key) => bestOfDay.get(key)));
-			const out = sorted.filter((row) => kept.has(row));
-			for (const row of out) {
-				const inWorst = worst.indexOf(row) !== -1;
-				const inDaily = daily.has(row);
-				row.tier = inWorst && inDaily ? 'both' : (inWorst ? 'worst' : 'daily');
-			}
-			return out;
-		}
-
-		/**
-		 * 窗口完整性:用序号断档判断"环是不是把记录挤掉了"。
-		 * `rows` 已按时间升序;`dropped = 末序号 − 首序号 + 1 − 实际条数` 精确回答"中间缺了几条"。
-		 * `preOverflow` 是另一件事:窗口起点早于环里最老的一条、环当时是满的**且确实丢过记录** —— 开头那段已经丢了,
-		 * 但丢了几条无从得知(不编数字,只标原因)。老数据没有 seq 时返回 0,不假装算过。
-		 */
-		function windowIntegrity(rows, oldestAt, ringFull, droppedAtTrigger, from) {
-			const list = Array.isArray(rows) ? rows : [];
-			// 环满 ≠ 丢过记录:只有真的丢过(droppedAtTrigger>0)才谈"前摇滚出环"。
-			const preOverflow = ringFull === true && droppedAtTrigger > 0 && typeof oldestAt === 'number' && oldestAt > from;
-			if (list.length === 0) return { dropped: 0, preOverflow };
-			const first = list[0];
-			const last = list[list.length - 1];
-			if (typeof first.seq !== 'number' || typeof last.seq !== 'number' || last.seq < first.seq) {
-				return { dropped: 0, preOverflow: false };
-			}
-			return { dropped: Math.max(0, last.seq - first.seq + 1 - list.length), preOverflow };
-		}
-
-		/**
-		 * 把一个事件窗口切成事故包:前摇 WATCH_PRE_MS + 后摇 WATCH_POST_MS,原样带上帧序列、
-		 * LoAF 条目、窗口内的 longtask 明细。严重度取"触发时的值"与"窗口里最差帧"的较大者 ——
-		 * 手动标记传进来的 0 因此不会因为"不够差"而被留存策略丢掉。
-		 */
-		function assembleIncident(pending) {
-			const from = pending.at - WATCH_PRE_MS;
-			const to = pending.until;
-			const frames = frameRing.slice(from, to);
-			const rows = state.watch.loaf.filter((row) => row.t >= from && row.t <= to);
-			// URL 抽表:实测一份事故里同一个 combo URL 会被写 27 遍 —— 116.6KB 里有 75.4KB 是
-			// 那个 2.9KB 的 URL 重复(导出的缩进版 138.6KB 里更糟)。脚本只留下标之后:
-			// 紧凑 29.6KB / 导出 51.5KB / 512KB 能放 17 条(原来 4 条)。信息一点没少。
-			// u = -1 表示这条脚本没有 URL。
-			const urls = [];
-			const urlIndex = (url) => {
-				if (typeof url !== 'string' || url === '') return -1;
-				const found = urls.indexOf(url);
-				if (found !== -1) return found;
-				urls.push(url);
-				return urls.length - 1;
-			};
-			const loaf = rows.map((row) => ({
-				t: row.t,
-				dur: row.dur,
-				blocking: row.blocking,
-				renderStart: row.renderStart,
-				styleAndLayoutStart: row.styleAndLayoutStart,
-				scripts: row.scripts.map((script) => ({
-					u: urlIndex(script.url),
-					fn: script.fn,
-					invoker: script.invoker,
-					invokerType: script.invokerType,
-					charPos: script.charPos,
-					ms: script.ms,
-					forcedMs: script.forcedMs,
-					pauseMs: script.pauseMs,
-				})),
-			}));
-			const longTasks = state.longTasks.filter((row) => row.at >= from && row.at <= to);
-			// A4:窗口内的交互延迟(端到端时长;页面内没有帧内拆分,见 watchInteraction 的说明)
-			const interactions = (state.watch.interactions ?? []).filter((row) => row.at >= from && row.at <= to);
-			// 窗口完整性:和官方 Inspector 的 sequence gap 同一条纪律 —— 缺口必须显式,不许静默。
-			const loafIntegrity = windowIntegrity(rows, pending.loafOldestAt, pending.loafFull, pending.loafDroppedAtTrigger, from);
-			const longTaskIntegrity = windowIntegrity(longTasks, pending.longTaskOldestAt, pending.longTaskFull, pending.longTaskDroppedAtTrigger, from);
-			const integrityReasons = [];
-			if (loafIntegrity.dropped > 0) integrityReasons.push('loaf-ring-overflow');
-			if (longTaskIntegrity.dropped > 0) integrityReasons.push('longtask-ring-overflow');
-			if (loafIntegrity.preOverflow) integrityReasons.push('loaf-pre-window-overflow');
-			if (longTaskIntegrity.preOverflow) integrityReasons.push('longtask-pre-window-overflow');
-			const integrity = {
-				captureComplete: integrityReasons.length === 0,
-				loafDropped: loafIntegrity.dropped,
-				longTaskDropped: longTaskIntegrity.dropped,
-				loafKept: rows.length,
-				longTaskKept: longTasks.length,
-				reasons: integrityReasons,
-			};
-			let worst = null;
-			let live = 0;
-			let over50 = 0;
-			let over100 = 0;
-			let gaps = 0;
-			const durations = [];
-			for (const row of frames) {
-				if (row.gap) { gaps += 1; continue; }
-				live += 1;
-				durations.push(row.ms);
-				if (row.ms >= 50) over50 += 1;
-				if (row.ms >= 100) over100 += 1;
-				if (worst === null || row.ms > worst.ms) worst = row;
-			}
-			durations.sort((a, b) => a - b);
-			const quantile = (p) => (durations.length === 0 ? null : round1(durations[Math.min(durations.length - 1, Math.floor(p * durations.length))]));
-			const pick50 = quantile(0.5);
-			const pick90 = quantile(0.9);
-			const pick99 = quantile(0.99);
-			// 每条脚本尽力定包名(拿不到就写清 via),再按包汇总一次 ——
-			// 「是谁」在合并批里原来只能给到那个 58 包的 URL,等于没有答案。
-			// 现在顺手把**文件与行号**也按同一份证据函数算出来(面板与导出件共用这套 via 码):
-			// 面板那一块能定位到"哪个文件的哪一段",事故包离开现场后也还留着这两样。
-			// ⚠️ 切片是**当时**算的:脚本文本 / sourcemap 还没到位时 lineVia 就是 text-pending,
-			// 照实记 —— 不给"事后补算"的假位置(事后补的会与这份包的其它读数不同源)。
-			for (const row of loaf) {
-				for (const script of row.scripts) {
-					const evidence = scriptEvidence(script, script.u >= 0 ? urls[script.u] : '');
-					script.pkg = evidence.pkg;
-					script.pkgVia = evidence.pkgVia;
-					script.file = evidence.file;
-					script.line = evidence.line;
-					script.lineVia = evidence.lineVia;
-					// 行号属于哪个坐标系(合并大文件 / 那个文件自己)—— 存进包,面板与导出件才不用现推
-					script.lineScope = evidence.lineScope;
-				}
-			}
-			const scripts = [];
-			for (const row of loaf) for (const script of row.scripts) scripts.push({ at: row.t, ...script });
-			scripts.sort((a, b) => b.ms - a.ms);
-			const byPkg = new Map();
-			let pkgResolved = 0;
-			for (const script of scripts) {
-				if (script.pkg === null) continue;
-				pkgResolved += 1;
-				const row = byPkg.get(script.pkg);
-				if (row === undefined) byPkg.set(script.pkg, { pkg: script.pkg, ms: script.ms, count: 1 });
-				else { row.ms = round1(row.ms + script.ms); row.count += 1; }
-			}
-			const packages = [...byPkg.values()].sort((a, b) => b.ms - a.ms);
-			const pkgVia = {};
-			for (const script of scripts) {
-				const key = script.pkgVia === null || script.pkgVia === undefined ? 'unknown' : script.pkgVia;
-				pkgVia[key] = (pkgVia[key] ?? 0) + 1;
-			}
-			let blocking = 0;
-			for (const row of loaf) blocking += row.blocking;
-			// 最差那一帧有没有 JS 解释?用 longtask / LoAF 与它的区间是否重叠判。
-			// 再往前一步:如果它既没有 JS 证据、前后又都是健康帧,那更可能是**浏览器把 rAF
-			// 节流/挂起了一次**(Windows 遮挡、省电),不是页面真的忙了这么久 —— 实测有一帧
-			// 983.7ms,前后都是 16.7ms(正好 60fps),而 983.7 恰好卡在 1 秒间隙线下面。
-			let worstJs = 'none';
-			let suspectedThrottle = false;
-			let neighboursMs = null;
-			if (worst !== null) {
-				const start = worst.t - worst.ms;
-				const end = worst.t;
-				const hasJs = longTasks.some((row) => row.at < end && row.at + row.ms > start)
-					|| loaf.some((row) => row.t < end && row.t + row.dur > start);
-				worstJs = hasJs ? 'js' : 'none';
-				const index = frames.indexOf(worst);
-				const around = frames.slice(Math.max(0, index - 5), index).concat(frames.slice(index + 1, index + 6))
-					.filter((row) => row.gap === false).map((row) => row.ms).sort((a, b) => a - b);
-				neighboursMs = around.length === 0 ? null : round1(around[Math.floor(around.length / 2)]);
-				suspectedThrottle = worst.ms >= 500 && hasJs === false && neighboursMs !== null && neighboursMs < WATCH_TRIGGER_MS;
-			}
-			return {
-				id: `i${(state.watch.seq += 1)}`,
-				cause: pending.cause,          // frame / loaf / manual
-				note: pending.note,
-				kept: null,                    // settleCapture 填 kept / replaced / dropped
-				severity: round1(Math.max(pending.severity, worst === null ? 0 : worst.ms)),
-				atPerfMs: round1(pending.at),
-				at: wallClock(pending.at),
-				window: {
-					fromMs: round1(from), toMs: round1(to),
-					preMs: WATCH_PRE_MS, postMs: WATCH_POST_MS,
-					from: wallClock(from), to: wallClock(to),
-				},
-				// 这份现场**采全了没有**。false 时不要把它当完整证据:面板、missing、manifest 都会标。
-				integrity,
-				summary: {
-					worstFrameMs: worst === null ? null : worst.ms,
-					worstFrameAt: worst === null ? null : wallClock(worst.t),
-					frames: live,
-					framesOver50Ms: over50,
-					framesOver100Ms: over100,
-					hiddenGaps: gaps,
-					loafEntries: loaf.length,
-					blockingMs: round1(blocking),
-					pkgCoverage: { resolved: pkgResolved, total: scripts.length },   // 有名字的脚本占比
-					pkgVia,                       // 每一条脚本"是怎么定名的"(url / section / not-plugin / …)
-					longTasksInWindow: longTasks.length,
-					interactionsInWindow: interactions.length,   // A4:窗口内的交互次数(≥100ms 的那些)
-					topScripts: scripts.slice(0, 5).map((script) => ({
-						at: script.at, u: script.u, ms: script.ms, fn: script.fn,
-						invoker: script.invoker, invokerType: script.invokerType, charPos: script.charPos,
-						// 「打开哪个文件、哪一段」:file = 包内那份文件(section 的 sources),
-						// line = **脚本文本自己的行号**(不是原始源码行),两个 via 码说明它们是怎么来的
-						pkg: script.pkg, pkgVia: script.pkgVia,
-						file: script.file, line: script.line, lineVia: script.lineVia, lineScope: script.lineScope,
-					})),
-					// 窗口自己的分位:没有它,howToRead 里那句"拿 summary 和 baseline 比"在
-					// 文件内根本没法执行(实测一位只读文件的读者就卡在这)
-					p50: pick50,
-					p90: pick90,
-					p99: pick99,
-					worstFrameJs: worstJs,                  // js = 有 longtask/LoAF 重叠;none = 没有任何 JS 解释
-					worstFrameNeighboursMs: neighboursMs,   // 最差帧前后各 5 帧的中位(健康帧 ≈ 16.7ms)
-					suspectedThrottle,                      // true = 更像 rAF 被节流/挂起,而不是页面真忙
-					streaming: state.streaming,
-					visibility: document.visibilityState,
-				},
-				urls,                          // 脚本 URL 表(scripts[].u 是它的下标)
-				packages,                      // 按包汇总的脚本耗时(降序):「是谁」在这一层才有答案
-				frames,
-				loaf,
-				longTasks,
-				interactions,
-				baseline: frameRing.stats(from, to),   // 排除本窗口之后的分布:含自己就永远"比不上"
-				host: state.host === null || state.host === undefined ? null : {
-					at: state.hostAt > 0 ? new Date(state.hostAt).toISOString() : null,
-					// 快照年龄:这份宿主数据是事故时刻之前多少毫秒采到的(正 = 更早,负 = 事故之后才采到)。
-					// 以前这里写的是"距现在多久",口径没定义,读的人只能猜。
-					snapshotAgeMs: state.hostAt > 0 ? Math.round(perfOrigin() + pending.at - state.hostAt) : null,
-					eventLoop: state.host.eventLoop ?? null,
-				},
-				env: {
-					domNodes: state.dom.total,
-					heapUsedBytes: state.heap,
-					instrumented: state.on && state.deep === true,
-					deep: state.deep === true,
-					precise: state.precise,
-					// 跨会话(落盘后重开页面)读这份事故时,perf 毫秒要靠它才能对齐墙上时间
-					perfOrigin: new Date(perfOrigin()).toISOString(),
-					// 渲染环境:判断"这段是坏还是这台机器一直这样"的另一个前提
-					viewport: `${W.innerWidth}×${W.innerHeight}`,
-				// 本地时区偏移(分钟,UTC+8 = 480)—— 只读文件的人靠它把 ISO 换成本地时间;
-				// 注意 JS 的 getTimezoneOffset() 符号是反的
-				utcOffsetMin: -new Date().getTimezoneOffset(),
-					devicePixelRatio: W.devicePixelRatio,
-					hardwareConcurrency: navigator.hardwareConcurrency ?? null,
-					visibility: document.visibilityState,
-				},
-			};
-		}
-
-		/** 后摇到点:切片、计数、按策略留存。 */
-		function settleCapture() {
-			const watch = state.watch;
-			if (watch.pendingTimer !== 0) { natives.clearTimeout(watch.pendingTimer); watch.pendingTimer = 0; }
-			const pending = watch.pending;
-			watch.pending = null;
-			if (pending === null) return null;
-			const incident = assembleIncident(pending);
-			watch.captured += 1;
-			// 计数与留存分开记:上面那个 captured 是**本次会话**的计数,下面这份是跨刷新的时间桶
-			const now = Date.now();
-			bumpTally('captured', now);
-			noteTallySeverity(now, incident.severity);
-			incident.kept = keepIncident(incident);
-			watch.coveredUntil = pending.until;   // 这段窗口已经有主了,见 triggerCapture 的去重
-			saveIncidents();
-			return incident;
-		}
-
-		/**
-		 * 落盘:事故要能活过刷新 —— "等了很久才抓到"的东西丢了最肉疼。
-		 * localStorage 有配额,所以三步兜底:超过字节上限就丢最弱的 → 写失败再把列表砍半重试 →
-		 * 仍失败就把原因记进 persistError,并在 watch() 里照实说"这次没能落盘"。
-		 */
-		function saveIncidents() {
-			const watch = state.watch;
-			// 按触发时刻去重:同一 at(0.1ms 精度)就是同一次事件 —— 即使 id 不同也只留一条。
-			// 这是兜底:buffered 重放那条根因已修,但读回来的旧数据里可能还带着重复。
-			const seenAt = new Set();
-			const list = [];
-			for (const row of watch.incidents) {
-				// 只有两个字段都在才谈得上"同一次事件";缺字段的一律不参与去重(不能把它们
-				// 当成同一条而把真事故吃掉)。
-				const key = typeof row.at === 'string' && typeof row.cause === 'string' ? `${row.at}|${row.cause}` : null;
-				if (key !== null) {
-					if (seenAt.has(key)) { watch.deduped += 1; continue; }
-					seenAt.add(key);
-				}
-				list.push(row);
-			}
-			const afterDedupe = list.length;
-			for (let attempt = 0; attempt < 3; attempt += 1) {
-				let payload;
-				try {
-					payload = JSON.stringify({ v: 1, savedAt: Date.now(), incidents: list });
-				} catch (error) {
-					watch.persistError = `serialize:${error instanceof Error ? error.message : String(error)}`;
-					bumpTally('failed', Date.now());
-					return false;
-				}
-				if (payload.length > WATCH_PERSIST_MAX_BYTES && list.length > 1) {
-					list.pop();   // 列表按严重度降序,去掉最弱的那条
-					continue;
-				}
-				try {
-					localStorage.setItem(LS_INCIDENTS, payload);
-					watch.persistError = null;
-					// 内存里也按同一份裁掉:"看到的"必须等于"刷新后还在的"。
-					// 以前这里只裁落盘的那份,面板说"抓到 10 次"、刷新后可能只回来 7 条,对不上。
-					// 两个计数分开:去重的算 deduped,字节装不下的才算 trimmedByBytes。
-					if (watch.incidents.length !== list.length) {
-						watch.incidents.length = 0;
-						for (const row of list) watch.incidents.push(row);
-					}
-					// 裁掉的那部分进计数桶(单列成 trimmed,不混进 dropped:一个是"没比留存更好",
-					// 一个是"字节装不下",原因不同,读数的人要能分辨)
-					const trimmedNow = Math.max(0, afterDedupe - list.length);
-					watch.trimmedByBytes += trimmedNow;
-					if (trimmedNow > 0) bumpTally('trimmed', Date.now(), trimmedNow);
-					return true;
-				} catch (error) {
-					watch.persistError = error instanceof Error ? error.message : String(error);
-					if (list.length > 1) { list.length = Math.ceil(list.length / 2); continue; }
-					bumpTally('failed', Date.now());
-					return false;
-				}
-			}
-			bumpTally('failed', Date.now());
-			return false;
-		}
-
-		/** 读回落盘的事故。形状不对的条目直接丢(丢了不会静默:restored 会告诉你读回几条)。 */
-		function restoreIncidents() {
-			const watch = state.watch;
-			let parsed = null;
-			try { parsed = JSON.parse(localStorage.getItem(LS_INCIDENTS) ?? 'null'); } catch (error) { return; }
-			if (parsed === null || Array.isArray(parsed.incidents) === false) return;
-			const rows = [];
-			for (const row of parsed.incidents) {
-				if (row === null || typeof row !== 'object') continue;
-				if (typeof row.id !== 'string' || typeof row.severity !== 'number') continue;
-				if (Array.isArray(row.frames) === false || Array.isArray(row.loaf) === false) continue;
-				row.restored = true;   // 跨会话的 perf 毫秒要靠 env.perfOrigin 对齐,标出来免得误读
-				rows.push(row);
-			}
-			rows.sort((a, b) => b.severity - a.severity);
-			// 同一个 id 只留一条:实测落盘里出现过同一条事故被存了三遍(占掉 3 个留存位),
-			// 原因没复现出来(disable→enable 不会重复),所以这里按 id 兜住 —— 有牙齿的是断言。
-			const seen = new Set();
-			const unique = [];
-			for (const row of rows) {
-				const key = typeof row.at === 'string' && typeof row.cause === 'string' ? `${row.at}|${row.cause}` : null;
-				if (key !== null) {
-					if (seen.has(key)) { watch.deduped += 1; continue; }
-					seen.add(key);
-				}
-				unique.push(row);
-			}
-			// 读回来也按同一份两档策略裁一遍:落盘那份是旧版本写的、或天数已经翻过去了,
-			// 都可能比现在的上限多。裁不动也要保证"看到的 = 刷新后还在的"。
-			watch.incidents = pruneIncidents(unique);
-			watch.restored = watch.incidents.length;
-			// 新事故的序号从读回来的最大 id 之后继续,否则新 id 会和旧的撞(旧包里的 i2 撞了三次)
-			for (const row of watch.incidents) {
-				const n = /^i(\d+)$/.exec(row.id);
-				if (n !== null) watch.seq = Math.max(watch.seq, Number(n[1]));
-			}
-		}
-
-		/**
-		 * 手动标记"刚刚卡了一下":回退 WATCH_REACTION_MS(默认 3 秒,人的反应时间),
-		 * 立刻切片(不等后摇)。note 原样进事故包,方便事后知道当时在干什么。
-		 */
-		function captureNow(note) {
-			if (state.watch.on === false) return { ok: false, reason: 'not-recording(HUD 关闭时不记录)' };
-			const incident = triggerCapture('manual', performance.now() - WATCH_REACTION_MS, 0, note ?? null);
-			return incident === null ? { ok: false, reason: 'coalesced(已并进正在等的那一次)' } : { ok: true, incident };
-		}
-
-		/** 守夜层状态:装没装上、录了多少、抓到几次 —— 一律照实,不写"运行中"。 */
-		function watchStatus() {
-			const watch = state.watch;
-			const oldest = frameRing.size === 0 ? 0 : frameRing.at[(frameRing.head - frameRing.size + WATCH_FRAMES) % WATCH_FRAMES];
-			return {
-				recording: watch.on,
-				loaf: watch.loafState,
-				// A4:交互延迟(event / element timing)。面板不显示,导出件里照实写状态与计数
-				interactions: {
-					state: watch.eventState,
-					supported: watch.eventSupported,
-					thresholdMs: WATCH_EVENT_MS,
-					events: watch.eventCount,
-					elements: watch.elementCount,
-					kept: watch.interactions.length,
-				},
-				frameSamples: frameRing.size,
-				frameBudget: WATCH_FRAMES,
-				coveredMs: oldest === 0 ? 0 : round1(performance.now() - oldest),
-				loafEntries: watch.loaf.length,
-				pending: watch.pending === null ? null : { cause: watch.pending.cause, severity: watch.pending.severity },
-				captured: watch.captured,
-				coalesced: watch.coalesced,
-				dropped: watch.dropped,
-				restored: watch.restored,
-				trimmedByBytes: watch.trimmedByBytes,
-				deduped: watch.deduped,
-				persistError: watch.persistError,
-				kept: watch.incidents.map((row) => ({ id: row.id, severity: row.severity, cause: row.cause, at: row.at, note: row.note, tier: row.tier ?? null, day: row.day ?? null })),
-				triggers: {
-					frameMs: WATCH_TRIGGER_MS, gapMs: WATCH_GAP_MS,
-					preMs: WATCH_PRE_MS, postMs: WATCH_POST_MS, keep: WATCH_INCIDENT_MAX,
-					dailyDays: WATCH_DAILY_DAYS, keepMax: WATCH_KEEP_MAX,
-					reactionMs: WATCH_REACTION_MS,
-				},
-			};
-		}
 
 		// ───────────────────────── 捕获计数(与留存分离)─────────────────────────
 		/**
@@ -3570,421 +2981,25 @@ window.__ModuleLoader__.load({
 		}
 
 		// ───────────────────────────────── 文案 ─────────────────────────────────
-		const DICT = {
-			zh: {
-				title: '性能 HUD', shortcutToggle: '展开或收起性能 HUD', off: '已关', turnOn: '开启', turnOff: '关闭',
-				frameWorst: '最差帧', blame: '回调归因(耗时·下界)',
-				rest: '其余', dom: 'DOM 节点', none: '无', exportJson: '导出 JSON', clear: '清空',
-				collapse: '折叠', expand: '展开', sessions: '会话列表', messages: '消息区', perMin: '/分',
-				unattr: '帧内未归因', peak: '峰',
-				unattrHint: '帧间隔里没被插桩回调解释掉的部分:样式重算、绘制、以及等待 vsync。CSS 动画的开销只在这里现形。',
-				rateWindow: '速率近12s', heap: 'JS 堆(近60s)', domWrites: 'DOM 写入(按插件)', est: '≈',
-				worstSecond: '最差那秒', hit: '命中', times: ' 次',
-				maxBlame: '整窗最多', topBlame: '归属 Top', blameSelfHint: '本记录器自己的回调,不算在上面那张榜里', legFiber: 'fiber', legSubtree: '子树', legDom: 'DOM写入', legOwner: '包名',
-				blameHint: '本秒执行速率 / 峰值速率(EMA 平滑后的每秒执行次数)与合计耗时;悬停某一行看它的执行次数、同步耗时与累计',
-				restHint: '其余 = 除 Top3 之外还有几个归属方(名字各不相同,按累计耗时排在后面);这一行给的是它们的合计速率',
-				cnExec: '该秒执行', cnCost: '该秒同步耗时',
-				cnScope: '口径:只含 setTimeout/setInterval/requestAnimationFrame 这三次调度的回调;事件处理器 / Promise / 微任务 / React 自身调度不计入,所以这是下界',
-				perSec: '/s', samples: '次采样', unblamed: '未归因',
-				domWritesHint: '前一项是精确总次数;下面按插件给出估算(每 10 次采样一次栈,命中按 10 折算)。',
-				component: '组件', cumulative: '累计',
-				overview: '概览', overviewHint: '三秒判断:最差帧 + 最差 longtask 及其归属 + 归因命中数',
-				scope60s: '近 60 秒',
-				overviewFrame: '帧', overviewBlame: '最差那条', worstSecondShort: '最差秒', hostShort: '宿主',
-				deepShort: '深录', deepHint: '深录(= 插桩 + 精确归因):装上调度点与 DOM 写入的包装,并拉那份 12MB 的 sourcemap。默认关着 —— 守夜与现场都不插桩',
-				recorder: '记录器自身', recorderHint: '每帧给这个 HUD 自己的 rAF 回调计时:测量工具必须自证没有明显改变被测对象。p99 取最近 600 帧',
-				split: '帧里花在哪', splitTotal: '这段长动画帧共', splitWorst: '最差那条',
-				framePick: '帧', framePinned: '已钉住(点 ⟲ 回到自动)', framePickAuto: '自动:跟着最差那条走',
-				frameAutoHint: '回到自动(跟着最差那条走)',
-				framePickHint: '最近 200 条长动画帧里**值得回看的那些**(帧时长 ≥ 100ms,与守夜触发线同一条;排序也按它,blocking 只作补充),最差的在前。◀ ▶ 换一条,⟲ 回到自动;选中的那条被挤出 200 条之后会自动退回。一条都不到线时这里退回显示全部',
-				framePickFiltered: '值得回看的帧',
-				spark: '60 秒帧条',
-				sparkHint: '最近 60 秒,一格一秒:高度 = 那一秒里最差那一帧的间隔,颜色与导出件的 ASCII 帧条带用同一组阈值(≥100ms 红 / ≥50ms 黄 / 其余正常)。整格都是 rAF 挂起的那一秒画成最矮的灰柱 —— 那是间隙,不是卡顿;空白 = 那一秒没采到',
-				pkgHint: '**本帧**(上面那张环的同一帧)里脚本耗时按包汇总(与事故包 incident.packages 同一条 resolve 路:单包 URL 直接读出来,合并批按 sourcemap 分段还原)。合并批里没开「精确」就只能给到那个 58 包的批 URL,这是刻意的,不硬猜',
-				pkgWindowHint: '最近这段 LoAF **窗口**(不是上面那一帧)的同一份按包汇总:它是**累计**,分母写在小标题上;拿它和「本帧」比之前先看平均每帧',
-				pkgStoredHint: '事故包里**这一帧**的脚本耗时按包汇总:包名是**捕获时存下来的**(跨会话读回仍在),不再走当前会话的 sourcemap 缓存 —— 所以刷新之后这里也不会变成"未定名"',
-				incidentWindowScopeHint: '下面是这条事故**整份包**里的脚本累计(与 `incident.loaf` 同一份数据,不是某一帧):它是**累计**,分母写在本行;拿它和上面「历史帧」那一行比之前,先看平均每帧',
-				pkgIncidentWindowHint: '这条事故**窗口**的脚本按包汇总(整份事故包的累计,不是某一帧);分母同样在本行小标题上',
-				barCopyHint: '点这一行 → 复制「名字 + 毫秒」', copyName: '名称',
-				forcedLayout: '强制样式布局', forcedShort: '强制',
-				forcedHint: 'LoAF 的 forcedStyleAndLayoutDuration:读布局 / 写样式逼出来的同步布局。它**已经算在**脚本耗时里,来源却是样式而不是业务逻辑 —— 分不清"这块是 JS 慢还是样式慢"时看这一行。这一行是**窗口**聚合',
-				splitScript: '脚本', splitTask: '任务', splitRender: '渲染', splitTail: '样式+布局+绘制',
-				splitJs: '脚本细拆', jsExec: '纯执行', jsPause: '暂停', scopeFrame: '本帧',
-				bySource: '按来源', byPkg: '按包', pkgZeroNamed: '0 条定到名', scriptsUnit: '条脚本', needDeep: '要深录', invokerUnknown: '来源未记录',
-				srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
-				crossIncidentHint: '范围:这条事故**整份包**里的脚本(与上面「·窗口」那两行同一份数据)。两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间";只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 事故窗口的脚本总耗时;格内是毫秒,把鼠标放上去看占比。',
-				crossTable: '包 × 来源 · 窗口', crossCorner: '包 \\ 来源', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', crossUnit: '格内毫秒', crossBiggest: '最重', crossNone: '没有可交叉的脚本', crossHint: '范围:**窗口**(最近 200 条长动画帧的**累计**,与上面那两行「·窗口」是同一份数据,不是某一帧)。两个维度分开看是两张榜单,**交叉**起来才回答"哪个包的哪类回调在烧时间"。只展开 Top3 × Top3,其余并进"其余"行/列(减法补足),四块拼起来 = 脚本总耗时;格内是毫秒,把鼠标放上去看占比。', barShareHint: '最大那一段占这条的多少',
-				windowScope: '窗口', loafRows: '条长动画帧', spanOver: '跨', avgPerFrame: '平均每帧脚本',
-				maxLabel: '最大', sparkGap: '整格 rAF 挂起(间隙,不是卡顿)', sparkNoPick: '这一秒没有长动画帧,点不动', sparkPickHint: '点它 → 翻帧切到这一秒的长动画帧',
-				pickNone: '这条事故包里没有帧记录(老包或捕获时没采到):只能看窗口统计,不能逐帧回看',
-				// ── 诊断上下文(实时 / 历史事故 / 历史帧):两个上下文各自写明自己是哪一个 ──
-				ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧',
-				backToLive: '回到实时', backToLiveHint: '回到实时帧上下文(实时采集数据与历史那一侧的选中都不动)',
-				historyHint: '切到历史事故上下文:取证明细整块换成这条事故的窗口、历史帧、帧内分解与证据',
-				frameNavHint: '历史帧按**时间**翻(帧条从左到右就是这个顺序);「只看异常」开着时,步长落在帧间隔 ≥ 守夜触发线的那些帧上',
-				frameNavPrev: '上一帧', frameNavNext: '下一帧',
-				onlyBad: '只看异常', onlyBadHint: '把「上一帧 / 下一帧」的步长限制在异常帧上(帧间隔 ≥100ms,即守夜触发线);再点一次取消。它只是导航过滤器:不动选中的帧,也不动采集',
-				techFrameNone: '这一帧没有长动画帧记录(只存了帧间隔):没有帧内分解,与窗口内的 long task 也不重叠 —— 不拿别的帧顶上',
-				techFrameNoneShort: '这一帧没有记录',
-				techNoneHint: '为什么没有:长动画帧(LoAF)只上报 ≥50ms 的那些,这一帧没被上报;它的帧间隔仍然留在上面的时间轴上',
-				frameEvidenceMissing: '这一帧没有脚本记录:下面给的是事故窗口内的切片,不是这一帧的',
-				frameLtTitle: '与这一帧重叠的 Long Task', frameLtNone: '这一帧与窗口内的 long task 都不重叠',
-				frameLtWindow: '窗口内 long task',
-				replayTimeline: '历史帧时间轴', replayCellPick: '点它 → 选中这一帧', replayCellCount: '这一格',
-				replayGapCell: '这段时间没有帧记录(rAF 被挂起或采样缺失)',
-				replayTimelineHint: '横轴按**时间**放:一格可能有多帧(取最差的那一帧),点击选中**真实存在的那一帧**;整段 rAF 被挂起的地方留白 —— 那是"没在测",不是"没卡",不补桩。',
-				verdictLabel: '归因状态', verdictConfirmed: '已确认', verdictSuspected: '可疑', verdictUnattributed: '未归因',
-				verdictConfirmedText: '该帧有直接测量到的 JS 阻塞证据(longtask / LoAF 与它重叠),窗口内主要归属',
-				verdictNotRootCause: '这只缩小到"哪个包",不等于已定位根因',
-				verdictSuspectedJsNoPkg: '有 JS 阻塞证据,但窗口里的脚本没能定到包名 —— 要深录(精确归因)才能再缩小',
-				verdictThrottleText: '没有观察到足以解释该帧的 JS 阻塞,而它又明显长于前后帧:更像 rAF 被挂起或浏览器节流,需结合前后帧与时间间隙确认',
-				verdictNeighbours: '前后帧中位',
-				verdictUnattributedText: '未观察到足以解释该帧的 JS 阻塞证据;请结合前后帧和时间间隙检查 rAF 挂起或浏览器节流',
-				handoffFrameNoEvidence: '这一帧在事故包里没有脚本记录(只有帧间隔)',
-				// 证据 → 代码:把「事故 → 帧 → 来源 → 包 → 文件:行」落到个体脚本上。
-				// 直接测量 / 归因推断 / 尚无法确认三者在这几句里分开写。
-				evidenceLabel: '可疑脚本', evidenceScopeIncident: '事故', evidenceWindowPrefix: '窗口内',
-				evidenceHint: '把「事故 → 帧 → 来源 → 包 → 文件:行」落到个体脚本上:上面那几块给的是"时间花在哪个包 / 哪类调用"(排行),这一块给的是"打开哪个文件、哪个函数"(定位)。**历史事故上下文**里优先给选中那一帧自己的脚本(捕获时存下来的,跨会话读回仍在);这一帧没有记录时才退回**事故窗口内**的切片,并在行上写明范围。**实时上下文**里给当前实时帧的脚本。LoAF 只上报 >5ms 的脚本,所以这一层是**下界**。',
-				evidenceHoverHint: '悬停看口径与缺口',
-				evidenceCopyHint: '点这一行复制「函数 @ 包 · 文件:行 · 耗时 · 来源」',
-				evidenceWhere: '位置', evidenceInvoker: '来源', copyScript: '脚本',
-				evidenceBundleLine: '合并脚本行',
-				replay: '事故回放', replayGaps: 'rAF 挂起',
-				replayFailed: '事故回放算不出来',
-				replayHint: '这块是**捕获时存下来的窗口**(来自事故包,所以刷新生效),不是实时那条 60 秒帧环:横轴按**时间**放,一格可能有多帧(取最差的那一帧),点击选中的一定是 `incident.frames` 里**真实存在**的那一帧;整段 rAF 被挂起的地方留白(那是“没在测”,不是“没卡”,不补桩)。帧间隔与 LoAF 都是直接测量。⚠️ LoAF 不给每帧内脚本的起止时间,所以这里**不排帧内执行顺序**;要看逐帧明细请「导出事故包」+ tools/inspect-incident.mjs。',
-				replayScopeNote: '口径:帧间隔 / 分位 / 最差帧都来自捕获时那 13 秒的切片,不是实时读数,也不代表现在的状况;缺口 = 那段时间 rAF 被挂起。',
-				evidenceFailed: '可疑脚本这一段算不出来',
-				fnUnknown: '函数名未记录', pkgUnresolvedShort: '包未定名', fileUnresolved: '文件未定名',
-				pkgNamed: '定到包',
-				viaDirect: '直接读出来', viaInferred: '分段推断', viaNotPlugin: '不是插件脚本', viaFailed: '解析失败', viaNotFetched: '还没预取(只有深录才拉脚本文本)', viaUnavailable: '还没到位/拿不到',
-				// 交接件(复制摘要)里那两行:措辞要能让**没看过面板的人**直接用
-				handoffInteractions: '窗口内 ≥100ms 的交互', handoffInteractionsScope: '(端到端时长,不是帧内拆分)',
-				evidenceCaliberPlain: '口径:函数名与毫秒由 LoAF 直接测量;包 / 文件 / 行号由 URL 与 sourcemap 分段推断(pkg= / line= 是原始 via 码);行号是脚本文件自己的行,不是原始源码行 —— 合并批里它是合并后大文件的行,所以只给文件 + 「合并脚本行 N」,不拼成 文件:行。',
-				evidenceMissingPlain: '缺:原始源码行号与调用栈(要解 section 内层 mappings 或录 Chrome trace);交互只有端到端时长,没有输入延迟/处理/呈现的拆分。',
-				hourUnit: '小时', minUnit: '分', secUnit: '秒',
-				windowScopeHint: '下面三行是**累计**:最近 200 条**长动画帧**(LoAF 只报 >50ms 的帧)的脚本耗时加总,不是某一帧的时长 —— 200 条各百来毫秒,累计就是二十几秒。**只有"平均每条脚本"那一栏和上面那张饼可比**(饼是单帧);条数与跨度顺带回答"这段时间卡了多少次"。跨度越久,累计越大,别拿它当"越来越慢"',
-				invokerHint: 'LoAF 的 scripts[].invoker:这条脚本是**谁调起来的** —— setTimeout / rAF、某个事件处理器(实测最多的是 `DOMWebSocket.onmessage`,即会话事件流)、Promise 回调、脚本加载。它与「按包」是同一份脚本耗时的两种切法:按来源覆盖全部脚本,按包只覆盖定得到包名的那部分(所以合计不相等是正常的,总数看上面的脚本耗时)。⚠️ 它只回答"哪一类调用",不回答"函数里面慢在哪" —— 函数级要 Chrome trace,页面内没有采样器',
-				splitJsHint: '脚本自身的三分:纯执行 / 强制样式布局(读布局、写样式逼出来的同步布局)/ 暂停(同步 XHR、对话框把它卡住的时间)。三者都是 scripts[].duration 的分区内,**相加 = 脚本耗时**,不是另加的。这一行是上面那张饼的**同一帧**',
-				splitNoLoaf: '暂时没有(要等到一条 >50ms 的长动画帧;LoAF 只报 50ms 以上的)',
-				splitHint: 'LoAF 的三个时间点能拆出来的极限。环上最多 7 段:脚本那一段再按**调用来源**(invoker,与下面「本帧按来源」同一个顺序)切成最多 4 块 —— 同一族的红、由深到浅;任务里没归到脚本的那部分是**灰的**;再往后是渲染(rAF 回调)与样式+布局+绘制。段与段之间留了 1.4px 缝(同一族的红靠缝才看得出是几块),小段扣不起缝就不扣。**绘制与合成分不开**,所以最后一段是"剩下的都在这儿",别读成"样式布局占了多少";要分开只能录 Chrome trace',
-				worstOne: '最差那条',
-				unexplained: '该帧几乎无 JS 解释', unexplainedHint: '样式/布局/绘制/vsync;可用 Rendering 面板的 Paint flashing 交叉验证',
-				verdict: '判定', linkShort: 'RTT', suspectSuffix: ' 存疑', cleared: '链路已排除(宿主与隧道均正常)',
-				groupDetail: '取证明细', groupTech: '技术细节', groupDom: 'DOM 与堆', groupHost: '宿主与链路', groupTools: '工具箱', nodesSuffix: ' 节点',
-				stream: '状态', running: '流式', idle: '空闲', idleBase: '空闲基线(60s)', idleWriter: '空闲也在加节点的是',
-				notYet: '未采集', hostLoop: '宿主 event-loop',
-				hostDown: '宿主不可用', hostUnsupported: '宿主未采到', hostWarming: '等宿主样本', hostUnknown: '宿主数据不足', hostStale: '已过期', link: '链路 RTT',
-				hostEvents: '宿主事件到达', hostEventsHint: '宿主半用公开接口 ctx.on(\'session/event\') 记每条事件「提交(event.time)→到达监听器」的延迟;第一版想包 Context.emit,线上实测根本抓不到(该事件走带作用域过滤的派发),故改口径且写明',
-				notInstalled: '未安装', waiting: '已装,等事件',
-				sampling: '吞吐采样中', failed: '吞吐失败',
-				renderError: '面板渲染出错', retry: '重试',
-				renderErrorHint: '采集没停:上面是错误原文;点「重试」恢复面板,或直接导出(errors 段里也有)',
-				linkHint: '每 10 秒一次 1KB 同源探测(带 cache-buster)算 RTT,n 是最近 60 秒的样本数;吞吐每 60 秒一次 64KB(启动后 3 秒先补一次)。p99 > 300ms 且 FPS 正常且 n≥2 才判「疑似链路」',
-				suspect: '疑似链路',
-				stressFromDom: 'DOM 写入',
-				via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
-				unattrShort: '未归因', markPlaceholder: '备注(可选)',
-				// 守夜层(默认常开、不插桩):面板上只露一行状态 + 工具箱里的清单与两个按钮
-				watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回',
-				watchDetected: '检测', watchKept: '已保存现场', watchLost: '丢失', tallyUnit: ' 份',
-				tallyCoalesced: '同串触发', tallyCoalescedHint: '同一串卡顿里被并掉的触发数(密度,不是次数)',
-				// 可能原因(候选假设)与诊断包:线索强度 / 出处三档 / 包的固定形态
-				causeScriptLead: '脚本耗时最高的包', causeLongTaskLead: '长任务归属', causeHostLead: '宿主事件循环', causeNoEvidenceLead: '缺少 JS 阻塞证据',
-				causeUnresolvedSuffix: '没定到包名', causeHostBasis: '事故前后的宿主事件循环', causeLongTaskLimit: '四条腿只覆盖三次调度的回调与 DOM 写入,事件处理器 / Promise / 微任务不在内(所以这是下界)',
-				hostSnapshotNotInstant: '这份宿主快照每 10 秒采一次,未必覆盖卡顿瞬间',
-				strengthStrong: '线索较强', strengthMedium: '线索中等', strengthWeak: '线索较弱', strengthNone: '证据不足',
-				provenanceMeasured: '直接测量', provenanceInferred: '归因推断', provenanceUnknown: '无法确认',
-				packSummaryTitle: '# 性能事故诊断摘要', packSecSummary: '## 1. 摘要', integrityIncomplete: '现场不完整',
-				packSecCandidates: '## 2. 最可能的假设(最多 3 条,每条都带支持与限制)', packSecMissing: '## 3. 缺失的证据',
-				packSecNext: '## 4. 下一步验证', packSecMeta: '## 5. 元信息',
-				packCauseLabel: '假设', packSupport: '支持', packLimits: '限制', packProvenance: '出处', packTier: '采集档位',
-				packNoCandidate: '没有足够证据给出候选原因 —— 见下面的缺失与下一步。',
-				packPreviewNote: '导出前先看这份清单:包在本机生成,不上传任何内容;要交给 AI 请你自己主动发出去。',
-				packReadmeTitle: '# 这份诊断包里有什么',
-				packReadmeWhat: 'manifest.json 是入口(格式版本、平台、采集档位、能力矩阵、脱敏说明);summary.md 是给人读的摘要;incident.json 是结构化原始证据;README.md 就是你正在读的这份。',
-				packReadmeHow: '先读 summary.md 的「最可能的假设」:每一条都带支持证据与限制,以及出处(直接测量 / 归因推断 / 无法确认)。「缺失的证据」说明这一层为什么没采到 —— 不要把「没有证据」读成「没有发生」。',
-				packReadmePrivacy: '包内不含聊天正文、提示词、Cookie、Token 与请求头(不是筛掉了,是本来就没采);页面地址只保留 origin + path,用户目录降级成 ~,UA 只留主版本与系统。这是减法,不是匿名化。',
-				packReadmeNotes: '在别的工具里读 incident.json 时:帧的 t 是页面时间轴毫秒,要靠 incident.env.perfOrigin 换成墙钟;loaf 与 frames 是同一信号的两个视图,别相加;blocking 可以是 0 而这一帧仍然很重。',
-				// ── 视图模型(方案 1:主界面 / 卡顿详情 / 开发者详情 / 设置)──
-				viewDev: '开发者详情', viewSettings: '设置', back: '←',
-				// ⚠️ 这一组是补上来的:上一轮它们**只被引用、没进词典**,面板上直接印出了 key 名
-				// (viewIncident / packFilesLabel / storageKeys …)。新加的"引用的键必须在词典里"那条断言
-				// 专门挡这一类 —— 死键断言管不到它。
-				viewIncident: '卡顿详情', backHint: '回到主界面(那一屏只回答五个问题)',
-				packFilesLabel: '诊断包内容', packFilesHint: '给 AI 的那条:格式说明 + 摘要 + 原始证据 + 怎么读',
-				packFilesValue: 'manifest.json · summary.md · incident.json · README.md',
-				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / marks / groups / on / collapsed / deep / precise / map / map:index',
-				storageKeysHint: '清状态时按需删;on / deep / precise 就是采集档位(守夜 / 深录 / 精确归因),这三个会改变面板贵不贵;map 是那份 12MB sourcemap 的分段表缓存(按 rev 存)',
-				// 本轮:原因说人话(包名收进展开区)、两条导出路径、分享前预览
-				causePlainScript: '某个脚本模块的耗时偏高', causePlainLongTask: '这一段时间里有较重的渲染任务',
-				causePlainHost: '宿主进程那侧偏忙', causePlainUnknown: '缺少能解释这次停顿的 JS 证据',
-				causeWhy: '为什么这样判断?', causeWhyHide: '收起',
-				causeWhyHint: '展开看原始包名、毫秒与支持 / 限制;也可以去「开发者详情」',
-				causeRawNote: '以下是原始证据(包名 / 毫秒 / 出处),平时不用看',
-				exportAiBtn: '导出诊断包(给 AI:脱敏、不含备注)', exportFullBtn: '完整技术导出(保留备注)',
-				exportAiHint: '给 AI 的那条:自由文本置空并标 noteDropped、页面地址只留 origin+path、用户目录换成 ~、UA 只留主版本',
-				exportFullHint: '本机调试件:与上面同源,但保留你手敲的备注 —— 它不是脱敏件,别直接交出去',
-				previewTitle: '导出预览(还没生成文件)', previewFiles: '文件',
-				previewNotesDropped: '备注:已置空(标 noteDropped)', previewNotesKept: '备注:保留(本机调试件)',
-				previewExcludes: '本包不含', previewZip: '一个 zip 一次下载:', previewZipHint: '(含上面四个文件)',
-				previewGo: '生成并导出', previewCancel: '取消', exportPreviewCopy: '复制导出预览',
-				hudOff: 'HUD 已关闭', loafOff: 'LoAF 未装上',
-				healthOk: '运行流畅', healthStall: '刚才有卡顿', healthLimited: '监测受限',
-				healthHint: '看的是最近 60 秒:帧间隔与长动画帧的档位(与面板判色同一套阈值)',
-				mainStatus: '当前状态', mainLast: '最近一次卡顿', mainCause: '可能原因',
-				mainTrend1: '最近 1 小时', mainTrend24: '最近 24 小时',
-				trendSwitchHint: '在这两个窗口之间切换(计数跨刷新保存)', trendHint: '检测到几次 / 最长一次 / 重复线索 —— 三个数各有各的口径',
-				trendScope: '计数是"检测到几次卡顿"(同一串算一次);重复线索只数留存下来的现场,所以它不会比实际更严重',
-				noStallYet: '暂未记录到明显卡顿,仍在后台观察。', noCauseYet: '还没有抓到事故,先让它继续观察。',
-				trendNone: '这段时间没有检测到卡顿', trendRepeat: '重复线索', stallSuffix: '卡顿',
-				trendRepeatPlain: '同一个脚本模块',
-				viewThisStall: '查看这次卡顿', exportReport: '导出诊断报告',
-				devEntry: '开发者详情(技术数据)', devEntryHint: '帧 / 脚本 / DOM / 宿主 / 链路 / 原始数据 —— 现有能力一个都没删,只是收进这里',
-				settingsHint: '记录模式、数据保留、隐私与脱敏',
-				stallSaved: '现场已自动保存', stallNotSaved: '现场未完整保存', secondsUnit: ' 秒',
-				devTabFrames: '帧与归因', devTabDom: 'DOM 与堆', devTabHost: '宿主与链路', devTabTools: '工具箱', devTabRaw: '原始数据',
-				devTabFramesHint: '概览 / 最差事件 / 回调归因 / 取证明细(帧条、时间轴、脚本拆解、交叉表)',
-				devTabDomHint: 'DOM 节点、容器增长、JS 堆、写入者(深录时)',
-				devTabHostHint: '宿主 event-loop、宿主事件到达、空闲基线、链路 RTT 与吞吐',
-				devTabToolsHint: '事故清单 / 手动标记 / 隔离实验与清空读数',
-				devTabRawHint: '整机 JSON、事故包、诊断包预览与存储键位',
-				settingsMode: '记录模式', settingsRetain: '数据保留', settingsPrivacy: '隐私与脱敏',
-				modeWatch: '守夜(默认常开、零插桩)', modeDeep: '深录(装插桩 + 精确归因,有代价)',
-				modeHint: '守夜与现场是同一档采集,只差面板收放;深录才会包装 setTimeout / DOM 写入并拉那份 sourcemap',
-				modeHintShort: '守夜默认常开且不插桩;深录要你显式打开,面板会跟着变贵',
-				retainText: '留存取两档并集:全局最差 10 次 + 每天最差 1 条(最多最近 7 天),另有 2MB 落盘上限 —— 超了就裁最弱的,并在"裁掉"里照实计数',
-				clearIncidentsBtn: '清空事故现场', clearIncidentsHint: '只清事故(证据),不动发生频次:清掉的是证据,不是事实',
-				clearHint: '清空当前读数(帧环、长表、归因表);事故现场与发生频次都不动',
-				privacyText: '所有数据都在本机采集与保存,默认不上传任何内容。导出件在你本机生成,交给谁是你的动作。',
-				privacyRedaction: '导出前会先做减法:页面地址只留 origin + path(查询串整段丢弃)、用户目录换成 ~、UA 只留主版本;包内写明脱了什么、留了什么、本来就没采什么。这是减法,不是匿名化。',
-				privacyRedactionHint: '还有两处默认不导出:你手敲的备注(AI 诊断包里置空并标 noteDropped);聊天正文 / 提示词 / Cookie / Token / 请求头 —— 那些本插件从不读取',
-				tallyScopeSuffix: '内,同一串卡顿算一次', tallyKeepHint: '受容量限制,不等于检测到', tallyWorst: '最长一次',
-				watchDaily: '当天最差',
-				watchNone: '还没抓到', watchOff: '未开录', watchPersistFailed: '落盘失败', watchTrimmed: '裁掉',
-				watchHint: '默认常开、不插桩:一个 rAF 循环 + 一个 LoAF 观察器。帧间隔(或 LoAF 的 blockingDuration)超过 100ms 就自动抓「前 10 秒 + 后 3 秒」原样切片,留存取**两档并集**:全局最差 10 次 + 每天最差 1 条(最多最近 7 天,清单里标「当天最差」),刷新后还在;落盘另有 2MB 上限,超了就裁掉最弱的并在这一行标出「裁掉 N」。要抓偶发卡顿就让它一直开着 —— 出事后用「导出最近一次」把证据包交给分析者。',
-				watchMark: '标记刚才', watchMarkHint: '手动记一次「刚刚卡了一下」:自动回退 3 秒(人的反应时间),立刻切片,并把上面输入框的备注原样写进证据包',
-				watchExport: '导出最近一次', watchExportHint: '下载**时刻最新**那一条的完整证据包(帧序列 + LoAF + 窗口内 longtask + 环境与缺失声明;不是最差那条)。要别的:__perfHud.exportIncident(\'i55\') 按 id、或 exportIncident(0) 取最差的',
-				watchManualNote: '手动标记',
-				// 最差事件入口(P0/P1):严重度用**文字 + token 颜色**两样一起给,不只靠颜色
-				worstEvent: '最差事件', worstEventHint: '守夜留下的最差那条(按严重度排,不是按时间)。默认自动跟它;在工具箱的清单里点一条就切过去,「恢复默认布局」可回到自动。',
-				sevLabel: '严重度', sevBad: '严重', sevWarn: '警告', sevOk: '低于线',
-				sevBadHint: '≥200ms 记为「严重」:与面板判色的红档同一条线;≥100ms(守夜触发线)记为「警告」',
-				jsEvidence: 'JS 证据', jsYes: '有(longtask/LoAF 与它重叠)', jsNo: '无(longtask/LoAF 都不与它重叠)',
-				evOwner: '主要归属', evWindow: '窗口', framesUnit: ' 帧', evAutoWorst: '自动·最差', evAutoLatest: '自动·最近', evPinned: '已选中',
-				evWorst: '最差', evLatest: '最近',
-				evScopeHint: '「自动」跟哪一条:最差(严重度最高,默认)或最近(时刻最新)。点具体某一条会变成手选,这个按钮再点一下就回到自动。',
-				viewEvidence: '看这一帧', viewEvidenceHint: '切到**历史事故**这个诊断上下文:选中的那条事故 + 展开「取证明细」+ 选中这条事故里**最差的那一帧**。帧、耗时分解与证据全部来自事故包(所以跨会话读回的事故也能逐帧回看),实时那一侧的选中不动。包里没有帧记录时会如实说。',
-				exportIncidentBtn: '导出事故包', exportIncidentBtnHint: '下载这条事故的完整证据包(帧序列 + LoAF + 窗口内 longtask + 环境与缺失声明),不是整机快照。',
-				copySummary: '复制摘要', copySummaryHint: '把这条事故的结论与口径(严重度 / JS 证据 / 主要归属 / 窗口)作为纯文本复制走。',
-				copied: '已复制', copyFailed: '复制失败', copyNoApi: '这个环境没有剪贴板 API',
-				collapseAll: '全部折叠', collapseAllHint: '收起取证与工具那几组(不动翻帧与事故选中)',
-				resetLayout: '恢复默认布局', resetLayoutHint: '回到干净首屏:组全收起 + 翻帧回自动 + 事故选中回自动',
-				exportJsonHint: '整机快照:当前全部读数 + 记录器自身 + 错误账本 + 全部留存事故的清单 —— 不是某一次事故包(单次事故走「导出事故包」)。',
-				envPickHint: '点一条事故就切过去;当前选中的那条前面有 ●',
-			},
-			en: {
-				title: 'Perf HUD', shortcutToggle: 'Toggle the performance HUD', off: 'off', turnOn: 'on', turnOff: 'off',
-				frameWorst: 'worst frame', blame: 'attribution (time · lower bound)',
-				rest: 'rest', dom: 'DOM nodes', none: 'n/a', exportJson: 'Export JSON', clear: 'Clear',
-				collapse: 'Collapse', expand: 'Expand', sessions: 'Sessions', messages: 'Messages', perMin: '/min',
-				unattr: 'unattributed/frame', peak: 'peak',
-				unattrHint: 'Frame gap not explained by instrumented callbacks: style recalc, paint, and vsync wait. CSS-animation cost only shows up here.',
-				rateWindow: 'rate 12s', heap: 'JS heap (60s)', domWrites: 'DOM writes (by plugin)', est: '≈',
-				worstSecond: 'worst second', hit: 'hit', times: '',
-				maxBlame: 'window top', topBlame: 'attribution top', blameSelfHint: 'the recorder\'s own callbacks, not part of the list above', legFiber: 'fiber', legSubtree: 'subtree', legDom: 'DOM write', legOwner: 'package',
-				blameHint: 'Per-second execution rate / peak rate (EMA-smoothed) plus the summed synchronous time; hover a row for its execution count, cost and cumulative totals',
-				restHint: 'rest = how many further owners fall outside the top 3 (distinct names, ranked by cumulative time); this row shows their combined rate',
-				cnExec: 'executed this second', cnCost: 'sync time this second',
-				cnScope: 'Scope: only callbacks scheduled through setTimeout/setInterval/requestAnimationFrame; event handlers, Promises, microtasks and React\'s own scheduling are not counted, so this is a lower bound',
-				perSec: '/s', samples: ' samples', unblamed: 'unattributed',
-				domWritesHint: 'First number is the exact total; the rows below are estimates (stacks sampled every 10th write, hits scaled by 10).',
-				component: 'component', cumulative: 'total',
-				overview: 'overview', overviewHint: 'Three-second read: worst frame + worst longtask and its owner + attribution hit ratio',
-				scope60s: 'last 60s',
-				overviewFrame: 'frame', overviewBlame: 'worst one', worstSecondShort: 'worst sec', hostShort: 'host',
-				deepShort: 'deep', deepHint: 'Deep = instrumentation + precise attribution: wraps scheduling points and DOM writes and fetches the 12MB sourcemap. Off by default',
-				recorder: 'HUD itself', recorderHint: 'Times this HUD own rAF callback: a measuring tool must prove it does not change what it measures. p99 over the last 600 frames',
-				split: 'where the frame went', splitTotal: 'long frame total', splitWorst: 'worst',
-				framePick: 'frame', framePinned: 'pinned (⟲ returns to auto)', framePickAuto: 'auto: follows the worst',
-				frameAutoHint: 'back to auto (follow the worst)',
-				framePickHint: 'Out of the last 200 long animation frames, only the ones **worth reviewing** (frame duration >= 100ms, the same line the night watch triggers on; the ranking uses it too, blocking is only a supplement), worst first. ◀ ▶ flips through them, ⟲ returns to auto; a pinned frame falls back once it leaves the 200-frame ring. When nothing reaches the line this falls back to showing all of them',
-				framePickFiltered: 'frames above the line',
-				spark: '60s frame strip',
-				sparkHint: 'Last 60 seconds, one bar per second: height = the worst frame interval in that second, and the colours use the same thresholds as the ASCII frame strip in the export (>=100ms red / >=50ms yellow / otherwise normal). A second that was all rAF suspension is the shortest grey bar — a gap, not a stall; blank = nothing sampled in that second',
-				pkgHint: 'Script time in **this frame** (the same frame as the donut above), summed per package (the same resolve path as incident.packages: read straight off single-package URLs, restored from sourcemap sections for combo batches). Without precise attribution a combo batch can only be named as its 58-package batch URL — that is deliberate, nothing is guessed',
-				pkgWindowHint: 'The same per-package sum for the recent LoAF **window** (not the frame above): this is a **cumulative** figure, its denominator is on the section heading; check avg script per frame before comparing it with "this frame"',
-				pkgStoredHint: 'Script time in **this frame** of the incident, summed per package: the package names were **stored at capture time** (they survive a reload) instead of going through this session\'s sourcemap cache, so they do not turn into "unnamed" after a reload',
-				incidentWindowScopeHint: 'Below is the script total of the incident\'s **whole pack** (the same data as `incident.loaf`, not a single frame): a **cumulative** figure whose denominator is on this line; check avg script per frame before comparing it with the "history frame" row above',
-				pkgIncidentWindowHint: 'Per-package script sum for the incident\'s **window** (the whole pack, cumulative, not a single frame); its denominator is on this line as well',
-				barCopyHint: 'Click a row to copy "name + ms"', copyName: 'name',
-				forcedLayout: 'forced style+layout', forcedShort: 'forced',
-				forcedHint: 'LoAF forcedStyleAndLayoutDuration: synchronous layout forced by reading layout or writing style. It is **already inside** script time, but it comes from styling rather than business logic — read this row when you cannot tell whether the script side is slow because of JS or because of style. This row is the **window** aggregate',
-				splitScript: 'script', splitTask: 'task', splitRender: 'render', splitTail: 'style+layout+paint',
-				splitJs: 'script split', jsExec: 'exec', jsPause: 'paused', scopeFrame: 'this frame',
-				bySource: 'by source', byPkg: 'by package', pkgZeroNamed: '0 resolved', scriptsUnit: 'scripts', needDeep: 'needs deep', invokerUnknown: 'source not recorded',
-				srcNoUrl: 'no URL (inline)', srcBatch: 'plugin batch (not split)',
-				crossIncidentHint: 'Scope: the scripts of the incident\'s **whole pack** (the same data as the two "· window" rows above). The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time"; Top3 × Top3 is expanded and the rest is folded into the "rest" row/column (by subtraction), the four blocks adding up to the incident window\'s script total. Cells are milliseconds; hover for the share.',
-				crossTable: 'pkg × source · window', crossCorner: 'pkg \\ src', crossNoOverlap: 'no overlap between the top 3', crossFailed: 'cross table failed', splitFailed: 'script breakdown failed for this frame', crossUnit: 'ms per cell', crossBiggest: 'heaviest', crossNone: 'nothing to cross-tabulate', crossHint: 'Scope: the **window** (the **cumulative** total of the last 200 long animation frames, the same data as the two "· window" rows above — not a single frame). The two dimensions are two separate leaderboards on their own; only **crossed** do they answer "which of this package\'s callbacks is burning the time". Top3 × Top3 is expanded, the rest is folded into the "rest" row/column (by subtraction) and the four blocks add up to the script total. Cells are milliseconds; hover for the share.', barShareHint: 'share of the largest segment in this bar',
-				windowScope: 'window', loafRows: 'long frames', spanOver: 'over', avgPerFrame: 'avg script per frame',
-				maxLabel: 'max', sparkGap: 'whole second was rAF suspension (a gap, not a stall)', sparkNoPick: 'no long animation frame in this second, not clickable', sparkPickHint: 'click it to move the frame picker to this second\'s long animation frame',
-				pickNone: 'this incident pack has no frame records (an old pack, or nothing was captured): only window statistics are available, no frame-by-frame replay',
-				ctxLive: 'live', ctxFrame: 'current frame', ctxIncident: 'incident', ctxHistoryFrame: 'history frame',
-				backToLive: 'back to live', backToLiveHint: 'return to the live frame context (live capture data and the incident-side selection are untouched)',
-				historyHint: 'switch to the incident context: the forensics block becomes this incident\'s window, history frame, frame breakdown and evidence',
-				frameNavHint: 'history frames step in **time** order (the same order as the strip, left to right); with "only bad" on, steps land on frames whose interval is at or over the night-watch trigger',
-				frameNavPrev: 'prev frame', frameNavNext: 'next frame',
-				onlyBad: 'only bad', onlyBadHint: 'Restricts prev / next to anomalous frames (interval >=100ms, the night-watch trigger); click again to clear. It is a navigation filter only: it does not move the selection or the capture',
-				techFrameNone: 'no long animation frame was recorded for this frame (only the interval was stored): no breakdown here, and it overlaps none of the window\'s long tasks — no other frame is substituted',
-				techFrameNoneShort: 'no record for this frame',
-				techNoneHint: 'Why: long animation frames (LoAF) are only reported at or above 50ms and this frame was not reported; its interval is still on the timeline above',
-				frameEvidenceMissing: 'this frame has no script records: what follows is the in-window slice of the incident, not this frame\'s',
-				frameLtTitle: 'long tasks overlapping this frame', frameLtNone: 'this frame overlaps none of the window\'s long tasks',
-				frameLtWindow: 'long tasks in window',
-				replayTimeline: 'history frame timeline', replayCellPick: 'click to select this frame', replayCellCount: 'this column',
-				replayGapCell: 'no frames recorded during this stretch (rAF suspended or sampling gap)',
-				replayTimelineHint: 'The x axis is **time**: a column may hold several frames (the worst one is kept) and clicking selects a **frame that really exists**; stretches where rAF was suspended stay blank — that is "not measured", not "no stall", and nothing is fabricated.',
-				verdictLabel: 'attribution', verdictConfirmed: 'confirmed', verdictSuspected: 'suspected', verdictUnattributed: 'unattributed',
-				verdictConfirmedText: 'this frame has directly measured JS blocking evidence (a longtask / LoAF overlaps it); main owner in the window',
-				verdictNotRootCause: 'this narrows it to a package, not to a root cause',
-				verdictSuspectedJsNoPkg: 'there is JS blocking evidence, but no script in the window resolved to a package — deep mode (precise attribution) is needed to narrow it further',
-				verdictThrottleText: 'no JS blocking that would explain this frame was observed, and it is clearly longer than its neighbours: more like rAF suspension or browser throttling, to be confirmed against the neighbouring frames and the time gaps',
-				verdictNeighbours: 'neighbours median',
-				verdictUnattributedText: 'no JS blocking evidence sufficient to explain this frame was observed; check rAF suspension or browser throttling against the neighbouring frames and the time gaps',
-				handoffFrameNoEvidence: 'this frame has no script records in the incident pack (interval only)',
-				evidenceLabel: 'suspect scripts', evidenceScopeIncident: 'incident', evidenceWindowPrefix: 'in window',
-				evidenceHint: 'Lands the chain "incident -> frame -> invoker -> package -> file:line" on individual scripts: the blocks above say where the time went (ranking), this one says which file and function to open (locating). In the **incident context** it prefers the selected history frame\'s own scripts (stored at capture time, still there after a reload); when that frame has no records it falls back to the **in-window** slice of the incident and says so. In the **live context** it shows the current live frame\'s scripts. LoAF only reports scripts over 5ms, so this layer is a **lower bound**.',
-				evidenceHoverHint: 'hover for scope & gaps',
-				evidenceCopyHint: 'Click to copy "function @ package · file:line · cost · invoker"',
-				evidenceWhere: 'where', evidenceInvoker: 'invoked by', copyScript: 'script',
-				evidenceBundleLine: 'line in merged script',
-				replay: 'incident replay', replayGaps: 'rAF suspended',
-				replayFailed: 'incident replay could not be computed',
-				replayHint: 'This is the **captured window** (it comes from the incident pack, so it survives a reload), not the live 60-second strip: the x axis is **time**, a column may hold several frames (the worst one is kept) and a click always selects a frame that **really exists** in `incident.frames`; stretches where rAF was suspended stay blank (that is "not measured", not "no stall" — nothing is fabricated). Frame intervals and LoAF entries are directly measured. ⚠️ LoAF gives no per-script start/end inside a frame, so this **does not order execution within a frame**; for per-frame detail use "Export incident" + tools/inspect-incident.mjs.',
-				replayScopeNote: 'Scope: frame intervals / quantiles / worst frame all come from the captured 13 seconds, not from live readings, and do not describe right now; a gap means rAF was suspended during that stretch.',
-				evidenceFailed: 'the suspect-scripts block could not be computed',
-				fnUnknown: 'no function name', pkgUnresolvedShort: 'package unknown', fileUnresolved: 'file unknown',
-				pkgNamed: 'named',
-				viaDirect: 'read directly', viaInferred: 'inferred from sections', viaNotPlugin: 'not a plugin script', viaFailed: 'resolution failed', viaNotFetched: 'not fetched yet (only deep mode pulls script text)', viaUnavailable: 'not ready / unavailable',
-				handoffInteractions: 'interactions >=100ms in the window', handoffInteractionsScope: ' (end-to-end duration, not a frame breakdown)',
-				evidenceCaliberPlain: 'Scope: the function name and milliseconds are measured by LoAF; the package / file / line are inferred from the URL and sourcemap sections (pkg= / line= are the raw via codes); the line is a line in the script file itself, not an original-source line — in a combo batch it is a line in the merged big file, so only the file plus "line in merged script N" is shown, never joined into file:line.',
-				evidenceMissingPlain: 'Missing: original source line and call stack (needs the inner section mappings or a Chrome trace); interactions only give an end-to-end duration, with no input-delay/processing/presentation split.',
-				hourUnit: 'h', minUnit: 'm', secUnit: 's',
-				windowScopeHint: 'The three rows below are a **cumulative** sum: script time across the last 200 **long animation frames** (LoAF only reports frames >50ms), not the duration of any single frame — 200 frames of ~100ms each add up to tens of seconds. **Only "avg script per frame" is comparable to the donut above** (that is a single frame); the count and span answer "how often did it stall in that period". A longer span means a bigger total, so do not read it as "it is getting slower"',
-				invokerHint: 'LoAF\'s scripts[].invoker: what invoked this script — setTimeout / rAF, an event handler (the most common one here is `DOMWebSocket.onmessage`, the session event stream), a promise callback, a script load. It and "by package" are two slicings of the same script time: "by source" covers every script, "by package" only those whose package could be resolved (so the two totals differ; the total is the script time above). ⚠️ It answers "which kind of call", not "which function inside is slow" — function level needs a Chrome trace, there is no in-page sampler',
-				splitJsHint: 'The script slice split three ways: exec / forced style+layout (sync layout forced by reading layout or writing style) / paused (time blocked in sync XHR or dialogs). All three are partitions of scripts[].duration and **sum to it** — they are not additional. This row is **the same frame as the pie above**',
-				splitNoLoaf: 'not yet (needs a long animation frame >50ms; LoAF only reports those)',
-				splitHint: 'As far as LoAF can decompose it. Up to 7 arcs: the script slice is split again by **invoker** (same order as the "by source" row below) into up to 4 pieces — one red family, dark to light; the unattributed part of the task is **grey**; then render (rAF callbacks) and style+layout+paint. Arcs are separated by a 1.4px gap (that is the only way same-family reds read as separate pieces); slices too small to afford the gap keep their full length. Paint and compositing **cannot** be separated in-page, so the last slice is "everything else" — do not read it as "style and layout only"; separating them needs a Chrome trace',
-				worstOne: 'worst one',
-				unexplained: 'no JS explanation for that frame', unexplainedHint: 'style/layout/paint/vsync; cross-check with Paint flashing in the Rendering panel',
-				verdict: 'verdict', linkShort: 'RTT', suspectSuffix: ' suspect', cleared: 'link cleared (host and tunnel both normal)',
-				groupDetail: 'forensics', groupTech: 'technical details', groupDom: 'DOM & heap', groupHost: 'host & link', groupTools: 'toolbox', nodesSuffix: ' nodes',
-				stream: 'state', running: 'streaming', idle: 'idle', idleBase: 'idle baseline (60s)', idleWriter: 'still adding nodes while idle',
-				notYet: 'n/a', hostLoop: 'host event-loop',
-				hostDown: 'host n/a', hostUnsupported: 'host not sampled', hostWarming: 'waiting for host sample', hostUnknown: 'not enough host data', hostStale: 'stale', link: 'link RTT',
-				hostEvents: 'host event arrival', hostEventsHint: 'The host half uses the public ctx.on(\'session/event\') and records commit(event.time)→listener arrival lag; the earlier attempt to wrap Context.emit never fired (that event uses scope-filtered dispatch)',
-				notInstalled: 'not installed', waiting: 'installed, waiting for events',
-				sampling: 'throughput sampling', failed: 'throughput failed',
-				renderError: 'panel render error', retry: 'Retry',
-				renderErrorHint: 'Collection keeps running: the raw error is above. Retry to restore, or export (also in the errors section)',
-				linkHint: 'A 1KB same-origin probe (cache-busted) every 10s gives RTT; n is the sample count over the last 60s. Throughput is a 64KB fetch every 60s (one extra 3s after start). \"Link suspected\" needs p99 > 300ms, normal FPS, and n >= 2',
-				suspect: 'link suspected',
-				stressFromDom: 'DOM write',
-				via: 'channel', viaRemote: 'ctx.remote (client remote)', viaRoute: 'host route /api/dsh-perf-hud/host',
-				unattrShort: 'unattr', markPlaceholder: 'note (optional)',
-				watch: 'Night watch', watchCaught: 'caught', watchWorst: 'worst', watchRestored: 'restored',
-				watchDetected: 'seen', watchKept: 'evidence kept', watchLost: 'lost', tallyUnit: '',
-				tallyCoalesced: 'merged triggers', tallyCoalescedHint: 'triggers merged into the same burst (a density, not a count)',
-				// candidate causes / diagnostic pack: lead strength, provenance, fixed pack shape
-				causeScriptLead: 'package with the most script time', causeLongTaskLead: 'long-task attribution', causeHostLead: 'host event loop', causeNoEvidenceLead: 'no JS blocking evidence',
-				causeUnresolvedSuffix: ' not attributed to a package', causeHostBasis: 'host event-loop p99 around the incident', causeLongTaskLimit: 'the four legs only cover the three scheduler callbacks plus DOM writes — event handlers, promises and microtasks are not in them (so this is a lower bound)',
-				hostSnapshotNotInstant: 'the host snapshot is taken every 10s and may not cover the stall itself',
-				strengthStrong: 'strong lead', strengthMedium: 'moderate lead', strengthWeak: 'weak lead', strengthNone: 'not enough evidence',
-				provenanceMeasured: 'measured', provenanceInferred: 'inferred', provenanceUnknown: 'unknown',
-				packSummaryTitle: '# Performance incident summary', packSecSummary: '## 1. Summary', integrityIncomplete: 'incomplete capture',
-				packSecCandidates: '## 2. Most likely hypotheses (up to 3, each with support and limits)', packSecMissing: '## 3. Missing evidence',
-				packSecNext: '## 4. How to verify next', packSecMeta: '## 5. Meta',
-				packCauseLabel: 'hypothesis', packSupport: 'support', packLimits: 'limits', packProvenance: 'provenance', packTier: 'capture tier',
-				packNoCandidate: 'Not enough evidence to name a candidate cause — see the missing evidence and next steps below.',
-				packPreviewNote: 'Read this list before exporting: the pack is built locally and uploads nothing; sharing it with an AI is your own action.',
-				packReadmeTitle: '# What is in this diagnostic pack',
-				packReadmeWhat: 'manifest.json is the entry point (format version, platform, capture tier, capability matrix, redaction note); summary.md is the human-readable digest; incident.json is the structured raw evidence; README.md is what you are reading.',
-				packReadmeHow: 'Start with the hypotheses in summary.md: each carries its supporting evidence, its limits, and its provenance (measured / inferred / unknown). The missing-evidence section says WHY a layer was not captured — do not read "no evidence" as "it did not happen".',
-				packReadmePrivacy: 'The pack contains no chat text, prompts, cookies, tokens or request headers (never collected, not filtered out); page URLs keep origin + path only, home directories become ~, and the UA keeps just the major version and OS. This is subtraction, not anonymisation.',
-				packReadmeNotes: 'When reading incident.json elsewhere: frame t is page-timeline milliseconds and needs incident.env.perfOrigin to become wall clock; loaf and frames are two views of one signal, never add them; blocking can be 0 while the frame is still heavy.',
-				// view model (scheme 1: main / incident detail / developer details / settings)
-				viewDev: 'Developer details', viewSettings: 'Settings', back: '←',
-				viewIncident: 'Stall detail', backHint: 'Back to the overview (that screen only answers five questions)',
-				packFilesLabel: 'diagnostic pack', packFilesHint: 'the AI path: format note + summary + raw evidence + how to read it',
-				packFilesValue: 'manifest.json · summary.md · incident.json · README.md',
-				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / sessions / marks / groups / on / collapsed / deep / precise / map / map:index',
-				storageKeysHint: 'delete as needed when clearing state; on / deep / precise are the capture tier (night watch / deep / precise attribution) and change how expensive the panel is; map is the section-table cache for that 12MB sourcemap (keyed by rev)',
-				// this round: plain-language causes (package names behind a disclosure), two export paths, pre-share preview
-				causePlainScript: 'one script module is spending an unusual amount of time', causePlainLongTask: 'a heavy render task happened in this window',
-				causePlainHost: 'the host process side looks busy', causePlainUnknown: 'no JS evidence that explains this stall',
-				causeWhy: 'Why this conclusion?', causeWhyHide: 'Collapse',
-				causeWhyHint: 'Expand for raw package names, milliseconds and support / limits; or open developer details',
-				causeRawNote: 'Raw evidence below (package names / ms / provenance) — you rarely need this',
-				exportAiBtn: 'Export diagnostic pack (for AI: redacted, no notes)', exportFullBtn: 'Full technical export (keeps notes)',
-				exportAiHint: 'The AI path: free text blanked and marked noteDropped, page URL keeps origin+path only, home dirs become ~, UA keeps the major version',
-				exportFullHint: 'Local debugging artifact: same source, but it KEEPS the notes you typed — it is not redacted, do not hand it out as-is',
-				previewTitle: 'Export preview (nothing generated yet)', previewFiles: 'files',
-				previewNotesDropped: 'notes: blanked (marked noteDropped)', previewNotesKept: 'notes: kept (local debugging artifact)',
-				previewExcludes: 'not included', previewZip: 'one zip, one download:', previewZipHint: ' (the four files above) ',
-				previewGo: 'Generate and export', previewCancel: 'Cancel', exportPreviewCopy: 'Copy export preview',
-				hudOff: 'HUD is off', loafOff: 'LoAF not available',
-				healthOk: 'Running smoothly', healthStall: 'A stall just happened', healthLimited: 'Monitoring limited',
-				healthHint: 'Last 60 seconds: frame interval and long animation frame levels (same thresholds as the panel colours)',
-				mainStatus: 'Current status', mainLast: 'Most recent stall', mainCause: 'Possible cause',
-				mainTrend1: 'Last hour', mainTrend24: 'Last 24 hours',
-				trendSwitchHint: 'Switch between the two windows (counts survive a reload)', trendHint: 'How many / the longest / a repeating lead — three numbers with three different calibers',
-				trendScope: 'The count is "stalls detected" (one burst counts once); the repeating lead only counts evidence that was kept, so it never overstates',
-				noStallYet: 'No noticeable stall recorded yet — still watching in the background.', noCauseYet: 'Nothing captured yet; let it keep watching.',
-				trendNone: 'No stall detected in this window', trendRepeat: 'Repeating lead', stallSuffix: ' stalls',
-				trendRepeatPlain: 'the same script module',
-				viewThisStall: 'View this stall', exportReport: 'Export diagnostic report',
-				devEntry: 'Developer details (technical data)', devEntryHint: 'Frames / scripts / DOM / host / link / raw data — nothing was removed, it just moved in here',
-				settingsHint: 'Capture mode, retention, privacy and redaction',
-				stallSaved: 'scene saved automatically', stallNotSaved: 'scene not fully saved', secondsUnit: 's',
-				devTabFrames: 'Frames & blame', devTabDom: 'DOM & heap', devTabHost: 'Host & link', devTabTools: 'Toolbox', devTabRaw: 'Raw data',
-				devTabFramesHint: 'Overview / worst event / attribution / forensics (frame strip, timeline, script split, cross table)',
-				devTabDomHint: 'DOM nodes, container growth, JS heap, writers (when deep recording is on)',
-				devTabHostHint: 'Host event loop, host event arrival, idle baseline, link RTT and throughput',
-				devTabToolsHint: 'Incident list / manual mark / isolation experiment and clearing readings',
-				devTabRawHint: 'Whole-machine JSON, incident pack, diagnostic pack preview and storage keys',
-				settingsMode: 'Capture mode', settingsRetain: 'Retention', settingsPrivacy: 'Privacy and redaction',
-				modeWatch: 'Night watch (always on, zero instrumentation)', modeDeep: 'Deep recording (instrumentation + precise attribution, has a cost)',
-				modeHint: 'Night watch and live view are the same capture tier, differing only in whether the panel is unfolded; deep recording is what wraps setTimeout / DOM writes and pulls that sourcemap',
-				modeHintShort: 'Night watch is on by default and installs nothing; deep recording is yours to switch on and makes the panel itself more expensive',
-				retainText: 'Retention is the union of two tiers: the worst 10 overall + one per day (last 7 days), plus a 2MB persistence cap — over it the weakest are dropped and counted honestly',
-				clearIncidentsBtn: 'Clear saved scenes', clearIncidentsHint: 'Clears evidence only, never the frequency counts: what is removed is evidence, not the fact that it happened',
-				clearHint: 'Clears current readings (frame ring, long tasks, attribution); saved scenes and frequency counts are untouched',
-				privacyText: 'Everything is collected and stored locally; nothing is uploaded by default. Exports are built on your machine — sharing them is your action.',
-				privacyRedaction: 'Exports are redacted first: page URLs keep origin + path only (the query string is dropped), home directories become ~, the UA keeps just the major version; the pack states what was removed, kept and never collected. Subtraction, not anonymisation.',
-				privacyRedactionHint: 'Two more things are excluded by default: free text you typed (blanked and marked noteDropped in the AI pack) and chat text / prompts / cookies / tokens / request headers — this plugin never reads those',
-				tallyScopeSuffix: ' — one stall counts once', tallyKeepHint: 'capacity-limited, not the number of stalls', tallyWorst: 'longest',
-				watchDaily: 'daily worst',
-				watchNone: 'nothing caught yet', watchOff: 'not recording', watchPersistFailed: 'persist failed', watchTrimmed: 'trimmed',
-				watchHint: 'On by default and it patches nothing: one rAF loop plus one LoAF observer. When a frame interval (or LoAF blockingDuration) crosses 100ms it captures the 10s before and 3s after verbatim and keeps the **union of two tiers**: the worst 10 overall plus one worst-per-day (at most the last 7 days, marked "daily worst" in the list); they survive a reload. Persistence has a 2MB byte cap; when it trims, the count shows up as "trimmed N". Leave it running to catch intermittent stalls; after one, hand the evidence pack to an analyst with "Export latest".',
-				watchMark: 'Mark just now', watchMarkHint: 'Manually record "it just stuttered": rewinds 3s (human reaction time), slices immediately, and copies the note from the input above into the pack',
-				watchExport: 'Export latest', watchExportHint: 'Download the **newest by time** incident (frames + LoAF + long tasks in the window + environment and missing-data notes; not the worst one). For others: __perfHud.exportIncident(\'i55\') by id, or exportIncident(0) for the worst',
-				watchManualNote: 'manual mark',
-				worstEvent: 'worst event', worstEventHint: 'The worst incident the night watch kept (ranked by severity, not by time). It follows this one automatically; click an entry in the toolbox list to switch, or Reset layout to go back to auto.',
-				sevLabel: 'severity', sevBad: 'severe', sevWarn: 'warn', sevOk: 'below line',
-				sevBadHint: '>=200ms reads as severe: the same line as the red level of the panel verdict; >=100ms (the night-watch trigger) reads as warn',
-				jsEvidence: 'JS evidence', jsYes: 'yes (a longtask/LoAF overlaps it)', jsNo: 'none (neither a longtask nor a LoAF overlaps it)',
-				evOwner: 'main owner', evWindow: 'window', framesUnit: ' frames', evAutoWorst: 'auto · worst', evAutoLatest: 'auto · latest', evPinned: 'selected',
-				evWorst: 'worst', evLatest: 'latest',
-				evScopeHint: 'Which incident "auto" follows: worst (highest severity, default) or latest (newest by time). Clicking a specific entry makes it a manual pick; clicking this button returns to auto.',
-				viewEvidence: 'Show frame', viewEvidenceHint: 'Switches to the **incident** context: selects this incident, opens the forensics block and selects the **worst frame** of the incident. Frames, breakdown and evidence all come from the incident pack (so an incident restored from a previous session is still replayable frame by frame), and the live-side selection is untouched. It says so when the pack holds no frame records.',
-				exportIncidentBtn: 'Export incident', exportIncidentBtnHint: 'Download this incident\'s full evidence pack (frame series + LoAF + long tasks in the window + environment and missing-data notes) — not the whole-machine snapshot.',
-				copySummary: 'Copy summary', copySummaryHint: 'Copy this incident\'s conclusions and scope (severity / JS evidence / main owner / window) as plain text.',
-				copied: 'copied', copyFailed: 'copy failed', copyNoApi: 'no clipboard API in this environment',
-				collapseAll: 'Collapse all', collapseAllHint: 'Collapse the forensics and toolbox groups (keeps the frame pin and the incident selection)',
-				resetLayout: 'Reset layout', resetLayoutHint: 'Back to the clean first screen: all groups collapsed + frame picker to auto + incident selection to auto',
-				exportJsonHint: 'Whole-machine snapshot: every current reading + the recorder itself + the error ledger + the list of all kept incidents — not a single incident pack (use Export incident for that).',
-				envPickHint: 'Click an incident to switch to it; the selected one is marked with ●',
-			},
-		};
+		// 词典在 client.i18n.js 分片里(纯数据);`translate` 保持晚绑定,注册后再指向真实现。
+		let DICT = null;
+		let translate = (key) => key;
+		function loadI18n() {
+			if (DICT !== null) return Promise.resolve(DICT);
+			if (i18nPromise === null) {
+				i18nPromise = require.async('./client.i18n.js').then((module) => {
+					DICT = module.DICT;
+					translate = fallback;
+					return DICT;
+				}, (error) => {
+					i18nPromise = null;
+					state.errors.push({ at: Date.now(), where: 'i18n-chunk', message: String(error) });
+					throw error;
+				});
+			}
+			return i18nPromise;
+		}
+		let i18nPromise = null;
 		/**
 		 * 内置兜底:语言**跟文档走**。
 		 *
@@ -4006,7 +3021,6 @@ window.__ModuleLoader__.load({
 			if (docLang().startsWith('zh')) return DICT.zh[key] ?? DICT.en[key] ?? key;
 			return DICT.en[key] ?? key;
 		}
-		let translate = fallback;
 
 		// ─────────────────────────────── 面板(React) ───────────────────────────────
 		// 面板排版:文案走 UI 字体、数字走等宽字体;关键字加粗,数值一律 600+ 权重;
@@ -4448,10 +3462,12 @@ window.__ModuleLoader__.load({
 			React.useEffect(() => {
 				let alive = true;
 				Promise.all([
+					loadI18n(),
 					loadModel(),
+					loadWatch(),
 					require.async('./client.pack.js'),
 					require.async('./client.ui.js'),
-				]).then(([modelApiReady, pack, ui]) => {
+				]).then(([, , modelApiReady, pack, ui]) => {
 					packApi = pack;
 					uiApi = ui.createUi({
 						translate: (key) => translate(key),
@@ -4634,20 +3650,9 @@ window.__ModuleLoader__.load({
 				remoteFace = null;
 			}
 
-			// 字典:服务不在(或接口变了)就退回内置中文,仪表照常工作。
+			// 字典在分片里:先把它拉到位,再注册 locale(服务不在就退回内置词典)。
 			const locale = ctx.get('locale');
-			if (locale !== undefined && typeof locale.register === 'function' && typeof locale.bind === 'function') {
-				try {
-					const disposers = [locale.register(NS, 'zh', DICT.zh), locale.register(NS, 'en', DICT.en)];
-					translate = locale.bind(NS);
-					ctx.effect(() => () => {
-						for (const dispose of disposers) dispose();
-						translate = fallback;
-					}, 'perf-hud: dictionaries');
-				} catch (error) {
-					translate = fallback;
-				}
-			}
+			const useLocale = locale !== undefined && typeof locale.register === 'function' && typeof locale.bind === 'function';
 
 			// 页面隐藏/关闭前落盘,别丢最后 5 秒的样本。顺带记一条 A2 的跨会话基线:
 			// 会话结束时的分布只在这一次机会里拿得到(下次打开就是新会话了)。
@@ -4660,9 +3665,23 @@ window.__ModuleLoader__.load({
 				W.removeEventListener('visibilitychange', persistIfHidden);
 			}, 'perf-hud: persist on hide');
 
-			// 采集路径要调模型层(packageOfScript / evidence 等),所以等分片到位再开录。
-			// restore() 会碰模型层(pruneMapCache 等),所以整段等分片到位;采集同理。
-			loadModel().then(() => { restore(); if (state.want) start(); }, () => {});
+			// 顺序有依赖:词典要先注册(translate 晚绑定)、模型层在采集路径上、restore 会碰两者。
+			Promise.all([loadI18n(), loadModel(), loadWatch()]).then(() => {
+				if (useLocale) {
+					try {
+						const disposers = [locale.register(NS, 'zh', DICT.zh), locale.register(NS, 'en', DICT.en)];
+						translate = locale.bind(NS);
+						ctx.effect(() => () => {
+							for (const dispose of disposers) dispose();
+							translate = fallback;
+						}, 'perf-hud: dictionaries');
+					} catch (error) {
+						translate = fallback;
+					}
+				}
+				restore();
+				if (state.want) start();
+			}, () => {});
 			ctx.effect(() => () => { stop(); }, 'perf-hud: instrumentation');
 
 			// 快捷键:可选注入 —— shortcuts 服务不在时插件照常工作,只是没有这个键。
