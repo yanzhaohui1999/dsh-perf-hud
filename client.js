@@ -1,11 +1,19 @@
 /**
  * dsh-perf-hud — 浏览器端性能 HUD(纯客户端)。
  *
- * 浏览器半的全部实现在这个文件里;Host 侧(index.js)是可选的:它只提供
- * perf_hooks 事件循环采样与一个 /api/dsh-perf-hud/host 路由(事件循环读数、
- * session/event 到达延迟、bundle 读写代理)。宿主半没加载时面板照常工作,
- * 只是那三处显示不可用并写明原因。仪表固定在右下角
- * (实时 fps + 插桩状态药丸),展开后是完整面板。
+ * 浏览器半由五个文件组成(DSH 的包内分片,零构建):
+ *   client.js        采集 / 归因 / 守夜捕获 / 宿主探针 / apply(+ 模型层同步包装)
+ *   client.model.js  证据链 / 能力矩阵 / 可能原因 / 诊断包 / 视图模型(159 个函数)
+ *   client.ui.js     渲染层(四视图 + 各 block)
+ *   client.pack.js   zip(store 模式)
+ *   client.tools.js  隔离实验(首次调用才加载)
+ * 分片用 require.async 装载、factory(require) 注册;依赖一律显式传入
+ * (createModel / createUi / createToolsApi),不做反向 import。
+ *
+ * Host 侧(index.js)是可选的:它只提供 perf_hooks 事件循环采样与一个
+ * /api/dsh-perf-hud/host 路由(事件循环读数、session/event 到达延迟、bundle
+ * 读写代理)。宿主半没加载时面板照常工作,只是那三处显示不可用并写明原因。
+ * 仪表固定在右下角(实时 fps + 插桩状态药丸),展开后是完整面板。
  *
  * 四项测量:
  *   1. FPS      —— 自己的 rAF 循环(走原生 rAF,不自我归因),1 秒滚动窗口
@@ -3007,7 +3015,7 @@ window.__ModuleLoader__.load({
 		};
 		const mb = (bytes) => (bytes / 1048576).toFixed(1);
 
-		// ───────────────── 可能原因:候选假设 + 支持 / 限制 / 出处 ─────────────────
+		// ───────── 可能原因 / 诊断包 / 导出脱敏:实现在 client.model.js 分片里 ─────────
 		const CAUSE_MAX = 3;
 
 		// ───────────────────────── ZIP(store 模式,零依赖)─────────────────────────
@@ -3021,7 +3029,7 @@ window.__ModuleLoader__.load({
 		 * ② 本地头与中央目录里的 CRC / 长度必须一致(否则任何解压器都报 bad CRC);
 		 * ③ 结尾必须有 EOCD(没有它,文件根本不被认成 zip)。
 		 */
-		// ───────────────────────── zip:在 client.pack.js 分片里 ─────────────────────────
+		// ───────────── zip 包装 / 面板状态 / 选择上下文 / 启停 ─────────────
 		// 这里只留同步包装:PerfHudGate 保证面板渲染前分片已到位,所以按钮 / 导出路径调用时
 		// packApi 一定非 null;控制台在分片到位前调用会拿到明确的错误,不静默失败。
 		function packGuard() {
@@ -3031,7 +3039,6 @@ window.__ModuleLoader__.load({
 		function zipStore(files, atMs) { return packGuard().zipStore(files, atMs); }
 		function zipBase64(bytes) { return packGuard().zipBase64(bytes); }
 
-		// ───────────────────────── 诊断包(给人看,也给 AI 读)─────────────────────────
 		/**
 		 * 包是**数据**,不是界面文案:构建全在这几个纯函数里,UI 只负责下载。
 		 * 好处很直接 —— 摘要、manifest、脱敏都能在离线套件里断言,不用开浏览器;
@@ -3043,7 +3050,6 @@ window.__ModuleLoader__.load({
 		// v2:incident 增加 `integrity`(captureComplete / loafDropped / longTaskDropped / reasons)。
 		const PACK_SCHEMA_VERSION = 2;
 
-		// ───────────────────────────── 导出脱敏(离开本机的文件先做减法)─────────────────────────────
 		/**
 		 * 导出件会被交到外部 AI / 同事手里,所以**先做减法,再把减了什么写进 `context.redaction`**。
 		 * 三条铁律:
