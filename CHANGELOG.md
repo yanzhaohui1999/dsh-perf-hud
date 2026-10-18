@@ -2,7 +2,7 @@
 
 本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/),版本号遵循 SemVer。
 
-## 未发布
+## [0.5.0] - 2026-10-18
 
 ### 面板(2026-10-17,标题栏:一行永不换行)
 
@@ -103,6 +103,9 @@
 - 随后再补 **490 → 494** 条(logic 440 → 444):一条**零证据分母范围**的口径断言(历史帧 / 本帧 / 窗口内三档,不许一律写"窗口内"),以及**三条结构性静态检查** —— ① 上下文只在 `detailContext()` 一处分流;② `incidentDetail` 的函数体里不出现任何实时读数(`pickedLoaf` / `scriptPkgTally` / `framePkgTally` / `worstSecond` / `recorderText` / `unexplainedFrame` / `frameRing`);③ 新加的渲染辅助函数(定义在 `function PerfHud(` **之前**,旧的"渲染区裸调用"检查盖不到)单独跑同一条未声明引用分析。后两条的**牙齿**是用副本验过的:往 `incidentDetail` 里塞一个 `pickedLoaf()`、往 `timelineBlock` 里塞一个未声明的裸调用,断言都会 FAIL。`ci.yml` / `release.yml` 的 `-eq` 门禁与 README / README_EN / AGENTS / REVIEW 里的总数随之同步到 **494**。
 - 再补 **494 → 497** 条(logic 444 → 447):**证据块底下那一行的正文/悬停分离**("可疑脚本"底下以前把口径与缺口两整段摊在正文里,面板是纯文本渲染,`**` 与反引号原样显示 —— 现在正文只留分母 + 一句悬停提示,全文进 `evidenceFooterTitle()` 的 `title`,与「复制摘要」共用同一份措辞),以及两条**词典级**断言:① 正文文案不许带 markdown 记号(`**` / 反引号),带记号的一律得是白名单里"只进悬停"的那 20 个键;② 那份白名单不许有死键。
 - 真页面四件套:`check-panel` / `check-storage` / `check-interaction` / `check-incident` **ALL PASS**;另外用 CDP 真实鼠标扫过展开的面板 644 个点,断言条目仍活着、`errors: 0`、悬停边框解析到交互蓝 token —— 这是纯 CSS,没有任何 JS 鼠标状态。
+
+### 工具
+- **记录器自己的代价可以量了(`tools/measure-cost.mjs`)**:分 `off` / `watch` / `deep` 三档,各测空闲期帧节奏(帧间隔 p50 / p95 / max)、堆增量(每档先 `clear()` 再测,含"这一档又攒起来"的驻留成本)与 `setTimeout` 微基准(6000 次的耗时;**深录档与另外两档的比值就是调度点包装的逐调用成本**)。为什么不能再用"驱动一次同步提交、比两次提交谁慢"来量:同步提交期间 rAF 与两个观察器**根本插不进来**,而 HUD 关着那一档连 `stress()` 组件都不存在(它只在 HUD 渲染时存在)—— 两档量的不是同一件事。**守夜内部无法再细分**(`state.watch.on` 与总开关联动,`watchStatus()` 返回的是快照副本,写不进去),所以守夜档的代价是合计的;这是代码的结构缺口,不是测量偷懒。它要真浏览器 + 本机 `dsh web`,不在 `npm test` 与 CI 里。
 
 ### 文档
 - **README / README_EN 的界面说明跟上新版 UI**:补「四屏一眼看完」的九张截图(主界面 / 卡顿详情 / 设置 / 开发者详情五个标签页 / 折叠药丸)、五步操作路径(展开 → 看那一次卡顿 → 看技术数据 → 交给 AI → 本机排查),并写明两条导出路径的差别。截图由新脚本 `tools/shots.mjs` 生成:每张图**先把视图状态写死再刷新**,所以图与代码里的那一屏一一对应,改完重跑即全量更新;它和 `check-*.mjs` 一样不在离线门禁里。截图放 `docs/images/`,**不进** `package.json#files`(GitHub 上的 README 用相对路径就够;真要以 npm 页面为主再把它加进白名单 —— 这条取舍写在这里,免得以后当成遗漏)。
@@ -315,5 +318,6 @@
   [AGENTS.md](AGENTS.md) §0.1,`LANDSCAPE.md`(生态与撞车矩阵)并进 [AGENTS.md](AGENTS.md) §12 —— 三份带日期的
   记录文档删除,git 历史里还在
 
+[0.5.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.5.0
 [0.4.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.4.0
 [0.2.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.2.0

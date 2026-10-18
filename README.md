@@ -6,14 +6,14 @@
 > **守夜层:偶发卡顿自动留存最差几次,连证据一次性导出**。
 
 <p>
-<img alt="status" src="https://img.shields.io/badge/status-v0.4.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" />
+<img alt="status" src="https://img.shields.io/badge/status-v0.5.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1-4d6bfe" />
 </p>
 
 <p align="center">🌏 <b>中文</b> · <a href="./README_EN.md">English</a></p>
 
-> ✅ **v0.4.0 已发布到 npm** —— `dsh plugin --profile web add dsh-perf-hud` 即可(发布门槛与验收证据见
+> ✅ **v0.5.0 已发布到 npm** —— `dsh plugin --profile web add dsh-perf-hud` 即可(发布门槛与验收证据见
 > [REVIEW.md](REVIEW.md))。
 
 ## 📑 目录

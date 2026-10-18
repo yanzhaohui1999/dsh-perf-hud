@@ -8,12 +8,12 @@
 > worst few stalls with a full evidence pack.
 
 <p>
-<img alt="status" src="https://img.shields.io/badge/status-v0.4.0%20%C2%B7%20released-green" />
+<img alt="status" src="https://img.shields.io/badge/status-v0.5.0%20%C2%B7%20released-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1-4d6bfe" />
 </p>
 
-> ✅ **v0.4.0 is on npm** — install with `dsh plugin --profile web add dsh-perf-hud` (release gates and
+> ✅ **v0.5.0 is on npm** — install with `dsh plugin --profile web add dsh-perf-hud` (release gates and
 > evidence: [REVIEW.md](REVIEW.md)).
 > Docs are maintained in Chinese — [README.md](README.md) is the primary version.
 
