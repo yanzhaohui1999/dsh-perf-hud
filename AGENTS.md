@@ -145,7 +145,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 554 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 561 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -399,7 +399,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 `npm pack --dry-run` **18 个文件**、`tag v0.4.0` == registry 的 `gitHead` == `dbcd8f3`(线上 tarball 与本机 `npm pack` **逐文件 sha256 全等**)。
 首发走的是 **staged publishing**,不是直接 `npm publish`:`npm stage publish`(npm **11.17.0** / Node 24.19.0;registry 先建占位版本 `0.0.0-stage` 占住包名)→ 维护者 2FA **approve**。OIDC **直接** publish 发不了首版(npmjs.com 要到包已存在才能配 Trusted Publisher,上游 [npm/cli#8544](https://github.com/npm/cli/issues/8544) 仍 open);下一个版本起走 Release 触发 `release.yml`,要不要每版人工 approve 取决于 Trusted Publisher 的 **Allowed actions**(见 §10 第 4 条)。
 
-**v0.5.0 已发布到 npm**(2026-10-18,`latest → 0.5.0`,带 provenance attestations):`tag v0.5.0` → GitHub Release → `release.yml` 用 **OIDC 直接 publish** 成功(日志 `+ dsh-perf-hud@0.5.0`,**不是** staged)。Trusted Publisher 已配好并实测可用:Provider `GitHub Actions` / owner `yanzhaohui1999` / repo `dsh-perf-hud` / Workflow filename `release.yml` / Environment 留空 / **Allow npm publish 与 Allow npm dist-tag 都勾上**(只勾 stage 的话得把工作流改成 `npm stage publish` 并且每版人工 approve)。⚠️ **配置生效之前**,同一条工作流会拿到**误导性的 404**(`E404 PUT https://registry.npmjs.org/dsh-perf-hud`,`The requested resource 'dsh-perf-hud@0.5.0' could not be found or you do not have permission`),看起来像包名 / 权限写错,其实是 OIDC 匹配不上 Trusted Publisher;配好之后**重跑同一个 run** 就绿了(见 [npm/cli#9088](https://github.com/npm/cli/issues/9088))。这一版 `npm test` **606** 条、`npm pack` **23 个文件**(新增 `tools/measure-cost.mjs`)。
+**v0.5.0 已发布到 npm**(2026-10-18,`latest → 0.5.0`,带 provenance attestations):`tag v0.5.0` → GitHub Release → `release.yml` 用 **OIDC 直接 publish** 成功(日志 `+ dsh-perf-hud@0.5.0`,**不是** staged)。Trusted Publisher 已配好并实测可用:Provider `GitHub Actions` / owner `yanzhaohui1999` / repo `dsh-perf-hud` / Workflow filename `release.yml` / Environment 留空 / **Allow npm publish 与 Allow npm dist-tag 都勾上**(只勾 stage 的话得把工作流改成 `npm stage publish` 并且每版人工 approve)。⚠️ **配置生效之前**,同一条工作流会拿到**误导性的 404**(`E404 PUT https://registry.npmjs.org/dsh-perf-hud`,`The requested resource 'dsh-perf-hud@0.5.0' could not be found or you do not have permission`),看起来像包名 / 权限写错,其实是 OIDC 匹配不上 Trusted Publisher;配好之后**重跑同一个 run** 就绿了(见 [npm/cli#9088](https://github.com/npm/cli/issues/9088))。这一版 `npm test` **613** 条、`npm pack` **23 个文件**(新增 `tools/measure-cost.mjs`)。
 
 **0.4.0 收进的改动**:「帧里花在哪」从三段饼改成四段饼
 (脚本 / 任务里没归到脚本的 / 渲染 / 样式+布局+绘制),脚本侧再拆三层并分成**本帧与窗口两个分母**;
@@ -418,7 +418,7 @@ DOM 写入挪进「DOM 与堆」、`回调归因` 未插桩时降级成一行 `�
 分流点只有 `detailContext()` 一处;历史帧条是**导航器**(240 列,每列取该列最差的一帧,点击映射回 `incident.frames` 里的真实记录,
 rAF 挂起的区间留白),四个方向翻帧(没有下一条就禁用),选中帧的分解 / 脚本 / long task / 证据全部只吃那一帧(缺就是缺,不回退);
 归因状态收敛成**已确认 / 可疑 / 未归因**三档并去掉"更像 rAF 被节流"这类把可能写成结论的说法;诊断上下文落盘 `LS_WATCHUI`,
-刷新后仍停在同一条事故的同一帧。`npm test` 现在 **606** 条(attribution 11 / logic 554 / host 41),CI 门禁与文档同步成 `-eq 606`;
+刷新后仍停在同一条事故的同一帧。`npm test` 现在 **613** 条(attribution 11 / logic 561 / host 41),CI 门禁与文档同步成 `-eq 613`;
 真页面验收:`check-panel` / `check-storage` / `check-interaction` / **新增 `tools/check-incident.mjs`** 四个验证器 **ALL PASS**(见 REVIEW §2)。
 
 **仍然存在的债(套件是绿的 ≠ 它们没问题)**:
