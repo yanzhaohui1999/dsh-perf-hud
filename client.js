@@ -1425,6 +1425,8 @@ window.__ModuleLoader__.load({
 			loadAt: 0,
 		};
 		const ring = [];
+		// 包内分片 `client.pack.js` 的 exports(诊断包 / zip / 导出),由 PerfHudGate 加载。
+		let packApi = null;
 		let dirty = false;
 
 		// 容器:都用宿主自己的稳定钩子,不用哈希类名。
@@ -8514,6 +8516,29 @@ window.__ModuleLoader__.load({
 			} catch (error) { /* 样式装不上不影响功能,面板照旧可用 */ }
 		}
 
+		/**
+		 * 分片闸门:**先把 `client.pack.js` 拉到位,再渲染面板**。
+		 *
+		 * 为什么不"先渲染、后台补 API":pack / zip / 导出是一批**同步**函数,面板上的按钮
+		 * 点了就该有结果;先渲染再异步补 API,会在分片没到位时造出一排点了没反应的按钮。
+		 * 加载失败不阻塞面板:错误记进 `state.errors`(导出件里能读到),照常渲染主界面。
+		 */
+		function PerfHudGate() {
+			const [ready, setReady] = React.useState(false);
+			React.useEffect(() => {
+				let alive = true;
+				require.async('./client.pack.js').then((module) => {
+					packApi = module;
+				}, (error) => {
+					state.errors.push({ at: Date.now(), where: 'pack-chunk', message: String(error) });
+				}).then(() => {
+					if (alive) setReady(true);
+				});
+				return () => { alive = false; };
+			}, []);
+			return ready ? h(PerfHud) : null;
+		}
+
 		// ───────────────────────────────── 装配 ─────────────────────────────────
 		function apply(ctx) {
 			state.since = Date.now();
@@ -8586,7 +8611,7 @@ window.__ModuleLoader__.load({
 				name: 'shell.overlay',
 				id: PKG,
 				order: 100,
-			}, PerfHud));
+			}, PerfHudGate));
 		}
 
 		return { inject: ['slots'], apply };

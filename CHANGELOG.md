@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 客户端(2026-10-18,包内分片脚手架)
+
+- **接入 DSH 的包内分片**(`require.async('./client.<name>.js')`):新增 `client.pack.js` 与 `PerfHudGate` —— 面板在分片到位后再渲染,加载失败记进 `state.errors`、不阻塞主界面。真页面实测:浏览器请求 `/plugins/dsh-perf-hud/client.pack.js?rev=6fc872091b76`、面板 0 错误、`check-panel` ALL PASS。`package.json#files` 与 `release.yml` 的产物核对同步覆盖 `client.*.js`;分片当前只是探针,下一步把 `zipStore` / `buildPack` / `manifestFor` / `diagnosticSummary` / `packPreview` 搬进去。
+
 ### 文档(2026-10-18,档案拆分与上下文瘦身)
 
 - **REVIEW.md 只留现在仍然有效的**:对外门槛、未还的债、当前边界(57.6KB → 5.5KB)。历史决策与 67 条实测证据移到 `docs/plans/2026-10-11-acceptance-evidence.md`;原 `REVIEW-2026-10-13.md` / `NEXT-PHASE-PLAN.md` 移到 `docs/plans/`,归档说明写在各自开头。

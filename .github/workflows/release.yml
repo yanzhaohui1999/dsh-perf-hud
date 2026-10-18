@@ -72,6 +72,11 @@ jobs:
                    REVIEW.md; do
             grep -q "$f" /tmp/pack.txt || { echo "打包产物缺 $f"; exit 1; }
           done
+          # 包内分片(client.<suffix>.js)必须随包发出:漏一个,面板启动时 `require.async` 直接 404。
+          for f in client.*.js; do
+            [ -e "$f" ] || continue
+            grep -q "$f" /tmp/pack.txt || { echo "打包产物缺分片 $f"; exit 1; }
+          done
           for dir in tools locale; do
             found=0
             for f in "$dir"/*; do
