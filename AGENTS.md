@@ -61,11 +61,11 @@
 | 位置 | 是什么 | 谁读 / 什么时候 |
 |---|---|---|
 | `client.js` | 浏览器半:采集 / 归因 / 面板状态 / `apply` + 同步包装(3,723 行) | 改客户端行为 |
-| `client.*.js` | 包内分片 6 片:model 3,148 / ui 1,230 / watch 726 / i18n 431 / tools 230 / pack 135 行 | 改分片后**必须重启宿主**(见「改动的生效方式」);清单见下面「代码分片」 |
+| `client.*.js` | 包内分片 6 片:model 3,148 / ui 1,230 / watch 726 / i18n 431 / tools 230 / pack 135 行 | 改分片后 **`touch client.js`** 再刷新(见「改动的生效方式」);清单见下面「代码分片」 |
 | `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(456 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 三套离线断言(618 条)+ 两套线上 + `fixtures/incident-real.json` | 每次改完(§3) |
+| `tests/` | 三套离线断言(620 条)+ 两套线上 + `fixtures/incident-real.json` | 每次改完(§3) |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 七份参考文档 + `images/`(9 张 README 截图)+ `plans/`(三份档案 + 索引) | 按需查,别通读(§9) |
 | `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 | 改挂载、发版(§10) |
@@ -76,7 +76,7 @@
 | 改动 | 生效方式 |
 |---|---|
 | `client.js` | HMR 轮询 mtime/size;**刷新页面**最稳 |
-| `client.*.js`(包内分片) | **必须重启宿主**:分片按 URL 在宿主进程里记忆,旧 rev 会被拒(404)而旧内容会照旧返回 —— 实测改完分片后连页面自己报的 rev 都拿不到新字节(主文件走 combo 路由,是现读磁盘的,不受影响)。详见 [环境与验证](docs/verification.md) |
+| `client.*.js`(包内分片) | **`touch client.js` 换掉 rev,再刷新页面**(rev 来自主文件的 mtime/size;分片正文按 URL 记一次,rev 一变就会重读)。只改分片而不动主文件 → 浏览器/宿主都还认旧 rev,看到的是旧字节。详见 [环境与验证](docs/verification.md) |
 | `index.js` | **必须重启宿主**(`launchctl kickstart -k gui/$(id -u)/ai.dsh.web`) |
 | `package.json` 的 `dsh.client` / `dsh.bundle` | 重装或重启 |
 | 纯文档 | 无需操作 |
@@ -104,11 +104,11 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑三套件**(合计 **618** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑三套件**(合计 **620** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 566 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 568 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -170,7 +170,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **长文本用块式 + 主动断行**:可能超一行的行(概览 / 折叠摘要)用"标签独占一行 + 值左对齐 + `white-space: pre-line` 自己给 `\n`",不赌浏览器宽度。
 - **标题栏是一行不换行的工具条,只有文字可以让位**:`S.head` 无 `flexWrap`,分 `headLeft`(可压缩:`minWidth: 0` + `overflow: hidden`)+ `headRight`(控件 `flex: 0 0 auto`);**不许**用某个元素上的 `margin-left: auto` 分组;文字优先级 = 标题 > 场景标签 > 其余;**新增头部控件前先量**(现在 4 个)。**面板自己不是滚动容器**:`maxHeight: 82vh` + `overflow: hidden`,正文走 `S.scroll`(`overflowY: auto`)—— 滚轮滚不走标题栏,「收起 / 关闭」永远够得着。→ 三次事故与尺寸账见 [面板约定](docs/panel-rules.md)。
 - **单位一致性**:同一张表里不许一处给 `/s`、另一处给累计;任何"和邻居不同单位"的读数都要有断言。
-- **宽度只有一个来源**:`PANEL_WIDTH`(展开态与错误降级态都用它),收起态拿它当 `minWidth` —— 药丸是一行不可换行的读数,英文比中文宽,钉死会截断。
+- **宽度只有一个来源,而且随视口收**:`S.root(open, width)` 收一个 `panelWidthFor(innerWidth)` 算出来的宽度(桌面 = `PANEL_WIDTH` 396,窄屏 = 视口 − 24,下限 240)。收起态不设宽度(内容多宽就多宽,只封顶),整条读数比面板宽时靠 `minWidth` 托住、窄屏转紧凑档丢掉「检测 N 次」—— 钉死 396 会在手机上溢出、在英文下截断(实测 393px 视口:left = −15,标题被切掉一截)。
 
 **文案**
 

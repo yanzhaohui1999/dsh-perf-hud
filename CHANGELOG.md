@@ -38,6 +38,18 @@
 
 **证据**:`npm test` 613 条全绿;`check-panel` / `check-incident` / `check-counts` / `check-storage` / `check-interaction` 全绿;`dead-code` 0 候选;真页面按 chunk 请求六个分片、面板 0 错误。
 
+### 面板(2026-10-19,窄屏适配)
+
+- **手机上面板不再溢出**:宽度改由 `panelWidthFor(innerWidth)` 算 —— `min(396, 视口 − 24)`,下限 240。模拟 393×851 实测:定宽 396 时 `left = −15`、`right = 381`,「性能 HUD · 已关」被切成「能 HUD · 已关」,药丸那条横贯整屏还把标题挤成「生…」。现在展开态 369px(左右各 12),已关态是一枚 168px 的小 chip。
+- **收起态 / 已关态只封顶不设宽**:昨天给药丸加 `minWidth: 396` 时把已关态一起带上了,手机上就变成一条横贯整屏的胶布。现在这两种状态都是"内容多宽就多宽",只保留 `maxWidth`。
+- **药丸窄屏档**(< 480px):只丢「检测 N 次」这一格(明细在悬停与设置页里),fps / 最差帧 / 最差 longtask 三个基本读数一个不丢。判据只有视口宽度 —— 面板样式全是内联的,没有媒体查询可用。
+- **测试**:断言 618 → **620**(logic 566 → **568**:`panelWidthFor` 四档 + `pillCompact` 三档);`tools/check-panel.mjs` 加两条真页面检查 —— 用 CDP 设备模拟把视口压到 393×851,断言面板不越界、宽度 = 视口 − 24。
+
+### 文档(2026-10-19,更正"分片必须重启宿主")
+
+- 昨天写的"改包内分片必须重启宿主"**是错的**,实测更正:分片正文按 URL 记一次,而 URL 里的 rev 来自**主文件**的 mtime/size —— 所以 `touch client.js` 换掉 rev 就会重读分片,刷新页面即可,重启只是最后手段。
+- 顺带记下 memo 的副作用:它会把"改坏那一刻"的字节钉在那个 rev 上(实测一次中间态把两行 `pickStep` 写重了,文件改好之后那个 rev 仍回坏字节,页面报 `client-modules: bundle …/client.ui.js?rev=… loaded without registering`)。处置是再 `touch client.js` 换一个 rev;别在分片半改完的状态下开页面。细节与探针抓法见 [环境与验证](docs/verification.md)。
+
 ### 面板(2026-10-18,头部常驻 / 宽度一个来源 / 审批卡让位)
 
 - **头部常驻**:展开态由"根节点自己滚"改成 flex 列 + `overflow: hidden`,正文走新的 `S.scroll`(`overflowY: auto`)。以前 `overflowY: auto` 挂在根节点上,**滚轮滚走的是整块** —— 卡顿详情展开「技术细节」后必然要滚,于是标题栏连同「收起 / 关闭」一起滚没了(1400×757 实测必然发生),想收面板只能先滚回顶部。

@@ -599,6 +599,9 @@ window.__ModuleLoader__.load({
 				CROSS_SUMMARY_SRC_MAX,
 				EVIDENCE_MAX,
 				EXPERIMENT_LOAD_BURN_MS,
+				MIN_PANEL_WIDTH,
+				PANEL_WIDTH,
+				PILL_COMPACT_BELOW,
 				EXPERIMENT_LOAD_PERIOD_MS,
 				FETCH_TIMEOUT_MS,
 				FREE_TEXT_KEYS,
@@ -899,6 +902,8 @@ window.__ModuleLoader__.load({
 		function splitLegend(...args) { return model().splitLegend(...args); }
 		function frameArcs(...args) { return model().frameArcs(...args); }
 		function hudDodge(...args) { return model().hudDodge(...args); }
+		function panelWidthFor(...args) { return model().panelWidthFor(...args); }
+		function pillCompact(...args) { return model().pillCompact(...args); }
 		function frameSeverity(...args) { return model().frameSeverity(...args); }
 		function worstLoaf(...args) { return model().worstLoaf(...args); }
 		function loafRanks(...args) { return model().loafRanks(...args); }
@@ -3029,13 +3034,17 @@ window.__ModuleLoader__.load({
 		const UI_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 		const MONO_FONT = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
-		// 面板宽度**只有一个来源**(展开态与错误降级态都用它 —— 以前是 396 / 380 两个字面量)。
-		// 收起态只拿它当 `minWidth`:药丸是一行不可换行的读数,英文比中文宽,钉死会截断;给下限
-		// 是为了别随"有没有 LT / 检测到几次"忽宽忽窄。
+		// 面板宽度**只有一个来源**(展开态与错误降级态都用它 —— 以前是 396 / 380 两个字面量),
+		// 而且**随视口收**:真宽度走 `panelWidthFor(innerWidth)`(手机上 396 会溢出去)。
 		const PANEL_WIDTH = 396;
+		// 窄屏分界(< 这个宽度药丸转紧凑档、丢掉「检测 N 次」):整条读数实测要 ~425px,
+		// 加两边各 12 的边距 → 放不下就得让一格。
+		const PILL_COMPACT_BELOW = 480;
+		// 面板再窄也得放得下标题与两个按钮。
+		const MIN_PANEL_WIDTH = 240;
 
 		const S = {
-			root: (open) => ({
+			root: (open, width) => ({
 				position: 'fixed', right: 12, bottom: 12, zIndex: 60, pointerEvents: 'auto',
 				// 整数 px + 整数权重:11.5px / 650 这种分数值在 125%~150% 显示缩放下会被
 				// 浏览器合成加粗并重新栅格化,观感发糊 —— "糊糊的"最常见的来源。
@@ -3045,13 +3054,15 @@ window.__ModuleLoader__.load({
 				boxShadow: '0 10px 30px rgba(0,0,0,.28)', boxSizing: 'border-box',
 				...(open
 					? {
-						width: PANEL_WIDTH, maxHeight: '82vh', padding: '10px 12px',
+						width, maxHeight: '82vh', padding: '10px 12px',
 						// **头部常驻**:面板自己**不滚**,只有正文那一块滚(见 S.scroll)。以前
 						// `overflowY: auto` 挂在根节点上,滚轮滚走的是整块 —— 卡顿详情展开
 						// 「技术细节」之后必然要滚,于是「收起 / 关闭」跟着标题栏一起滚没了。
 						display: 'flex', flexDirection: 'column', overflow: 'hidden',
 					}
-					: { minWidth: PANEL_WIDTH, padding: '6px 10px' }),
+					// 收起态/已关态**不设宽度**:内容多宽就多宽(chip 才是它该有的样子),
+					// 只封顶 —— 药丸那一长条读数在宽屏上会比展开态还宽(实测 425),窄屏上不能溢出去。
+					: { maxWidth: width, padding: '6px 10px' }),
 			}),
 			// 正文滚动区:展开态唯一的滚动容器(`minHeight: 0` 是 flex 子项能滚起来的前提)。
 			scroll: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden' },
@@ -3154,7 +3165,7 @@ window.__ModuleLoader__.load({
 			return h('div', {
 				ref: (element) => { state.root = element; },
 				id: ROOT_ID,
-				style: S.root(true),
+				style: S.root(true, panelWidthFor(W.innerWidth)),
 			},
 				h('div', { style: S.head },
 					h('span', { style: S.brand }, translate('title')),
@@ -3489,7 +3500,8 @@ window.__ModuleLoader__.load({
 						EVIDENCE_MAX,
 				LS_UI,
 				MONO_FONT,
-				PANEL_WIDTH,
+				panelWidthFor,
+				pillCompact,
 				PICK_MIN_MS,
 				REPLAY_COLS,
 				ROOT_ID,

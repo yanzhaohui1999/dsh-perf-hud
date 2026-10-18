@@ -444,7 +444,12 @@ const newPieces = [
 	'const state = {',
 	'function round1(',
 	'function pluginTable(',
+	'const PANEL_WIDTH = ',
+	'const MIN_PANEL_WIDTH = ',
+	'const PILL_COMPACT_BELOW = ',
 	'function hudDodge(',
+	'function panelWidthFor(',
+	'function pillCompact(',
 	'function domWriteTable(',
 	'function domWriteSnapshot(',
 	'function domWriteDelta(',
@@ -733,7 +738,7 @@ const box = new Function(`${sandbox}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -3509,13 +3514,20 @@ check('卡片不可见 / 在视口下方 / 占满整屏 / 根本没有卡片 →
 	dodgeIn({ card: { top: 0 } }),
 	EX.hudDodge({ card: null, viewport: { w: 1400, h: 757 }, width: 396 }),
 ], [null, null, null, null]);
-// 面板宽度只允许一个来源:展开态 `width` 与收起态 `min-width` 都走 PANEL_WIDTH(以前展开 396、
-// 错误降级视图另写 380 —— 三个宽度来源,改一个忘一个)。
-check('面板宽度只有一个来源(PANEL_WIDTH)', [
+// 面板宽度只允许一个来源,而且**随视口收**:S.root 收一个算好的宽度(以前展开 396 / 错误降级
+// 视图 380 / 收起态 min-width 396 —— 三个字面量,改一个忘一个,而且在手机上会溢出去)。
+check('面板宽度只有一个来源,而且由 S.root 收参', [
 	(source.match(/const PANEL_WIDTH = 396;/g) ?? []).length,
-	/width: PANEL_WIDTH/.test(source) && /minWidth: PANEL_WIDTH/.test(source),
+	/root: \(open, width\)/.test(source),
 	/\bwidth: 380\b/.test(source) || /\bwidth: 396\b/.test(source),
 ], [1, true, false]);
+// 手机上 396 定宽会直接溢出(实测 393px 视口:left = −15,标题被切掉一截)。
+check('窄屏宽度:396 → 视口 − 24,下限 240',
+	[EX.panelWidthFor(1400), EX.panelWidthFor(393), EX.panelWidthFor(260), EX.panelWidthFor(2000)],
+	[396, 369, 240, 396]);
+check('药丸窄屏档(< 480 才丢「检测 N 次」,三个基本读数一个不丢)',
+	[EX.pillCompact(1400), EX.pillCompact(480), EX.pillCompact(479), EX.pillCompact(393)],
+	[false, false, true, true]);
 check('worstLoaf:按 frameSeverity = max(blocking, 帧时长) 取最差(只看 blocking 会挑错那条)', (() => {
 	const saved = watch.state.watch.loaf.slice();
 	watch.state.watch.loaf.length = 0;

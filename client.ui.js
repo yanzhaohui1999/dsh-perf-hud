@@ -15,7 +15,8 @@ window.__ModuleLoader__.load({
 				EVIDENCE_MAX,
 				LS_UI,
 				MONO_FONT,
-				PANEL_WIDTH,
+				panelWidthFor,
+				pillCompact,
 				PICK_MIN_MS,
 				REPLAY_COLS,
 				ROOT_ID,
@@ -914,12 +915,16 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			const t = translate;
+			// 面板宽度随视口收(手机上定宽 396 会溢出去);药丸在窄屏转紧凑档。
+			// 两个判据都是纯函数,真页面那侧由 tools/check-panel.mjs 在 393px 视口下验。
+			const panelWidth = panelWidthFor(W.innerWidth);
+			const compact = pillCompact(W.innerWidth);
 			// 审批卡让位:那两个真按钮(拒绝 / 允许一次)在卡片右下角,正压在我们这一列上 ——
 			// 遮住批准按钮是这个面板最不该干的事。判定是纯函数(见 hudDodge),这里只量一次 DOM。
 			const dodge = hudDodge({
 				card: approvalCardRect(),
 				viewport: { w: W.innerWidth, h: W.innerHeight },
-				width: PANEL_WIDTH,
+				width: panelWidth,
 			});
 			const dodgeStyle = dodge === null ? null : {
 				bottom: dodge.bottom,
@@ -939,7 +944,7 @@ window.__ModuleLoader__.load({
 			state.toggleHud = toggle;
 			// 收起/展开不抢焦点:外壳在键盘命令之后会把焦点还给输入框;与它抢只会让用户丢焦点。
 			if (state.on === false) {
-				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false), ...dodgeStyle } },
+				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false, panelWidth), ...dodgeStyle } },
 					h('div', { style: S.head },
 						h('span', { style: S.label }, `${t('title')} · ${t('off')}`),
 						h('button', { type: 'button', style: S.btn, onClick: () => setEnabled(true) }, t('turnOn'))));
@@ -988,14 +993,16 @@ window.__ModuleLoader__.load({
 				// 少报:被挤掉的卡顿不是没发生。现在这一格给的是**跨刷新的 24 小时检测次数**
 				// (`tallyWindow`),留存数 / 丢失数放进悬停(`tallyTitle`)—— 三个数各有各的名字。
 				const pillTally = tallyWindow(TALLY_MINUTES * TALLY_BUCKET_MS);
-				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false), ...dodgeStyle } },
+				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false, panelWidth), ...(compact === true ? null : { minWidth: panelWidth }), ...dodgeStyle } },
 					h('div', { style: S.head },
 						h('span', { style: S.brand }, t('title')),
 						h('span', { style: { ...S.label, color: sceneChip().color } }, sceneChip().text),
 						h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(0)} fps`),
 						h('span', { style: S.label }, `${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms`),
 						worst === null ? null : h('span', { style: S.label }, `LT ${worst.ms.toFixed(0)}ms`),
-						pillTally.detected === 0 ? null : h('span', { style: S.label, title: tallyTitle(TALLY_MINUTES * TALLY_BUCKET_MS) }, `${t('watchDetected')} ${pillTally.detected}${t('times')}`),
+						// 窄屏只让这一格(明细本来就在悬停与设置页里):实测整条读数要 ~425px,
+						// 393px 视口把它丢掉之后其余读数才不挤成"生… 空闲 2s 12 fps…"。
+						pillTally.detected === 0 || compact === true ? null : h('span', { style: S.label, title: tallyTitle(TALLY_MINUTES * TALLY_BUCKET_MS) }, `${t('watchDetected')} ${pillTally.detected}${t('times')}`),
 						h('button', { type: 'button', style: S.btn, title: t('expand'), onClick: toggle }, '+'),
 						h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff'))));
 			}
@@ -1227,7 +1234,7 @@ window.__ModuleLoader__.load({
 
 			// 自带边界:渲染抛错时只降级成一块小面板,不让外壳把整个条目停用。
 			return h(HudBoundary, { renderError: renderErrorView },
-				h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(true), ...dodgeStyle } }, head,
+				h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(true, panelWidth), ...dodgeStyle } }, head,
 					// 正文是**唯一**的滚动容器:头部(返回 / 设置 / 收起 / 关闭)永远留在原地,
 					// 滚轮再长也滚不走它(以前整块一起滚,控件够不着)。
 					h('div', { style: S.scroll }, body,

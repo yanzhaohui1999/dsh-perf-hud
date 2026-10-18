@@ -10,7 +10,7 @@
 | 改动 | 生效方式 |
 |---|---|
 | `client.js`(客户端半) | `dsh-client-hmr` 轮询 mtime/size 自动热载;**刷新页面**最稳 |
-| `client.*.js`(包内分片) | **必须重启宿主**:分片按 URL 在宿主进程里记忆(见下面那段实测) |
+| `client.*.js`(包内分片) | **`touch client.js` 换 rev + 刷新页面**(见下面那段实测) |
 | `index.js`(宿主半) | **必须重启宿主服务**(本机 `launchctl kickstart -k gui/$(id -u)/ai.dsh.web`) |
 | `package.json` 的 `dsh.client` / `dsh.bundle` | 需要重新扫描(重装或重启) |
 | 纯文档(`*.md`) | 无需任何操作 |
@@ -19,14 +19,19 @@
 
 为什么宿主插件没有文件监听:本 profile 的 `dsh-hmr` `config.root` 是 `[]`,它只在 bundle 列表或 patch 文件**内容**变化时 reconcile —— 这是机制原因,不是偷懒。
 
-⚠️ **改包内分片(`client.*.js`)必须重启宿主 —— 刷新页面没用(2026-10-18 实测,花了半小时才认出来)**。
-分片路由与主文件走的不是同一条路:`client.js` 在 combo 路由里**每次现读磁盘**(所以改完主文件刷新就生效),
-而分片走 `chunkResponse`,它 ① 只认当前 rev(`record.entry.rev`,不匹配一律 404)、② 把响应体按 URL 缓存
-(`this.responses.set(resourceUrl, response)`),缓存一次就不再重读磁盘。rev 的唯一更新入口是 `rebuilt(id)`
-(由 HMR 的注册钩子调用),所以只要宿主没重扫,新字节就进不来。抓到它的办法是探针里直接
-`fetch(performance.getEntriesByType('resource') 里那条 client.ui.js 的 URL, { cache: 'no-store' })`,
-再在回来的正文里找一个刚写进去的标记 —— 实测:主文件有标记、分片没有,而两个 URL 的 `?rev=` 还不一样。
-→ **改完分片先重启宿主,再跑真页面验收器**;重启会杀掉本会话的 bash,排在一轮的最后或交给用户。
+⚠️ **改包内分片(`client.*.js`)要 `touch client.js`,不是刷新页面就行(2026-10-18 实测,踩了两轮)**。
+分片与主文件走的不是同一条路:`client.js` 在 combo 路由里**每次现读磁盘**,而分片走 `chunkResponse` ——
+它 ① 只认当前 rev(URL 不匹配一律 404,实测 `?rev=deadbeef00` → 404)、② 把响应体按 URL 记一次
+(`this.responses.set(resourceUrl, response)`),同一个 rev 不再重读磁盘。而 rev 来自 `rebuilt(id)`,它的
+baseline 是**主文件**的 mtime/ctime/size —— 只改分片时 rev 不动,于是"页面报的还是旧 rev、拿到的还是旧字节"。
+**做法:改完分片 `touch client.js`(或顺手改它一行),等一两秒让 rev 推上去,再刷新页面**;重启宿主是最后手段。
+抓到这套的办法(两次都靠它):探针里 `fetch(performance.getEntriesByType('resource')` 里那条分片 URL,
+`{ cache: 'no-store' })`,在回来的正文里找一个刚写进去的标记 —— 主文件有、分片没有,就是命中了旧 rev。
+
+⚠️ 同一个 memo 还会**把"改坏那一刻"的字节钉在那个 rev 上**:一次中间态(两行 `pickStep` 重复声明)被读走后,
+即使文件已经改好,那个 rev 仍然回坏字节,页面报的是 `client-modules: bundle …/client.ui.js?rev=…
+loaded without registering "dsh-perf-hud/client.ui.js"`(脚本抛语法错 → 注册那一步没跑到)。**别在分片半改完
+的状态下开页面**;已经钉上了就再 `touch client.js` 换一个新 rev。
 
 两条容易踩的环境事实:
 

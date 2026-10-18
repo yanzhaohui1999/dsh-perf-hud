@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ `cordis.patch.yml` 形态正确 —— 这是市场收录最常见的被拒原因 |
 | 4 | 公开仓库 + topic | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场 |
 | 5 | 产物无死链 | ✅ 0.5.0 `npm pack` **23 个文件**;`release.yml` 逐份核(含 `tools/`、`locale/` 按目录核) |
-| 6 | 门禁全绿 | ✅ **618** 条离线断言(attribution 11 / logic 566 / host 41);CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ **620** 条离线断言(attribution 11 / logic 568 / host 41);CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ✅ 2026-10-18 已提 PR [awesome-dsh-plugin#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814)(单文件 `data/plugins/…yml`),等 maintainer 合并 |
 | 8 | 兼容性声明 | ✅ `engines.dsh` 与三个客户端 inject 包统一 `>=0.2.0-rc.2 <0.3.0-0`;本机 `0.2.1-rc.1` 下五个真页面验收器全绿 |
 

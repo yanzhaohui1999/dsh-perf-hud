@@ -70,17 +70,22 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	check('正文有独立滚动容器,而且头部不在它里面', geom.scroller !== null && geom.headInScroller === false, JSON.stringify(geom));
 
 	// 往正文里塞 2000px 再滚 1500px:头部必须原地不动(以前整块一起滚,「收起 / 关闭」够不着)。
+	// ⚠️ 先等面板长到 maxHeight 封顶再记起点:根节点没有 height,塞进高内容时它会先长高
+	// (底边固定 → 头部上移),那不是"滚走"。要验的是**滚轮**能不能把头部带走。
 	const stuck = await page.evaluate(`(async () => {
+		const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		const root = document.getElementById('dsh-perf-hud-root');
 		const scroller = [...root.querySelectorAll('*')].find((el) => getComputedStyle(el).overflowY === 'auto');
 		const head = root.firstElementChild;
-		const before = head.getBoundingClientRect().top;
 		const tall = document.createElement('div');
 		tall.style.height = '2000px';
 		scroller.appendChild(tall);
+		await frame();
+		const before = Math.round(head.getBoundingClientRect().top);
 		scroller.scrollTop = 1500;
-		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-		const out = { before: Math.round(before), after: Math.round(head.getBoundingClientRect().top), scrolled: Math.round(scroller.scrollTop) };
+		await frame();
+		const after = Math.round(head.getBoundingClientRect().top);
+		const out = { before, after, scrolled: Math.round(scroller.scrollTop), rootH: Math.round(root.getBoundingClientRect().height) };
 		tall.remove();
 		return out;
 	})()`);
@@ -113,6 +118,22 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	})()`);
 	check('审批卡出现 → 面板让到卡片上方(不压批准按钮)', dodge.dodged !== null, JSON.stringify(dodge));
 	check('审批卡消失 → 面板回到右下角', dodge.restored !== null, JSON.stringify(dodge));
+
+	// 窄屏(手机 / 分栏):定宽 396 会溢出去(实测 393px 视口:left = −15,标题被切掉一截),
+	// 现在宽度走 panelWidthFor → "视口 − 两边各 12"。用 CDP 的设备模拟把视口压到 393×851。
+	await page.send('Emulation.setDeviceMetricsOverride', { width: 393, height: 851, deviceScaleFactor: 3, mobile: true });
+	await new Promise((resolve) => setTimeout(resolve, 1200));
+	await page.evaluate(`(() => { try { localStorage.setItem('dsh-perf-hud:collapsed', '0'); localStorage.setItem('dsh-perf-hud:on', '1'); } catch (error) { /* 隐私模式之类 */ } })()`);
+	await page.reload();
+	await new Promise((resolve) => setTimeout(resolve, 800));
+	const narrow = await page.evaluate(`(() => {
+		const root = document.getElementById('dsh-perf-hud-root');
+		const rect = root.getBoundingClientRect();
+		return { left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width), viewport: innerWidth };
+	})()`);
+	check('393px 视口:面板不越界(左 ≥ 0、右 ≤ 视口)', narrow.left >= 0 && narrow.right <= narrow.viewport, JSON.stringify(narrow));
+	check('393px 视口:面板宽度 = 视口 − 24', narrow.width === narrow.viewport - 24, JSON.stringify(narrow));
+	await page.send('Emulation.clearDeviceMetricsOverride');
 
 	// 只求值一次:**布尔**当断言(`false` 即失败),其它类型当诊断读数(打印出来,不影响通过)
 	const value = await page.evaluate(`(() => { try { return (${expression}); } catch (error) { return 'expr-threw: ' + error.message; } })()`);

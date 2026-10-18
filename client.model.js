@@ -26,10 +26,13 @@ window.__ModuleLoader__.load({
 				LS_MAP,
 				LS_MAP_INDEX,
 				MAP_CACHE_MAX,
+				MIN_PANEL_WIDTH,
 				MUT_SAMPLE,
 				PACK_SCHEMA_VERSION,
 				PAGE_KEYS,
+				PANEL_WIDTH,
 				PICK_MIN_MS,
+				PILL_COMPACT_BELOW,
 				PKG,
 				PLUGIN_URL,
 				REPLAY_COLS,
@@ -2204,6 +2207,22 @@ window.__ModuleLoader__.load({
 			];
 		}
 		/**
+		 * **面板宽度**:桌面 396,窄屏(手机 / 分栏)退到"视口 − 两边各 12"。
+		 * 手机上定宽 396 会直接溢出去(实测 393px 视口:left = −15,「性能 HUD · 已关」被切成
+		 * 「能 HUD · 已关」,药丸那条更是横贯整屏)。下限 240:再窄也得放得下标题与两个按钮。
+		 */
+		function panelWidthFor(viewportWidth) {
+			return Math.max(MIN_PANEL_WIDTH, Math.min(PANEL_WIDTH, Math.round(viewportWidth) - 24));
+		}
+		/**
+		 * **药丸的窄屏档**:宽度不够时只丢「检测 N 次」这一格(它的明细本来就在悬停与设置页里)。
+		 * 三个基本读数 —— fps / 最差帧 / 最差 longtask —— 一个都不丢(见 §5「折叠不是看不见」)。
+		 * 判据只有视口宽度:面板的样式全是内联的,没有媒体查询可用。
+		 */
+		function pillCompact(viewportWidth) {
+			return viewportWidth < PILL_COMPACT_BELOW;
+		}
+		/**
 		 * **审批卡让位**:审批面板是 composer takeover,「拒绝 / 允许一次」两个按钮在卡片右下角 ——
 		 * 正压在 HUD 停的那一列上(实测 1400×757 下必然重叠,遮住的就是那两个按钮)。
 		 *
@@ -3116,6 +3135,8 @@ window.__ModuleLoader__.load({
 				splitLegend,
 				frameArcs,
 				hudDodge,
+				panelWidthFor,
+				pillCompact,
 				frameSeverity,
 				worstLoaf,
 				loafRanks,
