@@ -399,6 +399,8 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 `npm pack --dry-run` **18 个文件**、`tag v0.4.0` == registry 的 `gitHead` == `dbcd8f3`(线上 tarball 与本机 `npm pack` **逐文件 sha256 全等**)。
 首发走的是 **staged publishing**,不是直接 `npm publish`:`npm stage publish`(npm **11.17.0** / Node 24.19.0;registry 先建占位版本 `0.0.0-stage` 占住包名)→ 维护者 2FA **approve**。OIDC **直接** publish 发不了首版(npmjs.com 要到包已存在才能配 Trusted Publisher,上游 [npm/cli#8544](https://github.com/npm/cli/issues/8544) 仍 open);下一个版本起走 Release 触发 `release.yml`,要不要每版人工 approve 取决于 Trusted Publisher 的 **Allowed actions**(见 §10 第 4 条)。
 
+**v0.5.0 已发布到 npm**(2026-10-18,`latest → 0.5.0`,带 provenance attestations):`tag v0.5.0` → GitHub Release → `release.yml` 用 **OIDC 直接 publish** 成功(日志 `+ dsh-perf-hud@0.5.0`,**不是** staged)。Trusted Publisher 已配好并实测可用:Provider `GitHub Actions` / owner `yanzhaohui1999` / repo `dsh-perf-hud` / Workflow filename `release.yml` / Environment 留空 / **Allow npm publish 与 Allow npm dist-tag 都勾上**(只勾 stage 的话得把工作流改成 `npm stage publish` 并且每版人工 approve)。⚠️ **配置生效之前**,同一条工作流会拿到**误导性的 404**(`E404 PUT https://registry.npmjs.org/dsh-perf-hud`,`The requested resource 'dsh-perf-hud@0.5.0' could not be found or you do not have permission`),看起来像包名 / 权限写错,其实是 OIDC 匹配不上 Trusted Publisher;配好之后**重跑同一个 run** 就绿了(见 [npm/cli#9088](https://github.com/npm/cli/issues/9088))。这一版 `npm test` **606** 条、`npm pack` **23 个文件**(新增 `tools/measure-cost.mjs`)。
+
 **0.4.0 收进的改动**:「帧里花在哪」从三段饼改成四段饼
 (脚本 / 任务里没归到脚本的 / 渲染 / 样式+布局+绘制),脚本侧再拆三层并分成**本帧与窗口两个分母**;
 随后一轮 UI 改版:折叠组变五组(新增「包 × 来源 · 窗口」`cross`,默认收起;`group()` 的 children 改成 thunk,
@@ -428,10 +430,9 @@ rAF 挂起的区间留白),四个方向翻帧(没有下一条就禁用),选中�
 - **原始源码行号 / 调用栈 / 函数级耗时仍然拿不到**:要解 section 内层 `mappings`(VLQ)或录 Chrome trace。「可疑脚本」只能缩小到"哪个包的哪个文件哪一段"。
 - **函数名经常缺失**:LoAF 的 `sourceFunctionName` 在合并/压缩脚本里常常是空 —— 面板照实写「函数名未记录」,这不是 bug。
 
-**卡在哪**:没有了 —— 0.4.0 已经发出去。**下一次发版前**只剩两件对外动作(细节在 [REVIEW.md](REVIEW.md) §3.1):
-① 在 npm 包设置页配 Trusted Publisher(Provider `GitHub Actions`,owner `yanzhaohui1999` / repo `dsh-perf-hud` / Workflow filename `release.yml`)
-—— ⚠️ 新建配置**必须在 2 天内完成一次成功发布**,否则作废且无法编辑,所以**别提前配**;
-② 收录 PR 还没提。
+**卡在哪**:没有了 —— 0.5.0 已经发出去,Trusted Publisher 也已在用(上一次发版的 404 是配置未生效,不是代码问题)。对外只剩两件:
+① **收录 PR 已提**(2026-10-18,[awesome-dsh-plugin#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814),`Submission gate` 与 `check` 已 pass,等 maintainer 合并;合并后 dsh-market 每日刷新带上);
+② **npm 搜索索引仍缺这个包**:`/-/v1/search?text=dsh-perf-hud` 查不到,而 `maintainer:yanzhaohui1999` 查得到、npmmirror 也查得到(0.4.0 时代就这样;0.5.0 发布后再观察,48h 仍缺就把这两条证据报 npm support)。
 `release.yml` 对"该版本已在 npm 上"幂等(发布前查 registry,查到就跳过;查询失败照实报错),所以给手工首发那一版建 Release 只会走"跳过"分支,不会再发一次。
 三条新发现的尾巴(A5 还没接进客户端/导出件、~~D4 的 `stressText()` 死代码~~(2026-10-13 已随死代码层删掉;`stress()` 夹具保留,仍然没有可读结果)、`locale` 的打包边界)也记在 REVIEW §3.2。已完成的验收证据在 REVIEW §2。
 

@@ -133,7 +133,9 @@
     - **勾上直接 publish** ⇒ 现在的 `release.yml` 原样可用,建 Release 就自动上线。
     ⚠️ 另外,新建配置**必须 2 天内完成一次成功发布**,否则作废且无法编辑 —— 所以配的时机是"接下来两天真的会发一版";给一个**已经在 npm 上**的版本建 Release **不算验证**(工作流会走"跳过发布"那条分支)。
   - `release.yml` 现在对"该版本已在 npm 上"幂等:发布前查 registry,查到就跳过并写 notice(**实测**:给首发那版建 Release,v0.4.0 的 `release.yml` 跑绿,`Check whether…` 步骤 success、`Publish` 步骤 **skipped**);**查询失败照实报错退出**,不猜成"没发过"。
-- [ ] **提收录 PR**:只提**一个文件** `data/plugins/<owner>__<repo>.yml`(必填 `description.en`),一个 PR 最多 3 条(§1 #7)。
+- [x] **0.5.0 发版(2026-10-18)**:`tag v0.5.0` → GitHub Release → `release.yml` 用 **OIDC 直接 publish** 成功(日志 `+ dsh-perf-hud@0.5.0`;registry `dist.attestations` 在场,`latest → 0.5.0`)。Trusted Publisher 配置:**Provider `GitHub Actions` / `yanzhaohui1999` / `dsh-perf-hud` / Workflow filename `release.yml` / Environment 留空 / Allow npm publish + Allow npm dist-tag 都勾**。⚠️ **配置生效之前**,同一条 run 报的是**误导性的 404**(`E404 PUT https://registry.npmjs.org/dsh-perf-hud`,`The requested resource 'dsh-perf-hud@0.5.0' could not be found or you do not have permission`),看起来像包名 / 权限错,实际是 OIDC 对不上 Trusted Publisher;配置生效后**重跑同一个 run** 即绿([npm/cli#9088](https://github.com/npm/cli/issues/9088))。`npm test` **606** 条、`npm pack` **23 个文件**。
+- [ ] **npm 搜索索引仍缺这个包(2026-10-18 发现)**:registry 与 `maintainer:yanzhaohui1999` 查询都有它,但文本搜索 `/-/v1/search?text=dsh-perf-hud` 翻到 1250 条也没有(同期同量级的 `dsh-token-hud` / 只有 `0.0.0-stage` 的 `dsh-cot-anchor` 搜自己的名字都是第 1 条);npmmirror 的搜索能搜到。0.4.0 时代就这样,0.5.0 正常 publish 后继续观察;48h 不恢复就把这两条证据报 npm support。
+- [x] **提收录 PR**(2026-10-18):只提了**一个文件** `data/plugins/yanzhaohui1999__dsh-perf-hud.yml`(category `dev`),PR [awesome-dsh-plugin#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814);`Submission gate` 与 `check` 已 pass,等 maintainer 合并(合并后 dsh-market 每日刷新带上)。
 
 ### 3.2 三条尾巴(2026-10-08 新发现)
 
@@ -228,4 +230,4 @@
 
 **深录 sourcemap 解析实测(决定要不要 Worker)**:在当前构建(17 个 section,不是早期 58 个)上清掉 map 缓存 → `setPrecise(true)` → 等 `bundleMap` ready,整段墙钟 **514ms**(含网络),**没有 >50ms 的 longtask**;所以本轮**不**把解析搬进 Worker。它仍可能随包数增长,后续要动就先重测这一条(阈值:出现 >50ms 的自有长任务)。
 
-**时机**:0.4.0 已于 2026-10-11 发到 npm(手工首发,见 §3.1);发布这件事只剩两件:下次发版前配 Trusted Publisher、提收录 PR。
+**时机**:0.4.0 于 2026-10-11 手工首发(见 §3.1);**0.5.0 于 2026-10-18 由 GitHub Release 触发 `release.yml` 自动发布**(OIDC,无人工 approve)。发布这件事只剩两件对外尾巴:收录 PR 等合并、npm 搜索索引等恢复。
