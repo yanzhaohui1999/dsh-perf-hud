@@ -56,6 +56,23 @@
 
 ## 2. 环境与验证
 
+**仓库一览**(先认路;顶层文件 + 四个目录各是什么。**行数是 2026-10-18 的快照**,只在"这块有多大"时参考):
+
+| 位置 | 是什么 | 谁读 / 什么时候 |
+|---|---|---|
+| `client.js` | 浏览器半:采集 / 归因 / 面板状态 / `apply` + 同步包装(3,723 行) | 改客户端行为 |
+| `client.*.js` | 包内分片 6 片:model 3,148 / ui 1,230 / watch 726 / i18n 431 / tools 230 / pack 135 行 | 改分片后主文件要一起 touch;清单见下面「代码分片」 |
+| `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(456 行) | 改宿主行为,必须重启 |
+| `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
+| `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
+| `tests/` | 三套离线断言(613 条)+ 两套线上 + `fixtures/incident-real.json` | 每次改完(§3) |
+| `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
+| `docs/` | 七份参考文档 + `images/`(9 张 README 截图)+ `plans/`(三份档案 + 索引) | 按需查,别通读(§9) |
+| `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 | 改挂载、发版(§10) |
+| `icon.svg`、根目录六份文档 | 图标;README / README_EN / AGENTS / CONTRIBUTING / REVIEW / CHANGELOG | §9 文档地图 |
+
+**改动的生效方式**(决定你能不能验证):
+
 | 改动 | 生效方式 |
 |---|---|
 | `client.js` | HMR 轮询 mtime/size;**刷新页面**最稳 |
