@@ -444,6 +444,7 @@ const newPieces = [
 	'const state = {',
 	'function round1(',
 	'function pluginTable(',
+	'function hudDodge(',
 	'function domWriteTable(',
 	'function domWriteSnapshot(',
 	'function domWriteDelta(',
@@ -732,7 +733,7 @@ const box = new Function(`${sandbox}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -3487,6 +3488,34 @@ check('"谁"的两类标签合起来排序(插件包 + 其余来源),堆叠条�
 	watch.whoRows({ top: [['pkg', 10]], byOther: [['index-abc.js', 90], ['无 URL(内联脚本)', 5]] }),
 	[['index-abc.js', 90], ['pkg', 10], ['无 URL(内联脚本)', 5]]);
 check('圆环图例两行的长度预算(zh;396px 面板)', watch.splitLegend({ total: 200, js: 100, taskOther: 20, render: 20, tail: 60 }).every((line) => line.length <= 26), true);
+
+// ── 审批卡让位(hudDodge)──────────────────────────────────────────────
+// 背景:审批面板是 composer takeover,「拒绝 / 允许一次」两个真按钮在卡片右下角 —— 正好压在
+// HUD 停的那一列上(真页面实测:挡住的就是批准按钮)。判定是纯函数,这里用造出来的几何断言;
+// 真页面那一侧由 `tools/check-panel.mjs` 插一张假审批卡来验。
+const dodgeIn = ({ card: over, viewport } = {}) => EX.hudDodge({
+	card: { top: 526, right: 1400, width: 1400, height: 231, ...over },
+	viewport: viewport ?? { w: 1400, h: 757 },
+	width: 396,
+});
+check('审批卡压在我们这一列 → 抬到卡片上方,高度跟着收到剩下的空间',
+	dodgeIn(), { bottom: 243, maxHeight: 502, left: false });
+check('窗口够宽(卡片右边界在面板左边)→ 一动不动', dodgeIn({ card: { right: 900 } }), null);
+check('卡片把上方挤没了 → 退到左下角(动作按钮右对齐,挡不到)', dodgeIn({ card: { top: 40 } }),
+	{ bottom: 12, maxHeight: 621, left: true });
+check('卡片不可见 / 在视口下方 / 占满整屏 / 根本没有卡片 → 一律不动', [
+	dodgeIn({ card: { width: 0, height: 0 } }),
+	dodgeIn({ card: { top: 800 } }),
+	dodgeIn({ card: { top: 0 } }),
+	EX.hudDodge({ card: null, viewport: { w: 1400, h: 757 }, width: 396 }),
+], [null, null, null, null]);
+// 面板宽度只允许一个来源:展开态 `width` 与收起态 `min-width` 都走 PANEL_WIDTH(以前展开 396、
+// 错误降级视图另写 380 —— 三个宽度来源,改一个忘一个)。
+check('面板宽度只有一个来源(PANEL_WIDTH)', [
+	(source.match(/const PANEL_WIDTH = 396;/g) ?? []).length,
+	/width: PANEL_WIDTH/.test(source) && /minWidth: PANEL_WIDTH/.test(source),
+	/\bwidth: 380\b/.test(source) || /\bwidth: 396\b/.test(source),
+], [1, true, false]);
 check('worstLoaf:按 frameSeverity = max(blocking, 帧时长) 取最差(只看 blocking 会挑错那条)', (() => {
 	const saved = watch.state.watch.loaf.slice();
 	watch.state.watch.loaf.length = 0;

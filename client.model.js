@@ -2204,6 +2204,34 @@ window.__ModuleLoader__.load({
 			];
 		}
 		/**
+		 * **审批卡让位**:审批面板是 composer takeover,「拒绝 / 允许一次」两个按钮在卡片右下角 ——
+		 * 正压在 HUD 停的那一列上(实测 1400×757 下必然重叠,遮住的就是那两个按钮)。
+		 *
+		 * 这里只做算术,输入全是数字:真页面里由渲染层量一次 `[data-approval-key]` 的 rect 喂进来,
+		 * 离线套件拿造出来的数断言。返回 `null` = 不用让;否则给要盖到根节点上的三个数:
+		 *   · `bottom`    —— 新的下边距(把面板抬到卡片上方);
+		 *   · `maxHeight` —— 抬上去之后还剩多高(不跟着收,面板会被顶出屏幕上沿);
+		 *   · `left`      —— 上方也放不下时的退路:改停左下角(动作按钮右对齐,挡不到它们)。
+		 */
+		function hudDodge(input) {
+			const card = input.card;
+			if (card === null || card === undefined) return null;
+			const margin = input.margin ?? 12;
+			if (!(card.width > 0) || !(card.height > 0)) return null;          // display:none / 还没布局
+			const vw = input.viewport.w;
+			const vh = input.viewport.h;
+			if (card.top >= vh) return null;                                   // 卡片整块还在视口下方
+			if (card.right <= vw - input.width - margin) return null;          // 窗口够宽,卡片伸不到这一列
+			const bottom = Math.round(vh - card.top + margin);
+			const room = vh - bottom - margin;
+			const cap = Math.round(vh * (input.capRatio ?? 0.82));
+			if (room < (input.minRoom ?? 200)) {
+				if (card.top <= margin) return null;                            // 卡片顶到屏幕上沿:让也无处可让
+				return { bottom: margin, maxHeight: cap, left: true };
+			}
+			return { bottom, maxHeight: Math.min(cap, room), left: false };
+		}
+		/**
 		 * 一条长动画帧的严重度 = `max(blocking, 帧时长)`。**面板里"最差那条帧"只有这一个口径**:
 		 * LoAF 的 blocking 在这个环境里常年偏小(实测 45 帧的 blocking 全部 < 100ms,最大 92ms),
 		 * 只看它会把 92ms 的帧排到 300ms 的帧前面;而判色(120/200ms)与圆环上的「帧里花在哪」
@@ -3087,6 +3115,7 @@ window.__ModuleLoader__.load({
 				frameSplit,
 				splitLegend,
 				frameArcs,
+				hudDodge,
 				frameSeverity,
 				worstLoaf,
 				loafRanks,

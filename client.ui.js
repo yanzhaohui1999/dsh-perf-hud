@@ -15,6 +15,7 @@ window.__ModuleLoader__.load({
 				EVIDENCE_MAX,
 				LS_UI,
 				MONO_FONT,
+				PANEL_WIDTH,
 				PICK_MIN_MS,
 				REPLAY_COLS,
 				ROOT_ID,
@@ -76,6 +77,7 @@ window.__ModuleLoader__.load({
 				hostFreshness,
 				hostLoopStateText,
 				hostSummary,
+				hudDodge,
 				incidentFrameHeadingText,
 				incidentFrameStep,
 				incidentLongTasksAt,
@@ -858,6 +860,17 @@ window.__ModuleLoader__.load({
 					h('span', { style: S.num }, hitText(tally))),
 			];
 		}
+		/**
+		 * **审批卡**(composer takeover)的 rect —— `data-approval-key` 是外壳那侧给的稳定约定
+		 * (见 `@deepseek-ai/dsh-client-ui-approval` 的 ApprovalPanel;类名是构建期哈希,不能用)。
+		 * 没有审批卡时一次 querySelector 就返回,**不读布局**。
+		 */
+		function approvalCardRect() {
+			const card = document.querySelector('[data-approval-key]');
+			if (card === null) return null;
+			const rect = card.getBoundingClientRect();
+			return { top: rect.top, right: rect.right, width: rect.width, height: rect.height };
+		}
 		function PerfHud() {
 			const [, force] = React.useState(0);
 			const [open, setOpen] = React.useState(state.collapsed === false);
@@ -901,6 +914,18 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			const t = translate;
+			// 审批卡让位:那两个真按钮(拒绝 / 允许一次)在卡片右下角,正压在我们这一列上 ——
+			// 遮住批准按钮是这个面板最不该干的事。判定是纯函数(见 hudDodge),这里只量一次 DOM。
+			const dodge = hudDodge({
+				card: approvalCardRect(),
+				viewport: { w: W.innerWidth, h: W.innerHeight },
+				width: PANEL_WIDTH,
+			});
+			const dodgeStyle = dodge === null ? null : {
+				bottom: dodge.bottom,
+				maxHeight: dodge.maxHeight,
+				...(dodge.left === true ? { left: 12, right: 'auto' } : null),
+			};
 			const toggle = () => {
 				const next = open === false;
 				setOpen(next);
@@ -914,7 +939,7 @@ window.__ModuleLoader__.load({
 			state.toggleHud = toggle;
 			// 收起/展开不抢焦点:外壳在键盘命令之后会把焦点还给输入框;与它抢只会让用户丢焦点。
 			if (state.on === false) {
-				return h('div', { ref: setRoot, id: ROOT_ID, style: S.root(false) },
+				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false), ...dodgeStyle } },
 					h('div', { style: S.head },
 						h('span', { style: S.label }, `${t('title')} · ${t('off')}`),
 						h('button', { type: 'button', style: S.btn, onClick: () => setEnabled(true) }, t('turnOn'))));
@@ -963,7 +988,7 @@ window.__ModuleLoader__.load({
 				// 少报:被挤掉的卡顿不是没发生。现在这一格给的是**跨刷新的 24 小时检测次数**
 				// (`tallyWindow`),留存数 / 丢失数放进悬停(`tallyTitle`)—— 三个数各有各的名字。
 				const pillTally = tallyWindow(TALLY_MINUTES * TALLY_BUCKET_MS);
-				return h('div', { ref: setRoot, id: ROOT_ID, style: S.root(false) },
+				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false), ...dodgeStyle } },
 					h('div', { style: S.head },
 						h('span', { style: S.brand }, t('title')),
 						h('span', { style: { ...S.label, color: sceneChip().color } }, sceneChip().text),
@@ -1202,8 +1227,11 @@ window.__ModuleLoader__.load({
 
 			// 自带边界:渲染抛错时只降级成一块小面板,不让外壳把整个条目停用。
 			return h(HudBoundary, { renderError: renderErrorView },
-				h('div', { ref: setRoot, id: ROOT_ID, style: S.root(true) }, head, body,
-					state.stressNodes > 0 ? h(PerfHudStress, { count: Math.min(state.stressNodes, 6000) }) : null));
+				h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(true), ...dodgeStyle } }, head,
+					// 正文是**唯一**的滚动容器:头部(返回 / 设置 / 收起 / 关闭)永远留在原地,
+					// 滚轮再长也滚不走它(以前整块一起滚,控件够不着)。
+					h('div', { style: S.scroll }, body,
+						state.stressNodes > 0 ? h(PerfHudStress, { count: Math.min(state.stressNodes, 6000) }) : null)));
 		}
 		/** 分享前预览:构建一次存进 state(别每次渲染都重新序列化整份事故包)。 */
 		function openPackPreview(id, options) {

@@ -61,11 +61,11 @@
 | 位置 | 是什么 | 谁读 / 什么时候 |
 |---|---|---|
 | `client.js` | 浏览器半:采集 / 归因 / 面板状态 / `apply` + 同步包装(3,723 行) | 改客户端行为 |
-| `client.*.js` | 包内分片 6 片:model 3,148 / ui 1,230 / watch 726 / i18n 431 / tools 230 / pack 135 行 | 改分片后主文件要一起 touch;清单见下面「代码分片」 |
+| `client.*.js` | 包内分片 6 片:model 3,148 / ui 1,230 / watch 726 / i18n 431 / tools 230 / pack 135 行 | 改分片后**必须重启宿主**(见「改动的生效方式」);清单见下面「代码分片」 |
 | `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(456 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 三套离线断言(613 条)+ 两套线上 + `fixtures/incident-real.json` | 每次改完(§3) |
+| `tests/` | 三套离线断言(618 条)+ 两套线上 + `fixtures/incident-real.json` | 每次改完(§3) |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 七份参考文档 + `images/`(9 张 README 截图)+ `plans/`(三份档案 + 索引) | 按需查,别通读(§9) |
 | `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 | 改挂载、发版(§10) |
@@ -76,7 +76,7 @@
 | 改动 | 生效方式 |
 |---|---|
 | `client.js` | HMR 轮询 mtime/size;**刷新页面**最稳 |
-| `client.*.js`(包内分片) | 同主文件,但**分片的 rev 来自主文件** —— 只改分片时先 `touch client.js`,否则浏览器会命中同一个 `?rev=` |
+| `client.*.js`(包内分片) | **必须重启宿主**:分片按 URL 在宿主进程里记忆,旧 rev 会被拒(404)而旧内容会照旧返回 —— 实测改完分片后连页面自己报的 rev 都拿不到新字节(主文件走 combo 路由,是现读磁盘的,不受影响)。详见 [环境与验证](docs/verification.md) |
 | `index.js` | **必须重启宿主**(`launchctl kickstart -k gui/$(id -u)/ai.dsh.web`) |
 | `package.json` 的 `dsh.client` / `dsh.bundle` | 重装或重启 |
 | 纯文档 | 无需操作 |
@@ -104,11 +104,11 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑三套件**(合计 **613** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑三套件**(合计 **618** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 561 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 566 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -168,8 +168,9 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 - **整数 px、整数字重**:`11.5px` / `fontWeight: 650` 在 125%~150% 缩放下会合成加粗 + 重新栅格化,观感发糊 —— 用 `12px` / `700`。
 - **标签不收缩、数值换行**(只作用于数据行):`label { flex: 0 0 auto; nowrap }` + `value { flex: 1 1 auto; textAlign: right }`;反过来标签会竖排(实测「宿主事件到达」)。标题栏不适用 —— 见下一条。
 - **长文本用块式 + 主动断行**:可能超一行的行(概览 / 折叠摘要)用"标签独占一行 + 值左对齐 + `white-space: pre-line` 自己给 `\n`",不赌浏览器宽度。
-- **标题栏是一行不换行的工具条,只有文字可以让位**:`S.head` 无 `flexWrap`,分 `headLeft`(可压缩:`minWidth: 0` + `overflow: hidden`)+ `headRight`(控件 `flex: 0 0 auto`);**不许**用某个元素上的 `margin-left: auto` 分组;文字优先级 = 标题 > 场景标签 > 其余;**新增头部控件前先量**(现在 4 个)。→ 三次事故与尺寸账见 [面板约定](docs/panel-rules.md)。
+- **标题栏是一行不换行的工具条,只有文字可以让位**:`S.head` 无 `flexWrap`,分 `headLeft`(可压缩:`minWidth: 0` + `overflow: hidden`)+ `headRight`(控件 `flex: 0 0 auto`);**不许**用某个元素上的 `margin-left: auto` 分组;文字优先级 = 标题 > 场景标签 > 其余;**新增头部控件前先量**(现在 4 个)。**面板自己不是滚动容器**:`maxHeight: 82vh` + `overflow: hidden`,正文走 `S.scroll`(`overflowY: auto`)—— 滚轮滚不走标题栏,「收起 / 关闭」永远够得着。→ 三次事故与尺寸账见 [面板约定](docs/panel-rules.md)。
 - **单位一致性**:同一张表里不许一处给 `/s`、另一处给累计;任何"和邻居不同单位"的读数都要有断言。
+- **宽度只有一个来源**:`PANEL_WIDTH`(展开态与错误降级态都用它),收起态拿它当 `minWidth` —— 药丸是一行不可换行的读数,英文比中文宽,钉死会截断。
 
 **文案**
 
@@ -180,6 +181,7 @@ scope 用固定这几个:`client` / `host` / `attribution` / `panel` / `isolatio
 **交互**
 
 - **可点 / 不可点的界线(不做假按钮)**:只有"有具体名字或对应一条真实记录"的元素可点;合计行(「其余」)与堆叠条的色段本身不可点。→ 逐项清单(可点 5 类)见 [面板约定](docs/panel-rules.md)。
+- **不许挡住别人的按钮**:审批卡(composer takeover,`[data-approval-key]`)的「拒绝 / 允许一次」在卡片右下角,正压在我们这一列上 —— 卡片压过来时让到它上方并跟着收高度,上方也放不下就停左下角。→ 判定规则与实测见 [面板约定](docs/panel-rules.md)。
 - **按钮按需出现,不留"点了没反应"的动作**:「全部折叠」只在 `anyGroupOpen()` 时有意义,「恢复默认布局」只在 `layoutDirty()` 为真时渲染;新加布局类按钮前先问"默认状态下点它会发生什么",不会发生就别显示。
 
 **渲染性能**

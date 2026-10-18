@@ -898,6 +898,7 @@ window.__ModuleLoader__.load({
 		function frameSplit(...args) { return model().frameSplit(...args); }
 		function splitLegend(...args) { return model().splitLegend(...args); }
 		function frameArcs(...args) { return model().frameArcs(...args); }
+		function hudDodge(...args) { return model().hudDodge(...args); }
 		function frameSeverity(...args) { return model().frameSeverity(...args); }
 		function worstLoaf(...args) { return model().worstLoaf(...args); }
 		function loafRanks(...args) { return model().loafRanks(...args); }
@@ -3028,6 +3029,11 @@ window.__ModuleLoader__.load({
 		const UI_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 		const MONO_FONT = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
+		// 面板宽度**只有一个来源**(展开态与错误降级态都用它 —— 以前是 396 / 380 两个字面量)。
+		// 收起态只拿它当 `minWidth`:药丸是一行不可换行的读数,英文比中文宽,钉死会截断;给下限
+		// 是为了别随"有没有 LT / 检测到几次"忽宽忽窄。
+		const PANEL_WIDTH = 396;
+
 		const S = {
 			root: (open) => ({
 				position: 'fixed', right: 12, bottom: 12, zIndex: 60, pointerEvents: 'auto',
@@ -3038,9 +3044,17 @@ window.__ModuleLoader__.load({
 				border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 12,
 				boxShadow: '0 10px 30px rgba(0,0,0,.28)', boxSizing: 'border-box',
 				...(open
-					? { width: 396, maxHeight: '82vh', overflowY: 'auto', overflowX: 'hidden', padding: '10px 12px' }
-					: { padding: '6px 10px' }),
+					? {
+						width: PANEL_WIDTH, maxHeight: '82vh', padding: '10px 12px',
+						// **头部常驻**:面板自己**不滚**,只有正文那一块滚(见 S.scroll)。以前
+						// `overflowY: auto` 挂在根节点上,滚轮滚走的是整块 —— 卡顿详情展开
+						// 「技术细节」之后必然要滚,于是「收起 / 关闭」跟着标题栏一起滚没了。
+						display: 'flex', flexDirection: 'column', overflow: 'hidden',
+					}
+					: { minWidth: PANEL_WIDTH, padding: '6px 10px' }),
 			}),
+			// 正文滚动区:展开态唯一的滚动容器(`minHeight: 0` 是 flex 子项能滚起来的前提)。
+			scroll: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden' },
 			// ⚠️ **头部一行永不换行**(以前是 flexWrap: 'wrap'):那一行里每个元素都是 `flex: 0 0 auto`
 			// (见下面 label / btn 那两条"不收缩"规则),一旦总宽超了就按 DOM 顺序把**尾部的控件整组**
 			// 丢到第二行、还左对齐 —— 看上去像下面那一块的按钮。现在分成显式两组:左组可压缩
@@ -3140,7 +3154,7 @@ window.__ModuleLoader__.load({
 			return h('div', {
 				ref: (element) => { state.root = element; },
 				id: ROOT_ID,
-				style: { ...S.root(true), width: 380 },
+				style: S.root(true),
 			},
 				h('div', { style: S.head },
 					h('span', { style: S.brand }, translate('title')),
@@ -3475,6 +3489,7 @@ window.__ModuleLoader__.load({
 						EVIDENCE_MAX,
 				LS_UI,
 				MONO_FONT,
+				PANEL_WIDTH,
 				PICK_MIN_MS,
 				REPLAY_COLS,
 				ROOT_ID,
@@ -3536,6 +3551,7 @@ window.__ModuleLoader__.load({
 				hostFreshness,
 				hostLoopStateText,
 				hostSummary,
+				hudDodge,
 				incidentFrameHeadingText,
 				incidentFrameStep,
 				incidentLongTasksAt,

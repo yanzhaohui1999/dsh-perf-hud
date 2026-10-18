@@ -10,6 +10,7 @@
 | 改动 | 生效方式 |
 |---|---|
 | `client.js`(客户端半) | `dsh-client-hmr` 轮询 mtime/size 自动热载;**刷新页面**最稳 |
+| `client.*.js`(包内分片) | **必须重启宿主**:分片按 URL 在宿主进程里记忆(见下面那段实测) |
 | `index.js`(宿主半) | **必须重启宿主服务**(本机 `launchctl kickstart -k gui/$(id -u)/ai.dsh.web`) |
 | `package.json` 的 `dsh.client` / `dsh.bundle` | 需要重新扫描(重装或重启) |
 | 纯文档(`*.md`) | 无需任何操作 |
@@ -17,6 +18,15 @@
 ⚠️ **重启会杀死正在跑这个插件的会话**:agent 的 bash 工具进程就在 `dsh web` 进程内(实测进程链)。改宿主半后要重启时,把重启排在报告之后(`nohup bash -c 'sleep N; launchctl kickstart …' &`)或交给用户执行,**不要在会话中途重启**。
 
 为什么宿主插件没有文件监听:本 profile 的 `dsh-hmr` `config.root` 是 `[]`,它只在 bundle 列表或 patch 文件**内容**变化时 reconcile —— 这是机制原因,不是偷懒。
+
+⚠️ **改包内分片(`client.*.js`)必须重启宿主 —— 刷新页面没用(2026-10-18 实测,花了半小时才认出来)**。
+分片路由与主文件走的不是同一条路:`client.js` 在 combo 路由里**每次现读磁盘**(所以改完主文件刷新就生效),
+而分片走 `chunkResponse`,它 ① 只认当前 rev(`record.entry.rev`,不匹配一律 404)、② 把响应体按 URL 缓存
+(`this.responses.set(resourceUrl, response)`),缓存一次就不再重读磁盘。rev 的唯一更新入口是 `rebuilt(id)`
+(由 HMR 的注册钩子调用),所以只要宿主没重扫,新字节就进不来。抓到它的办法是探针里直接
+`fetch(performance.getEntriesByType('resource') 里那条 client.ui.js 的 URL, { cache: 'no-store' })`,
+再在回来的正文里找一个刚写进去的标记 —— 实测:主文件有标记、分片没有,而两个 URL 的 `?rev=` 还不一样。
+→ **改完分片先重启宿主,再跑真页面验收器**;重启会杀掉本会话的 bash,排在一轮的最后或交给用户。
 
 两条容易踩的环境事实:
 

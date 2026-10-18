@@ -53,6 +53,67 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 		check('快捷键再按一次回到原状态', back === before, JSON.stringify({ before, back }));
 	}
 
+	// ── 面板几何:这三条离线套件看不出来,只有真布局才知道 ────────────────────
+	// ① 宽度只有一个来源;② 头部常驻(面板自己不滚,正文才滚);③ 审批卡让位(不许压住批准按钮)。
+	const geom = await page.evaluate(`(() => {
+		const root = document.getElementById('dsh-perf-hud-root');
+		const scroller = [...root.querySelectorAll('*')].find((el) => getComputedStyle(el).overflowY === 'auto');
+		return {
+			width: Math.round(root.getBoundingClientRect().width),
+			overflowY: getComputedStyle(root).overflowY,
+			scroller: scroller === undefined ? null : scroller.tagName,
+			headInScroller: scroller === undefined ? null : scroller.contains(root.firstElementChild),
+		};
+	})()`);
+	check('展开态宽度 = PANEL_WIDTH(396)', geom.width === 396, JSON.stringify(geom));
+	check('面板自己不是滚动容器(头部不会被滚走)', geom.overflowY === 'hidden', String(geom.overflowY));
+	check('正文有独立滚动容器,而且头部不在它里面', geom.scroller !== null && geom.headInScroller === false, JSON.stringify(geom));
+
+	// 往正文里塞 2000px 再滚 1500px:头部必须原地不动(以前整块一起滚,「收起 / 关闭」够不着)。
+	const stuck = await page.evaluate(`(async () => {
+		const root = document.getElementById('dsh-perf-hud-root');
+		const scroller = [...root.querySelectorAll('*')].find((el) => getComputedStyle(el).overflowY === 'auto');
+		const head = root.firstElementChild;
+		const before = head.getBoundingClientRect().top;
+		const tall = document.createElement('div');
+		tall.style.height = '2000px';
+		scroller.appendChild(tall);
+		scroller.scrollTop = 1500;
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		const out = { before: Math.round(before), after: Math.round(head.getBoundingClientRect().top), scrolled: Math.round(scroller.scrollTop) };
+		tall.remove();
+		return out;
+	})()`);
+	check('正文滚 1500px 时头部原地不动', stuck.scrolled > 1000 && stuck.before === stuck.after, JSON.stringify(stuck));
+
+	// 插一张假审批卡(外壳那侧的真约定是 `data-approval-key`,类名是构建期哈希、不能用):
+	// 面板必须让到卡片上方;拿掉之后再回到右下角。渲染是"显示值变了"+ 兜底 2 秒一次,所以轮询等。
+	const dodge = await page.evaluate(`(async () => {
+		const root = document.getElementById('dsh-perf-hud-root');
+		const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const stub = document.createElement('div');
+		stub.setAttribute('data-approval-key', 'approval:check');
+		stub.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:231px;background:rgba(0,0,0,.4);z-index:59';
+		document.body.appendChild(stub);
+		const cardTop = Math.round(stub.getBoundingClientRect().top);
+		let dodged = null;
+		for (let i = 0; i < 12 && dodged === null; i += 1) {
+			await wait(500);
+			const rect = root.getBoundingClientRect();
+			if (rect.bottom <= cardTop + 1) dodged = Math.round(rect.bottom);
+		}
+		const during = Math.round(root.getBoundingClientRect().bottom);
+		stub.remove();
+		let restored = null;
+		for (let i = 0; i < 12 && restored === null; i += 1) {
+			await wait(500);
+			if (Math.abs(root.getBoundingClientRect().bottom - (innerHeight - 12)) <= 1) restored = Math.round(root.getBoundingClientRect().bottom);
+		}
+		return { cardTop, dodged, during, restored, viewport: innerHeight };
+	})()`);
+	check('审批卡出现 → 面板让到卡片上方(不压批准按钮)', dodge.dodged !== null, JSON.stringify(dodge));
+	check('审批卡消失 → 面板回到右下角', dodge.restored !== null, JSON.stringify(dodge));
+
 	// 只求值一次:**布尔**当断言(`false` 即失败),其它类型当诊断读数(打印出来,不影响通过)
 	const value = await page.evaluate(`(() => { try { return (${expression}); } catch (error) { return 'expr-threw: ' + error.message; } })()`);
 	const threw = typeof value === 'string' && value.startsWith('expr-threw: ');
