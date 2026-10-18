@@ -10,6 +10,16 @@
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+// 包内分片:zip 在 client.pack.js 里。测试也读线上那份源码,不另写一份实现。
+const packSource = readFileSync(new URL('../client.pack.js', import.meta.url), 'utf8');
+function loadPackChunk() {
+	let definition = null;
+	const fakeWindow = { __ModuleLoader__: { load: (value) => { definition = value; } } };
+	new Function('window', packSource)(fakeWindow);
+	if (definition === null) throw new Error('client.pack.js 没有注册分片');
+	return definition.factory(() => { throw new Error('client.pack.js 不需要 require'); });
+}
+const packChunk = loadPackChunk();
 // 一份**真的**事故切片(真页面手动 capture → report() → 脱敏后落盘),不是合成的形状;
 // 用来钉住"文件格式与真实数据对得上",而不是只测我们想象出来的字段。
 const realFixture = JSON.parse(readFileSync(new URL('./fixtures/incident-real.json', import.meta.url), 'utf8'));
@@ -655,10 +665,9 @@ const newPieces = [
 	// 能力矩阵 + 可能原因 + 诊断包(整机导出件 snapshot 会调 capabilities)
 	'const CAUSE_MAX = ',
 	'const PACK_SCHEMA_VERSION = ',
-	'function crc32(',
-	'function utf8Bytes(',
-	'function dosStamp(',
+	'function packGuard(',
 	'function zipStore(',
+	'function setPackApi(',
 	'function latestIncident(',
 	'function causePlainLead(',
 	'function healthIcon(',
@@ -695,7 +704,9 @@ const newPieces = [
 	return extract(source, header);
 }).join('\n');
 
-const box = new Function(`${sandbox}\n${newPieces}
+const box = new Function(`${sandbox}
+	let packApi = null;
+	${newPieces}
 	return { state, changedNodes, bundleMaps, scriptLines, ring, storage: localStorage, location, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
 		SELF_RING, recordSelf, selfStats, recorderText,
@@ -712,11 +723,15 @@ const box = new Function(`${sandbox}\n${newPieces}
 		capabilities, capabilityMissing, provenanceOf, provenanceText, strengthText, causeCandidates,
 		healthIcon, healthText, healthVerdict, repeatedLead, trendSummary, trendText, secondsText, lastStallSubText, trendRawText,
 		latestIncident, causePlainLead,
-		crc32, zipStore, dosStamp, utf8Bytes,
+		zipStore,
 		// 视图模型断言要用计数桶:直接测纯函数,不走 snapshot
 		clearTally, bumpTally, tallyWindow, noteTallySeverity,
-		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview, exportPack, CAUSE_MAX, PACK_SCHEMA_VERSION } };`)();
+		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview, exportPack, CAUSE_MAX, PACK_SCHEMA_VERSION, setPackApi } };`)();
 const EX = box.EX;
+box.EX.setPackApi(packChunk);
+EX.crc32 = packChunk.crc32;
+EX.utf8Bytes = packChunk.utf8Bytes;
+EX.dosStamp = packChunk.dosStamp;
 box.state.samplesLength = 1;
 box.ring.push({ t: Date.now() - 1000, fps: 59, frameMs: 22, ltCount: 0, nodes: 4300, heap: 104857600, top: [] });
 
@@ -2264,10 +2279,9 @@ const watchPieces = [
 	line('const LS_VIEW'),
 	line('const TALLY_TREND_SHORT_MS'),
 	line('const TALLY_TREND_LONG_MS'),
-	extract(source, 'function crc32('),
-	extract(source, 'function utf8Bytes('),
-	extract(source, 'function dosStamp('),
+	extract(source, 'function packGuard('),
 	extract(source, 'function zipStore('),
+	extract(source, 'function setPackApi('),
 	line('const CAUSE_MAX'),
 	line('const PACK_SCHEMA_VERSION'),
 	extract(source, 'function severityLevel('),
@@ -2297,6 +2311,7 @@ const watchPieces = [
 const watchBox = new Function(`
 	${watchPieces}
 	let nowMs = 100000;
+	let packApi = null;
 	// 解析推进计数:client.js 里 scriptPkgTally 的缓存指纹带它(markResolved 在每个 entry.state 后推)
 	let resolveSeq = 0;
 	const markResolved = () => { resolveSeq += 1; };
@@ -2444,14 +2459,16 @@ const watchBox = new Function(`
 		SECRET_PARAM, SECRET_PARAM_NAMES,
 		// 能力矩阵(事故包的缺失声明由它推)
 		capabilities, capabilityMissing, causeCandidates,
-		crc32, zipStore,
+		zipStore,
 		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview,
+		setPackApi: (api) => { packApi = api; },
 		// 捕获计数(与留存分离):桶 / 窗口 / 落盘
 		tallyWindow, tallyOfDay, tallyTitle, tallyReport, bumpTally, noteTallySeverity, pruneTally,
 		saveTally, restoreTally, clearTally, tallyDayKey, tallySum, TALLY_FIELDS, TALLY_MINUTES, TALLY_BUCKET_MS, TALLY_DAYS, LS_TALLY,
 	};
 `)();
 const watch = watchBox;
+watch.setPackApi(packChunk);
 
 // 触发判据:低于线不触发,返回严重度便于留存排序
 check('watchTrigger(99) 不触发', watch.watchTrigger(99), null);

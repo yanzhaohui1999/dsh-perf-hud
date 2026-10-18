@@ -4051,112 +4051,17 @@ window.__ModuleLoader__.load({
 		 * ② 本地头与中央目录里的 CRC / 长度必须一致(否则任何解压器都报 bad CRC);
 		 * ③ 结尾必须有 EOCD(没有它,文件根本不被认成 zip)。
 		 */
-		/**
-		 * 标准 CRC-32(IEEE 802.3):`'123456789'` → 0xCBF43926,有断言钉住。
-		 * 用逐位算法而不是 256 项查表:一次打包只调用 4 次,现算换掉一份模块级状态更划算
-		 * (而且"没有额外的模块级 const"让两个测试沙箱都好抽)。
-		 */
-		function crc32(bytes) {
-			let crc = -1;
-			for (let i = 0; i < bytes.length; i += 1) {
-				crc ^= bytes[i];
-				for (let k = 0; k < 8; k += 1) crc = (crc & 1) !== 0 ? (0xEDB88320 ^ (crc >>> 1)) : (crc >>> 1);
-			}
-			return (crc ^ -1) >>> 0;
+		// ───────────────────────── zip:在 client.pack.js 分片里 ─────────────────────────
+		// 这里只留同步包装:PerfHudGate 保证面板渲染前分片已到位,所以按钮 / 导出路径调用时
+		// packApi 一定非 null;控制台在分片到位前调用会拿到明确的错误,不静默失败。
+		function packGuard() {
+			if (packApi === null) throw new Error('perf-hud: client.pack.js 还没加载完');
+			return packApi;
 		}
-
-		function utf8Bytes(text) {
-			return new TextEncoder().encode(String(text));
-		}
-
-		/** zip 要的是 DOS 时间戳(两个 16 位字段),不是 ISO 串。 */
-		function dosStamp(atMs) {
-			const date = new Date(typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now());
-			const year = Math.max(1980, date.getFullYear());
-			return {
-				time: ((date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2)) & 0xFFFF,
-				date: (((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate()) & 0xFFFF,
-			};
-		}
-
-		/** `files` = `[{ name, text }]` → zip 的字节(store,不压缩)。 */
-		function zipStore(files, atMs) {
-			const stamp = dosStamp(atMs);
-			const parts = [];
-			const central = [];
-			let offset = 0;
-			for (const file of files) {
-				const name = utf8Bytes(file.name);
-				const data = utf8Bytes(file.text);
-				const crc = crc32(data);
-				const local = new Uint8Array(30 + name.length);
-				const lv = new DataView(local.buffer);
-				lv.setUint32(0, 0x04034B50, true);      // 本地文件头签名
-				lv.setUint16(4, 20, true);              // version needed to extract
-				lv.setUint16(6, 0x0800, true);          // 文件名是 UTF-8
-				lv.setUint16(8, 0, true);               // 0 = store
-				lv.setUint16(10, stamp.time, true);
-				lv.setUint16(12, stamp.date, true);
-				lv.setUint32(14, crc, true);
-				lv.setUint32(18, data.length, true);    // 压缩后大小 = 原始大小(store)
-				lv.setUint32(22, data.length, true);
-				lv.setUint16(26, name.length, true);
-				lv.setUint16(28, 0, true);              // extra 长度
-				local.set(name, 30);
-				parts.push(local, data);
-				const dir = new Uint8Array(46 + name.length);
-				const dv = new DataView(dir.buffer);
-				dv.setUint32(0, 0x02014B50, true);      // 中央目录签名
-				dv.setUint16(4, 20, true);              // version made by
-				dv.setUint16(6, 20, true);
-				dv.setUint16(8, 0x0800, true);
-				dv.setUint16(10, 0, true);
-				dv.setUint16(12, stamp.time, true);
-				dv.setUint16(14, stamp.date, true);
-				dv.setUint32(16, crc, true);
-				dv.setUint32(20, data.length, true);
-				dv.setUint32(24, data.length, true);
-				dv.setUint16(28, name.length, true);
-				dv.setUint16(30, 0, true);              // extra
-				dv.setUint16(32, 0, true);              // comment
-				dv.setUint16(34, 0, true);              // disk number
-				dv.setUint16(36, 0, true);              // internal attrs
-				dv.setUint32(38, 0, true);              // external attrs
-				dv.setUint32(42, offset, true);         // 本地头偏移
-				dir.set(name, 46);
-				central.push(dir);
-				offset += local.length + data.length;
-			}
-			let centralSize = 0;
-			for (const dir of central) centralSize += dir.length;
-			const eocd = new Uint8Array(22);
-			const ev = new DataView(eocd.buffer);
-			ev.setUint32(0, 0x06054B50, true);          // EOCD 签名
-			ev.setUint16(4, 0, true);
-			ev.setUint16(6, 0, true);
-			ev.setUint16(8, files.length, true);
-			ev.setUint16(10, files.length, true);
-			ev.setUint32(12, centralSize, true);
-			ev.setUint32(16, offset, true);             // 中央目录起始偏移
-			ev.setUint16(20, 0, true);                  // 注释长度
-			const all = [...parts, ...central, eocd];
-			let total = 0;
-			for (const part of all) total += part.length;
-			const out = new Uint8Array(total);
-			let at = 0;
-			for (const part of all) { out.set(part, at); at += part.length; }
-			return out;
-		}
-
-		/** zip 字节 → base64:给验收器用(CDP 里传字节数组太笨重)。分块,避免 apply 爆栈。 */
-		function zipBase64(bytes) {
-			let text = '';
-			const CHUNK = 0x8000;
-			for (let at = 0; at < bytes.length; at += CHUNK) {
-				text += String.fromCharCode(...bytes.subarray(at, at + CHUNK));
-			}
-			return btoa(text);
-		}
+		function zipStore(files, atMs) { return packGuard().zipStore(files, atMs); }
+		function zipBase64(bytes) { return packGuard().zipBase64(bytes); }
+		/** 测试夹具用:把分片 exports 注入沙箱;生产由 PerfHudGate 直接赋值。 */
+		function setPackApi(api) { packApi = api; }
 
 		// ───────────────────────── 诊断包(给人看,也给 AI 读)─────────────────────────
 		/**

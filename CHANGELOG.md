@@ -6,7 +6,8 @@
 
 ### 客户端(2026-10-18,包内分片脚手架)
 
-- **接入 DSH 的包内分片**(`require.async('./client.<name>.js')`):新增 `client.pack.js` 与 `PerfHudGate` —— 面板在分片到位后再渲染,加载失败记进 `state.errors`、不阻塞主界面。真页面实测:浏览器请求 `/plugins/dsh-perf-hud/client.pack.js?rev=6fc872091b76`、面板 0 错误、`check-panel` ALL PASS。`package.json#files` 与 `release.yml` 的产物核对同步覆盖 `client.*.js`;分片当前只是探针,下一步把 `zipStore` / `buildPack` / `manifestFor` / `diagnosticSummary` / `packPreview` 搬进去。
+- **接入 DSH 的包内分片**(`require.async('./client.<name>.js')`):新增 `client.pack.js` 与 `PerfHudGate` —— 面板在分片到位后再渲染,加载失败记进 `state.errors`、不阻塞主界面。真页面实测:浏览器请求 `/plugins/dsh-perf-hud/client.pack.js?rev=…`、面板 0 错误、`check-panel` 与 `check-counts`(真 zip / 四文件 / 预览)全绿。
+- **第一批搬出 zip 层**:`crc32` / `utf8Bytes` / `dosStamp` / `zipStore` / `zipBase64` 的实现进 `client.pack.js`,主文件只留同步包装(分片没到位时明确报错,不静默)。`tests/logic.mjs` 直接读分片源码跑同一批 CRC32 / 字节向量断言,不另写实现。`package.json#files` 与 `release.yml` 的产物核对覆盖 `client.*.js`。下一批:把 `manifestFor` / `diagnosticSummary` / `buildPack` / `packPreview` / `exportPack` 搬进去(需要把 `capabilities` 等依赖显式传进分片)。
 
 ### 文档(2026-10-18,档案拆分与上下文瘦身)
 
