@@ -8,8 +8,10 @@
 
 - **接入 DSH 的包内分片**(`require.async('./client.<name>.js')`):新增 `client.pack.js` 与 `PerfHudGate` —— 面板在分片到位后再渲染,加载失败记进 `state.errors`、不阻塞主界面。真页面实测:浏览器请求 `/plugins/dsh-perf-hud/client.pack.js?rev=…`、面板 0 错误、`check-panel` 与 `check-counts`(真 zip / 四文件 / 预览)全绿。
 - **第一批搬出 zip 层**:`crc32` / `utf8Bytes` / `dosStamp` / `zipStore` / `zipBase64` 的实现进 `client.pack.js`,主文件只留同步包装(分片没到位时明确报错,不静默)。`tests/logic.mjs` 直接读分片源码跑同一批 CRC32 / 字节向量断言,不另写实现。`package.json#files` 与 `release.yml` 的产物核对覆盖 `client.*.js`。
-- **控制台工具搬进 `client.tools.js`**:隔离实验的 `runExperiment` / `abortExperiment` / 合成负载 / 空闲等待 / 恢复核验移出主文件,只在 `__perfHud.experiment()` 首次调用时 `require.async`;不跑实验就永远不下载。`experimentDelta` / `noiseFloor` / `significance` / `pickExperimentCandidates` 留在主文件(离线套件直接抽它们)。`client.js` 8,524 → 8,347 行。真页面实测:加载 `/plugins/dsh-perf-hud/client.tools.js?rev=…`、实验进入 running、`abortExperiment()` 返回 true、面板 0 错误。
-- **下一批**:`manifestFor` / `diagnosticSummary` / `buildPack` / `packPreview` / `exportPack` 搬进 `client.pack.js`(依赖 `capabilities` 等显式传入);应力自测(`stress` / `PerfHudStress`)可随后进 `client.tools.js`。
+- **控制台工具搬进 `client.tools.js`**:隔离实验的 `runExperiment` / `abortExperiment` / 合成负载 / 空闲等待 / 恢复核验移出主文件,只在 `__perfHud.experiment()` 首次调用时 `require.async`;不跑实验就永远不下载。`experimentDelta` / `noiseFloor` / `significance` / `pickExperimentCandidates` 留在主文件(离线套件直接抽它们)。`client.js` 8,524 → 8,347 行。真页面实测:加载 `/plugins/dsh-perf-hud/client.tools.js?rev=…`、实验进入运行、`abortExperiment()` 返回 true、面板 0 错误。
+- **渲染层搬进 `client.ui.js`**(这一刀最大):`PerfHud` / `mainView` / `settingsView` / `incidentDetail` / `techGroup` / `ringBlock` / `scriptBreakdownRows` / `evidenceBlock` / `crossBlock` / `timelineBlock` / `longTaskBlock` / `verdictBlock` / `liveDetail` / `PerfHudStress` 等 20 个组件与视图函数(约 1,060 行)移出主文件,通过 `createUi(deps)` 接收 153 个显式依赖(含 `state` / `React` / `h` / `translate` 包装 / `HudBoundary`)。`PerfHudGate` 与 pack 分片并行拉取,**任一分片失败都记进 `state.errors` 且不阻塞其余降级路径**。`client.js` 8,347 → **7,438 行**;渲染层改动不再和采集逻辑抢同一个文件。真页面:`check-panel` / `check-incident` / `check-counts` / `check-storage` / `check-interaction` 全绿,`npm test` 613 条。
+- **离线套件的静态检查改为扫两份源码**:`logic.mjs` 新增 `renderSource = client.js + client.ui.js`,渲染区 / 词典引用 / 静态裸调用那几条断言跟着渲染层走。
+- **下一批**:`manifestFor` / `diagnosticSummary` / `buildPack` / `packPreview` / `exportPack` 搬进 `client.pack.js`(依赖 `capabilities` 等显式传入);随后是诊断 / 视图模型层(约 2,700 行)。
 
 ### 文档(2026-10-18,档案拆分与上下文瘦身)
 

@@ -10,6 +10,9 @@
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+// 渲染层在包内分片 client.ui.js 里;静态检查与渲染区断言要扫两份源码。
+const uiSource = readFileSync(new URL('../client.ui.js', import.meta.url), 'utf8');
+const renderSource = source + '\n' + uiSource;
 // 包内分片:zip 在 client.pack.js 里。测试也读线上那份源码,不另写一份实现。
 const packSource = readFileSync(new URL('../client.pack.js', import.meta.url), 'utf8');
 function loadPackChunk() {
@@ -152,11 +155,11 @@ process.exitCode = failed === 0 ? 0 : 1;
 // 停用 —— 面板凭空消失。所以这里用正则做一层廉价的"未声明引用"检查。
 {
 	const declared = new Set();
-	for (const pattern of [/\bfunction\s+([A-Za-z_$][\w$]*)/g, /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g, /\bclass\s+([A-Za-z_$][\w$]*)/g]) {
-		for (const match of source.matchAll(pattern)) declared.add(match[1]);
+	for (const text of [source, uiSource]) for (const pattern of [/\bfunction\s+([A-Za-z_$][\w$]*)/g, /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g, /\bclass\s+([A-Za-z_$][\w$]*)/g]) {
+		for (const match of text.matchAll(pattern)) declared.add(match[1]);
 	}
 	// 解构声明:const [open, setOpen] = / const { a, b } =
-	for (const match of source.matchAll(/\b(?:const|let|var)\s*[[{]([^\]}]*)[\]}]/g)) {
+	for (const match of renderSource.matchAll(/\b(?:const|let|var)\s*[[{]([^\]}]*)[\]}]/g)) {
 		for (const part of match[1].split(',')) {
 			const name = part.split(':').pop().trim().replace(/^\s*\.\.\./, '');
 			if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
@@ -167,14 +170,14 @@ process.exitCode = failed === 0 ? 0 : 1;
 	// 样式字符串里的 CSS 函数(var(--x)/rgba(...))不是 JS 调用。`not` 也是 CSS 伪类函数:
 	// 面板的 `installStyle()` 里有一条 `button:hover:not(:disabled)`。
 	const CSS_FUNCS = new Set(['var', 'rgb', 'rgba', 'hsl', 'hsla', 'calc', 'clamp', 'minmax', 'color-mix', 'linear-gradient', 'radial-gradient', 'url', 'not']);
-	const components = [...new Set([...source.matchAll(/\bh\(\s*([A-Z][\w$]*)/g)].map((m) => m[1]))];
+	const components = [...new Set([...renderSource.matchAll(/\bh\(\s*([A-Z][\w$]*)/g)].map((m) => m[1]))];
 	check('h() 引用的组件都声明了(PerfHudStress 事故回归)',
 		components.filter((name) => !declared.has(name)), []);
 
 	// clear() 漏清帧环的回归:清了之后「窗口:… 跨 …」纹丝不动(实测被问"我清了怎么还是跨 3 分")
 	check('clear() 也要清帧环(它也是读数)',
 		/clear\(\) \{[\s\S]{0,600}?watch\.loaf\.length = 0/.test(source), true);
-	const renderRegion = source.slice(source.indexOf('function PerfHud('));
+	const renderRegion = renderSource.slice(renderSource.indexOf('function PerfHud('));
 	// 单/双引号字符串里的内容不是 JS 调用(SVG/CSS 的 `transform: 'rotate(-90 24 24)'` 就是典型);
 	// 模板字符串**要留着** —— `${t('x')}` 里的调用是真调用,不能一起丢掉。
 	const renderCode = renderRegion
@@ -213,7 +216,7 @@ process.exitCode = failed === 0 ? 0 : 1;
 		/marks: \(\) => state\.marks/.test(source), true);
 	// 快捷键:可选注入(服务不在也不影响加载);Linux Web 不支持这个组合,不硬塞默认绑定
 	check('快捷键走 ctx.shortcuts 可选注入,只声明 macOS / Windows 的默认绑定',
-		/ctx\.inject\(\['shortcuts'\]/.test(source) && /state\.toggleHud = toggle/.test(source)
+		/ctx\.inject\(\['shortcuts'\]/.test(source) && /state\.toggleHud = toggle/.test(renderSource)
 		&& /'web:macos': \{ code: 'KeyU'/.test(source) && /'web:linux'/.test(source) === false, true);
 
 	// P0-1:任何 fetch 都必须带 signal(或经 fetchTextWithin / fetchJsonWithin)。
@@ -246,7 +249,7 @@ process.exitCode = failed === 0 ? 0 : 1;
 	// `errors` 为空),2026-10-11 在当前代码上**复现不出来**(163 个元素真实鼠标 + 153 次 JS
 	// 派发 mouseover 全程存活),所以保持停用 + 清理,而不是赌它能用。
 	{
-		const render = source.slice(source.indexOf('function PerfHud('));
+		const render = renderSource.slice(renderSource.indexOf('function PerfHud('));
 		check('P1:渲染区没有 per-element 鼠标状态(onMouseEnter/Leave)', /onMouse(?:Enter|Leave)/.test(render), false);
 		check('P1:悬停联动那套辅助代码已删除(hotProps / hotStyle / setHot 不再有定义或调用)',
 			[/\bhotProps\s*\(/, /\bhotStyle\s*\(/, /\bsetHot\s*\(/].some((re) => re.test(source)), false);
@@ -258,9 +261,9 @@ process.exitCode = failed === 0 ? 0 : 1;
 	// 诊断上下文只在 detailContext() 一处分流,渲染那侧只读它的返回值 —— 这条断言钉住"没有第二处
 	// 偷偷去拿实时帧"的可能(那正是这次要修的病:上面历史事故、下面另一条实时帧的编号与饼图)。
 	check('取证明细:上下文只在 detailContext 一处分流(渲染只读 detail.kind)',
-		/const detail = detailContext\(\);/.test(source) && /detail\.kind === 'incident'/.test(source), true);
+		/const detail = detailContext\(\);/.test(renderSource) && /detail\.kind === 'incident'/.test(renderSource), true);
 	{
-		const incidentDetailText = extract(source, 'function incidentDetail(');
+		const incidentDetailText = extract(renderSource, 'function incidentDetail(');
 		const leaks = ['pickedLoaf(', 'scriptPkgTally(', 'framePkgTally(', 'worstSecond(', 'recorderText(', 'unexplainedFrame(', 'frameRing']
 			.filter((needle) => incidentDetailText.includes(needle));
 		check('取证明细:历史事故那一支不出现任何实时读数(pickedLoaf / 窗口聚合 / 记录器 / 帧环)', leaks, []);
@@ -273,7 +276,7 @@ process.exitCode = failed === 0 ? 0 : 1;
 			'function verdictBlock(', 'function techGroup(', 'function techSummary(', 'function incidentDetail(', 'function liveDetail(',
 			// 方案 1 的视图函数(同样定义在 `function PerfHud(` 之前)
 			'function mainView(', 'function settingsView(', 'function devTabRow('];
-		const text = helpers.map((header) => extract(source, header)).join('\n');
+		const text = helpers.map((header) => extract(renderSource, header)).join('\n');
 		const code = text.replace(/'(?:[^'\\]|\\.)*'/g, "''").replace(/"(?:[^"\\]|\\.)*"/g, '""');
 		const bare = [...new Set([...code.matchAll(/(?<![.\w$-])([a-z_$][\w$]*)\s*\(/g)].map((match) => match[1]))];
 		check('取证明细的渲染辅助函数里没有未声明的裸调用(与渲染区同一条规矩)',
@@ -288,9 +291,9 @@ process.exitCode = failed === 0 ? 0 : 1;
 	{
 		const headLine = line('head: {');
 		const brandLine = line('brand: {');
-		const headAt = source.indexOf("const head = h('div'");
-		const headEnd = source.indexOf('if (open === false) {', headAt);
-		const headBlock = headAt === -1 || headEnd === -1 ? '' : source.slice(headAt, headEnd);
+		const headAt = renderSource.indexOf("const head = h('div'");
+		const headEnd = renderSource.indexOf('if (open === false) {', headAt);
+		const headBlock = headAt === -1 || headEnd === -1 ? '' : renderSource.slice(headAt, headEnd);
 		check('头部一行永不换行,且显式分成左右两组(不再靠某个元素上的 margin-left:auto 假装分组)',
 			[/wrap/.test(headLine), /S\.headLeft/.test(headBlock), /S\.headRight/.test(headBlock), /marginLeft: 'auto'/.test(headBlock)],
 			[false, true, true, false]);
@@ -300,7 +303,7 @@ process.exitCode = failed === 0 ? 0 : 1;
 		check('头部按钮预算 ≤4 个(返回 / 设置 / 收起 / 关闭 —— 任何视图都一样)',
 			(headBlock.match(/h\('button'/g) ?? []).length <= 4, true);
 		check('「深录」不进标题栏(它在开发者详情的标签页行与设置页;标题栏是不可换行的那一行)',
-			[/deepShort/.test(headBlock), /deepShort/.test(extract(source, 'function devTabRow('))], [false, true]);
+			[/deepShort/.test(headBlock), /deepShort/.test(extract(renderSource, 'function devTabRow('))], [false, true]);
 		check('头部"文字让位、控件不让位":标题与场景标签都可省略(场景那一格 flex 从 0 0 auto 改成可收缩)',
 			[/(?:\.\.\.S\.label)[^)]*flex: '0 1 auto'/.test(headBlock), /textOverflow: 'ellipsis'/.test(headBlock)], [true, true]);
 		check('子页标题不再拼品牌名(品牌名进悬停;标题与下面那行上下文标题不再重复说"我在哪")',
@@ -311,7 +314,7 @@ process.exitCode = failed === 0 ? 0 : 1;
 	check('A4:交互延迟进两个导出件(事故包按窗口过滤)',
 		[/interactionsInWindow: interactions\.length/, /const interactions = \(state\.watch\.interactions \?\? \[\]\)\.filter/, /records: state\.watch\.interactions,/].every((re) => re.test(source)), true);
 	check('A4:交互延迟不进面板渲染区(只进导出件)',
-		source.slice(source.indexOf('function PerfHud(')).includes('interactions'), false);
+		renderSource.slice(renderSource.indexOf('function PerfHud(')).includes('interactions'), false);
 }
 
 // ═══════════════ A/B/C/D/E 新增逻辑的离线验证 ═══════════════
@@ -667,7 +670,6 @@ const newPieces = [
 	'const PACK_SCHEMA_VERSION = ',
 	'function packGuard(',
 	'function zipStore(',
-	'function setPackApi(',
 	'function latestIncident(',
 	'function causePlainLead(',
 	'function healthIcon(',
@@ -726,7 +728,7 @@ const box = new Function(`${sandbox}
 		zipStore,
 		// 视图模型断言要用计数桶:直接测纯函数,不走 snapshot
 		clearTally, bumpTally, tallyWindow, noteTallySeverity,
-		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview, exportPack, CAUSE_MAX, PACK_SCHEMA_VERSION, setPackApi } };`)();
+		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview, exportPack, CAUSE_MAX, PACK_SCHEMA_VERSION, setPackApi: (api) => { packApi = api; } } };`)();
 const EX = box.EX;
 box.EX.setPackApi(packChunk);
 EX.crc32 = packChunk.crc32;
@@ -794,7 +796,7 @@ check('C2:两本字典键集合完全一致(成对改的机器检查)',
 	JSON.stringify(Object.keys(box.DICT.zh).sort()) === JSON.stringify(Object.keys(box.DICT.en).sort()), true);
 check('C2:词典里没有"没人引用"的死键(面板撤下后遗留的串)', (() => {
 	const dictBlock = extract(source, 'const DICT = {');
-	const outside = source.replace(dictBlock, '');
+	const outside = source.replace(dictBlock, '') + '\n' + uiSource;
 	// 只认字面量调用:本项目没有 `translate(变量)` 这种动态取键 —— 真要加动态键,这条断言得先放宽
 	const referenced = new Set([...outside.matchAll(/\b(?:t|translate)\(\s*(['"])([A-Za-z_$][\w$]*)\1\s*\)/g)].map((row) => row[2]));
 	return Object.keys(box.DICT.zh).filter((key) => referenced.has(key) === false);
@@ -804,7 +806,7 @@ check('C2:词典里没有"没人引用"的死键(面板撤下后遗留的串)', 
 // 词典条目,三套件全绿、死键断言也不响,只有真页面才看得出来)。死键断言管不到它,所以必须有这一条。
 check('C2:引用的键必须真的在词典里(否则界面上会印出 key 名)', (() => {
 	const dictBlock = extract(source, 'const DICT = {');
-	const outside = source.replace(dictBlock, '');
+	const outside = source.replace(dictBlock, '') + '\n' + uiSource;
 	const referenced = new Set([...outside.matchAll(/\b(?:t|translate)\(\s*(['"])([A-Za-z_$][\w$]*)\1\s*\)/g)].map((row) => row[2]));
 	const zh = new Set(Object.keys(box.DICT.zh));
 	const en = new Set(Object.keys(box.DICT.en));
@@ -2087,11 +2089,11 @@ check('可能原因:没有事故就返回空数组(不造候选)', [EX.causeCand
 	for (const row of saved) box.state.watch.incidents.push(row);
 }
 check('主界面只吃时间语义(结构上不碰 selectedIncident / 手选那套)', (() => {
-	const seg = extract(source, 'function mainView(');
-	return [seg.includes('selectedIncident') === false, seg.includes('props.latest'), /const latestRow = latestIncident\(\);/.test(source)];
+	const seg = extract(renderSource, 'function mainView(');
+	return [seg.includes('selectedIncident') === false, seg.includes('props.latest'), /const latestRow = latestIncident\(\);/.test(renderSource)];
 })(), [true, true, true]);
 check('主界面的人话行里没有 item.name(包名只在展开区出现)', (() => {
-	const seg = extract(source, 'function mainView(');
+	const seg = extract(renderSource, 'function mainView(');
 	const plainLine = /h\('div', \{ style: S\.blockLabel \}, `\$\{index \+ 1\}\. \$\{causePlainLead\(item\)\} · \$\{strengthText\(item\.strength\)\}`\)/.test(seg);
 	const whyBranch = /props\.why !== true \? null : h\('div', null,[\s\S]{0,400}?short\(item\.name\)/.test(seg);
 	return [plainLine, whyBranch];
@@ -2281,7 +2283,6 @@ const watchPieces = [
 	line('const TALLY_TREND_LONG_MS'),
 	extract(source, 'function packGuard('),
 	extract(source, 'function zipStore('),
-	extract(source, 'function setPackApi('),
 	line('const CAUSE_MAX'),
 	line('const PACK_SCHEMA_VERSION'),
 	extract(source, 'function severityLevel('),
@@ -4018,14 +4019,14 @@ watch.state.watch.incidents.length = 0;
 check('两条导出路径在代码里就是分开的(主界面/AI = dropFreeText:true,完整导出 = false)', (() => {
 	return [/onExportGo: \(\) => \{[\s\S]{0,200}?dropFreeText: true/, /onExportPreview: \(id\) => \{ openPackPreview\(id, \{ dropFreeText: true \}\);/,
 		/exportPack\(selectedRow === null \? 'latest' : selectedRow\.id, \{ dropFreeText: false \}\)/, /exportPack\(selectedRow === null \? 'latest' : selectedRow\.id, \{ dropFreeText: true \}\)/]
-		.map((re) => re.test(source));
+		.map((re) => re.test(renderSource));
 })(), [true, true, true, true]);
 check('分享前预览是"先看再生成":预览态不落盘,生成之后自动收起', (() => {
 	return [/function openPackPreview\(/, /state\.packPreview = packPreview\(id, opts\);/, /onExportGo: \(\) => \{[\s\S]{0,160}?closePackPreview\(\);[\s\S]{0,80}?exportPack/]
-		.map((re) => re.test(source));
+		.map((re) => re.test(renderSource));
 })(), [true, true, true]);
 check('本地预览态不进 localStorage(它不是读数,也没有新键位)',
-	/state\.packPreviewId = id;[\s\S]{0,80}?bump\(\);/.test(source) && /LS_VIEW/.test(source), true);
+	/state\.packPreviewId = id;[\s\S]{0,80}?bump\(\);/.test(renderSource) && /LS_VIEW/.test(source), true);
 
 // ═══════════ 捕获计数:与"留存了几份详细现场"彻底分开 ═══════════
 // 挡的是这一类事故:留存清单受容量限制(最差 10 + 每天 1),却拿它的条数回答"发生了多少次卡顿"
@@ -4180,9 +4181,9 @@ check('计数:导出件里那一份带窗口范围与两句口径(不是事故�
 			/detected = triggered/.test(row.scope), /密度,不是次数/.test(row.scope), row.worstMs];
 	})(), [1, 1, 'string', true, true, true, 326.5]);
 check('计数:折叠药丸不再拿留存份数当发生次数(静态)', (() => {
-	const at = source.indexOf('const pillTally = tallyWindow(');
+	const at = renderSource.indexOf('const pillTally = tallyWindow(');
 	if (at === -1) return [false, false];
-	const seg = source.slice(at, source.indexOf("h('button'", at));
+	const seg = renderSource.slice(at, renderSource.indexOf("h('button'", at));
 	return [true, seg.includes('incidents.length') === false];
 })(), [true, true]);
 check('计数:清事故不动计数桶(清掉的是证据,不是事实);而且设置页与 API 共用这一条实现', (() => {

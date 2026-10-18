@@ -59,9 +59,12 @@
 | 改动 | 生效方式 |
 |---|---|
 | `client.js` | HMR 轮询 mtime/size;**刷新页面**最稳 |
+| `client.*.js`(包内分片) | 同主文件,但**分片的 rev 来自主文件** —— 只改分片时先 `touch client.js`,否则浏览器会命中同一个 `?rev=` |
 | `index.js` | **必须重启宿主**(`launchctl kickstart -k gui/$(id -u)/ai.dsh.web`) |
 | `package.json` 的 `dsh.client` / `dsh.bundle` | 重装或重启 |
 | 纯文档 | 无需操作 |
+
+**代码分片**(DSH 的 package-local chunk,零构建):`client.pack.js`(zip)、`client.tools.js`(隔离实验,首次调用才加载)、`client.ui.js`(渲染层,`PerfHudGate` 与 pack 并行拉取)。分片用 `__ModuleLoader__.load({ id, chunk, factory })` 注册,主文件用 `require.async('./client.<name>.js')`;改分片后主文件的 `client.js` 要一起被 touch/改到,否则 rev 不变。
 
 ⚠️ **重启会杀死当前会话的 bash 进程**(它在 `dsh web` 里):把重启排在报告之后,或交给用户。worktree 里的 `client.js` 浏览器看不到(profile 指向主检出)。真页面验收器要浏览器 + 本机 `dsh web`,不进 CI;改面板 / `apply()` / `start()` 后至少跑 `node tools/check-panel.mjs`。
 
