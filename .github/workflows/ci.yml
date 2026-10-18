@@ -58,3 +58,8 @@ jobs:
           done
           echo "total: $total"
           test "$total" -eq 613
+          # 文档里的数字也要跟着走:CONTRIBUTING 曾经停在 325 / 39 / 358,而这条门禁
+          # 以前只核总数 —— 五份文档里任何一份漏改,读者看到的就不是实际条数。
+          for doc in README.md README_EN.md REVIEW.md AGENTS.md CONTRIBUTING.md; do
+            grep -q "613" "$doc" || { echo "$doc 里没有 613"; exit 1; }
+          done
