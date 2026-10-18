@@ -92,6 +92,12 @@ From npm:
 dsh plugin --profile web add dsh-perf-hud
 ```
 
+The npm install follows `latest`. dsh-plugin.market also prints a `github:…/dsh-perf-hud#<40-char sha>` command — that pins the exact commit the scanner looked at (so the installed code matches the evidence); it is not the everyday install path. To pin a release from GitHub without pasting a sha, use a tag:
+
+```sh
+dsh plugin --profile web add github:yanzhaohui1999/dsh-perf-hud#v0.5.0
+```
+
 From a source checkout (development; `link:` install, client-half edits take effect on reload):
 
 ```sh

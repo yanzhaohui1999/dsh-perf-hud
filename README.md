@@ -127,6 +127,12 @@ __perfHud.clearIncidents()    // 只清事故;clear() 刻意不动它
 dsh plugin --profile web add dsh-perf-hud
 ```
 
+npm 装到的是 `latest`。dsh-plugin.market 的详情页会额外给一条 `github:…/dsh-perf-hud#<40 位 sha>` 的安装命令 —— 那是**把扫描时那个 commit 钉死**的复现命令(保证装到的代码与扫描证据一致),不是日常安装路径。要从 GitHub 固定版本又不想贴 sha,用 tag:
+
+```sh
+dsh plugin --profile web add github:yanzhaohui1999/dsh-perf-hud#v0.5.0
+```
+
 从源码/本地目录(开发用,`link:` 安装,改客户端半刷新页面即可生效):
 
 ```sh
