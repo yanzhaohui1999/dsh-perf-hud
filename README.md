@@ -144,7 +144,7 @@ dsh plugin --profile web add "$PWD"
 
 | 改了什么 | 怎么生效 |
 |---|---|
-| `client.js`(客户端半) | 刷新页面(dev 环境下客户端 HMR 也会自动热载) |
+| `client.js` 与其分片 `client.*.js`(客户端半) | 刷新页面(dev 环境下客户端 HMR 也会自动热载;只改分片时先 `touch client.js`,rev 才更新) |
 | `index.js`(宿主半) | 必须重启宿主服务 |
 | `package.json` 的 `dsh.*` | 重装或重启 |
 
@@ -332,7 +332,7 @@ dsh plugin --profile web add "$PWD"
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 561 条:从 client.js 抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 561 条:从 client.js 与其分片抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js
 # 合计 613 条断言,离线,无需 DSH 在跑
 ```

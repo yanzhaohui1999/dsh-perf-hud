@@ -14,6 +14,9 @@
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+// 归因 URL 解析已搬进 client.model.js 分片:抽实现要抽分片那份(主文件里只剩包装)。
+const modelSource = readFileSync(new URL('../client.model.js', import.meta.url), 'utf8');
+const lib = (header) => (modelSource.includes(header) ? modelSource : source);
 
 /** 按 header 抽出"从 header 起到配对右括号"的源码;识别字符串与行注释。 */
 function extract(text, header) {
@@ -40,15 +43,16 @@ function extract(text, header) {
 }
 
 const line = (header) => source.slice(source.indexOf(header), source.indexOf('\n', source.indexOf(header)));
+const libLine = (header) => lib(header).slice(lib(header).indexOf(header), lib(header).indexOf('\n', lib(header).indexOf(header)));
 const chunk = [
 	line('const BUNDLE_PREFIX = '),
-	line('const PLUGIN_URL = '),
+	libLine('const PLUGIN_URL = '),
 	// state 里用到视图模型的两条窗口常量 —— 排在 state 之前(否则 TDZ)
 	line('const TALLY_TREND_SHORT_MS = '),
 	line('const TALLY_TREND_LONG_MS = '),
 	`${extract(source, 'const state = {')};`,
-	extract(source, 'function isCore('),
-	extract(source, 'function ownerOfUrl('),
+	extract(lib('function isCore('), 'function isCore('),
+	extract(lib('function ownerOfUrl('), 'function ownerOfUrl('),
 	'const bundleMaps = new Map();',
 	'const bundleMeta = new Map();',
 ].join('\n');

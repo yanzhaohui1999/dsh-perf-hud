@@ -10,9 +10,14 @@
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+// 诊断 / 视图模型的实现在包内分片里(主文件只剩同名同步包装):extract 先找分片,
+// 找不到再回主文件 —— 这样箱子测的仍然是线上那份实现,而不是包装器。
+const modelSource = readFileSync(new URL('../client.model.js', import.meta.url), 'utf8');
 // 渲染层在包内分片 client.ui.js 里;静态检查与渲染区断言要扫两份源码。
 const uiSource = readFileSync(new URL('../client.ui.js', import.meta.url), 'utf8');
 const renderSource = source + '\n' + uiSource;
+// 主文件 + 分片:静态检查要能看见搬家之后的实现
+const allSource = source + '\n' + uiSource + '\n' + modelSource;
 // 包内分片:zip 在 client.pack.js 里。测试也读线上那份源码,不另写一份实现。
 const packSource = readFileSync(new URL('../client.pack.js', import.meta.url), 'utf8');
 function loadPackChunk() {
@@ -27,25 +32,31 @@ const packChunk = loadPackChunk();
 // 用来钉住"文件格式与真实数据对得上",而不是只测我们想象出来的字段。
 const realFixture = JSON.parse(readFileSync(new URL('./fixtures/incident-real.json', import.meta.url), 'utf8'));
 
-/** 按 header 抽出"从 header 起到配对右括号"的源码;识别字符串/模板串与行注释。 */
+/**
+ * 按 header 抽出"从 header 起到配对右括号"的源码;识别字符串/模板串与行注释。
+ * ⚠️ 诊断 / 视图模型搬进 client.model.js 之后,主文件里同名的是同步包装器 ——
+ * 所以**分片优先**:同一个 header 在分片里能找到就抽分片那份,否则回主文件。
+ */
 function extract(text, header) {
-	const start = text.indexOf(header);
+	const fromModel = text === source && modelSource.indexOf(header) !== -1;
+	const body = fromModel ? modelSource : text;
+	const start = fromModel ? modelSource.indexOf(header) : text.indexOf(header);
 	if (start === -1) throw new Error(`extract: missing ${header}`);
 	let depth = 0;
 	let quote = null;
-	for (let i = text.indexOf('{', start); i < text.length; i += 1) {
-		const c = text[i];
+	for (let i = body.indexOf('{', start); i < body.length; i += 1) {
+		const c = body[i];
 		if (quote !== null) {
 			if (c === '\\') i += 1;
 			else if (c === quote) quote = null;
 			continue;
 		}
 		if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
-		if (c === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i += 1; continue; }
+		if (c === '/' && body[i + 1] === '/') { while (i < body.length && body[i] !== '\n') i += 1; continue; }
 		if (c === '{') depth += 1;
 		else if (c === '}') {
 			depth -= 1;
-			if (depth === 0) return text.slice(start, i + 1);
+			if (depth === 0) return body.slice(start, i + 1);
 		}
 	}
 	throw new Error(`extract: unbalanced ${header}`);
@@ -194,10 +205,10 @@ process.exitCode = failed === 0 ? 0 : 1;
 	check('DOM 写入插桩排除本 HUD 自身', /if \(owner === PKG\)/.test(source), true);
 
 	// 导出里必须有错误账本(下次再抛错,导出件能带出原文)
-	check('client.js 带 errors 导出段', /errors:\s*state\.errors/.test(source), true);
+	check('client.js 带 errors 导出段', /errors:\s*state\.errors/.test(allSource), true);
 
 	// 导出件的审计属性:文件离开现场后,读的人要能判断"这份证据被裁过没有"
-	const storeBlock = /store:\s*\{([\s\S]{0,500}?)\n\t{5}\}/.exec(source);
+	const storeBlock = /store:\s*\{([\s\S]{0,500}?)\n\t{5}\}/.exec(allSource);
 	check('client.js 导出件带 store 段(restored/trimmedByBytes/deduped/captured/dropped)',
 		storeBlock !== null && ['restored', 'trimmedByBytes', 'deduped', 'captured', 'dropped'].every((key) => storeBlock[1].includes(`${key}:`)),
 		true);
@@ -206,11 +217,11 @@ process.exitCode = failed === 0 ? 0 : 1;
 	const inspector = readFileSync(new URL('../tools/inspect-incident.mjs', import.meta.url), 'utf8');
 	check('D2:帧条与导出件 ASCII 条带同一组阈值(>=100ms / >=50ms)',
 		[/ms >= 100\) return '█'/, /ms >= 50\) return '▒'/].every((re) => re.test(inspector))
-		&& [/ms >= 100\) return 'bad'/, /ms >= 50\) return 'warn'/, /if \(cell\.seen === true\)/].every((re) => re.test(source)), true);
+		&& [/ms >= 100\) return 'bad'/, /ms >= 50\) return 'warn'/, /if \(cell\.seen === true\)/].every((re) => re.test(allSource)), true);
 
 	// A2:跨会话基线是"只进导出件"的 —— 两个导出件都要带,面板一个字都不显示
 	check('A2:整机导出件与事故包都带跨会话基线',
-		(source.match(/sessionBaselines: sessionBaselines\(\)/g) ?? []).length, 2);
+		(allSource.match(/sessionBaselines: sessionBaselines\(\)/g) ?? []).length, 2);
 	// README 承诺过 `__perfHud.marks()`(撤面板入口时给标记清单留的出口);没有它那句文档就是假的
 	check('控制台 API 暴露 marks 只读 getter(与 README「控制台 API」那一行对齐)',
 		/marks: \(\) => state\.marks/.test(source), true);
@@ -234,12 +245,12 @@ process.exitCode = failed === 0 ? 0 : 1;
 	}
 	// P1:map 缓存写入必须走 saveMapCache(配额失败会先淘汰最旧 rev),不许直接 setItem
 	check('map 缓存写入走 saveMapCache(配额淘汰有入口)',
-		/saveMapCache\(entry\.storageKey/.test(source) && /localStorage\.setItem\(entry\.storageKey/.test(source) === false, true);
+		/saveMapCache\(entry\.storageKey/.test(allSource) && /localStorage\.setItem\(entry\.storageKey/.test(allSource) === false, true);
 	// D5:面板的二级拆分与导出件必须吃同一份字段(否则"按包"两边会算出不同答案)
 	check('D5:面板二级与导出件用同一份字段(packageOfScript(url,charPos) 与 forcedMs)',
-		/packageOfScript\(script\.url, script\.charPos\)/.test(source)
-		&& /forcedMs: script\.forcedMs/.test(source)
-		&& /forced \+= script\.forcedMs \?\? 0/.test(source), true);
+		/packageOfScript\(script\.url, script\.charPos\)/.test(allSource)
+		&& /forcedMs: script\.forcedMs/.test(allSource)
+		&& /forced \+= script\.forcedMs \?\? 0/.test(allSource), true);
 
 	// REVIEW §3.4 的债已还:那条"永远渲染不到"的分支连同它的函数一起删了(别只删文档)
 	check('REVIEW §3.4:不可达的 pkgZeroText 分支已删除(不留死代码)', /\bpkgZeroText\b/.test(source), false);
@@ -312,7 +323,7 @@ process.exitCode = failed === 0 ? 0 : 1;
 
 	// A4:交互延迟这一层"只进导出件",而且必须两个导出件都带(事故包只带窗口内的)
 	check('A4:交互延迟进两个导出件(事故包按窗口过滤)',
-		[/interactionsInWindow: interactions\.length/, /const interactions = \(state\.watch\.interactions \?\? \[\]\)\.filter/, /records: state\.watch\.interactions,/].every((re) => re.test(source)), true);
+		[/interactionsInWindow: interactions\.length/, /const interactions = \(state\.watch\.interactions \?\? \[\]\)\.filter/, /records: state\.watch\.interactions,/].every((re) => re.test(allSource)), true);
 	check('A4:交互延迟不进面板渲染区(只进导出件)',
 		renderSource.slice(renderSource.indexOf('function PerfHud(')).includes('interactions'), false);
 }
@@ -327,6 +338,7 @@ const sandbox = `
 	let streamingFlag = false;
 	// 解析推进计数(sourcemap/脚本文本异步到位):窗口聚合的缓存指纹带它,沙箱里给个可推进的桩
 	let resolveSeq = 0;
+	const resolveStamp = () => resolveSeq;
 	const markResolved = () => { resolveSeq += 1; };
 	const document = { documentElement: {}, querySelector: () => (streamingFlag ? {} : null) };
 	const localStorage = { store: new Map(), getItem(k) { return this.store.has(k) ? this.store.get(k) : null; }, setItem(k, v) { this.store.set(String(k), String(v)); } };
@@ -796,7 +808,7 @@ check('C2:两本字典键集合完全一致(成对改的机器检查)',
 	JSON.stringify(Object.keys(box.DICT.zh).sort()) === JSON.stringify(Object.keys(box.DICT.en).sort()), true);
 check('C2:词典里没有"没人引用"的死键(面板撤下后遗留的串)', (() => {
 	const dictBlock = extract(source, 'const DICT = {');
-	const outside = source.replace(dictBlock, '') + '\n' + uiSource;
+	const outside = source.replace(dictBlock, '') + '\n' + uiSource + '\n' + modelSource;
 	// 只认字面量调用:本项目没有 `translate(变量)` 这种动态取键 —— 真要加动态键,这条断言得先放宽
 	const referenced = new Set([...outside.matchAll(/\b(?:t|translate)\(\s*(['"])([A-Za-z_$][\w$]*)\1\s*\)/g)].map((row) => row[2]));
 	return Object.keys(box.DICT.zh).filter((key) => referenced.has(key) === false);
@@ -1978,11 +1990,11 @@ check('ZIP:空文件清单也能打包(不抛错,给一个只有 EOCD 的合法 
 check('ZIP:导出走的是一个 zip 一次下载(不再逐个下载文件),两条路径的文件名带 -ai / -full',
 	(() => {
 		return [/const bytes = zipStore\(pack\.files\);/, /link\.download = `\$\{base\}\$\{opts\.dropFreeText === true \? '-ai' : '-full'\}\.zip`;/,
-			/'application\/zip'/.test(source), /exportPack\(id, opts\)/.test(source) === false]
+			/'application\/zip'/.test(allSource), /exportPack\(id, opts\)/.test(allSource) === false]
 			.map(Boolean);
 	})(), [true, true, true, true]);
 check('ZIP:预览里给的是压缩包总大小(zipBytes),而且"zip 是下一步"那句过渡文案已删',
-	[/(\s)zipBytes,/.test(source), /zipStore\(list\)\.length/.test(source), /一次打包成一个 zip 是下一步/.test(source), /bundling them into one zip is the next step/.test(source)],
+	[/(\s)zipBytes,/.test(allSource), /zipStore\(list\)\.length/.test(allSource), /一次打包成一个 zip 是下一步/.test(allSource), /bundling them into one zip is the next step/.test(allSource)],
 	[true, true, false, false]);
 check('ZIP:验收口子给的是 zip 的 base64(验收器拿它去 unzip -t)',
 	[/function zipBase64\(/, /zip: \(id, options\) => \{/, /zipBase64\(zipStore\(pack\.files\)\)/].map((re) => re.test(source)),
@@ -2315,6 +2327,7 @@ const watchBox = new Function(`
 	let packApi = null;
 	// 解析推进计数:client.js 里 scriptPkgTally 的缓存指纹带它(markResolved 在每个 entry.state 后推)
 	let resolveSeq = 0;
+	const resolveStamp = () => resolveSeq;
 	const markResolved = () => { resolveSeq += 1; };
 	const timers = [];
 	const natives = {
