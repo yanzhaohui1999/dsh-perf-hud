@@ -4,14 +4,34 @@
 
 ## [Unreleased]
 
-### 客户端(2026-10-18,包内分片脚手架)
+### 客户端(2026-10-18,拆成包内分片)
 
-- **接入 DSH 的包内分片**(`require.async('./client.<name>.js')`):新增 `client.pack.js` 与 `PerfHudGate` —— 面板在分片到位后再渲染,加载失败记进 `state.errors`、不阻塞主界面。真页面实测:浏览器请求 `/plugins/dsh-perf-hud/client.pack.js?rev=…`、面板 0 错误、`check-panel` 与 `check-counts`(真 zip / 四文件 / 预览)全绿。
-- **第一批搬出 zip 层**:`crc32` / `utf8Bytes` / `dosStamp` / `zipStore` / `zipBase64` 的实现进 `client.pack.js`,主文件只留同步包装(分片没到位时明确报错,不静默)。`tests/logic.mjs` 直接读分片源码跑同一批 CRC32 / 字节向量断言,不另写实现。`package.json#files` 与 `release.yml` 的产物核对覆盖 `client.*.js`。
-- **控制台工具搬进 `client.tools.js`**:隔离实验的 `runExperiment` / `abortExperiment` / 合成负载 / 空闲等待 / 恢复核验移出主文件,只在 `__perfHud.experiment()` 首次调用时 `require.async`;不跑实验就永远不下载。`experimentDelta` / `noiseFloor` / `significance` / `pickExperimentCandidates` 留在主文件(离线套件直接抽它们)。`client.js` 8,524 → 8,347 行。真页面实测:加载 `/plugins/dsh-perf-hud/client.tools.js?rev=…`、实验进入运行、`abortExperiment()` 返回 true、面板 0 错误。
-- **渲染层搬进 `client.ui.js`**(这一刀最大):`PerfHud` / `mainView` / `settingsView` / `incidentDetail` / `techGroup` / `ringBlock` / `scriptBreakdownRows` / `evidenceBlock` / `crossBlock` / `timelineBlock` / `longTaskBlock` / `verdictBlock` / `liveDetail` / `PerfHudStress` 等 20 个组件与视图函数(约 1,060 行)移出主文件,通过 `createUi(deps)` 接收 153 个显式依赖(含 `state` / `React` / `h` / `translate` 包装 / `HudBoundary`)。`PerfHudGate` 与 pack 分片并行拉取,**任一分片失败都记进 `state.errors` 且不阻塞其余降级路径**。`client.js` 8,347 → **7,438 行**;渲染层改动不再和采集逻辑抢同一个文件。真页面:`check-panel` / `check-incident` / `check-counts` / `check-storage` / `check-interaction` 全绿,`npm test` 613 条。
-- **离线套件的静态检查改为扫两份源码**:`logic.mjs` 新增 `renderSource = client.js + client.ui.js`,渲染区 / 词典引用 / 静态裸调用那几条断言跟着渲染层走。
-- **下一批**:`manifestFor` / `diagnosticSummary` / `buildPack` / `packPreview` / `exportPack` 搬进 `client.pack.js`(依赖 `capabilities` 等显式传入);随后是诊断 / 视图模型层(约 2,700 行)。
+**背景**:client.js 一个文件 8,595 行 / 354 个顶层函数 / 94 字段的共享 state,任何改动都要在同一个文件里找上下文。DSH 本身支持包内分片(package-local chunk),不需要构建步骤:
+
+- 运行时 `require.async('./client.<name>.js')`,宿主按 `/plugins/dsh-perf-hud/client.<name>.js?rev=<rev>` 发;
+- 分片用 `window.__ModuleLoader__.load({ id, chunk, factory })` 注册(与官方 `dsh-client-ui-sidebar-documentpreview` 的 `client.excel.js` 同一条路);
+- `package.json#files` 与 `release.yml` 的产物核对覆盖 `client.*.js`(漏发分片 = 启动 404)。
+
+**结果**:`client.js` **8,595 → 4,698 行**,分成四块:
+
+| 文件 | 行数 | 内容 | 加载时机 |
+|---|---:|---|---|
+| `client.js` | 4,698 | 采集 / 归因 / 守夜捕获 / 宿主探针 / apply + 同步包装 | 启动 |
+| `client.model.js` | 3,148 | 归因证据链 / 能力矩阵 / 可能原因 / 诊断包 / 视图模型与摘要(159 个函数) | `apply()` 与面板渲染前(采集路径也吃它) |
+| `client.ui.js` | 1,230 | 全部渲染(PerfHud / 四视图 / 各 block) | `PerfHudGate` |
+| `client.pack.js` | 135 | zip(CRC32 / store-only) | `PerfHudGate` |
+| `client.tools.js` | 230 | 隔离实验 | 首次 `__perfHud.experiment()` |
+
+**依赖是显式的,不做反向 import**:`createModel(deps)` 收 96 个、`createUi(deps)` 收 153 个、`createToolsApi(deps)` 收 16 个;主文件保留同名同步包装,分片没到位时抛出明确错误而不是静默返回空值。
+
+**两处必须记住的坑**:
+
+- `HudBoundary` 是 `class`,按 function/const 收集依赖时会漏 —— `h(HudBoundary)` 拿到 undefined → React 抛 `Element type is invalid` → 外壳把整个条目停用(面板消失、`errors` 为空),与 dead-ends 第 7 条同一形态;
+- 采集路径(`assembleIncident` → `scriptEvidence`)也吃模型层,所以 `restore()` / `start()` 都改到 `loadModel()` 之后再跑。
+
+**离线套件跟着走**:`logic.mjs` 的 `extract()` 改成分片优先(同 header 在 model 分片里能找到就抽那份),静态检查用 `allSource`;`attribution.mjs` 从 model 分片抽 `ownerOfUrl` / `isCore`;`renderSource` 覆盖渲染层。
+
+**证据**:`npm test` 613 条全绿;`check-panel` / `check-incident` / `check-counts` / `check-storage` / `check-interaction` 全绿;`dead-code` 0 候选;真页面按 chunk 请求四个分片、面板 0 错误。
 
 ### 文档(2026-10-18,档案拆分与上下文瘦身)
 
