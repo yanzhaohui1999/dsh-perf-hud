@@ -2,6 +2,14 @@
 
 本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/),版本号遵循 SemVer。
 
+## [Unreleased]
+
+### 文档(2026-10-18,档案拆分与上下文瘦身)
+
+- **REVIEW.md 只留现在仍然有效的**:对外门槛、未还的债、当前边界(57.6KB → 5.5KB)。历史决策与 67 条实测证据移到 `docs/plans/2026-10-11-acceptance-evidence.md`;原 `REVIEW-2026-10-13.md` / `NEXT-PHASE-PLAN.md` 移到 `docs/plans/`,归档说明写在各自开头。
+- **AGENTS 拆成「规则 + 按需参考」**:§7 面板读数 → `docs/reading-panel.md`;§2 环境与验证 → `docs/verification.md`;§6 归因机制 → `docs/mechanisms.md`;§8 已知坑 → `docs/dead-ends.md`;§10 发版 → `docs/release.md`;§12 竞争与 §0.2 → `docs/landscape.md`。AGENTS 只留规则、门禁、代码约定与指针:**94.8KB → 23KB**,整份都在 65536 字节自动加载预算内(以前被截断,§7 后半与 §8–§12 实际看不到)。
+- **文档地图与链接同步**:README / README_EN / CONTRIBUTING / AGENTS §8–§11 的引用改指新档案;`docs/plans/README.md` 是档案索引。档案不进 npm 包。
+
 ## [0.5.0] - 2026-10-18
 
 ### 面板(2026-10-17,标题栏:一行永不换行)

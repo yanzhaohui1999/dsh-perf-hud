@@ -9,7 +9,7 @@ English summary follows the Chinese text below.
 ## 开始之前
 
 - 先读 [README.md](README.md) 了解面板能力与读数口径,再读 [AGENTS.md](AGENTS.md) —— 那里是**开发规则**(硬约束、门禁、提交规范、代码约定),本文不重复。
-- 想知道"为什么这么设计、哪些路已经试过并证伪" → [AGENTS.md](AGENTS.md) §0.1(方向取舍)/ §6(源码级机制)/ §8(已证伪的死路);想知道发布门槛、验收证据与还差什么 → [REVIEW.md](REVIEW.md)。
+- 想知道"为什么这么设计、哪些路已经试过并证伪" → [AGENTS.md](AGENTS.md) §0.1(方向取舍)/ [docs/mechanisms.md](docs/mechanisms.md)(源码级机制)/ [docs/dead-ends.md](docs/dead-ends.md)(已证伪的死路);想知道发布门槛、未还的债与还差什么 → [REVIEW.md](REVIEW.md);想看历史决策与实测证据 → [docs/plans/](docs/plans/)(不是必读)。
 
 ## 报告 Bug
 
@@ -32,44 +32,13 @@ English summary follows the Chinese text below.
 
 ### 提交前自检(必过)
 
-```sh
-node tests/attribution.mjs   # 11 条
-node tests/logic.mjs         # 561 条(含静态检查与长度预算)
-node tests/host.mjs          # 41 条
-```
+- **`npm test`** —— **613** 条(11 / 561 / 41)。三套件、三个沙箱与门禁细节见 [AGENTS.md](AGENTS.md) §3。
+- 改了面板文案或读数口径:长度预算 / 单位一致性 / 静态检查由 `npm test` 一起跑,规则见 [AGENTS.md](AGENTS.md) §5;**改断言前先确认不是在删证据**。
+- 改到面板渲染 / `apply()` / `start()`:按 [docs/verification.md](docs/verification.md) 跑真页面验收器(`check-panel` 必跑,`check-incident` / `check-counts` 视改动)。它们**不是离线门禁**(要真浏览器 + 本机 `dsh web`),PR 里附输出即可。
 
-改了面板文案或读数口径时,**必须**确认 `tests/logic.mjs` 的这几类断言仍然绿:
+### 硬规则不在这里重复
 
-- **长度预算**:概览两行 ≤36 / ≤60 字符,四个折叠组摘要 ≤26/30/34/24;
-- **单位一致性**:同一张表里不许一处给 `/s`、另一处给累计;
-- **静态检查**:`h(Uppercase…)` 引用的组件必须声明过、面板渲染区的裸函数调用必须声明过。
-
-> 这三类断言是历史上真实事故的回归测试,不是形式主义。改断言前先确认你不是在删掉证据。
-
-**改到面板渲染 / `apply()` / `start()` 路径的改动,再跑一次真页面验证**(离线三套件只抽纯函数,不跑这些路径 —— 本项目真出过"三套件全绿、浏览器里面板整块消失"的事故):
-
-```sh
-node tools/check-panel.mjs        # 真开一次页面:面板渲染 0 错误 + 目标元素在场(可用 --expr= 换断言)
-node tools/check-storage.mjs      # 写 localStorage → 重新加载 → 读回(落盘 / 跨会话基线)
-node tools/check-interaction.mjs  # CDP 发真实输入,验 event timing 真的交付
-```
-
-⚠️ 这三条**不是离线门禁**:要真浏览器 + 本机跑着 `dsh web`(token 从 `~/Library/Logs/ai.dsh.web.log` 取),
-所以 `npm test` 与 CI 里都没有它们(CI 只对 `tools/*.mjs` 做语法检查)。PR 里附上它们的输出即可。
-
-### 这个项目的几个「坑」(改动涉及对应区域时务必注意)
-
-1. **改 `client.js` 用带锚点的小批次**,一次替换一个可唯一匹配的片段。整段替换曾两次吞掉相邻声明
-   (`const signed` / `function PerfHudStress`),后果是 React 抛 `Element type is invalid`、外壳把整个条目
-   **永久停用**(面板凭空消失,只能刷新)。
-2. **插桩必须可还原**:包装 `setTimeout`/`setInterval`/`rAF` 与 `appendChild`/`insertBefore`/`setAttribute` 时,
-   保存原生引用,并且只在"当前仍是我们那个 wrapper"时才还原。
-3. **读数不许四舍五入成误导**:`0ms/s` 这类数字要显式写 `<0.1ms/s`;拿不到数据就写"未采集 / 不适用 /
-   失败原因",**不要留空、不要假装成功**。
-4. **i18n 成对改**:新增文案同时进 `DICT.zh` 与 `DICT.en`;实验进度与错误原因串也要进字典(见 [REVIEW.md](REVIEW.md) §2)。
-5. **宿主半不许改宿主原型**,也不许在没有 `confirm: true` 的情况下写 bundle 状态(宿主套件有断言钉住)。
-6. **提交信息**用 Conventional Commits,`<type>(<scope>): 描述`,scope 取 `client` / `host` / `attribution` /
-   `panel` / `isolation` / `i18n` / `docs` / `tests`。正文里不要写"用户问…"这类对话转述。
+改 `client.js` 的锚点小批次、插桩还原、读数不造假、i18n 成对、宿主半安全线,都是 [AGENTS.md](AGENTS.md) §1 / §4 / §5 里的硬规则;最高频的坑(整段替换吞声明、模块作用域裸标识符、HMR 热载换实例)见 [docs/dead-ends.md](docs/dead-ends.md)。
 
 ## 代码风格
 

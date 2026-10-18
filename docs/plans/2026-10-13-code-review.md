@@ -3,6 +3,8 @@
 > 分支:`review/2026-10-13-audit`(基于 `main` @ `c526358`)。
 > 范围:**意图演进**(160 个提交)→ **是否跑偏** → **当前代码质量** → **UI 走查** → **优化意见**。
 > 证据都可复跑:`npm test`(603 条)、`node tools/check-*.mjs`(真页面)、`docs/images/`(九张截图)。
+>
+> **归档(2026-10-18)**:本文是当时的审计快照,不是当前行为说明。文中提到的 `NEXT-PHASE-PLAN.md` 现位于 [2026-10-12-next-phase-plan.md](2026-10-12-next-phase-plan.md);仍未还的两条(P2-10 拆分 / P2-12 `dshVersion`)已并入 [REVIEW.md](../../REVIEW.md) §2。
 
 ---
 

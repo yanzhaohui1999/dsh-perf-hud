@@ -3,6 +3,8 @@
 > 输入:`dsh-perf-hud-next-phase-product-plan.md`(产品计划)+ `dsh_perf_hud_ui_overview.png`(UI 概念图)。
 > 本文件是**给代码 AI 的实施计划与文件清单**(产品计划 §8 要的那一份),不是新需求文档。
 > 基线(写这份计划时):`main` @ 0.4.0,三套件 **497** 条全绿(attribution 11 / logic 447 / host 39),`DICT.zh` = `DICT.en` = 283 键。
+>
+> **归档(2026-10-18)**:本文是当时的实施计划,不是当前行为说明;计划已基本执行完,现行规则见 [AGENTS.md](../../AGENTS.md),当前状态见 [REVIEW.md](../../REVIEW.md)。
 
 ### 本轮进度(2026-10-12)
 

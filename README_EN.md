@@ -14,7 +14,7 @@
 </p>
 
 > ✅ **v0.5.0 is on npm** — install with `dsh plugin --profile web add dsh-perf-hud` (release gates and
-> evidence: [REVIEW.md](REVIEW.md)).
+> open debts: [REVIEW.md](REVIEW.md)).
 > Docs are maintained in Chinese — [README.md](README.md) is the primary version.
 
 ## Night watch: catching the stall you were not looking at
@@ -332,14 +332,14 @@ node tests/host.mjs          # 41 assertions: real index.js driven by a fake ctx
 
 The i18n dictionary now has **402 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
 
-Live verification (exchange a cookie first, see [AGENTS.md](AGENTS.md) §2.2):
+Live verification (exchange a cookie first, see [verification](docs/verification.md)):
 
 ```sh
 DSH_COOKIE=… node tests/live-sourcemap.mjs   # real indexed sourcemap sections and package names
 DSH_COOKIE=… node tests/live-host.mjs        # real route; exit code 3 = host half not loaded yet (restart needed)
 ```
 
-Development rules, commit conventions, the source-level attribution mechanism and disproven dead ends: [AGENTS.md](AGENTS.md) (§6 mechanism / §8 traps). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
+Development rules, commit conventions and boundaries: [AGENTS.md](AGENTS.md); source-level attribution: [docs/mechanisms.md](docs/mechanisms.md); disproven dead ends: [docs/dead-ends.md](docs/dead-ends.md). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

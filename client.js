@@ -640,7 +640,7 @@ window.__ModuleLoader__.load({
 		}
 
 		// ──────── A2. LoAF 脚本 → 包名:字符位置 → 行号 → 分段表 ────────
-		// LoAF 的 scripts[] 给的是「合并批 URL + 字符位置」,而包名藏在合并批里(见 §6.1)。
+		// LoAF 的 scripts[] 给的是「合并批 URL + 字符位置」,而包名藏在合并批里(见 docs/mechanisms.md)。
 		// 单包 URL 直接从 URL 读得出包名;多包 URL 必须把字符位置换算成行号,再查分段表。
 		// 换算要那段脚本文本(同源 fetch,浏览器内存缓存命中),所以后台预取一次、按 URL 缓存。
 		const scriptLines = new Map();   // url -> { state, starts, reason }
@@ -3927,7 +3927,7 @@ window.__ModuleLoader__.load({
 			}
 			howToAdd.push('零成本、当场可做:chrome://gpu 看是不是落到了软件渲染;DevTools → Rendering 打开 Frame Rendering Stats(FPS 表)与 Paint flashing —— 页面完全静止时帧率是否也上不去');
 			howToAdd.push('判定"主线程之外":Performance 面板录 5 秒,看 Main 轨道自身的忙碌时间是否远小于墙钟 —— 注意 blocking=0 / scripts 为空**不能**当证据(见上面的读取说明),要看 Main 轨道本身');
-			howToAdd.push('宿主火焰图:插件自带路由就能采 —— 带宿主 cookie(见 AGENTS §2.2)POST /api/dsh-perf-hud/host {op:"profileStart", seconds:5},再 POST {op:"profileGet"} 取回标准 .cpuprofile(speedscope 打开);退一步也可以 kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record');
+			howToAdd.push('宿主火焰图:插件自带路由就能采 —— 带宿主 cookie(见 docs/verification.md)POST /api/dsh-perf-hud/host {op:"profileStart", seconds:5},再 POST {op:"profileGet"} 取回标准 .cpuprofile(speedscope 打开);退一步也可以 kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record');
 			return { missing, howToAdd, capabilities: caps };
 		}
 
@@ -3954,7 +3954,7 @@ window.__ModuleLoader__.load({
 		 * 候选原因(最多 `CAUSE_MAX` 条)。**这是"可能原因"那一块的唯一生成处**,面板与
 		 * 诊断包读同一份 —— 所以"面板上说 A、导出件里说 B"在结构上不会发生。
 		 *
-		 * 三条不许越界(与 §7 的归因三档同源):
+		 * 三条不许越界(与 docs/reading-panel.md 的归因三档同源):
 		 *   ① 每条候选都带 `limits`,而且限制里一定有那句"不等于已定位根因";
 		 *   ② `worstFrameJs === 'none'` 时**不**给节流结论:要么是"更可能"(只有 `suspectedThrottle`
 		 *      成立时),要么就是"证据不足";
@@ -5607,7 +5607,7 @@ window.__ModuleLoader__.load({
 		 */
 		/**
 		 * 环的四段 = **一个维度**:脚本 / 任务里没归到的 / 渲染 / 样式+布局+绘制(相加恒等于整帧)。
-		 * 脚本内部的「来源」细分**不在这里** —— 层级挤在环里读不出来(见 AGENTS §7 的拆解铁律),
+		 * 脚本内部的「来源」细分**不在这里** —— 层级挤在环里读不出来(见 docs/reading-panel.md 的拆解铁律),
 		 * 那件事交给 `barSegments` 的堆叠条。
 		 */
 		function frameArcs(split) {
@@ -7361,7 +7361,7 @@ window.__ModuleLoader__.load({
 			bump();
 		}
 
-		/** 状态图标(图形,不走词典 —— 它不是文案,是记号;颜色与文字两样一起给,见 §7)。 */
+		/** 状态图标(图形,不走词典 —— 它不是文案,是记号;颜色与文字两样一起给,见 docs/reading-panel.md)。 */
 		function healthIcon(level) {
 			if (level === 'ok') return '✓';
 			if (level === 'stall') return '!';

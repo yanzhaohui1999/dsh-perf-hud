@@ -13,7 +13,7 @@
 
 <p align="center">🌏 <b>中文</b> · <a href="./README_EN.md">English</a></p>
 
-> ✅ **v0.5.0 已发布到 npm** —— `dsh plugin --profile web add dsh-perf-hud` 即可(发布门槛与验收证据见
+> ✅ **v0.5.0 已发布到 npm** —— `dsh plugin --profile web add dsh-perf-hud` 即可(发布门槛与未还的债见
 > [REVIEW.md](REVIEW.md))。
 
 ## 📑 目录
@@ -339,7 +339,7 @@ node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js
 
 i18n 词典现在是**中英各 405 键**(两本字典键集合必须一致,且每个键都得有人引用 —— 撤下界面时留下的死键会被断言报出来)。
 
-线上验证(需要先换 cookie,步骤见 [AGENTS.md](AGENTS.md) §2.2):
+线上验证(需要先换 cookie,步骤见 [环境与验证](docs/verification.md)):
 
 ```sh
 DSH_COOKIE=… node tests/live-sourcemap.mjs   # 真实 indexed sourcemap 的分段与包名
@@ -360,7 +360,7 @@ node tools/check-incident.mjs     # 抓一条真事故 → 逐帧回看 / 上一
 `tools/*.mjs` 做语法检查)。离线三套件只抽纯函数、**不跑 `apply()` 与渲染**,而"三套件全绿、浏览器里
 面板整块消失"这种事本项目真出过 —— 所以改那两条路径时别只跑 `npm test`。
 
-开发规则、提交规范、代码约定、源码级归因机制与已证伪的死路见 [AGENTS.md](AGENTS.md)(§6 机制 / §8 坑);
+开发规则、提交规范、代码约定见 [AGENTS.md](AGENTS.md);源码级归因机制见 [docs/mechanisms.md](docs/mechanisms.md),已证伪的死路见 [docs/dead-ends.md](docs/dead-ends.md);
 贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 🤝 参与贡献
