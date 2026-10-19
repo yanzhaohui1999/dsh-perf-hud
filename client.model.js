@@ -2796,7 +2796,11 @@ window.__ModuleLoader__.load({
 		function isShellScript(script) {
 			const url = typeof script?.url === 'string' ? script.url : '';
 			if (url === '') return false;
-			return ownerOfUrl(url) === null;
+			const owner = ownerOfUrl(url);
+			// ⚠️ **不等于 null 不算外壳**:多包 URL 的 owner 是 `bundle:` 前缀的 key(不是 null),
+			// 那种 URL 属于 58 个插件挤在一起的那一批 —— 它没定到单个包名,但绝不是应用外壳。
+			// 只认 null(有 URL、但不在 plugins/ 下)才判外壳。
+			return owner === null;
 		}
 		/** "谁"的两类标签合起来(插件包 + 其余来源),按耗时降序 —— 堆叠条与交叉表都用它。 */
 		function whoRows(tally) {

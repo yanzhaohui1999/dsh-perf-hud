@@ -2492,7 +2492,7 @@ const watchBox = new Function(`
 		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, frameSeverity, PICK_MIN_MS, unresolvedLabel, crossTable, crossSummary, clipName,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT, sparkPickMap, sparkCellTitle, markResolved,
 		sessionRecord, readSessionBaselines, mergeSessionBaseline, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
-		tallyScripts, framePkgTally, isShellScript, shellSummary, whoRows, barSegments, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel,
+		tallyScripts, framePkgTally, isShellScript, shellSummary, ownerOfUrl, whoRows, barSegments, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel,
 		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident, selectIncident, setIncidentScope, evidenceScope, evidenceFooter, evidenceFooterTitle, evidenceZeroText, incidentScriptEvidence, incidentEvidenceAt, evidenceWhereText, evidenceLine, evidenceName, evidencePlace, replayScope, replayX, replaySummaryText, evidenceCalls: () => evidenceCalls,
 		// 诊断上下文 + 历史帧数据层(逐帧回放)
 		diagMode, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, incidentFrameLevel, selectIncidentFrame, incidentFrameStep, setOnlyBad, showLiveMode, replayColumns, replayCellTitle, incidentWallClock, incidentFrameTally, incidentWindowTally, incidentFrameEvidenceRows, incidentLongTasksAt, longTaskLabel, incidentVerdict, verdictColor, incidentScriptOf, detailContext, incidentFrameHeadingText, liveFrameHeadingText, saveWatchUI, restoreWatchUI, LS_WATCHUI,
@@ -3895,6 +3895,11 @@ check('外壳 bundle(应用自己那一层)被认出来:按包第一名是它时
 	watch.isShellScript({ url: '' }),
 	watch.isShellScript(null),
 ], [true, false, false, false, false]);
+check('外壳判据与 ownerOfUrl 严格一致(只认 null):合并批的 owner 是 bundle: key,不是外壳', [
+	watch.ownerOfUrl('http://h/plugins/??a/client.js,b/client.js&rev=1').startsWith('bundle:'),
+	watch.isShellScript({ url: 'http://h/plugins/??a/client.js,b/client.js&rev=1' }),
+	watch.isShellScript({ url: 'http://h/plugins/??dsh-status-rotator/client.js&rev=1' }),
+], [true, false, false]);
 check('shellSummary:第一名是外壳才给结论,否则 null(不抢别的归属方的位置)', [
 	watch.shellSummary({ js: 300, top: [], byOther: [['index-CN7NIWNw.js', 281], ['插件批次(未按 sourcemap 拆)', 13]], shellMs: 281, shellName: 'index-CN7NIWNw.js' }),
 	watch.shellSummary({ js: 300, top: [['dsh-x', 281]], byOther: [['index-CN7NIWNw.js', 13]], shellMs: 13, shellName: 'index-CN7NIWNw.js' }),
