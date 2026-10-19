@@ -266,7 +266,7 @@ bump `package.json.version` → 打 `vX.Y.Z` tag(与 version 一致)→ GitHub R
 
 ## 11. 当前状态
 
-v0.5.0 已发布(2026-10-18,OIDC,`latest → 0.5.0`);对外只剩收录 PR [#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814) 等合并、npm 搜索索引待恢复。**未还的债、上游证据、能力边界**见 [REVIEW.md](REVIEW.md);发版流水见 [CHANGELOG.md](CHANGELOG.md);历史证据见 [验收档案](docs/plans/2026-10-11-acceptance-evidence.md)。
+v0.6.0 已发布(2026-10-19,OIDC,`latest → 0.6.0`,包内 **29 个文件**、带 provenance);收录 PR [#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814) 已于 2026-10-19 合并,npm 搜索索引也已恢复(发布当下的文本搜索仍停在 0.5.0,按 0.5.0 的经验会自己追上)。**未还的债、上游证据、能力边界**见 [REVIEW.md](REVIEW.md);发版流水见 [CHANGELOG.md](CHANGELOG.md);历史证据见 [验收档案](docs/plans/2026-10-11-acceptance-evidence.md)。
 
 ---
 
