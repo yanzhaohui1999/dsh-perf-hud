@@ -100,6 +100,26 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 		layers.pill === true && layers.leaked.length === 0 && layers.timeline === true && layers.actions === 2, JSON.stringify(layers));
 	check('同屏只有一个返回键(返回只属于标题栏)', layers.back === 1, String(layers.back));
 	check('面板没有渲染错误', (await errors(page)).length === 0, JSON.stringify(await errors(page)));
+	// ── 折叠组点开:派生统计只在展开时计算,点开不许炸 ──
+	// 这里只保证点开不抛错。它**不能**防住 2026-10-19 的 shellNote 事故:
+	// 那条路的触发条件是 tallyFrame.js > 0,而 headless 空页造出来的事故脚本恒为 0ms,
+	// 变异测试(把 t() 写回模块作用域)证明这条依旧全绿 —— 它是空的。
+	// 真正防住它的是 logic.mjs 里那条**结构**断言(shellNote 必须是
+	// scriptBreakdownRows 的内嵌闭包),那条已做变异测试、有牙齿。
+	const opened = await page.evaluate(`(() => {
+		const root = document.getElementById('dsh-perf-hud-root');
+		const rows = [...root.querySelectorAll('div')].filter((el) => (el.textContent || '').trimStart().startsWith('▸'));
+		let n = 0;
+		for (const row of rows) { row.click(); n += 1; }
+		return n;
+	})()`);
+	await page.sleep(300);
+	const expanded = await page.evaluate(`(() => ({
+		errors: window.__perfHud.snapshot().errors.length,
+		splitFailed: document.getElementById('dsh-perf-hud-root').innerText.includes('拆解算不出来'),
+	}))()`);
+	check('折叠组点开后 0 错误(防点了没反应 / 展开就炸;不防 shellNote 那类数据依赖路径)',
+		opened > 0 && expanded.errors === 0 && expanded.splitFailed === false, JSON.stringify({ opened, ...expanded }));
 
 	// 帧条:点一根柱子 → 选中的帧必须换(标题与耗时同步更新)
 	const beforePick = await contextBar(page);
@@ -212,6 +232,7 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 	check('设置页不改变采集:深录仍然默认关(要显式开)', settings.deep === false, String(settings.deep));
 	check('设置页渲染 0 错误', (await errors(page)).length === 0);
 });
+
 
 console.log(failed === 0 ? 'ALL PASS(真页面 · 历史事故逐帧回放)' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;
