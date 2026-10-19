@@ -206,6 +206,18 @@ process.exitCode = failed === 0 ? 0 : 1;
 	check('面板渲染区的函数调用都有声明(signed 事故回归)',
 		bare.filter((name) => !declared.has(name) && !GLOBALS.has(name) && !CSS_FUNCS.has(name)), []);
 
+	// 「技术细节」整块被降级成一行红字的事故回归(2026-10-19):shellNote 曾被定义在**模块
+	// 作用域**,却用了 `scriptBreakdownRows` 的局部别名 `t(...)` —— 三套件全绿(测的是纯函数)、
+	// 静态检查也不响(它是个变量引用,不是未声明的函数),真页面一展开那一组就 ReferenceError,
+	// 整块脚本拆解被降级成一行红字。修法:把它改成 `scriptBreakdownRows` 里的内嵌闭包。
+	// 这条断言钉住那个结构 —— 一旦有人再把它挪回模块作用域,先响的就是它。
+	check('shellNote 是 scriptBreakdownRows 的内嵌闭包(拿得到局部 t;shellNote 事故回归)', (() => {
+		const at = renderSource.indexOf('const shellNote = (tally, key) =>');
+		const owner = renderSource.lastIndexOf('function scriptBreakdownRows(', at);
+		const ownEnd = renderSource.indexOf('\n\t\t}', owner);
+		return [at > 0, owner > 0 && owner < at, at < ownEnd];
+	})(), [true, true, true]);
+
 
 	// HUD 自己的 DOM 写入必须不记账(实测摘要里出现过 (PerfHud) 顶在第一名)
 	check('DOM 写入插桩排除本 HUD 自身', /if \(owner === PKG\)/.test(source), true);

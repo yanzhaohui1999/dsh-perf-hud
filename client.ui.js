@@ -420,18 +420,6 @@ window.__ModuleLoader__.load({
 		 * (只是喂进来的 tally 与三个范围标签不同)—— 两边各写一份渲染,口径迟早会漂。
 		 * 按包那几行只在真定到包名 / 真有「其余来源」时才出现。
 		 */
-		/**
-		 * 「按包」第一名是**应用外壳** bundle 时的那一句结论。外壳文件名(如
-		 * `index-CN7NIWNw.js`)排第一会让人读成元凶,而它从来不属于任何插件 —— 这一层
-		 * 就地说明,免得读者自己想起规则。数据来自 tally 的 shellMs / shellName。
-		 */
-		function shellNote(tally, key) {
-			if (tally === null || tally === undefined) return null;
-			const shell = shellSummary(tally);
-			if (shell === null) return null;
-			return h('div', { key, style: { ...S.sub, marginTop: 2 }, title: t('shellNoteHint') },
-				`${t('shellNote')} ${short(shell.name)} ${Math.round(shell.ms)}ms · ${Math.round(shell.share * 100)}%`);
-		}
 		function scriptBreakdownRows(tallyFrame, tallyWindow, frameLabel, framePkgHint, windowHeadHint, windowPkgHint) {
 			const t = translate;
 			try {
@@ -450,6 +438,19 @@ window.__ModuleLoader__.load({
 			// 每项一行的小表:名字左(超长省略,title 给全名)、毫秒右(等宽)。
 			// 原来是"一整块右对齐长文本",折行会折在名字中间(实测 `ResizeObserverCallback` /
 			// `index-5SrrfWpU.js` 都被劈成两半),读起来要先把断行拼回去。
+			// 「按包」第一名是**应用外壳** bundle 时的那一句结论。外壳文件名(如
+			// `index-CN7NIWNw.js`)排第一会让人读成元凶,而它从来不属于任何插件 —— 这一层
+			// 就地说明,免得读者自己想起规则。数据来自 tally 的 shellMs / shellName。
+			// ⚠️ 它是**内嵌闭包**而不是模块作用域函数:2026-10-19 曾把 `t(...)` 写在模块作用域,
+			// 而 `t` 是本函数的局部别名 —— 三套件全绿、静态检查不响,真页面一展开「技术细节」
+			// 就 ReferenceError,整块脚本拆解被降级成一行红字。内嵌之后拿不到局部 t 就不可能。
+			const shellNote = (tally, key) => {
+				if (tally === null || tally === undefined) return null;
+				const shell = shellSummary(tally);
+				if (shell === null) return null;
+				return h('div', { key, style: { ...S.sub, marginTop: 2 }, title: t('shellNoteHint') },
+					`${t('shellNote')} ${short(shell.name)} ${Math.round(shell.ms)}ms · ${Math.round(shell.share * 100)}%`);
+			};
 			const bar = (key, label, hint, list, token) => {
 				const { segs, total } = barSegments(list);
 				if (segs.length === 0 || total <= 0) return null;
