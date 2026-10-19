@@ -1,6 +1,6 @@
 {
   "name": "dsh-perf-hud",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "纯客户端性能 HUD:帧与最差帧、Longtask(四条腿归因)、每插件回调速率与同步耗时、DOM 增长与写入者、JS 堆、宿主 event-loop 与链路 RTT,带隔离实验与一键导出 JSON;守夜层默认常开,用帧级环形缓冲与 LoAF 自动留存最差几次卡顿并导出事故包。 Client-side performance HUD for DeepSeek Harness: FPS and worst frame, long tasks with four-leg attribution (fiber / subtree / DOM write / scheduler), per-plugin callback rate and sync time, DOM growth and writers, JS heap, host event loop and link RTT, plus an isolation experiment and one-click JSON export. An always-on night-watch recorder (per-frame ring buffer + LoAF) keeps the worst stalls and exports an incident pack.",
   "type": "module",
   "icon": "./icon.svg",

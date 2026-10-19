@@ -2,7 +2,7 @@
 
 本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/),版本号遵循 SemVer。
 
-## [Unreleased]
+## [0.6.0] - 2026-10-19
 
 ### 客户端(2026-10-18,拆成包内分片)
 
@@ -12,13 +12,13 @@
 - 分片用 `window.__ModuleLoader__.load({ id, chunk, factory })` 注册(与官方 `dsh-client-ui-sidebar-documentpreview` 的 `client.excel.js` 同一条路);
 - `package.json#files` 与 `release.yml` 的产物核对覆盖 `client.*.js`(漏发分片 = 启动 404)。
 
-**结果**:`client.js` **8,595 → 3,723 行**,拆成 1 主 + 6 片:
+**结果**:`client.js` **8,595 → 3,751 行**(拆分当时 3,723,面板两批改动又加回 28 行),拆成 1 主 + 6 片:
 
 | 文件 | 行数 | 内容 | 加载时机 |
 |---|---:|---|---|
-| `client.js` | 3,723 | 采集 / 归因 / 宿主探针 / 面板状态 / apply + 同步包装 | 启动 |
-| `client.model.js` | 3,148 | 证据链 / 能力矩阵 / 可能原因 / 诊断包 / 视图模型(159 个函数) | apply 与渲染前 |
-| `client.ui.js` | 1,230 | 全部渲染(PerfHud / 四视图 / 各 block) | `PerfHudGate` |
+| `client.js` | 3,751 | 采集 / 归因 / 宿主探针 / 面板状态 / apply + 同步包装 | 启动 |
+| `client.model.js` | 3,198 | 证据链 / 能力矩阵 / 可能原因 / 诊断包 / 视图模型(159 个函数) | apply 与渲染前 |
+| `client.ui.js` | 1,265 | 全部渲染(PerfHud / 四视图 / 各 block) | `PerfHudGate` |
 | `client.watch.js` | 726 | 守夜层:observer 回调 / 事故组装 / 落盘(20 个函数) | apply(采集前) |
 | `client.i18n.js` | 431 | 中英词典(各 405 键,纯数据) | 最前(locale 注册) |
 | `client.tools.js` | 230 | 隔离实验 | 首次 `__perfHud.experiment()` |
@@ -66,6 +66,12 @@
 - **AGENTS §2 开头顶上「仓库一览」表**:10 行说清顶层文件与四个目录(`tests/` / `tools/` / `docs/` / `locale/`)各是什么、谁在什么时候读它。顺手纠正一处容易记错的:`locale/en.json` 是**插件登记信息**(title / description),不是面板词典 —— 中英词典(各 405 键)都在 `client.i18n.js`。表里的行数标成 2026-10-18 的快照,免得又变成一份会漂的抄本。
 - **§8 只留症状,规则回各自的家**:「带锚点小批次」与「插桩可还原」原本在 §5 与 §8 各有一份,现在 §8 并成一条"改 `client.js` 的纪律"指回 §5(5 条 → 4 条)。同一批把 5 处**搬家前的旧引用**对齐:`tools/cdp.mjs` / `tools/check-panel.mjs` / `tools/shots.mjs` / `tests/logic.mjs` 里的 `AGENTS §2.2`、`AGENTS §8 第 14 条`、`§8 第 7 条` 改指 `docs/verification.md` 与 `docs/dead-ends.md`(旧的 §8 是 17 条的坑清单,现在 §8 只有 4 条,按旧编号找必然找错)。
 - **`docs/dead-ends.md` 的条目编号修好**:末四条原本编成 15 / 16 / 15 / 16 / 17(15 与 16 各出现两次),现按顺序改成 15 / 16 / 17 / 18 / 19 —— 清单本身是 19 条,而 AGENTS §8 与 §9 一直写着"17 条",两处计数同步改成 **19 条**。引用按编号的四处(第 7 / 13 / 14 条)不受影响。
+
+### 发布(2026-10-19,0.6.0)
+
+- **对外状态收口**:收录 PR [#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814) 已于 2026-10-19 01:29 合并;npm 文本搜索索引也追上了 —— `/-/v1/search?text=dsh-perf-hud` 第 1 条就是 `dsh-perf-hud 0.5.0`。REVIEW §1 原先挂着的两条未完成项因此清空。
+- **门禁**:620 条离线断言(attribution 11 / logic 568 / host 41)全绿;`npm pack` **29 个文件**(0.5.0 的 23 + 6 个分片);五个真页面验收器(`check-panel` / `check-incident` / `check-counts` / `check-storage` / `check-interaction`)全绿、面板全程 0 错误;`dead-code` 0 候选。
+- **文档同步**:AGENTS §2 的行数快照(3,751 / 3,198 / 1,265)、REVIEW §2 债 #8 与 §5 的 P2-10 状态、验收档案的对外项;README / README_EN 的徽章与固定版本安装命令改指 `v0.6.0`。
 
 ## [0.5.0] - 2026-10-18
 
@@ -383,6 +389,7 @@
   [AGENTS.md](AGENTS.md) §0.1,`LANDSCAPE.md`(生态与撞车矩阵)并进 [AGENTS.md](AGENTS.md) §12 —— 三份带日期的
   记录文档删除,git 历史里还在
 
+[0.6.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.6.0
 [0.5.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.5.0
 [0.4.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.4.0
 [0.2.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.2.0

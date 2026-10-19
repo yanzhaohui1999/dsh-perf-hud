@@ -8,12 +8,12 @@
 > worst few stalls with a full evidence pack.
 
 <p>
-<img alt="status" src="https://img.shields.io/badge/status-v0.5.0%20%C2%B7%20released-green" />
+<img alt="status" src="https://img.shields.io/badge/status-v0.6.0%20%C2%B7%20released-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1-4d6bfe" />
 </p>
 
-> ✅ **v0.5.0 is on npm** — install with `dsh plugin --profile web add dsh-perf-hud` (release gates and
+> ✅ **v0.6.0 is on npm** — install with `dsh plugin --profile web add dsh-perf-hud` (release gates and
 > open debts: [REVIEW.md](REVIEW.md)).
 > Docs are maintained in Chinese — [README.md](README.md) is the primary version.
 
@@ -95,7 +95,7 @@ dsh plugin --profile web add dsh-perf-hud
 The npm install follows `latest`. dsh-plugin.market also prints a `github:…/dsh-perf-hud#<40-char sha>` command — that pins the exact commit the scanner looked at (so the installed code matches the evidence); it is not the everyday install path. To pin a release from GitHub without pasting a sha, use a tag:
 
 ```sh
-dsh plugin --profile web add github:yanzhaohui1999/dsh-perf-hud#v0.5.0
+dsh plugin --profile web add github:yanzhaohui1999/dsh-perf-hud#v0.6.0
 ```
 
 From a source checkout (development; `link:` install, client-half edits take effect on reload):
