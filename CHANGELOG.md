@@ -2,7 +2,34 @@
 
 本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/),版本号遵循 SemVer。
 
-## [0.6.0] - 2026-10-19
+## [Unreleased]
+
+### 面板:三处读数让人"看了也不知道是谁卡了"(2026-10-19)
+
+真实事故(帧 275ms、脚本 273.5ms、定到包 0/3)暴露的三个可读性问题,都不是归因链路坏掉,
+而是**数据在、读法没给**:
+
+1. **「按包」第一名是应用外壳时,就地说明"这不是插件"**(`isShellScript` / `shellSummary`):
+   `index-CN7NIWNw.js 281ms · 96%` 排在第一行,读者会理所当然把它当元凶,而它是宿主 /
+   React 根那一层、从来不属于任何插件(React 根容器上的事件处理器就来自它)。数据本来就有
+   (`pkgVia === 'not-plugin'`),只是没渲染。现在第一名是外壳时紧跟一行
+   `最大一块来自应用外壳(不是插件)` + 毫秒 + 占比。
+2. **long task 那一行不再显示 `? · TextPreview`**(`longTaskLabel`):四条腿一条都没咬住时,
+   旧写法是 `owner ?? '?'` + `component ?? '无'`,于是窗口内唯一一条 long task(271ms,
+   全屏第二重要的读数)以问号出场。现在走与 `blameText` 同一套优先级,一条都没有就照实写
+   「未归因」;**正文只念主名字,悬停把四条腿各自看到什么 + 出处全摊开**。
+3. **`Rx @ 包未定名` 这类行标「未定位」**(`evidenceLocatable`):只有函数名、定不到包也定不到
+   文件的行,和真正定到名的行并排时会被当成"定位失败了"的线索 —— 它没定位是因为没开深录。
+   毫秒仍是真的,所以不滤掉这一行,只在名字后加后缀、悬停给原因。判据与 `locatable`
+   (决不决定占名额)刻意不同:`locatable` 只要有 fn/pkg/file 任一样就显示,这一条只认
+   **能打开的东西**(包名或文件)。
+
+### 测试
+
+- 新增 4 条断言(外壳识别 / shellSummary 三态 / longTaskLabel 四态 / 未定位标注),总数 620 → **624**;
+- `logic.mjs` 守夜盒补 `blameText` / `blameName` / `looksLikeInfrastructure` / `isRecorderName`
+  及其两个常量(它们必须排在 `PKG` 之后:`SELF_NAMES` 用它)。
+
 
 ### 客户端(2026-10-18,拆成包内分片)
 
