@@ -242,17 +242,18 @@
     ⚠️ 另外,新建配置**必须 2 天内完成一次成功发布**,否则作废且无法编辑 —— 所以配的时机是"接下来两天真的会发一版";给一个**已经在 npm 上**的版本建 Release **不算验证**(工作流会走"跳过发布"那条分支)。
   - `release.yml` 现在对"该版本已在 npm 上"幂等:发布前查 registry,查到就跳过并写 notice(**实测**:给首发那版建 Release,v0.4.0 的 `release.yml` 跑绿,`Check whether…` 步骤 success、`Publish` 步骤 **skipped**);**查询失败照实报错退出**,不猜成"没发过"。
 - [x] **0.5.0 发版(2026-10-18)**:`tag v0.5.0` → GitHub Release → `release.yml` 用 **OIDC 直接 publish** 成功(日志 `+ dsh-perf-hud@0.5.0`;registry `dist.attestations` 在场,`latest → 0.5.0`)。Trusted Publisher 配置:**Provider `GitHub Actions` / `yanzhaohui1999` / `dsh-perf-hud` / Workflow filename `release.yml` / Environment 留空 / Allow npm publish + Allow npm dist-tag 都勾**。⚠️ **配置生效之前**,同一条 run 报的是**误导性的 404**(`E404 PUT https://registry.npmjs.org/dsh-perf-hud`,`The requested resource 'dsh-perf-hud@0.5.0' could not be found or you do not have permission`),看起来像包名 / 权限错,实际是 OIDC 对不上 Trusted Publisher;配置生效后**重跑同一个 run** 即绿([npm/cli#9088](https://github.com/npm/cli/issues/9088))。`npm test` **613** 条、`npm pack` **23 个文件**。
-- [ ] **npm 搜索索引仍缺这个包(2026-10-18 发现)**:registry 与 `maintainer:yanzhaohui1999` 查询都有它,但文本搜索 `/-/v1/search?text=dsh-perf-hud` 翻到 1250 条也没有(同期同量级的 `dsh-token-hud` / 只有 `0.0.0-stage` 的 `dsh-cot-anchor` 搜自己的名字都是第 1 条);npmmirror 的搜索能搜到。0.4.0 时代就这样,0.5.0 正常 publish 后继续观察;48h 不恢复就把这两条证据报 npm support。
-- [x] **提收录 PR**(2026-10-18):只提了**一个文件** `data/plugins/yanzhaohui1999__dsh-perf-hud.yml`(category `dev`),PR [awesome-dsh-plugin#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814);`Submission gate` 与 `check` 已 pass,等 maintainer 合并(合并后 dsh-market 每日刷新带上)。
+- [x] **npm 搜索索引仍缺这个包(2026-10-18 发现)**:registry 与 `maintainer:yanzhaohui1999` 查询都有它,但文本搜索 `/-/v1/search?text=dsh-perf-hud` 翻到 1250 条也没有(同期同量级的 `dsh-token-hud` / 只有 `0.0.0-stage` 的 `dsh-cot-anchor` 搜自己的名字都是第 1 条);npmmirror 的搜索能搜到。0.4.0 时代就这样,0.5.0 正常 publish 后继续观察;48h 不恢复就把这两条证据报 npm support。
+  - **结果(2026-10-19 实测)**:搜索索引自行追上 —— `/-/v1/search?text=dsh-perf-hud` 第 1 条就是 `dsh-perf-hud 0.5.0`(`total=23507`),不需要报 support。
+- [x] **提收录 PR**(2026-10-18):只提了**一个文件** `data/plugins/yanzhaohui1999__dsh-perf-hud.yml`(category `dev`),PR [awesome-dsh-plugin#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814);`Submission gate` 与 `check` 已 pass,**2026-10-19 01:29(UTC+8)已合并**(`merged=true`),dsh-market 的每日刷新会带上。
 
 ### 2. 当前仍开放的对外项
 
-- npm 文本搜索索引仍缺这个包(2026-10-18 发现):registry 与 maintainer 查询都有它,`/-/v1/search?text=dsh-perf-hud` 翻到 1250 条也没有;npmmirror 能搜到。48h 不恢复就把证据报 npm support。
+- **无(2026-10-19)**。上一版列的两条(npm 搜索索引、收录 PR)都已闭环:索引恢复、[#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814) 已合并。0.6.0 之后重新开始观察。
 
 ## 2026-10-18 归档时基线
 
 归档这一刻仍成立、且此后由 CI 每次复跑的几条(它们属于「当前门槛」,不随档案过期):
 
-- `npm test` **613** 条全绿(attribution 11 / logic 561 / host 41)。
+- `npm test` **613** 条全绿(attribution 11 / logic 561 / host 41);0.6.0 收口时是 **620** 条(11 / 568 / 41)。
 - 真页面面板渲染 **0 错误**(`snapshot().errors`);四个验收器 `check-panel` / `check-storage` / `check-interaction` / `check-incident` 全跑过。它们不是离线门禁(要真浏览器 + 本机 `dsh web`),CI 只做 `node --check`。
 - `pkgZeroText` 死分支已删、`node tools/dead-code.mjs` **0 个候选**(2026-10-13 审计的结论)。
