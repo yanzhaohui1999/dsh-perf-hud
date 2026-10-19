@@ -935,6 +935,10 @@ window.__ModuleLoader__.load({
 		function scriptPkgTally(...args) { return model().scriptPkgTally(...args); }
 		function framePkgTally(...args) { return model().framePkgTally(...args); }
 		function unresolvedLabel(...args) { return model().unresolvedLabel(...args); }
+		function isShellScript(...args) { return model().isShellScript(...args); }
+		function shellSummary(...args) { return model().shellSummary(...args); }
+		function longTaskLabel(...args) { return model().longTaskLabel(...args); }
+		function evidenceLocatable(...args) { return model().evidenceLocatable(...args); }
 		function whoRows(...args) { return model().whoRows(...args); }
 		function barSegments(...args) { return model().barSegments(...args); }
 		function crossSummary(...args) { return model().crossSummary(...args); }
@@ -3621,6 +3625,9 @@ window.__ModuleLoader__.load({
 				setEnabled,
 				setIncidentScope,
 				setOnlyBad,
+				shellSummary,
+				longTaskLabel,
+				evidenceLocatable,
 				setTrendMs,
 				setView,
 				severityColor,

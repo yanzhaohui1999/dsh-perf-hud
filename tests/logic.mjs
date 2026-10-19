@@ -400,6 +400,8 @@ const sandbox = `
 		handoffInteractions: '窗口内 ≥100ms 的交互', handoffInteractionsScope: '(端到端时长,不是帧内拆分)',
 		maxLabel: '最大', pickNone: '这条事故包里没有帧记录(老包或捕获时没采到):只能看窗口统计,不能逐帧回看',
 		viaNotFetched: '还没预取(只有深录才拉脚本文本)', evidenceBundleLine: '合并脚本行',
+		evidenceUnlocatable: '未定位', evidenceUnlocatableHint: '没有定位字段:函数名与包名都没有,别把它当线索',
+		shellNote: '最大一块来自应用外壳(不是插件)', shellNoteHint: '外壳 bundle 不属于任何插件',
 		watchTrimmed: '裁掉',
 		// 视图模型 / 主界面
 		healthOk: '运行流畅', healthStall: '刚才有卡顿', healthLimited: '监测受限', hudOff: 'HUD 已关闭', loafOff: 'LoAF 未装上',
@@ -469,6 +471,7 @@ const newPieces = [
 	'function viaText(',
 	'function scriptEvidence(',
 	'function evidenceName(',
+	'function evidenceLocatable(',
 	'function evidencePlace(',
 	'function evidenceLine(',
 	'function incidentScriptEvidence(',
@@ -844,6 +847,8 @@ const MARKDOWN_TITLE_ONLY = new Set([
 	'framePickHint', 'pkgHint', 'pkgWindowHint', 'pkgStoredHint', 'incidentWindowScopeHint', 'pkgIncidentWindowHint',
 	'forcedHint', 'crossHint', 'crossIncidentHint', 'frameNavHint', 'replayHint', 'replayTimelineHint', 'evidenceHint',
 	'splitHint', 'splitJsHint', 'invokerHint', 'windowScopeHint', 'watchHint', 'watchExportHint', 'viewEvidenceHint',
+	'shellNoteHint', 'evidenceUnlocatableHint',
+	'shellNoteHint', 'evidenceUnlocatableHint',
 ]);
 check('正文文案不含 markdown 记号(`**` / 反引号),带记号的一律是白名单里的"只进悬停"键',
 	Object.keys(box.DICT.zh).filter((key) => /\*\*|`/.test(box.DICT.zh[key]) || /\*\*|`/.test(box.DICT.en[key]))
@@ -1496,7 +1501,13 @@ check('证据行:有行号但拿不到文件时,写明「文件未定名」而�
 	EX.evidencePlace({ file: null, url: null, line: 5 }), '文件未定名:5');
 check('证据行:<函数> @ <包> 缺哪一半就写哪一半', [
 	EX.evidenceName({ fn: 'render', pkg: 'dsh-x' }), EX.evidenceName({ fn: null, pkg: 'dsh-x' }), EX.evidenceName({ fn: 'render', pkg: null }),
-], ['render @ dsh-x', '函数名未记录 @ dsh-x', 'render @ 包未定名']);
+], ['render @ dsh-x', '函数名未记录 @ dsh-x', 'render @ 包未定名 · 未定位']);
+check('证据行:一条定位字段都没有的行就地标「未定位」(压缩脚本里很常见,别让它冒充线索)', [
+	EX.evidenceName({ fn: null, pkg: null }),
+	EX.evidenceName({ fn: null, pkg: null, file: null }),
+	EX.evidenceName({ fn: 'Rx', pkg: null }),
+	EX.evidenceName({ fn: 'Rx', pkg: null, file: '/plugins/x/client.js' }),
+], ['函数名未记录 @ 包未定名 · 未定位', '函数名未记录 @ 包未定名 · 未定位', 'Rx @ 包未定名 · 未定位', 'Rx @ 包未定名']);
 check('证据行:位置拿不到文件就退回脚本名,两个都没有才 null',
 	[EX.evidencePlace({ file: null, url: 'http://h/a.js', line: null }), EX.evidencePlace({ file: null, url: null, line: null }), EX.evidencePlace({ file: '/p/a.js', line: 3 })],
 	['http://h/a.js', null, '/p/a.js:3']);
@@ -2172,6 +2183,7 @@ const watchPieces = [
 	source.slice(source.indexOf('const CROSS_SUMMARY_NAME_MAX'), source.indexOf('\n', source.indexOf('const CROSS_SUMMARY_NAME_MAX'))),
 	source.slice(source.indexOf('const CROSS_SUMMARY_SRC_MAX'), source.indexOf('\n', source.indexOf('const CROSS_SUMMARY_SRC_MAX'))),
 	extract(source, 'function invokerLabel('),
+	extract(source, 'function isShellScript('),
 	extract(source, 'function tallyScripts('),
 	extract(source, 'function scriptPkgTally('),
 	extract(source, 'function framePkgTally('),
@@ -2179,6 +2191,7 @@ const watchPieces = [
 		source.slice(source.indexOf('const PLUGIN_URL'), source.indexOf('\n', source.indexOf('const PLUGIN_URL'))),
 	extract(source, 'function ownerOfUrl('),
 	extract(source, 'function unresolvedLabel('),
+	extract(source, 'function shellSummary('),
 	extract(source, 'function jsBreakdownText('),
 	extract(source, 'function unattrText('),
 	extract(source, 'function hitText('),
@@ -2203,6 +2216,7 @@ const watchPieces = [
 	extract(source, 'function incidentScriptEvidence('),
 	extract(source, 'function viaText('),
 	extract(source, 'function evidenceName('),
+	extract(source, 'function evidenceLocatable('),
 	extract(source, 'function evidencePlace('),
 	extract(source, 'function evidenceLine('),
 	extract(source, 'function replayScope('),
@@ -2268,6 +2282,11 @@ const watchPieces = [
 	`${extract(source, 'const incidentTallyCache = ')};`,
 	extract(source, 'function incidentWindowTally('),
 	extract(source, 'function incidentFrameEvidenceRows('),
+	extract(source, 'function blameText('),
+	extract(source, 'function blameName('),
+	extract(source, 'function looksLikeInfrastructure('),
+	extract(source, 'function isRecorderName('),
+	extract(source, 'function longTaskLabel('),
 	extract(source, 'function incidentLongTasksAt('),
 	extract(source, 'function incidentFrameHeadingText('),
 	extract(source, 'function liveFrameHeadingText('),
@@ -2349,6 +2368,8 @@ const watchBox = new Function(`
 	const performance = { now: () => nowMs, timeOrigin: 1700000000000 };
 	const document = { visibilityState: 'visible' };
 	const PKG = 'dsh-perf-hud';
+	const REACT_INTERNAL = new Set(['react.element', 'react.internal']);
+	const SELF_NAMES = new Set(['PerfHud', 'PerfHudStress', PKG]);
 	// assembleIncident 会调用 packageOfScript:这里用桩把它隔离掉(真函数在上一个盒子里
 	// 有 11 条断言),只验证"切片时确实记了 pkg / pkgVia 两个字段"这个契约。
 	// 按 URL 查表 —— D5 的"脚本按包"要能给出不同的包名
@@ -2400,6 +2421,10 @@ const watchBox = new Function(`
 		tallyCoalesced: '同串触发', tallyCoalescedHint: '同一串卡顿里被并掉的触发数(密度,不是次数)',
 		tallyScopeSuffix: '内,同一串卡顿算一次', tallyKeepHint: '受容量限制,不等于检测到', tallyWorst: '最长一次',
 		evidenceLabel: '可疑脚本', evidenceScopeIncident: '事故', evidenceWindowPrefix: '窗口内', pkgNamed: '定到包', evidenceBundleLine: '合并脚本行',
+		evidenceUnlocatable: '未定位', evidenceUnlocatableHint: '没有定位字段:函数名与包名都没有,别把它当线索',
+		shellNote: '最大一块来自应用外壳(不是插件)', shellNoteHint: '外壳 bundle 不属于任何插件',
+		legScope: '出处', fnUnknown: '函数名未记录', pkgUnresolvedShort: '包未定名', unblamed: '未归因',
+		legSubtree: '子树', stressFromDom: 'DOM 写入', legFiber: 'fiber', legDom: 'DOM写入', legOwner: '包名', none: '无',
 		evidenceInvoker: '来源', evidenceWhere: '位置', fnUnknown: '函数名未记录', pkgUnresolvedShort: '包未定名', fileUnresolved: '文件未定名',
 		viaDirect: '直接读出来', viaInferred: '分段推断', viaNotPlugin: '不是插件脚本', viaFailed: '解析失败', viaUnavailable: '还没到位/拿不到', viaNotFetched: '还没预取(只有深录才拉脚本文本)',
 		worstOne: '最差那条', sparkGap: '整格 rAF 挂起(间隙,不是卡顿)', sparkNoPick: '这一秒没有长动画帧,点不动', sparkPickHint: '点它 → 翻帧切到这一秒的长动画帧',
@@ -2467,10 +2492,10 @@ const watchBox = new Function(`
 		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, frameSeverity, PICK_MIN_MS, unresolvedLabel, crossTable, crossSummary, clipName,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT, sparkPickMap, sparkCellTitle, markResolved,
 		sessionRecord, readSessionBaselines, mergeSessionBaseline, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
-		tallyScripts, framePkgTally, whoRows, barSegments, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel,
+		tallyScripts, framePkgTally, isShellScript, shellSummary, whoRows, barSegments, jsBreakdownText, unattrText, hitText, unexplainedFrame, spanText, windowScopeText, splitLegend, frameArcs, invokerLabel,
 		watchPanelText, watchSelectedText, watchRowText, watchFlagText, selectedIncident, selectIncident, setIncidentScope, evidenceScope, evidenceFooter, evidenceFooterTitle, evidenceZeroText, incidentScriptEvidence, incidentEvidenceAt, evidenceWhereText, evidenceLine, evidenceName, evidencePlace, replayScope, replayX, replaySummaryText, evidenceCalls: () => evidenceCalls,
 		// 诊断上下文 + 历史帧数据层(逐帧回放)
-		diagMode, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, incidentFrameLevel, selectIncidentFrame, incidentFrameStep, setOnlyBad, showLiveMode, replayColumns, replayCellTitle, incidentWallClock, incidentFrameTally, incidentWindowTally, incidentFrameEvidenceRows, incidentLongTasksAt, incidentVerdict, verdictColor, incidentScriptOf, detailContext, incidentFrameHeadingText, liveFrameHeadingText, saveWatchUI, restoreWatchUI, LS_WATCHUI,
+		diagMode, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, incidentFrameLevel, selectIncidentFrame, incidentFrameStep, setOnlyBad, showLiveMode, replayColumns, replayCellTitle, incidentWallClock, incidentFrameTally, incidentWindowTally, incidentFrameEvidenceRows, incidentLongTasksAt, longTaskLabel, incidentVerdict, verdictColor, incidentScriptOf, detailContext, incidentFrameHeadingText, liveFrameHeadingText, saveWatchUI, restoreWatchUI, LS_WATCHUI,
 		saveIncidents, restoreIncidents, perfOrigin, setFail: (value) => { failWrites = value; }, WATCH_MAX_BYTES: WATCH_PERSIST_MAX_BYTES,
 		WATCH: { frames: WATCH_FRAMES, loaf: WATCH_LOAF_MAX, script: WATCH_SCRIPT_MAX, keep: WATCH_INCIDENT_MAX, pre: WATCH_PRE_MS, post: WATCH_POST_MS, trigger: WATCH_TRIGGER_MS, gap: WATCH_GAP_MS, reaction: WATCH_REACTION_MS },
 		replayCols: REPLAY_COLS,
@@ -2933,6 +2958,12 @@ check('历史帧的证据:这一帧没有 LoAF 记录时退回**事故窗口内*
 		return result;
 	}),
 	[true, true, ['run'], 3]);
+check('long task 那一行:四条腿一条都没咬住时写「未归因」,不再显示 `? · TextPreview` 这种没信息的两截', [
+	watch.longTaskLabel({ owner: null, component: null, subtreeComponent: null, domComponent: null, ms: 271 }),
+	watch.longTaskLabel({ owner: null, component: 'ChatRow', subtreeComponent: null, domComponent: null, ms: 271 }),
+	watch.longTaskLabel({ owner: 'dsh-x', component: null, subtreeComponent: null, domComponent: null, ms: 271 }),
+	watch.longTaskLabel(null),
+], ['未归因', 'ChatRow', 'dsh-x', '未归因']);
 check('与这一帧重叠的 long task:只给时间上真的重叠的那几条(窗口里有、但不重叠的要排除)',
 	(() => {
 		const hit = watch.incidentLongTasksAt(frameRow, { t: 3000, ms: 984 });
@@ -3857,6 +3888,18 @@ check('一个包名都没定到时:按包那一条渲染的是「其余来源」
 		return [rows.length, segs.map((seg) => [seg.name, Math.round(seg.ms)])];
 	})(),
 	[2, [['index-abc.js', 266], ['无 URL(内联脚本)', 12]]]);
+check('外壳 bundle(应用自己那一层)被认出来:按包第一名是它时,面板能就地说明"这不是插件"', [
+	watch.isShellScript({ url: 'http://h/assets/index-CN7NIWNw.js' }),
+	watch.isShellScript({ url: 'http://h/plugins/??a/client.js,b/client.js&rev=1' }),
+	watch.isShellScript({ url: 'http://h/plugins/dsh-x/client.js?rev=1' }),
+	watch.isShellScript({ url: '' }),
+	watch.isShellScript(null),
+], [true, false, false, false, false]);
+check('shellSummary:第一名是外壳才给结论,否则 null(不抢别的归属方的位置)', [
+	watch.shellSummary({ js: 300, top: [], byOther: [['index-CN7NIWNw.js', 281], ['插件批次(未按 sourcemap 拆)', 13]], shellMs: 281, shellName: 'index-CN7NIWNw.js' }),
+	watch.shellSummary({ js: 300, top: [['dsh-x', 281]], byOther: [['index-CN7NIWNw.js', 13]], shellMs: 13, shellName: 'index-CN7NIWNw.js' }),
+	watch.shellSummary(null),
+], [{ name: 'index-CN7NIWNw.js', ms: 281, share: 281 / 300 }, null, null]);
 check('定不到插件包名的脚本按原因给名字(而不是笼统的"未定名")',
 	[
 		watch.unresolvedLabel({ url: '' }),

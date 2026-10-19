@@ -723,7 +723,21 @@ window.__ModuleLoader__.load({
 		function evidenceName(ev) {
 			const who = ev.fn == null || ev.fn === '' ? translate('fnUnknown') : short(ev.fn);
 			const pkg = ev.pkg == null || ev.pkg === '' ? translate('pkgUnresolvedShort') : short(ev.pkg);
-			return `${who} @ ${pkg}`;
+			const name = `${who} @ ${pkg}`;
+			// 一条定位字段都没有的行(压缩脚本里很常见):在名字后面就地标一句「未定位」,
+			// 免得 `Rx @ 包未定名 269ms` 和真正定到名的行并排、被当成失败了的线索读 ——
+			// 它没定位,是因为没开深录,不是定位失败。毫秒仍是真的,所以不滤掉这一行。
+			return evidenceLocatable(ev) === true ? name : `${name} · ${translate('evidenceUnlocatable')}`;
+		}
+		/**
+		 * 这一行**指不指得到代码位置**。与 `locatable`(决不决定占名额)刻意是两条判据:
+		 * `locatable` 只要有 fn / pkg / file 任一样就显示(信息多点比少点好),而这一条只认
+		 * **能打开的东西** —— 包名或文件。光有函数名(`Rx`)不指向任何文件,所以它照样算
+		 * "未定位",这正是截图上 `Rx @ 包未定名 269ms` 该被标注的原因。
+		 */
+		function evidenceLocatable(ev) {
+			if (ev === null || ev === undefined) return false;
+			return ev.pkg != null && ev.pkg !== '' || ev.file != null && ev.file !== '';
 		}
 		/**
 		 * 「文件(:行)」那一格。文件拿不到就退回脚本名,两个都没有才给 null。
@@ -2493,6 +2507,18 @@ window.__ModuleLoader__.load({
 			return value;
 		}
 		/**
+		 * 外壳 bundle 的汇总(按包那一行第一名是它时,给一句"这不是插件"的结论)。
+		 * 只统计**定不到插件包名、但 URL 指向应用外壳**的脚本 —— 与 `isShellScript` 同一条判据。
+		 */
+		function shellSummary(tally) {
+			if (tally === null || tally === undefined) return null;
+			const rows = whoRows(tally);
+			if (rows.length === 0) return null;
+			const [name, ms] = rows[0];
+			if (tally.shellMs <= 0 || name !== tally.shellName) return null;
+			return { name, ms: round1(ms), share: tally.js > 0 ? ms / tally.js : 0 };
+		}
+		/**
 		 * **这一帧**的脚本证据行(LoAF 的 scripts[] → 函数名 / 包 / 文件 / 行号)。
 		 * 走 `incidentEvidenceAt`:捕获时存下来的定位优先,老包才现算(见它的说明)。
 		 * 这一帧没有 LoAF 时返回空数组 —— **不回退**到别的帧,更不回退到实时帧环。
@@ -2501,6 +2527,19 @@ window.__ModuleLoader__.load({
 			const loaf = incidentLoafAt(row, frame);
 			if (loaf === null || Array.isArray(loaf.scripts) === false) return [];
 			return loaf.scripts.map((script) => incidentEvidenceAt(row, script)).sort((a, b) => b.ms - a.ms);
+		}
+		/**
+		 * 一条 long task 该怎么念(面板那一行)。
+		 *
+		 * 以前这里写的是 `owner ?? '?'` + `component ?? '无'`,于是四条腿一条都没咬住的
+		 * long task 会显示成 `? · TextPreview` —— 既没定位到代码,读者也看不出它和上面
+		 * 那 269ms 是不是同一件事(实测截图就是这样)。现在按 `blameText` 的同一套优先级
+		 * 把四条腿都摊出来,一条都没有时照实写「未归因」,不再摆一个问号。
+		 */
+		function longTaskLabel(task) {
+			if (task === null || task === undefined) return translate('unblamed');
+			const text = blameText(task);
+			return text === '' ? translate('unblamed') : text;
 		}
 		/** 与这一帧**时间上重叠**的 long task 明细(事故包里存下来的四条腿归因)。 */
 		function incidentLongTasksAt(row, frame) {
@@ -2622,6 +2661,8 @@ window.__ModuleLoader__.load({
 			let pause = 0;
 			let unresolved = 0;
 			let unresolvedMs = 0;
+			let shellMs = 0;
+			let shellName = null;
 			for (const row of rows) {
 				for (const script of row.scripts ?? []) {
 					js += script.ms ?? 0;
@@ -2644,6 +2685,13 @@ window.__ModuleLoader__.load({
 						unresolvedMs += script.ms ?? 0;
 						who = unresolvedLabel(script);
 						byOther.set(who, (byOther.get(who) ?? 0) + (script.ms ?? 0));
+						// 外壳 bundle(应用自己那一层,不是插件):单独累计一份,让「按包」第一名
+						// 是它时面板能就地说明"这不是插件"—— 否则 `index-CN7NIWNw.js 281ms` 排在
+						// 第一行,读者只会把它读成元凶(实测截图就是这么被读的)。
+						if (isShellScript(script) === true) {
+							shellMs += script.ms ?? 0;
+							shellName = who;
+						}
 					} else {
 						byPkg.set(resolved.pkg, (byPkg.get(resolved.pkg) ?? 0) + (script.ms ?? 0));
 					}
@@ -2653,6 +2701,8 @@ window.__ModuleLoader__.load({
 			}
 			return {
 				js: round1(js), exec: round1(Math.max(0, js - forced - pause)), forced: round1(forced), pause: round1(pause), unresolved, unresolvedMs: round1(unresolvedMs),
+				// 外壳 bundle 的合计与名字(按包第一名是它时,面板要就地说明"这不是插件")
+				shellMs: round1(shellMs), shellName,
 				// 窗口那几行是**累计**,必须带回它的分母:条数与跨度。没有它,`纯执行 21623.8ms`
 				// 会被读成"某一次执行花了 21 秒"(真被这么质疑过)—— 其实是 200 条长帧各百来毫秒攒起来的。
 				count: rows.length,
@@ -2736,6 +2786,17 @@ window.__ModuleLoader__.load({
 			const parts = url.split('?')[0].split('/');
 			const file = parts[parts.length - 1] === '' ? url : parts[parts.length - 1];
 			return file.length > 28 ? `${file.slice(0, 27)}…` : file;
+		}
+		/**
+		 * 这一条脚本是**应用自己的外壳 bundle**(宿主 / React 根那一层),不是插件 ——
+		 * `index-CN7NIWNw.js` 这种文件名排第一时,读者会理所当然地把它当元凶,而它
+		 * 从来不属于任何插件(React 根容器上的事件处理器就来自它)。
+		 * 判据与 `unresolvedLabel` 一致:有 URL、但不是 `plugins/` 路径。
+		 */
+		function isShellScript(script) {
+			const url = typeof script?.url === 'string' ? script.url : '';
+			if (url === '') return false;
+			return ownerOfUrl(url) === null;
 		}
 		/** "谁"的两类标签合起来(插件包 + 其余来源),按耗时降序 —— 堆叠条与交叉表都用它。 */
 		function whoRows(tally) {
@@ -3064,6 +3125,7 @@ window.__ModuleLoader__.load({
 				viaText,
 				scriptEvidence,
 				evidenceName,
+				evidenceLocatable,
 				evidencePlace,
 				evidenceWhereText,
 				evidenceLine,
@@ -3168,6 +3230,9 @@ window.__ModuleLoader__.load({
 				scriptPkgTally,
 				framePkgTally,
 				unresolvedLabel,
+				isShellScript,
+				shellSummary,
+				longTaskLabel,
 				whoRows,
 				barSegments,
 				crossSummary,

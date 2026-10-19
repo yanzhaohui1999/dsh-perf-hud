@@ -136,6 +136,9 @@ window.__ModuleLoader__.load({
 				setEnabled,
 				setIncidentScope,
 				setOnlyBad,
+				shellSummary,
+				longTaskLabel,
+				evidenceLocatable,
 				setTrendMs,
 				setView,
 				severityColor,
@@ -417,6 +420,18 @@ window.__ModuleLoader__.load({
 		 * (只是喂进来的 tally 与三个范围标签不同)—— 两边各写一份渲染,口径迟早会漂。
 		 * 按包那几行只在真定到包名 / 真有「其余来源」时才出现。
 		 */
+		/**
+		 * 「按包」第一名是**应用外壳** bundle 时的那一句结论。外壳文件名(如
+		 * `index-CN7NIWNw.js`)排第一会让人读成元凶,而它从来不属于任何插件 —— 这一层
+		 * 就地说明,免得读者自己想起规则。数据来自 tally 的 shellMs / shellName。
+		 */
+		function shellNote(tally, key) {
+			if (tally === null || tally === undefined) return null;
+			const shell = shellSummary(tally);
+			if (shell === null) return null;
+			return h('div', { key, style: { ...S.sub, marginTop: 2 }, title: t('shellNoteHint') },
+				`${t('shellNote')} ${short(shell.name)} ${Math.round(shell.ms)}ms · ${Math.round(shell.share * 100)}%`);
+		}
 		function scriptBreakdownRows(tallyFrame, tallyWindow, frameLabel, framePkgHint, windowHeadHint, windowPkgHint) {
 			const t = translate;
 			try {
@@ -491,6 +506,8 @@ window.__ModuleLoader__.load({
 				rows.push(line('frame-js', t('splitJs'), t('splitJsHint'), jsBreakdownText(tallyFrame)));
 				rows.push(bar('frame-src', t('bySource'), t('invokerHint'), tallyFrame.byInvoker, '--dsw-alias-brand-primary'));
 				rows.push(bar('frame-pkg', t('byPkg'), framePkgHint, whoRows(tallyFrame), '--dsw-alias-state-success-primary'));
+				const frameShell = shellNote(tallyFrame, 'frame-shell');
+				if (frameShell !== null) rows.push(frameShell);
 			}
 			if (tallyWindow !== null && tallyWindow.js > 0) {
 				rows.push(head('win-head', windowScopeText(tallyWindow), windowHeadHint));
@@ -498,6 +515,8 @@ window.__ModuleLoader__.load({
 				// 全是纯执行时这一行只是把"脚本总耗时"重复一遍(条上已经看得到),不显示
 				if (tallyWindow.forced + tallyWindow.pause > 0) rows.push(line('win-js', t('splitJs'), t('forcedHint'), jsBreakdownText(tallyWindow)));
 				rows.push(bar('win-pkg', t('byPkg'), windowPkgHint, whoRows(tallyWindow), '--dsw-alias-state-success-primary'));
+				const winShell = shellNote(tallyWindow, 'win-shell');
+				if (winShell !== null) rows.push(winShell);
 				// (这里原来有一条"一个包名都没定到 → 收敛成一行带分母的说明"的分支。它**永远不可达**:
 				//  外层已经要求 window.js > 0,而 js > 0 就必然有脚本,那条脚本要么定到包(top 非空)、
 				//  要么进 byOther —— 两个条件互斥,所以面板从来没渲染过它,套件却因为直接测那个函数而
@@ -535,7 +554,8 @@ window.__ModuleLoader__.load({
 					h('div', { style: { ...S.blockLabel, marginTop: 8 }, title: t('evidenceHint') }, scope.label),
 					h('div', { style: { marginTop: 2 } }, scope.rows.map((ev, index) => h('div', {
 						key: `ev-${index}`,
-						title: `${evidenceLine(ev)}\n${t('evidenceCopyHint')}`,
+						title: `${evidenceLine(ev)}\n${t('evidenceCopyHint')}`
+							+ `${evidenceLocatable(ev) === true ? '' : `\n${t('evidenceUnlocatableHint')}`}`,
 						style: { display: 'flex', gap: 8, alignItems: 'baseline', lineHeight: 1.45, cursor: 'pointer' },
 						onClick: () => copyText(evidenceLine(ev), t('copyScript')),
 					},
@@ -690,6 +710,19 @@ window.__ModuleLoader__.load({
 					`${t('replayFailed')}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200));
 			}
 		}
+		/**
+		 * long task 那一行的悬停全文:正文只念名字,悬停把**四条腿各自看到什么**摊开 ——
+		 * 正文省略的那几条(子树 / DOM 写入 / 包名)正是读者追问"还有没有别的线索"时要看的。
+		 */
+		function longTaskTitle(task) {
+			const t = translate;
+			if (task === null || task === undefined) return t('frameLtTitle');
+			const parts = [`${t('legFiber')} ${task.component ?? t('none')}`,
+				`${t('legSubtree')} ${task.subtreeComponent ?? t('none')}`,
+				`${t('legDom')} ${task.domComponent ?? t('none')}`,
+				`${t('legOwner')} ${task.owner === null || task.owner === undefined ? t('none') : short(task.owner)}`];
+			return `${longTaskLabel(task)}\n${parts.join(' · ')}\n${t('legScope')} ${task.source ?? t('none')}`;
+		}
 		/** 与这一帧**时间上重叠**的 long task(捕获时存下来的四条腿归因明细;没有就说没有)。 */
 		function longTaskBlock(row, frame) {
 			const t = translate;
@@ -704,11 +737,11 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.blockLabel }, `${t('frameLtTitle')} · ${t('frameLtWindow')} ${total}`),
 				h('div', { style: { marginTop: 2 } }, tasks.slice(0, EVIDENCE_MAX).map((task, index) => h('div', {
 					key: `lt-${index}`,
-					title: `${short(task.owner ?? '?')} · ${task.component ?? t('none')} · ${task.source ?? ''}`,
+					title: longTaskTitle(task),
 					style: { display: 'flex', gap: 8, alignItems: 'baseline', lineHeight: 1.45 },
 				},
 					h('span', { style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' } },
-						`${short(task.owner ?? '?')} · ${task.component ?? t('none')}`),
+						longTaskLabel(task)),
 					h('span', { style: { flex: '0 0 auto', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums' } }, `${Math.round(task.ms ?? 0)}ms`)))),
 				tasks.length <= EVIDENCE_MAX ? null : h('div', { style: S.sub }, `${t('rest')} ${tasks.length - EVIDENCE_MAX}`));
 		}
