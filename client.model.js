@@ -1941,7 +1941,16 @@ window.__ModuleLoader__.load({
 					detail: `${translate('verdictThrottleText')}(${translate('verdictNeighbours')} ${summary.worstFrameNeighboursMs}ms)`,
 				};
 			}
-			return { level: 'unattributed', label: translate('verdictUnattributed'), detail: translate('verdictUnattributedText') };
+			// 把**没观测到**说出来:这一帧的帧间隔是多少,与它重叠的 JS 观测是 0。
+			// 比一句「请结合前后帧检查」有用得多 —— 实测:498ms 的帧,窗口内只有 81ms 脚本
+			// 且**没有一条**与它重叠(见 worstFrameJs),所以这一帧里我们什么都没看见。
+			// ⚠️ 不拿窗口脚本总量去减帧间隔:窗口跨度远大于一帧,两个分母不同,
+			// 减出来的数会被读成「这一帧里有 X ms 脚本」。只报这一帧自己的观测结果。
+			const frameMs = typeof summary.worstFrameMs === 'number' ? summary.worstFrameMs : null;
+			const detail = frameMs === null
+				? translate('verdictUnattributedText')
+				: `${translate('verdictUnattributedText')}(${translate('verdictGap')} ${Math.round(frameMs)}ms,${translate('verdictGapJs')})`;
+			return { level: 'unattributed', label: translate('verdictUnattributed'), detail };
 		}
 		/** 归因状态的档位色:已确认绿 / 可疑橙 / 未归因中性灰(文字永远同时给,不只靠颜色)。 */
 		function verdictColor(level) {
@@ -2832,10 +2841,25 @@ window.__ModuleLoader__.load({
 			if (cross.top.who === null || cross.top.ms === 0) return translate('crossNoOverlap');
 			return `${clipName(short(cross.top.who), CROSS_SUMMARY_NAME_MAX)} · ${clipName(short(cross.top.src), CROSS_SUMMARY_SRC_MAX)} ${Math.round(cross.top.ms)}ms`;
 		}
+		/**
+		 * 交叉表**只有一格有值**时的那一行说明。此时 2D 不提供任何额外信息:整行整列都只有
+		 * 那一个数,而"是哪个包的哪类调用"两条堆叠条已经各答过一遍。写成一行带结论的话,
+		 * 不再画一张 8 个空格子的 3x3。
+		 */
+		function crossSingleText(cross) {
+			if (cross === null || cross === undefined) return translate('crossNone');
+			const who = short(cross.top.who);
+			const src = short(cross.top.src);
+			const ms = Math.round(cross.top.ms);
+			return `${who} × ${src} ${ms}ms · ${translate('crossSingleNote')}`;
+		}
 		function crossTable(tally) {
 			const who = whoRows(tally).filter(([, ms]) => ms > 0);
 			const src = (tally.byInvoker ?? []).filter(([, ms]) => ms > 0);
 			if (who.length === 0 || src.length === 0) return null;
+			// **非空格子数**:只有一格有值时这张表不提供任何 2D 信息(整行整列都只有它一个数),
+			// 那时渲染侧收敛成一行,不画 3×3 空表 —— 实测截图:一格有值也画满 3×3,另外 8 个 `·`
+			// 加三遍重复的 81ms,信息量 0 噪音 3 份。
 			const rows = who.slice(0, 3).map(([name]) => name);
 			const cols = src.slice(0, 3).map(([name]) => name);
 			const byPair = tally.byPair ?? {};
@@ -2852,7 +2876,8 @@ window.__ModuleLoader__.load({
 			// Top3 之间可能**一格交集都没有**(最大的包住在第 4 名的来源里):这时不能把 top 留成 null,
 			// 否则摘要那行拿到 null 去格式化。退回"最大的那一行 × 最大的那一列",并让 ms = 0 说明是空的。
 			if (best.who === null) best = { who: rows[0], src: cols[0], ms: 0 };
-			return { rows, cols, grid, restCol, restRow, corner, js, top: best };
+			const filled = grid.reduce((sum, row) => sum + row.filter((ms) => ms > 0).length, 0);
+			return { rows, cols, grid, restCol, restRow, corner, js, top: best, filled };
 		}
 		function sparkStrip() {
 			const now = performance.now();
@@ -3240,6 +3265,7 @@ window.__ModuleLoader__.load({
 				whoRows,
 				barSegments,
 				crossSummary,
+				crossSingleText,
 				crossTable,
 				sparkStrip,
 				unattrText,

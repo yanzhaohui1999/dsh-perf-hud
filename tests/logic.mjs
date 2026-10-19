@@ -398,7 +398,7 @@ const sandbox = `
 		verdictNotRootCause: '这只缩小到"哪个包",不等于已定位根因',
 		verdictSuspectedJsNoPkg: '有 JS 阻塞证据,但窗口里的脚本没能定到包名',
 		verdictThrottleText: '没有观察到足以解释该帧的 JS 阻塞,而它又明显长于前后帧:更像 rAF 被挂起或浏览器节流,需结合前后帧与时间间隙确认',
-		verdictNeighbours: '前后帧中位',
+		verdictNeighbours: '前后帧中位', verdictGap: '这一帧', verdictGapJs: '与它重叠的 JS 观测为 0ms',
 		verdictUnattributedText: '未观察到足以解释该帧的 JS 阻塞证据;请结合前后帧和时间间隙检查 rAF 挂起或浏览器节流',
 		handoffFrameNoEvidence: '这一帧在事故包里没有脚本记录(只有帧间隔)',
 		evOwner: '主要归属', evWindow: '窗口', framesUnit: ' 帧', byPkg: '按包',
@@ -1345,7 +1345,13 @@ check('归因状态:没有 JS 证据、也不满足节流判据 → 未归因,�
 		const row = { ...incidentRow, packages: [], summary: { ...incidentRow.summary, worstFrameJs: 'none', suspectedThrottle: false } };
 		const v = EX.incidentVerdict(row);
 		return [v.level, v.label, v.detail];
-	})(), ['unattributed', '未归因', '未观察到足以解释该帧的 JS 阻塞证据;请结合前后帧和时间间隙检查 rAF 挂起或浏览器节流']);
+	})(), ['unattributed', '未归因', '未观察到足以解释该帧的 JS 阻塞证据;请结合前后帧和时间间隙检查 rAF 挂起或浏览器节流(这一帧 326ms,与它重叠的 JS 观测为 0ms)']);
+check('未归因那把"没观测到"量化:帧间隔给出来,并说明与它重叠的 JS 观测为 0(不拿窗口总量减帧间隔)',
+	(() => {
+		const withMs = EX.incidentVerdict({ ...incidentRow, packages: [], summary: { ...incidentRow.summary, worstFrameMs: 498, worstFrameJs: 'none' } }).detail;
+		const noMs = EX.incidentVerdict({ ...incidentRow, packages: [], summary: { ...incidentRow.summary, worstFrameMs: null, worstFrameJs: 'none' } }).detail;
+		return [withMs.includes('这一帧 498ms'), withMs.includes('JS 观测为 0ms'), withMs.includes('blockingMs') === false, noMs.endsWith('器节流')];
+	})(), [true, true, true, true]);
 check('归因状态:档位色也一起给(文字永远在,不只靠颜色)',
 	['confirmed', 'suspected', 'unattributed'].map((level) => EX.verdictColor(level)),
 	['var(--dsw-alias-state-success-primary)', 'var(--dsw-alias-state-warn-primary)', 'var(--dsw-alias-label-secondary)']);

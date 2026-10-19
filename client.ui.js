@@ -139,6 +139,7 @@ window.__ModuleLoader__.load({
 				shellSummary,
 				longTaskLabel,
 				evidenceLocatable,
+				crossSingleText,
 				setTrendMs,
 				setView,
 				severityColor,
@@ -586,9 +587,19 @@ window.__ModuleLoader__.load({
 			try {
 				const cross = crossTable(tally);
 				if (cross === null) return null;
+				// **只有一格有值 -> 不画表**。那一格的答案上面两条堆叠条已经各说过一遍,3x3 里另外
+				// 8 个 `·` 与底部重复的摘要只是噪音(实测截图:一格有值也画满 3x3)。
+				if (cross.filled <= 1) {
+					return group('cross', t('crossTable'), crossSummary(cross), () => h('div',
+						{ style: { ...S.sub, marginTop: 2 }, title: hint ?? t('crossHint') },
+						crossSingleText(cross)));
+				}
 				const pct = (ms) => `${Math.round((ms / (cross.js || 1)) * 100)}%`;
 				const cellStyle = { flex: '1 1 0', textAlign: 'right', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums', fontSize: 12 };
-				const nameStyle = { flex: '0 0 84px', color: 'var(--dsw-alias-label-secondary)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+				// 名字列**不钉 84px**:长包名会被截成 `插件批次(未...`。按这一批名字里最长的取宽
+				// (上限 120px),title 给全名 —— 截断只发生在真的放不下时。
+				const widest = Math.min(120, Math.max(...cross.rows.map((name) => short(name).length), 6) * 7 + 4);
+				const nameStyle = { flex: `0 0 ${widest}px`, color: 'var(--dsw-alias-label-secondary)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
 				const row = (key, label, cells) => h('div', { key, style: { display: 'flex', gap: 4, marginTop: 2 } },
 					h('span', { style: nameStyle, title: label }, label), cells);
 				const num = (key, ms, who, src) => h('span', {

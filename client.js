@@ -943,6 +943,7 @@ window.__ModuleLoader__.load({
 		function barSegments(...args) { return model().barSegments(...args); }
 		function crossSummary(...args) { return model().crossSummary(...args); }
 		function crossTable(...args) { return model().crossTable(...args); }
+		function crossSingleText(...args) { return model().crossSingleText(...args); }
 		function sparkStrip(...args) { return model().sparkStrip(...args); }
 		function unattrText(...args) { return model().unattrText(...args); }
 		function hitText(...args) { return model().hitText(...args); }
@@ -3628,6 +3629,7 @@ window.__ModuleLoader__.load({
 				shellSummary,
 				longTaskLabel,
 				evidenceLocatable,
+				crossSingleText,
 				setTrendMs,
 				setView,
 				severityColor,
