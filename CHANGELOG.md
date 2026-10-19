@@ -6,6 +6,14 @@
 
 ### 面板:三处读数让人"看了也不知道是谁卡了"(2026-10-19)
 
+> ⚠️ **同批紧接的第二个事故(展开「技术细节」整块变红字)**:shellNote 被定义在**模块作用域**,
+> 却用了 `scriptBreakdownRows` 的局部别名 `t(...)` → 真页面 ReferenceError,那一块只剩一行
+> 「这一帧的脚本拆解算不出来:t is not defined」,脚本细拆 / 按来源 / 按包 / 交叉表全部消失。
+> 三套件、静态检查、两个真页面验收器**都没响**:三套件测的是纯函数(不测这个渲染函数);
+> 静态检查只覆盖未声明的**函数**调用,而 `t` 是变量引用、语法完全合法;验收器此前从不展开
+> 折叠组,而 scriptBreakdownRows 只在展开时才计算。修法:改成**内嵌闭包** —— 拿不到局部 `t`
+> 在结构上就不可能;配一条结构断言(shellNote 必须在 scriptBreakdownRows 内),已做变异测试。
+
 真实事故(帧 275ms、脚本 273.5ms、定到包 0/3)暴露的三个可读性问题,都不是归因链路坏掉,
 而是**数据在、读法没给**:
 
@@ -26,7 +34,7 @@
 
 ### 测试
 
-- 新增 4 条断言(外壳识别 / shellSummary 三态 / longTaskLabel 四态 / 未定位标注),总数 620 → **624**;
+- 新增 4 条断言(外壳识别 / shellSummary 三态 / longTaskLabel 四态 / 未定位标注),总数 620 → **626**;
 - `logic.mjs` 守夜盒补 `blameText` / `blameName` / `looksLikeInfrastructure` / `isRecorderName`
   及其两个常量(它们必须排在 `PKG` 之后:`SELF_NAMES` 用它)。
 
