@@ -2157,9 +2157,9 @@ check('可能原因:只有 suspectedThrottle 成立时才提"更像 rAF 挂起�
 check('可能原因:没有事故就返回空数组(不造候选)', [EX.causeCandidates(null), EX.causeCandidates(undefined)], [[], []]);
 
 // ── 60 秒帧分布:分档边界 / 间隙不进分母 / 占比文本 ──
-check('帧分布:分档边界落在 16.7 / 33.3 / 50 / 100(满帧 / 30–60 / 20–30 / 10–20fps / ≤10fps)',
-	[16.7, 16.8, 33.3, 33.4, 50, 50.1, 100, 100.1, 619.5].map((ms) => EX.frameBucketOf(ms)),
-	[0, 1, 1, 2, 2, 3, 3, 4, 4]);
+check('帧分布:分档边界落在 16.7 / 20 / 33.3 / 50 / 100(满帧 / 50 / 30 / 20 / 10fps)',
+	[16.7, 16.8, 20, 20.1, 33.3, 33.4, 50, 50.1, 100, 100.1, 619.5].map((ms) => EX.frameBucketOf(ms)),
+	[0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
 check('帧分布:间隙不是帧、不进分母;没有帧时返回 null',
 	(() => {
 		const mix = EX.frameMix([
@@ -2169,17 +2169,17 @@ check('帧分布:间隙不是帧、不进分母;没有帧时返回 null',
 		return [mix.total, mix.counts.join(','),
 			Math.round(mix.shares.reduce((sum, share) => sum + share, 0) * 1e9) / 1e9,
 			EX.frameMix([]), EX.frameMix([{ t: 9, ms: 900, gap: true }])];
-	})(), [3, '2,0,1,0,0', 1, null, null]);
+	})(), [3, '2,0,0,1,0,0', 1, null, null]);
 check('帧分布:占比两位小数(3600 帧里 1 条 = 0.03%)、整数不带 .00、条数带千分位',
 	[EX.frameMixPctText(1 / 3580), EX.frameMixPctText(0.9944), EX.frameMixPctText(0), EX.frameMixCountText(3580)],
 	['0.03%', '99.44%', '0%', '3,580']);
-check('帧分布:五档成表(标签 / 条数 / 占比),空窗口返回空数组',
+check('帧分布:六档成表(标签 / 条数 / 占比),空窗口返回空数组',
 	(() => {
 		const rows = EX.frameMixRows(EX.frameMix([
 			{ t: 1, ms: 16.7, gap: false }, { t: 2, ms: 60, gap: false },
 		]));
-		return [rows.length, rows[0].label, rows[0].pctText, rows[3].countText, rows[4].pctText, EX.frameMixRows(null)];
-	})(), [5, '≤16.7', '50%', '1', '0%', []]);
+		return [rows.length, rows[0].label, rows[0].pctText, rows[4].countText, rows[5].pctText, EX.frameMixRows(null)];
+	})(), [6, '≤16.7', '50%', '1', '0%', []]);
 check('可能原因:宿主那行的「最大」是事件循环 max,不再拿快照年龄冒充(曾印成「最大 -2248ms」)', (() => {
 	const hot = EX.causeCandidates({ ...causeRow, host: { eventLoop: { p50: 3, p99: 180, max: 400 }, snapshotAgeMs: -2000 } });
 	const host = hot.find((item) => item.kind === 'host');

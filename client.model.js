@@ -2401,14 +2401,15 @@ window.__ModuleLoader__.load({
 			return worstLoaf();
 		}
 		// 帧间隔分档(ms):满帧 / 30–60fps / 20–30fps / 10–20fps / ≤10fps。
-		// 边界故意落在 16.7(60Hz 一帧)、33.3(30fps)、50(LoAF 线)、100(守夜触发线)上 ——
+		// 边界故意落在 16.7(60Hz 一帧)、20(50fps)、33.3(30fps)、50(LoAF 线)、100(守夜触发线)上 ——
 		// 与面板其它地方同一套线,不另造刻度。标签是纯数字,不翻译。
 		// ⚠️ 用函数返回而不是模块级 const:测试沙箱按 header 抽函数,模块级 const 抽不到
 		// (`logic.mjs` 的 const 分支只读 client.js),抽不到就会在断言里变成 ReferenceError。
 		function frameMixBuckets() {
 			return [
 				{ max: 16.7, label: '≤16.7' },
-				{ max: 33.3, label: '16.7–33.3' },
+				{ max: 20, label: '16.7–20' },
+				{ max: 33.3, label: '20–33.3' },
 				{ max: 50, label: '33.3–50' },
 				{ max: 100, label: '50–100' },
 				{ max: Infinity, label: '≥100' },
@@ -2453,7 +2454,7 @@ window.__ModuleLoader__.load({
 			return `${Number((share * 100).toFixed(2))}%`;
 		}
 		/**
-		 * 五档成**表**(标签 / 条数 / 占比),给面板逐行渲染 —— 一条长串塞进 396px 只会
+		 * 六档成**表**(标签 / 条数 / 占比),给面板逐行渲染 —— 一条长串塞进 396px 只会
 		 * 交给浏览器在 `16.7–` 中间乱断。空窗口返回空数组,面板写"这一分钟还没有帧"。
 		 */
 		function frameMixRows(mix) {
