@@ -387,6 +387,7 @@ const sandbox = `
 		watchDetected: '检测', watchKept: '已保存现场', watchLost: '丢失', tallyUnit: ' 份',
 		// P0/P1:严重度必须是**文字**(不能只靠颜色)+ 「最差事件」块那三行的口径词
 		sevBad: '严重', sevWarn: '警告', sevOk: '低于线', sevLabel: '严重度',
+		sevBasisFrame: '帧间隔', sevBasisLoaf: 'LoAF blocking', sevBasisManual: '标记时刻',
 		ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧',
 		groupDetail: '取证明细', groupTech: '技术细节',
 		// 摘要那几条断言量的是**人看到的字**:这里给真串,长度才对得上(不然量的是 key)
@@ -679,6 +680,8 @@ const newPieces = [
 	'function frameMixRows(',
 	'function storageReport(',
 	'function uniqueInteractions(',
+	'function severityBasisText(',
+	'function severityValueText(',
 	'function bytesText(',
 	'const pad = ',
 	'const clock = (ms) => {',
@@ -1393,6 +1396,14 @@ check('最差事件证据/窗口行长度上限(可换行,防跑飞)',
 check('最差事件两行:没有事故时证据/窗口行给空串(不摆 0)',
 	[EX.eventEvidenceText(null), EX.eventWindowText(null)], ['', '']);
 
+check('复制摘要:严重度旁边标出口径(loaf=blocking / frame=帧间隔)',
+	(() => {
+		const loafRow = { ...incidentRow, cause: 'loaf', severity: 240 };
+		const frameRow = { ...incidentRow, cause: 'frame', severity: 112 };
+		const loafLine = EX.incidentSummaryText(loafRow).split('\n')[0];
+		const frameLine = EX.incidentSummaryText(frameRow).split('\n')[0];
+		return [loafLine.includes('LoAF blocking 240ms'), frameLine.includes('帧间隔 112ms')];
+	})(), [true, true]);
 check('复制摘要:带结论与口径(严重度文字 / JS 证据 / 归属 / 窗口分母)+ 口径与缺口两行',
 	(() => {
 		const text = EX.incidentSummaryText(incidentRow);
@@ -2333,6 +2344,8 @@ const watchPieces = [
 	extract(source, 'function keepIncident('),
 	extract(source, 'function pruneIncidents('),
 	extract(source, 'function uniqueInteractions('),
+	extract(source, 'function severityBasisText('),
+	extract(source, 'function severityValueText('),
 	extract(source, 'function dayKeyOf('),
 	extract(source, 'function windowIntegrity('),
 	extract(source, 'function assembleIncident('),
@@ -2573,6 +2586,7 @@ const watchBox = new Function(`
 		packNoCandidate: '没有足够证据给出候选原因。', packPreviewNote: '导出前先看这份清单。',
 		packReadmeTitle: '# 这份诊断包里有什么', packReadmeWhat: 'w', packReadmeHow: 'h', packReadmePrivacy: 'p', packReadmeNotes: 'n',
 		sevLabel: '严重度', worstEvent: '最差事件', evWindow: '窗口', evOwner: '主要归属', deepShort: '深录', watch: '守夜', none: '无',
+		sevBasisFrame: '帧间隔', sevBasisLoaf: 'LoAF blocking', sevBasisManual: '标记时刻',
 		verdictLabel: '归因状态', verdictConfirmed: '已确认', verdictSuspected: '可疑', verdictUnattributed: '未归因',
 		ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧', notYet: '未采集',
 		sevBad: '严重', sevWarn: '警告', sevOk: '低于线', verdictLabel: '归因状态',
@@ -2785,7 +2799,7 @@ check('守夜行:带备注时列出最近一条(跟的是选中的那条事故)'
 	watch.state.watch.incidents.shift();     // 验完挪走:后面的 incidentReport(0) 还要靠真事故
 	return text.includes('刚切了视图');
 })(), true);
-check('工具清单行:带序号与 id', watch.watchRowText({ id: 'x1', severity: 12, cause: 'manual', at: '2026-10-07T00:00:00.000Z', note: null }, 4).startsWith('5. x1 · manual · 12ms'), true);
+check('工具清单行:带序号与 id', watch.watchRowText({ id: 'x1', severity: 12, cause: 'manual', at: '2026-10-07T00:00:00.000Z', note: null }, 4).startsWith('5. x1 · manual · 标记时刻 12ms'), true);
 check('工具清单行:选中的那条前面加 ●(清单按严重度排,不标出来会被读成时间序)', (() => {
 	const row = { id: 'x1', severity: 12, cause: 'manual', at: '2026-10-07T00:00:00.000Z', note: null };
 	watch.state.watch.selId = 'x1';

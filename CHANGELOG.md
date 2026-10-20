@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 严重度旁边标出口径:loaf 是 blocking,frame 是帧间隔(2026-10-20)
+
+i4296 头部写「240ms」、正文写「101.8ms」,两个都对,但没人告诉读者前者是 LoAF 的
+blockingDuration、后者是这一帧的时长 —— 看起来像互相矛盾。三种触发测的不是同一个东西:
+frame → 帧间隔;loaf → blockingDuration;manual → 标记时刻。
+
+- 新增 `severityBasisText` / `severityValueText`:复制摘要头行、诊断包元信息、「最差事件」
+  的值、工具箱清单(非 frame 才加,省宽度)都带口径:`严重 · LoAF blocking 240ms`。
+- 两本词典加 sevBasisFrame / sevBasisLoaf / sevBasisManual(419 键)。
+- 断言 +1(587),合计 639。
+
 ### 交互计数按 interactionId 合并,interactionId=0 的延迟事件不算交互(2026-10-20)
 
 事故 i4296 的摘要写着「窗口内 ≥100ms 的交互 2 次:keyup 272ms · keyup 272ms」——

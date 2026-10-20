@@ -216,6 +216,7 @@ window.__ModuleLoader__.load({
 				// 最差事件入口(P0/P1):严重度用**文字 + token 颜色**两样一起给,不只靠颜色
 				worstEvent: '最差事件', worstEventHint: '守夜留下的最差那条(按严重度排,不是按时间)。默认自动跟它;在工具箱的清单里点一条就切过去,「恢复默认布局」可回到自动。',
 				sevLabel: '严重度', sevBad: '严重', sevWarn: '警告', sevOk: '低于线',
+				sevBasisFrame: '帧间隔', sevBasisLoaf: 'LoAF blocking', sevBasisManual: '标记时刻',
 				sevBadHint: '≥200ms 记为「严重」:与面板判色的红档同一条线;≥100ms(守夜触发线)记为「警告」',
 				jsEvidence: 'JS 证据', jsYes: '有(longtask/LoAF 与它重叠)', jsNo: '无(longtask/LoAF 都不与它重叠)',
 				evOwner: '主要归属', evWindow: '窗口', framesUnit: ' 帧', evAutoWorst: '自动·最差', evAutoLatest: '自动·最近', evPinned: '已选中',
@@ -427,6 +428,7 @@ window.__ModuleLoader__.load({
 				watchManualNote: 'manual mark',
 				worstEvent: 'worst event', worstEventHint: 'The worst incident the night watch kept (ranked by severity, not by time). It follows this one automatically; click an entry in the toolbox list to switch, or Reset layout to go back to auto.',
 				sevLabel: 'severity', sevBad: 'severe', sevWarn: 'warn', sevOk: 'below line',
+				sevBasisFrame: 'frame interval', sevBasisLoaf: 'LoAF blocking', sevBasisManual: 'manual mark',
 				sevBadHint: '>=200ms reads as severe: the same line as the red level of the panel verdict; >=100ms (the night-watch trigger) reads as warn',
 				jsEvidence: 'JS evidence', jsYes: 'yes (a longtask/LoAF overlaps it)', jsNo: 'none (neither a longtask nor a LoAF overlaps it)',
 				evOwner: 'main owner', evWindow: 'window', framesUnit: ' frames', evAutoWorst: 'auto · worst', evAutoLatest: 'auto · latest', evPinned: 'selected',

@@ -1294,7 +1294,7 @@ window.__ModuleLoader__.load({
 			const win = row.window ?? {};
 			const span = typeof win.fromMs === 'number' && typeof win.toMs === 'number' ? round1(win.toMs - win.fromMs) : null;
 			lines.push(t('packSecSummary'));
-			lines.push(`- ${t('sevLabel')}:${severityText(severityLevel(row.severity))}(${Math.round(row.severity)}ms)`);
+			lines.push(`- ${t('sevLabel')}:${severityValueText(row)}`);
 			// ⚠️ 摘要这一行**必须吃同一个 dropFreeText**:否则同一份包里 `incident.json` 把备注置空了、
 			// `summary.md` 还带着原文 —— 两份文件各说各话,而包里那份正是要交给 AI 的(实测踩过)。
 			// 保留那一支也要过 scrubParams:自由文本里粘贴的凭据同样不许原样出门。
@@ -2078,7 +2078,7 @@ window.__ModuleLoader__.load({
 			const cov = summary.pkgCoverage ?? { resolved: 0, total: 0 };
 			const verdict = incidentVerdict(row);
 			const lines = [
-				`${PKG} ${row.id} · ${row.cause} · ${Math.round(row.severity)}ms · ${row.at}`,
+				`${PKG} ${row.id} · ${row.cause} · ${severityBasisText(row)} ${Math.round(row.severity)}ms · ${row.at}`,
 				`${translate('sevLabel')} ${severityText(severityLevel(row.severity))} · ${translate('jsEvidence')} ${summary.worstFrameJs === 'js' ? translate('jsYes') : translate('jsNo')}`,
 				`${translate('verdictLabel')} ${verdict.label} · ${verdict.detail}`,
 				`${translate('evOwner')} ${owner === null ? translate('unblamed') : `${owner.name} ${Math.round(owner.ms)}ms`}`,
@@ -3140,7 +3140,7 @@ window.__ModuleLoader__.load({
 			const row = selectedIncident().row;
 			if (row === null) return null;
 			const at = Date.parse(row.at);
-			return `${row.id} · ${row.cause} · ${Math.round(row.severity)}ms` +
+			return `${row.id} · ${row.cause} · ${severityBasisText(row)} ${Math.round(row.severity)}ms` +
 				(Number.isFinite(at) ? ` · ${clock(at)}` : '') +
 				(row.note === null || row.note === undefined ? '' : ` · ${row.note}`);
 		}
@@ -3161,13 +3161,28 @@ window.__ModuleLoader__.load({
 			return flags.length === 0 ? null : `${translate('watch')} · ${flags.join(' · ')}`;
 		}
 		/**
+		 * 严重度那个数的**口径**。三种触发各测的不是同一个东西:
+		 * frame → 帧间隔;loaf → 这条 LoAF 的 blockingDuration;manual → 标记的那个时刻。
+		 * 数字一样大、含义不同 —— 不标出来,240ms 会被读成"这一帧卡了 240ms"。
+		 */
+		function severityBasisText(row) {
+			const cause = row === null || row === undefined ? null : row.cause;
+			if (cause === 'loaf') return translate('sevBasisLoaf');
+			if (cause === 'manual') return translate('sevBasisManual');
+			return translate('sevBasisFrame');
+		}
+		/** 「严重 240ms」→「严重 · LoAF blocking 240ms」。 */
+		function severityValueText(row) {
+			return `${severityText(severityLevel(row.severity))} · ${severityBasisText(row)} ${Math.round(row.severity)}ms`;
+		}
+		/**
 		 * 「最差事件」块那一行的**值**:未开录 / 还没抓到(带阈值)/ 严重度(文字 + 数字)。
 		 * 阈值写在这里而不是另起一行 —— 「还没抓到」+「还没抓到(≥100ms)」两行是同一句话。
 		 */
 		function eventValueText(row) {
 			if (state.watch.on === false) return translate('watchOff');
 			if (row === null || row === undefined) return `${translate('watchNone')}(≥${WATCH_TRIGGER_MS}ms)`;
-			return `${severityText(severityLevel(row.severity))} ${Math.round(row.severity)}ms`;
+			return severityValueText(row);
 		}
 		/**
 		 * 工具箱里的一条事故:`1. i7 · frame · 326ms · 14:48 · 读回`。
@@ -3176,7 +3191,7 @@ window.__ModuleLoader__.load({
 		function watchRowText(row, index) {
 			const at = Date.parse(row.at);
 			const marker = state.watch.selId === row.id ? '● ' : '';
-			return `${marker}${index + 1}. ${row.id} · ${row.cause} · ${Math.round(row.severity)}ms` +
+			return `${marker}${index + 1}. ${row.id} · ${row.cause} · ${(row.cause === 'frame' ? '' : `${severityBasisText(row)} `)}${Math.round(row.severity)}ms` +
 				(Number.isFinite(at) ? ` · ${clock(at)}` : '') +
 				(row.restored === true ? ` · ${translate('watchRestored')}` : '') +
 				// 靠"每天最差"/"最近"档留下的要标出来,否则读者会奇怪它为什么没被更差的事故挤掉
@@ -3319,6 +3334,8 @@ window.__ModuleLoader__.load({
 				causeCandidates,
 				manifestFor,
 				storageReport,
+				severityBasisText,
+				severityValueText,
 				uniqueInteractions,
 				bytesText,
 				diagnosticSummary,

@@ -32,7 +32,7 @@ English summary follows the Chinese text below.
 
 ### 提交前自检(必过)
 
-- **`npm test`** —— **638** 条(11 / 586 / 41)。三套件、三个沙箱与门禁细节见 [AGENTS.md](AGENTS.md) §3。
+- **`npm test`** —— **639** 条(11 / 587 / 41)。三套件、三个沙箱与门禁细节见 [AGENTS.md](AGENTS.md) §3。
 - 改了面板文案或读数口径:长度预算 / 单位一致性 / 静态检查由 `npm test` 一起跑,规则见 [AGENTS.md](AGENTS.md) §5(来历与逐项清单见 [docs/panel-rules.md](docs/panel-rules.md));**改断言前先确认不是在删证据**。
 - 改到面板渲染 / `apply()` / `start()`:按 [docs/verification.md](docs/verification.md) 跑真页面验收器(`check-panel` 必跑,`check-incident` / `check-counts` 视改动)。它们**不是离线门禁**(要真浏览器 + 本机 `dsh web`),PR 里附输出即可。
 
@@ -51,7 +51,7 @@ English summary follows the Chinese text below.
 ## 文档与翻译
 
 - 用户可见的行为变化必须同步 [README.md](README.md) 与 [README_EN.md](README_EN.md);开发规则变化同步 [AGENTS.md](AGENTS.md)。
-- 断言数字(638 = 11 + 586 + 41)出现在 README / REVIEW / AGENTS / CONTRIBUTING 里,**改了要一起改**(CI 有一条门禁专门核这个)。
+- 断言数字(639 = 11 + 587 + 41)出现在 README / REVIEW / AGENTS / CONTRIBUTING 里,**改了要一起改**(CI 有一条门禁专门核这个)。
 - 英文版可以只覆盖主路径,但**不要写与中文不一致的结论**。
 
 ## 行为准则
@@ -69,7 +69,7 @@ This file covers the workflow.
   most usefully — the panel's **Export JSON**, which carries a self-describing `context` header and any panel
   render errors in its `errors` section.
 - **PRs**: open an issue first for anything non-trivial; branch off the latest `main`; run the three offline suites
-  (`node tests/{attribution,logic,host}.mjs`, 638 assertions) before pushing; for any panel, `apply()` or `start()`
+  (`node tests/{attribution,logic,host}.mjs`, 639 assertions) before pushing; for any panel, `apply()` or `start()`
   change also run `node tools/check-panel.mjs` (it opens a real page and asserts the panel renders with zero errors —
   these tools are **not** part of the offline gate) and paste its output instead of a screenshot.
 - **Known traps**: edit `client.js` in small anchored batches (a whole-block replacement once swallowed neighbouring
