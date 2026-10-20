@@ -2269,6 +2269,15 @@ check('存储占用报告:按 key 归类(事故 / sourcemap 缓存 / 其余),字
 	box.state.watch.incidents.length = 0;
 	for (const row of saved) box.state.watch.incidents.push(row);
 }
+check('主文件里每个传给 createUi 的依赖都有声明(漏一个 = apply() 当场 ReferenceError,HUD 不出现)',
+	(() => {
+		const at = source.indexOf('uiApi = ui.createUi({');
+		const seg = source.slice(at, source.indexOf('});', at));
+		const names = [...seg.matchAll(/^\t{4}([A-Za-z_$][\w$]*),$/gm)].map((match) => match[1]);
+		// 声明形态就这几种:function / class / const / let / var —— 少一个,apply() 里构造 deps 就炸
+		const missing = names.filter((name) => new RegExp(`(function ${name}\\(|class ${name} |const ${name} =|let ${name} =|var ${name} =)`).test(source) === false);
+		return [names.length > 100, missing];
+	})(), [true, []]);
 check('主界面只吃时间语义(结构上不碰 selectedIncident / 手选那套)', (() => {
 	const seg = extract(renderSource, 'function mainView(');
 	return [seg.includes('selectedIncident') === false, seg.includes('props.latest'), /const latestRow = latestIncident\(\);/.test(renderSource)];
