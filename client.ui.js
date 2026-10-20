@@ -17,6 +17,12 @@ window.__ModuleLoader__.load({
 				MONO_FONT,
 				panelWidthFor,
 				pillCompact,
+				// 拖动 / 位置记忆:纯函数与落盘都在主文件那侧(与 panelWidthFor 同一套来源)
+				hudPosClamp,
+				hudPosMaxHeight,
+				HUD_POS_MIN_ROOM,
+				HUD_POS_PILL_ROOM,
+				saveHudPos,
 				PICK_MIN_MS,
 				REPLAY_COLS,
 				ROOT_ID,
@@ -1001,9 +1007,29 @@ window.__ModuleLoader__.load({
 			// 两个判据都是纯函数,真页面那侧由 tools/check-panel.mjs 在 393px 视口下验。
 			const panelWidth = panelWidthFor(W.innerWidth);
 			const compact = pillCompact(W.innerWidth);
+			// ── 位置(拖动 / 记忆)──────────────────────────────────────────────
+			// 默认停右下角(right/bottom);拖动之后改 left/top,右下的两个锚点必须一起置 auto,
+			// 否则两套锚点会互相拉扯。位置只活在 `state.pos` 里,渲染只负责把它写进样式。
+			// 宽度:展开态就是唯一来源 panelWidth;收起态用上次拖动量到的实宽(药丸宽度由内容决定)。
+			const isOpenPanel = open === true && state.on !== false;
+			const boxWidth = isOpenPanel || state.pos === null || !(state.pos.w > 0) ? panelWidth : state.pos.w;
+			const pos = state.pos === null ? null : hudPosClamp(
+				state.pos,
+				{ w: boxWidth },
+				{ w: W.innerWidth, h: W.innerHeight },
+				isOpenPanel ? HUD_POS_MIN_ROOM : HUD_POS_PILL_ROOM,
+			);
+			const posStyle = pos === null ? null : {
+				left: pos.left, top: pos.top, right: 'auto', bottom: 'auto',
+				// 锚在顶部之后高度上限得跟着上边界算(默认那套 82vh 是"从底边往上长")
+				...(isOpenPanel ? { maxHeight: hudPosMaxHeight(pos.top, W.innerHeight) } : null),
+			};
 			// 审批卡让位:那两个真按钮(拒绝 / 允许一次)在卡片右下角,正压在我们这一列上 ——
 			// 遮住批准按钮是这个面板最不该干的事。判定是纯函数(见 hudDodge),这里只量一次 DOM。
-			const dodge = hudDodge({
+			//
+			// ⚠️ 让位只对**默认位置**生效:用户亲手摆过的位置由用户负责(面板已经能一拖就走),
+			// 自动让位再插手就成了"两个东西抢同一组 CSS"—— 手动摆好的面板会在卡片弹出时跳走。
+			const dodge = pos !== null ? null : hudDodge({
 				card: approvalCardRect(),
 				viewport: { w: W.innerWidth, h: W.innerHeight },
 				width: panelWidth,
@@ -1024,10 +1050,87 @@ window.__ModuleLoader__.load({
 			};
 			// 快捷键走同一个 toggle(不另写一份展开状态,否则两处会不同步)。
 			state.toggleHud = toggle;
+			/**
+			 * 拖动标题栏。三条要点(前两条抄自 dsh-better-sidebar 的 FloatingWindow,那边真页面验过):
+			 * ① 指针用 **window 级监听**,不在面板上做 pointer capture —— capture 会把后续 click 的
+			 *    target 重定向到捕获元素,标题栏里的按钮(设置 / 收起 / 关闭)就点不动了;
+			 * ② 移动期间**直接写 DOM 样式**,不走 React state:每次 pointermove 重渲染一次整块面板,
+			 *    而面板自己正在测帧 —— 拖 HUD 会变成 HUD 记下的一次卡顿;
+			 * ③ 松手才落盘 + bump 一次,让 React 的 style diff 跟上(否则下一次「恢复默认布局」
+			 *    删不掉拖动留下的内联样式)。
+			 */
+			const startDrag = (event) => {
+				if (event.pointerType === 'mouse' && event.button !== 0) return;
+				const target = event.target;
+				if (target instanceof Element && target.closest('button, input, select, textarea, a') !== null) return;
+				const root = state.root;
+				if (root === null) return;
+				const rect = root.getBoundingClientRect();
+				const start = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, w: Math.round(rect.width) };
+				const room = isOpenPanel ? HUD_POS_MIN_ROOM : HUD_POS_PILL_ROOM;
+				let moved = false;
+				const onMove = (move) => {
+					const dx = move.clientX - start.x;
+					const dy = move.clientY - start.y;
+					// 3px 之内算手抖:标题栏不是按钮,但"点一下"也不该把位置改成一个和默认差 1px 的状态
+					if (moved === false && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+					moved = true;
+					const next = hudPosClamp({ left: start.left + dx, top: start.top + dy, w: start.w },
+						{ w: start.w }, { w: W.innerWidth, h: W.innerHeight }, room);
+					state.pos = next;
+					root.style.left = `${next.left}px`;
+					root.style.top = `${next.top}px`;
+					root.style.right = 'auto';
+					root.style.bottom = 'auto';
+					if (isOpenPanel === true) root.style.maxHeight = `${hudPosMaxHeight(next.top, W.innerHeight)}px`;
+				};
+				const onUp = () => {
+					W.removeEventListener('pointermove', onMove);
+					W.removeEventListener('pointerup', onUp);
+					W.removeEventListener('pointercancel', onUp);
+					if (moved === false) return;
+					saveHudPos();
+					bump();
+				};
+				event.preventDefault();
+				W.addEventListener('pointermove', onMove);
+				W.addEventListener('pointerup', onUp);
+				W.addEventListener('pointercancel', onUp);
+			};
+			/** 双击标题栏 = 回到默认右下角(与「恢复默认布局」里那次复位是同一个动作)。 */
+			const resetPos = () => {
+				if (state.pos === null) return;
+				state.pos = null;
+				saveHudPos();
+				bump();
+			};
+			// 视口变了(换屏幕 / 改窗口大小 / 手机转屏)之后把自定义位置夹回来,不然它会整个留在屏幕外。
+			React.useEffect(() => {
+				let frame = null;
+				const onResize = () => {
+					if (frame !== null || state.pos === null) return;
+					frame = W.requestAnimationFrame(() => {
+						frame = null;
+						const root = state.root;
+						if (root === null || state.pos === null) return;
+						const next = hudPosClamp(state.pos, { w: Math.round(root.getBoundingClientRect().width) },
+							{ w: W.innerWidth, h: W.innerHeight }, open === true ? HUD_POS_MIN_ROOM : HUD_POS_PILL_ROOM);
+						if (next.left === state.pos.left && next.top === state.pos.top) return;
+						state.pos = next;
+						saveHudPos();
+						bump();
+					});
+				};
+				W.addEventListener('resize', onResize);
+				return () => {
+					W.removeEventListener('resize', onResize);
+					if (frame !== null) W.cancelAnimationFrame(frame);
+				};
+			}, [open]);
 			// 收起/展开不抢焦点:外壳在键盘命令之后会把焦点还给输入框;与它抢只会让用户丢焦点。
 			if (state.on === false) {
-				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false, panelWidth), ...dodgeStyle } },
-					h('div', { style: S.head },
+				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false, panelWidth), ...posStyle, ...dodgeStyle } },
+					h('div', { style: { ...S.head, ...S.drag }, title: t('dragHint'), onPointerDown: startDrag, onDoubleClick: resetPos },
 						h('span', { style: S.label }, `${t('title')} · ${t('off')}`),
 						h('button', { type: 'button', style: S.btn, onClick: () => setEnabled(true) }, t('turnOn'))));
 			}
@@ -1052,7 +1155,7 @@ window.__ModuleLoader__.load({
 			// 不去渲染一个空的历史上下文(与 selectedIncident 的退回自动是同一条规矩)。
 			const view = state.view === 'incident' && state.watch.mode !== 'incident' ? 'main' : state.view;
 			const viewTitle = view === 'dev' ? t('viewDev') : view === 'settings' ? t('viewSettings') : t('viewIncident');
-			const head = h('div', { style: S.head },
+			const head = h('div', { style: { ...S.head, ...S.drag }, title: t('dragHint'), onPointerDown: startDrag, onDoubleClick: resetPos },
 				h('div', { style: S.headLeft },
 					// 子页只写视图名:「性能 HUD ·」那一段与下面第一行的上下文标题(`历史事故 i35xx · 历史帧 …`)
 					// 说的是同一件事(我在哪),而它是这一行里唯一能让位的文字。品牌名进悬停。
@@ -1075,8 +1178,8 @@ window.__ModuleLoader__.load({
 				// 少报:被挤掉的卡顿不是没发生。现在这一格给的是**跨刷新的 24 小时检测次数**
 				// (`tallyWindow`),留存数 / 丢失数放进悬停(`tallyTitle`)—— 三个数各有各的名字。
 				const pillTally = tallyWindow(TALLY_MINUTES * TALLY_BUCKET_MS);
-				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false, panelWidth), ...(compact === true ? null : { minWidth: panelWidth }), ...dodgeStyle } },
-					h('div', { style: S.head },
+				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false, panelWidth), ...(compact === true ? null : { minWidth: panelWidth }), ...posStyle, ...dodgeStyle } },
+					h('div', { style: { ...S.head, ...S.drag }, title: t('dragHint'), onPointerDown: startDrag, onDoubleClick: resetPos },
 						h('span', { style: S.brand }, t('title')),
 						h('span', { style: { ...S.label, color: sceneChip().color } }, sceneChip().text),
 						h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(0)} fps`),
@@ -1317,7 +1420,7 @@ window.__ModuleLoader__.load({
 
 			// 自带边界:渲染抛错时只降级成一块小面板,不让外壳把整个条目停用。
 			return h(HudBoundary, { renderError: renderErrorView },
-				h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(true, panelWidth), ...dodgeStyle } }, head,
+				h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(true, panelWidth), ...posStyle, ...dodgeStyle } }, head,
 					// 正文是**唯一**的滚动容器:头部(返回 / 设置 / 收起 / 关闭)永远留在原地,
 					// 滚轮再长也滚不走它(以前整块一起滚,控件够不着)。
 					h('div', { style: S.scroll }, body,

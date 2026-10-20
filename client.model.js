@@ -23,6 +23,9 @@ window.__ModuleLoader__.load({
 				FREE_TEXT_KEYS,
 				HOME_PATH,
 				HOST_ROUTE,
+				HUD_POS_MARGIN,
+				HUD_POS_MIN_ROOM,
+				HUD_POS_PILL_ROOM,
 				LS_INCIDENTS,
 				LS_MAP,
 				LS_MAP_INDEX,
@@ -2381,6 +2384,51 @@ window.__ModuleLoader__.load({
 		function pillCompact(viewportWidth) {
 			return viewportWidth < PILL_COMPACT_BELOW;
 		}
+		// ── 面板位置(拖动 / 记忆)────────────────────────────────────────────
+		// 默认位置是右下角(`right/bottom: 12`)。用户拖过一次之后改成 `left/top`,并把
+		// right/bottom 置 auto —— 同一时刻只留一套锚点,否则"改回去"要同时动四个值。
+		// 坐标全是整数 px(与面板其它尺寸同一条规矩:分数坐标在 125%~150% 缩放下会发糊)。
+		// 三个尺寸常量由主文件传入(deps,与 PANEL_WIDTH 同一套来源)。
+
+		/**
+		 * 位置落盘的**宽容解析**:只有数字才认,别的(手改 / 旧版本 / NaN)一律当"没拖过"。
+		 * `w` 是拖动时量到的面板宽度 —— 收起态宽度由内容决定,恢复时得拿它算右边界才不越界。
+		 */
+		function hudPosParse(raw) {
+			if (typeof raw !== 'string' || raw === '') return null;
+			let parsed = null;
+			try { parsed = JSON.parse(raw); } catch (error) { return null; }
+			if (parsed === null || typeof parsed !== 'object') return null;
+			if (Number.isFinite(parsed.left) === false || Number.isFinite(parsed.top) === false) return null;
+			const w = Number.isFinite(parsed.w) && parsed.w > 0 ? Math.round(parsed.w) : 0;
+			return { left: Math.round(parsed.left), top: Math.round(parsed.top), w };
+		}
+
+		/**
+		 * 把位置夹进视口:整块放得下就整块留在里面,放不下(窄屏 / 面板比视口宽)就贴左边。
+		 * 竖直方向只要求 `room` 那么高的空间 —— 面板高度随内容与折叠态变,按高度夹会让
+		 * "展开时在上、收起时被弹走"。
+		 */
+		function hudPosClamp(pos, size, viewport, room) {
+			const keep = room ?? HUD_POS_MIN_ROOM;
+			const width = size !== null && size !== undefined && Number.isFinite(size.w) && size.w > 0 ? size.w : 0;
+			const maxLeft = Math.max(HUD_POS_MARGIN, Math.round(viewport.w - width - HUD_POS_MARGIN));
+			const maxTop = Math.max(HUD_POS_MARGIN, Math.round(viewport.h - keep));
+			return {
+				left: Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.left)), maxLeft),
+				top: Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.top)), maxTop),
+				w: width > 0 ? width : 0,
+			};
+		}
+
+		/**
+		 * 自定义位置下的高度上限:面板锚在顶部,长高只能长到底边以内。
+		 * 默认位置是"从底边往上长"(`bottom: 12` + `maxHeight: 82vh`),两者不能共用一套算法。
+		 */
+		function hudPosMaxHeight(top, viewport) {
+			const cap = Math.round(viewport.h * 0.82);
+			return Math.max(0, Math.min(cap, Math.round(viewport.h - top - HUD_POS_MARGIN)));
+		}
 		/**
 		 * **审批卡让位**:审批面板是 composer takeover,「拒绝 / 允许一次」两个按钮在卡片右下角 ——
 		 * 正压在 HUD 停的那一列上(实测 1400×757 下必然重叠,遮住的就是那两个按钮)。
@@ -3325,6 +3373,8 @@ window.__ModuleLoader__.load({
 		 */
 		function layoutDirty() {
 			if (anyGroupOpen()) return true;
+			// 位置也算布局:拖过之后「恢复默认布局」才有意义(它会把面板拉回右下角)
+			if (state.pos !== null) return true;
 			if (state.watch.mode === 'incident') return true;
 			if (state.watch.onlyBad === true) return true;
 			if (state.watch.frameT !== null) return true;
@@ -3453,6 +3503,11 @@ window.__ModuleLoader__.load({
 				hudDodge,
 				panelWidthFor,
 				pillCompact,
+				HUD_POS_MIN_ROOM,
+				HUD_POS_PILL_ROOM,
+				hudPosParse,
+				hudPosClamp,
+				hudPosMaxHeight,
 				frameSeverity,
 				worstLoaf,
 				loafRanks,

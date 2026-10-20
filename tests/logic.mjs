@@ -464,8 +464,14 @@ const newPieces = [
 	'const MIN_PANEL_WIDTH = ',
 	'const PILL_COMPACT_BELOW = ',
 	'function hudDodge(',
+	'const HUD_POS_MARGIN = ',
+	'const HUD_POS_MIN_ROOM = ',
+	'const HUD_POS_PILL_ROOM = ',
 	'function panelWidthFor(',
 	'function pillCompact(',
+	'function hudPosParse(',
+	'function hudPosClamp(',
+	'function hudPosMaxHeight(',
 	'function domWriteTable(',
 	'function domWriteSnapshot(',
 	'function domWriteDelta(',
@@ -618,6 +624,8 @@ const newPieces = [
 	'function toolsSummary(',
 	// P0/P1:事故选中上下文 + 「最差事件」入口 + 布局动作(严重度必须文字与颜色两样都给)
 	'function pickIncident(',
+	'const LS_POS = ',
+	'function saveHudPos(',
 	'function saveGroups(',
 	'function collapseAll(',
 	'function resetLayout(',
@@ -773,7 +781,7 @@ const box = new Function(`${sandbox}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_RECENT_MAX, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, uniqueInteractions, evidenceGroups, evidenceGroupLine, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, uniqueInteractions, evidenceGroups, evidenceGroupLine, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact, hudPosParse, hudPosClamp, hudPosMaxHeight, HUD_POS_MIN_ROOM, HUD_POS_PILL_ROOM,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -2296,6 +2304,27 @@ check('主文件里每个传给 createUi 的依赖都有声明(漏一个 = apply
 		const missing = names.filter((name) => new RegExp(`(function ${name}\\(|class ${name} |const ${name} =|let ${name} =|var ${name} =)`).test(source) === false);
 		return [names.length > 100, missing];
 	})(), [true, []]);
+// 同一条规矩的另一半:**分片解构的键,主文件必须真的传**。漏传不会报错 —— 那个常量在分片里
+// 是 undefined,算术结果静默变成 NaN(拖动的位置 JSON 落盘成 `{"left":null,"top":null}` 就是这么来的)。
+check('modelDeps() 覆盖 createModel 解构的每一个键(漏传 = 常量 undefined,数值静默 NaN)',
+	(() => {
+		const at = modelSource.indexOf('exports.createModel = (deps) => {');
+		const destructure = modelSource.slice(at, modelSource.indexOf('} = deps;', at));
+		const needed = [...destructure.matchAll(/^\t{4}([A-Za-z_$][\w$]*),$/gm)].map((match) => match[1]);
+		const depsAt = source.indexOf('function modelDeps() {');
+		const depsBody = source.slice(depsAt, source.indexOf('\n\t\t}', depsAt));
+		// `name,` 与 `name: …` 都算提供了(resolveStamp / translate 是包一层传进去的)
+		const missing = needed.filter((name) => new RegExp(`^\\t{4}${name}[,:]`, 'm').test(depsBody) === false);
+		return [needed.length > 50, missing];
+	})(), [true, []]);
+check('主文件里每个传给 createModel 的依赖都有声明(少一个 = 分片拿到 undefined)', (() => {
+	const at = source.indexOf('function modelDeps() {');
+	const seg = source.slice(at, source.indexOf('\n\t\t}', at));
+	// 只认裸名字:`resolveStamp: () => resolveSeq` 这种是映射键,源里本来就没有同名变量
+	const names = [...seg.matchAll(/^\t{4}([A-Za-z_$][\w$]*),$/gm)].map((match) => match[1]);
+	const missing = names.filter((name) => new RegExp(`(function ${name}\\(|class ${name} |const ${name} =|let ${name} =|var ${name} =)`).test(source) === false);
+	return [names.length > 50, missing];
+})(), [true, []]);
 check('主界面只吃时间语义(结构上不碰 selectedIncident / 手选那套)', (() => {
 	const seg = extract(renderSource, 'function mainView(');
 	return [seg.includes('selectedIncident') === false, seg.includes('props.latest'), /const latestRow = latestIncident\(\);/.test(renderSource)];
@@ -3727,6 +3756,58 @@ check('卡片不可见 / 在视口下方 / 占满整屏 / 根本没有卡片 →
 	dodgeIn({ card: { top: 0 } }),
 	EX.hudDodge({ card: null, viewport: { w: 1400, h: 757 }, width: 396 }),
 ], [null, null, null, null]);
+// ── 面板位置(拖动 / 记忆)──────────────────────────────────────────────
+// 规则:整块放得下就整块留在视口里;竖直只要求还留得下 room 那么高(展开 220 / 药丸 48);
+// 落盘宽容解析(手改 / 旧版本 / 非数字一律当"没拖过")。
+const posAt = (left, top, w, room) => EX.hudPosClamp({ left, top }, { w }, { w: 1400, h: 757 }, room);
+check('位置夹进视口:左上贴 12,右下不越界(展开态留 220,药丸留 48)', [
+	posAt(-50, -80, 396, EX.HUD_POS_MIN_ROOM),
+	posAt(5000, 5000, 396, EX.HUD_POS_MIN_ROOM),
+	posAt(5000, 5000, 396, EX.HUD_POS_PILL_ROOM),
+], [
+	{ left: 12, top: 12, w: 396 },
+	{ left: 992, top: 537, w: 396 },
+	{ left: 992, top: 709, w: 396 },
+]);
+check('窄屏:面板比视口宽时贴左边(而不是给负的左偏移)', posAt(300, 20, 1600, EX.HUD_POS_MIN_ROOM), { left: 12, top: 20, w: 1600 });
+check('自定义位置的高度上限跟着顶边算(默认那套 82vh 是"从底边往上长")', [
+	EX.hudPosMaxHeight(100, { w: 1400, h: 757 }),
+	EX.hudPosMaxHeight(600, { w: 1400, h: 757 }),
+	EX.hudPosMaxHeight(900, { w: 1400, h: 757 }),
+], [621, 145, 0]);
+check('位置落盘宽容解析:数字才认,w 缺省补 0', [
+	EX.hudPosParse('{"v":1,"left":120,"top":80,"w":396}'),
+	EX.hudPosParse('{"left":120.4,"top":80.6}'),
+	EX.hudPosParse('{"left":"120","top":80}'),
+	EX.hudPosParse('null'),
+	EX.hudPosParse('not json'),
+	EX.hudPosParse(null),
+], [
+	{ left: 120, top: 80, w: 396 },
+	{ left: 120, top: 81, w: 0 },
+	null, null, null, null,
+]);
+check('位置也是布局:拖过之后 layoutDirty 才为真', (() => {
+	const watchSaved = { ...box.state.watch };
+	const groupsSaved = { ...box.state.groups };
+	const notesSaved = { copyNote: box.state.copyNote, pickNote: box.state.pickNote };
+	const posSaved = box.state.pos;
+	for (const key of Object.keys(box.state.groups)) box.state.groups[key] = false;
+	Object.assign(box.state.watch, { mode: 'live', onlyBad: false, frameT: null, pickT: null, selId: null, scope: 'worst' });
+	box.state.copyNote = null;
+	box.state.pickNote = null;
+	box.state.pos = null;
+	const clean = EX.layoutDirty();
+	box.state.pos = { left: 40, top: 40, w: 168 };
+	const moved = EX.layoutDirty();
+	box.state.pos = posSaved;
+	box.state.copyNote = notesSaved.copyNote;
+	box.state.pickNote = notesSaved.pickNote;
+	Object.assign(box.state.watch, watchSaved);
+	Object.assign(box.state.groups, groupsSaved);
+	return [clean, moved];
+})(), [false, true]);
+
 // 面板宽度只允许一个来源,而且**随视口收**:S.root 收一个算好的宽度(以前展开 396 / 错误降级
 // 视图 380 / 收起态 min-width 396 —— 三个字面量,改一个忘一个,而且在手机上会溢出去)。
 check('面板宽度只有一个来源,而且由 S.root 收参', [

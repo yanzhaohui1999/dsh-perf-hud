@@ -31,6 +31,14 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	await page.waitForHud();
 	check('HUD 挂上且面板渲染出来', true);
 
+	// 位置落盘是这次新加的键:上一次手动拖过会留下它,而"停过自定义位置"会让后面的审批卡让位
+	// 那条断言失效(让位只对默认位置生效)。所以先清掉再刷新,给整条验收一个干净起点。
+	const hadPos = await page.evaluate(`(() => { try { const value = localStorage.getItem('dsh-perf-hud:pos:v1'); if (value !== null) localStorage.removeItem('dsh-perf-hud:pos:v1'); return value !== null; } catch (error) { return false; } })()`);
+	if (hadPos === true) {
+		await page.reload();
+		await page.waitForHud();
+	}
+
 	const errors = await page.evaluate(`window.__perfHud.snapshot().errors`);
 	check('面板渲染 0 错误(HudBoundary 没兜到东西)', Array.isArray(errors) && errors.length === 0, JSON.stringify(errors ?? null));
 
@@ -118,6 +126,62 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	})()`);
 	check('审批卡出现 → 面板让到卡片上方(不压批准按钮)', dodge.dodged !== null, JSON.stringify(dodge));
 	check('审批卡消失 → 面板回到右下角', dodge.restored !== null, JSON.stringify(dodge));
+
+	// ── 拖动标题栏:跟手 / 越界夹住 / 落盘 / 刷新恢复 / 双击复位 ─────────────────
+	// 这里只能真发鼠标事件:拖动走的是 pointerdown + window 级 pointermove,离线套件测不到
+	// "按钮还能不能点""React 会不会在拖动中把位置写回去"这类只在该路径发生的事。
+	const headRect = await page.evaluate(`(() => {
+		const root = document.getElementById('dsh-perf-hud-root');
+		const rect = root.firstElementChild.getBoundingClientRect();
+		return { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) };
+	})()`);
+	const from = { x: headRect.left + 24, y: headRect.top + 8 };
+	const to = { x: from.x - 300, y: from.y - 120 };
+	await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x, y: from.y, button: 'none', buttons: 0 });
+	await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1 });
+	for (let step = 1; step <= 6; step += 1) {
+		const x = Math.round(from.x + (to.x - from.x) * (step / 6));
+		const y = Math.round(from.y + (to.y - from.y) * (step / 6));
+		await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1 });
+	}
+	await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', buttons: 0, clickCount: 1 });
+	await new Promise((resolve) => setTimeout(resolve, 400));
+	const moved = await page.evaluate(`(() => {
+		const root = document.getElementById('dsh-perf-hud-root');
+		const rect = root.getBoundingClientRect();
+		return { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width),
+			stored: localStorage.getItem('dsh-perf-hud:pos:v1'), viewport: innerWidth, viewportH: innerHeight };
+	})()`);
+	check('拖动标题栏:面板跟手往左上移动,而且不越界', moved.left <= headRect.left - 200 && moved.left >= 12 && moved.top >= 12, JSON.stringify(moved));
+	check('拖动之后位置落盘(没有在松手时被 React 写回去)', moved.stored !== null, String(moved.stored));
+	await page.reload();
+	await page.waitForHud();
+	const restored = await page.evaluate(`(() => {
+		const root = document.getElementById('dsh-perf-hud-root');
+		const rect = root.getBoundingClientRect();
+		return { left: Math.round(rect.left), top: Math.round(rect.top), right: Math.round(innerWidth - rect.right) };
+	})()`);
+	const saved = moved.stored === null ? null : JSON.parse(moved.stored);
+	check('刷新之后回到拖过的那一格(left/top 都还在,不是右下角)', saved !== null && Math.abs(restored.left - saved.left) <= 1 && Math.abs(restored.top - saved.top) <= 1, JSON.stringify({ restored, saved }));
+	// 双击标题栏 = 回默认右下角(与「恢复默认布局」同一个动作),键一起删掉。
+	// ⚠️ 坐标要用**标题栏自己**的 rect:根节点有 10px 上内边距,按根的 top+8 点下去落在内边距上,
+	// 拖动/双击都不会触发(第一次真跑就是这么"失败"的)。
+	const headAfter = await page.evaluate(`(() => {
+		const rect = document.getElementById('dsh-perf-hud-root').firstElementChild.getBoundingClientRect();
+		return { x: Math.round(rect.left + 24), y: Math.round(rect.top + rect.height / 2) };
+	})()`);
+	await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: headAfter.x, y: headAfter.y, button: 'left', buttons: 1, clickCount: 1 });
+	await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: headAfter.x, y: headAfter.y, button: 'left', buttons: 0, clickCount: 1 });
+	await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: headAfter.x, y: headAfter.y, button: 'left', buttons: 1, clickCount: 2 });
+	await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: headAfter.x, y: headAfter.y, button: 'left', buttons: 0, clickCount: 2 });
+	await new Promise((resolve) => setTimeout(resolve, 400));
+	const reset = await page.evaluate(`(() => {
+		const root = document.getElementById('dsh-perf-hud-root');
+		const rect = root.getBoundingClientRect();
+		return { left: Math.round(rect.left), bottom: Math.round(rect.bottom), stored: localStorage.getItem('dsh-perf-hud:pos:v1'), viewport: innerWidth, viewportH: innerHeight,
+			expectedLeft: Math.round(innerWidth - 12 - rect.width) };
+	})()`);
+	check('双击标题栏 → 回到右下角,位置键被删掉', reset.stored === null && Math.abs(reset.left - reset.expectedLeft) <= 1 && Math.abs(reset.bottom - (reset.viewportH - 12)) <= 1, JSON.stringify(reset));
 
 	// 窄屏(手机 / 分栏):定宽 396 会溢出去(实测 393px 视口:left = −15,标题被切掉一截),
 	// 现在宽度走 panelWidthFor → "视口 − 两边各 12"。用 CDP 的设备模拟把视口压到 393×851。

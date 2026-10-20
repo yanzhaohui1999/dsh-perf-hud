@@ -67,6 +67,7 @@ window.__ModuleLoader__.load({
 		// 事故落盘只在切片那一刻写一次,而用户来回切换上下文不该逼着再抓一次事故。
 		const LS_WATCHUI = 'dsh-perf-hud:watchui:v1';
 		const LS_VIEW = 'dsh-perf-hud:view:v1';        // 只存视图名 / 标签页 / 趋势窗口,不存读数
+		const LS_POS = 'dsh-perf-hud:pos:v1';          // 用户拖过之后的面板左上角(没有键 = 停默认右下角)
 		const TALLY_TREND_SHORT_MS = 3600000;          // 主界面「最近 1 小时」
 		const TALLY_TREND_LONG_MS = 86400000;          // 主界面「最近 24 小时」
 		const LS_SESSIONS = 'dsh-perf-hud:sessions:v1';     // A2 跨会话基线(每个会话一条,只进导出件)
@@ -434,6 +435,7 @@ window.__ModuleLoader__.load({
 			collapsed: false,
 			since: Date.now(),
 			root: null,              // HUD 根元素:DOM 统计里排除它
+			pos: null,               // 面板左上角 `{ left, top, w }`;null = 停默认右下角(不落盘)
 			fps: 0,
 			windowStart: 0,
 			windowFrames: 0,
@@ -610,6 +612,10 @@ window.__ModuleLoader__.load({
 				FREE_TEXT_KEYS,
 				HOME_PATH,
 				HOST_ROUTE,
+				// 拖动后的位置:三个尺寸常量与 PANEL_WIDTH 同一套来源(渲染、恢复、离线断言都从这里算)
+				HUD_POS_MARGIN,
+				HUD_POS_MIN_ROOM,
+				HUD_POS_PILL_ROOM,
 				LS_INCIDENTS,
 				LS_MAP,
 				LS_MAP_INDEX,
@@ -920,6 +926,10 @@ window.__ModuleLoader__.load({
 		function hudDodge(...args) { return model().hudDodge(...args); }
 		function panelWidthFor(...args) { return model().panelWidthFor(...args); }
 		function pillCompact(...args) { return model().pillCompact(...args); }
+		// 面板位置:纯函数在 model(离线可断言),这里只留同步包装(与 panelWidthFor 同一套规矩)。
+		function hudPosParse(...args) { return model().hudPosParse(...args); }
+		function hudPosClamp(...args) { return model().hudPosClamp(...args); }
+		function hudPosMaxHeight(...args) { return model().hudPosMaxHeight(...args); }
 		function frameSeverity(...args) { return model().frameSeverity(...args); }
 		function worstLoaf(...args) { return model().worstLoaf(...args); }
 		function loafRanks(...args) { return model().loafRanks(...args); }
@@ -1854,6 +1864,7 @@ window.__ModuleLoader__.load({
 			restoreTally();
 			restoreWatchUI();
 			restoreView();
+			restoreHudPos();
 			// 老 rev 的 sourcemap 分段表可重建;启动时清一次,别让它静默吃满配额。
 			pruneMapCache();
 		}
@@ -2930,6 +2941,27 @@ window.__ModuleLoader__.load({
 			gap: 'var(--dsw-alias-border-l2)',
 		};
 
+		/**
+		 * 面板位置落盘:有自定义位置就写 `{ v: 1, left, top, w }`,回到默认位置就把键删掉 ——
+		 * "没有键"必须等价于"停在右下角",否则恢复逻辑要分三种情况。
+		 */
+		function saveHudPos() {
+			try {
+				if (state.pos === null) localStorage.removeItem(LS_POS);
+				else localStorage.setItem(LS_POS, JSON.stringify({ v: 1, left: state.pos.left, top: state.pos.top, w: state.pos.w ?? 0 }));
+			} catch (error) { /* 记不住就本次会话有效 */ }
+		}
+
+		/** 恢复位置:解析宽容 + 按当前视口夹一次(换过屏幕 / 改过窗口大小之后旧的坐标可能整个在外面)。 */
+		function restoreHudPos() {
+			let saved = null;
+			try { saved = hudPosParse(localStorage.getItem(LS_POS)); } catch (error) { saved = null; }
+			state.pos = saved === null ? null : hudPosClamp(saved,
+				{ w: saved.w > 0 ? saved.w : panelWidthFor(W.innerWidth) },
+				{ w: W.innerWidth, h: W.innerHeight },
+				state.collapsed ? HUD_POS_PILL_ROOM : HUD_POS_MIN_ROOM);
+		}
+
 		/** 折叠选择落盘(尽力而为:记不住就本次会话有效)。 */
 		function saveGroups() {
 			try { localStorage.setItem(LS_GROUPS, JSON.stringify(state.groups)); } catch (error) { /* 记不住就本次会话有效 */ }
@@ -2969,6 +3001,9 @@ window.__ModuleLoader__.load({
 			// 两个"一次性说明"也清掉:布局都回到默认了,还挂着一句"帧环里没有…"只会让人以为又出错了
 			state.copyNote = null;
 			state.pickNote = null;
+			// 位置也是布局的一部分:拖过之后回到右下角(键一起删掉,否则刷新又"复活")
+			state.pos = null;
+			saveHudPos();
 			saveGroups();
 			saveWatchUI();
 			bump();
@@ -3065,6 +3100,11 @@ window.__ModuleLoader__.load({
 		const PILL_COMPACT_BELOW = 480;
 		// 面板再窄也得放得下标题与两个按钮。
 		const MIN_PANEL_WIDTH = 240;
+		// 拖动之后的位置:边距与默认停靠一致(12),另两个数是"拖到哪儿都还留得下的读数空间"。
+		// 与 PANEL_WIDTH 同一条规矩:尺寸只有一个来源,渲染层与离线断言都从这些常量算。
+		const HUD_POS_MARGIN = 12;
+		const HUD_POS_MIN_ROOM = 220;     // 展开态:竖直至少留这么高,否则只剩标题栏
+		const HUD_POS_PILL_ROOM = 48;     // 收起态:一行的高度
 
 		const S = {
 			root: (open, width) => ({
@@ -3095,6 +3135,9 @@ window.__ModuleLoader__.load({
 			// (标题 ellipsis 先让位),右组是不可让步的控件。分组也不再靠某个元素上的 margin-left:auto
 			// (那个技巧只在它所在的那一行生效,一换行就散)。
 			head: { display: 'flex', alignItems: 'center', gap: 6 },
+			// 标题栏可拖动(拖动逻辑在 client.ui.js 的 startDrag):grab 光标 + 关闭文本选择,
+			// touchAction 让触摸拖动不被页面滚动吃掉。按钮自己的 cursor:pointer 会盖掉 grab。
+			drag: { cursor: 'grab', userSelect: 'none', touchAction: 'none' },
 			headLeft: { display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 auto', minWidth: 0, overflow: 'hidden' },
 			headRight: { display: 'flex', alignItems: 'center', gap: 6, flex: '0 0 auto' },
 			// 工具条的按钮比正文里的按钮窄一点(padding 8→6):这一行是不可换行的,省下的 4px × 3
@@ -3593,6 +3636,11 @@ window.__ModuleLoader__.load({
 				hostLoopStateText,
 				hostSummary,
 				hudDodge,
+				hudPosClamp,
+				hudPosMaxHeight,
+				HUD_POS_MIN_ROOM,
+				HUD_POS_PILL_ROOM,
+				saveHudPos,
 				incidentFrameHeadingText,
 				incidentFrameStep,
 				incidentLongTasksAt,

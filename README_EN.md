@@ -124,6 +124,8 @@ The panel has **four views**, one at a time (only the view name is persisted, ne
 
 The default screen never shows LoAF / p99 / RTT / package rankings / frame indices — those live in developer details. Collapsed, it is the pill in the bottom-right corner (fps / worst frame / stalls detected in the last 24 hours); expanding it returns to the overview.
 
+The title bar is a drag handle: the panel can be moved anywhere on screen, the position survives a refresh, and double-clicking the title bar returns it to the bottom-right corner. Width and text zoom are deliberately not user-resizable (the 396px column is tuned for the label/value rows).
+
 ### The four views at a glance
 
 | **Overview** (default) | **Stall detail** | **Settings** |
@@ -325,9 +327,9 @@ the offline suites assert its shape directly — a future UI rewrite or MCP serv
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 592 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 599 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 41 assertions: real index.js driven by a fake ctx
-# 644 offline assertions total, no running DSH required
+# 651 offline assertions total, no running DSH required
 ```
 
 The i18n dictionary now has **402 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).
