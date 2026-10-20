@@ -2341,8 +2341,62 @@ window.__ModuleLoader__.load({
 			}
 			return worstLoaf();
 		}
+		// 帧间隔分档(ms):满帧 / 30–60fps / 20–30fps / 10–20fps / ≤10fps。
+		// 边界故意落在 16.7(60Hz 一帧)、33.3(30fps)、50(LoAF 线)、100(守夜触发线)上 ——
+		// 与面板其它地方同一套线,不另造刻度。标签是纯数字,不翻译。
+		// ⚠️ 用函数返回而不是模块级 const:测试沙箱按 header 抽函数,模块级 const 抽不到
+		// (`logic.mjs` 的 const 分支只读 client.js),抽不到就会在断言里变成 ReferenceError。
+		function frameMixBuckets() {
+			return [
+				{ max: 16.7, label: '≤16.7' },
+				{ max: 33.3, label: '16.7–33.3' },
+				{ max: 50, label: '33.3–50' },
+				{ max: 100, label: '50–100' },
+				{ max: Infinity, label: '≥100' },
+			];
+		}
+		function frameBucketOf(ms) {
+			const buckets = frameMixBuckets();
+			for (let index = 0; index < buckets.length; index += 1) {
+				if (ms <= buckets[index].max) return index;
+			}
+			return buckets.length;
+		}
+		/**
+		 * 一段窗口里的帧按**帧间隔**分档的占比。存在理由:守夜只留 ≥100ms 的事故,
+		 * 持续 20fps(每帧 50ms)一条都不会触发 —— 这份分布回答"这一分钟里有多少帧是慢的",
+		 * 而且不需要任何新采集:帧环里本来就有每一帧。
+		 * 分母是"这段里真的发生了多少帧":间隙(gap)不是帧,不计入;没有帧时返回 null。
+		 */
+		function frameMix(rows) {
+			const counts = new Array(frameMixBuckets().length).fill(0);
+			let total = 0;
+			for (const row of Array.isArray(rows) ? rows : []) {
+				if (row === null || row === undefined || row.gap === true) continue;
+				if (typeof row.ms !== 'number' || Number.isFinite(row.ms) === false) continue;
+				counts[frameBucketOf(row.ms)] += 1;
+				total += 1;
+			}
+			return total === 0 ? null : { total, counts, shares: counts.map((count) => count / total) };
+		}
+		/** 固定 60 秒窗口的帧分布(与 60 秒帧条同一个窗口)。 */
+		function frameMixNow() {
+			const now = performance.now();
+			return frameMix(frameRing.slice(now - SPARK_SECONDS * 1000, now));
+		}
+		/** 分布的一行文本:四舍五入到整数,非零但不足 1% 写 <1%,零写 0%。 */
+		function frameMixText(mix) {
+			if (mix === null || mix === undefined) return '';
+			return frameMixBuckets().map((bucket, index) => {
+				const count = mix.counts[index] ?? 0;
+				const pct = (mix.shares[index] ?? 0) * 100;
+				const shown = count === 0 ? '0%' : (pct < 0.5 ? '<1%' : `${Math.round(pct)}%`);
+				return `${bucket.label}:${shown}`;
+			}).join(' · ');
+		}
 		/**
 		 * 最近 SPARK_SECONDS 秒的分格数据:一格一秒,格值 = 那一格里最差那帧的间隔;间隙另标。
+
 		 * `t` 带上"最差那一帧的 perf 毫秒" —— 帧条 hover 要给出墙钟时间,点格导航也要它。
 		 */
 		function sparkBars(now) {
@@ -3252,6 +3306,11 @@ window.__ModuleLoader__.load({
 				loafRanks,
 				pickList,
 				pickedLoaf,
+				frameMixBuckets,
+				frameBucketOf,
+				frameMix,
+				frameMixNow,
+				frameMixText,
 				sparkBars,
 				sparkPickMap,
 				sparkCellTitle,

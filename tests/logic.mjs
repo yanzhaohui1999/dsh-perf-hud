@@ -668,6 +668,10 @@ const newPieces = [
 	'function rate(',
 	'function worstLongTask(',
 	'function worstSecond(',
+	'function frameMixBuckets(',
+	'function frameBucketOf(',
+	'function frameMix(',
+	'function frameMixText(',
 	'const pad = ',
 	'const clock = (ms) => {',
 	'const mb = ',
@@ -753,7 +757,7 @@ const box = new Function(`${sandbox}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixText, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -2119,6 +2123,28 @@ check('可能原因:只有 suspectedThrottle 成立时才提"更像 rAF 挂起�
 	return [unknown.strength, /更像/.test(unknown.basis.join(''))];
 })(), ['weak', true]);
 check('可能原因:没有事故就返回空数组(不造候选)', [EX.causeCandidates(null), EX.causeCandidates(undefined)], [[], []]);
+
+// ── 60 秒帧分布:分档边界 / 间隙不进分母 / 占比文本 ──
+check('帧分布:分档边界落在 16.7 / 33.3 / 50 / 100(满帧 / 30–60 / 20–30 / 10–20fps / ≤10fps)',
+	[16.7, 16.8, 33.3, 33.4, 50, 50.1, 100, 100.1, 619.5].map((ms) => EX.frameBucketOf(ms)),
+	[0, 1, 1, 2, 2, 3, 3, 4, 4]);
+check('帧分布:间隙不是帧、不进分母;没有帧时返回 null',
+	(() => {
+		const mix = EX.frameMix([
+			{ t: 1, ms: 16.7, gap: false }, { t: 2, ms: 16.7, gap: false },
+			{ t: 3, ms: 50, gap: false }, { t: 4, ms: 640, gap: true },
+		]);
+		return [mix.total, mix.counts.join(','),
+			Math.round(mix.shares.reduce((sum, share) => sum + share, 0) * 1e9) / 1e9,
+			EX.frameMix([]), EX.frameMix([{ t: 9, ms: 900, gap: true }])];
+	})(), [3, '2,0,1,0,0', 1, null, null]);
+check('帧分布文本:占比四舍五入到整数,非零但不足 1% 写 <1%',
+	(() => {
+		const rows = [];
+		for (let index = 0; index < 300; index += 1) rows.push({ t: index, ms: 16.7, gap: false });
+		rows.push({ t: 900, ms: 60, gap: false });
+		return EX.frameMixText(EX.frameMix(rows));
+	})(), '≤16.7:100% · 16.7–33.3:0% · 33.3–50:0% · 50–100:<1% · ≥100:0%');
 check('可能原因:宿主那行的「最大」是事件循环 max,不再拿快照年龄冒充(曾印成「最大 -2248ms」)', (() => {
 	const hot = EX.causeCandidates({ ...causeRow, host: { eventLoop: { p50: 3, p99: 180, max: 400 }, snapshotAgeMs: -2000 } });
 	const host = hot.find((item) => item.kind === 'host');

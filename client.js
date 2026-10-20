@@ -901,6 +901,8 @@ window.__ModuleLoader__.load({
 		function frameSplit(...args) { return model().frameSplit(...args); }
 		function splitLegend(...args) { return model().splitLegend(...args); }
 		function frameArcs(...args) { return model().frameArcs(...args); }
+		function frameMixNow(...args) { return model().frameMixNow(...args); }
+		function frameMixText(...args) { return model().frameMixText(...args); }
 		function hudDodge(...args) { return model().hudDodge(...args); }
 		function panelWidthFor(...args) { return model().panelWidthFor(...args); }
 		function pillCompact(...args) { return model().pillCompact(...args); }
@@ -3556,6 +3558,8 @@ window.__ModuleLoader__.load({
 				exportPack,
 				frame,
 				frameArcs,
+				frameMixNow,
+				frameMixText,
 				frameRing,
 				group,
 				h,

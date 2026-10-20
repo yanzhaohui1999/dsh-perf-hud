@@ -66,6 +66,8 @@ window.__ModuleLoader__.load({
 				exportPack,
 				frame,
 				frameArcs,
+				frameMixNow,
+				frameMixText,
 				frameRing,
 				group,
 				h,
@@ -221,6 +223,10 @@ window.__ModuleLoader__.load({
 			// 浏览器里当场 ReferenceError(面板整块被外壳停用),而 node --check 与三套件都看不出来。
 			const trendMs = props.trendMs;
 			const trendRaw = trendRawText(trendMs);
+			// 60 秒帧分布:守夜只收 ≥100ms 的事故,"每帧 50ms 的 20fps 段"一条都不会触发。
+			// 这一行直接读帧环回答"这一分钟里有多少帧是慢的",不需要任何新采集。
+			// 它是**当前状态的一部分**(不另起一块):面板仍是「状态 / 最近一次 / 原因 / 趋势」四块。
+			const mix = frameMixNow();
 			const kids = [
 				h('div', { style: S.block, title: health.reason === '' ? t('healthHint') : health.reason },
 					h('div', { style: S.blockLabel }, t('mainStatus')),
@@ -230,7 +236,9 @@ window.__ModuleLoader__.load({
 							color: health.level === 'ok' ? 'var(--dsw-alias-state-success-primary)'
 								: health.level === 'stall' ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-label-secondary)',
 						},
-					}, `${healthIcon(health.level)} ${healthText(health.level)} · ${health.fps.toFixed(0)} fps${health.reason === '' ? '' : ` · ${health.reason}`}`)),
+					}, `${healthIcon(health.level)} ${healthText(health.level)} · ${health.fps.toFixed(0)} fps${health.reason === '' ? '' : ` · ${health.reason}`}`),
+					h('div', { style: S.sub, title: t('frameMixHint') },
+						`${t('frameMix')} (ms):${mix === null ? t('frameMixEmpty') : frameMixText(mix)}`)),
 			];
 			// 最近一次卡顿:持续时间 / 何时 / 现场留没留住
 			if (row === null) {
