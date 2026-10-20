@@ -237,8 +237,8 @@ window.__ModuleLoader__.load({
 								: health.level === 'stall' ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-label-secondary)',
 						},
 					}, `${healthIcon(health.level)} ${healthText(health.level)} · ${health.fps.toFixed(0)} fps${health.reason === '' ? '' : ` · ${health.reason}`}`),
-					h('div', { style: S.sub, title: t('frameMixHint') },
-						`${t('frameMix')} (ms):${mix === null ? t('frameMixEmpty') : frameMixText(mix)}`)),
+					h('div', { style: { ...S.sub, whiteSpace: 'pre-line' }, title: t('frameMixHint') },
+						`${t('frameMix')} (ms)\n${mix === null ? t('frameMixEmpty') : frameMixText(mix)}`)),
 			];
 			// 最近一次卡顿:持续时间 / 何时 / 现场留没留住
 			if (row === null) {

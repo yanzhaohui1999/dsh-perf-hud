@@ -2138,13 +2138,13 @@ check('帧分布:间隙不是帧、不进分母;没有帧时返回 null',
 			Math.round(mix.shares.reduce((sum, share) => sum + share, 0) * 1e9) / 1e9,
 			EX.frameMix([]), EX.frameMix([{ t: 9, ms: 900, gap: true }])];
 	})(), [3, '2,0,1,0,0', 1, null, null]);
-check('帧分布文本:占比四舍五入到整数,非零但不足 1% 写 <1%',
+check('帧分布文本:两行(3 档 + 2 档,自己给 \\n),占比四舍五入,非零但不足 1% 写 <1%',
 	(() => {
 		const rows = [];
 		for (let index = 0; index < 300; index += 1) rows.push({ t: index, ms: 16.7, gap: false });
 		rows.push({ t: 900, ms: 60, gap: false });
 		return EX.frameMixText(EX.frameMix(rows));
-	})(), '≤16.7:100% · 16.7–33.3:0% · 33.3–50:0% · 50–100:<1% · ≥100:0%');
+	})(), '≤16.7 100% · 16.7–33.3 0% · 33.3–50 0%\n50–100 <1% · ≥100 0%');
 check('可能原因:宿主那行的「最大」是事件循环 max,不再拿快照年龄冒充(曾印成「最大 -2248ms」)', (() => {
 	const hot = EX.causeCandidates({ ...causeRow, host: { eventLoop: { p50: 3, p99: 180, max: 400 }, snapshotAgeMs: -2000 } });
 	const host = hot.find((item) => item.kind === 'host');

@@ -2384,19 +2384,23 @@ window.__ModuleLoader__.load({
 			const now = performance.now();
 			return frameMix(frameRing.slice(now - SPARK_SECONDS * 1000, now));
 		}
-		/** 分布的一行文本:四舍五入到整数,非零但不足 1% 写 <1%,零写 0%。 */
+		/**
+		 * 分布的文本:**两行**(3 档 + 2 档)。396px 面板放不下五档,交给浏览器折会断在
+		 * `16.7–` 这种地方 —— 自己给 \n,与其它块式长文本同一条规矩。
+		 * 四舍五入到整数,非零但不足 1% 写 <1%,零写 0%。
+		 */
 		function frameMixText(mix) {
 			if (mix === null || mix === undefined) return '';
-			return frameMixBuckets().map((bucket, index) => {
+			const parts = frameMixBuckets().map((bucket, index) => {
 				const count = mix.counts[index] ?? 0;
 				const pct = (mix.shares[index] ?? 0) * 100;
 				const shown = count === 0 ? '0%' : (pct < 0.5 ? '<1%' : `${Math.round(pct)}%`);
-				return `${bucket.label}:${shown}`;
-			}).join(' · ');
+				return `${bucket.label} ${shown}`;
+			});
+			return `${parts.slice(0, 3).join(' · ')}\n${parts.slice(3).join(' · ')}`;
 		}
 		/**
 		 * 最近 SPARK_SECONDS 秒的分格数据:一格一秒,格值 = 那一格里最差那帧的间隔;间隙另标。
-
 		 * `t` 带上"最差那一帧的 perf 毫秒" —— 帧条 hover 要给出墙钟时间,点格导航也要它。
 		 */
 		function sparkBars(now) {
