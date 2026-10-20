@@ -152,17 +152,45 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 		return { left: Math.round(rect.left), top: Math.round(rect.top), bottom: Math.round(rect.bottom), width: Math.round(rect.width),
 			stored: localStorage.getItem('dsh-perf-hud:pos:v1'), viewport: innerWidth, viewportH: innerHeight };
 	})()`);
-	check('拖动标题栏:面板跟手往左上移动,而且不越界', moved.left <= headRect.left - 200 && moved.left >= 12 && moved.top >= 12 && moved.bottom <= moved.viewportH, JSON.stringify(moved));
+	check('拖动标题栏:面板跟手往左上移动,而且不越界', moved.left <= headRect.left - 200 && moved.left >= 12 && moved.bottom <= moved.viewportH && moved.bottom >= 12, JSON.stringify(moved));
 	check('拖动之后位置落盘(没有在松手时被 React 写回去)', moved.stored !== null, String(moved.stored));
 	await page.reload();
 	await page.waitForHud();
 	const restored = await page.evaluate(`(() => {
 		const root = document.getElementById('dsh-perf-hud-root');
 		const rect = root.getBoundingClientRect();
-		return { left: Math.round(rect.left), top: Math.round(rect.top), bottom: Math.round(rect.bottom), viewportH: innerHeight };
+		return { left: Math.round(rect.left), top: Math.round(rect.top), bottom: Math.round(rect.bottom),
+			gap: Math.round(innerHeight - rect.bottom), viewportH: innerHeight };
 	})()`);
 	const saved = moved.stored === null ? null : JSON.parse(moved.stored);
-	check('刷新之后回到拖过的那一格(left/top 都还在,高度仍被上限夹在视口内)', saved !== null && Math.abs(restored.left - saved.left) <= 1 && Math.abs(restored.top - saved.top) <= 1 && restored.bottom <= restored.viewportH, JSON.stringify({ restored, saved }));
+	// 锚点是左下角:键里的 bottom 是"距视口底多少",刷新之后要能对得上
+	// (底边钉住 = 展开仍然是向上长,而不是从标题栏往下长)
+	check('刷新之后回到拖过的那一格(left / 距底 bottom 都对得上,高度仍夹在视口内)',
+		saved !== null && Math.abs(restored.left - saved.left) <= 1 && Math.abs(restored.gap - saved.bottom) <= 1 && restored.bottom <= restored.viewportH,
+		JSON.stringify({ restored, saved }));
+	// 用户在意的正是这一条:**展开时向上长**(底边不动),而不是从标题栏往下掉。
+	// 点两次折叠/展开,底边必须回到原处(±1),否则就是锚点换方向了。
+	const flip = await page.evaluate(`(async () => {
+		const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const bottomOf = () => Math.round(document.getElementById('dsh-perf-hud-root').getBoundingClientRect().bottom);
+		const clickBy = (label) => {
+			const root = document.getElementById('dsh-perf-hud-root');
+			const button = [...root.querySelectorAll('button')].find((node) => node.textContent === label);
+			if (button === undefined) throw new Error('没找到按钮 ' + label);
+			button.click();
+		};
+		const expanded = bottomOf();
+		clickBy('–');
+		await wait(600);
+		const collapsed = bottomOf();
+		clickBy('+');
+		await wait(600);
+		const reopened = bottomOf();
+		return { expanded, collapsed, reopened };
+	})()`);
+	check('展开 / 收起都钉住底边(展开是向上长,不是从标题栏往下掉)',
+		Math.abs(flip.collapsed - flip.expanded) <= 1 && Math.abs(flip.reopened - flip.expanded) <= 1,
+		JSON.stringify(flip));
 	// 双击标题栏 = 回默认右下角(与「恢复默认布局」同一个动作),键一起删掉。
 	// ⚠️ 坐标要用**标题栏自己**的 rect:根节点有 10px 上内边距,按根的 top+8 点下去落在内边距上,
 	// 拖动/双击都不会触发(第一次真跑就是这么"失败"的)。

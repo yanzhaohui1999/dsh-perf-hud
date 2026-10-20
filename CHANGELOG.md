@@ -11,28 +11,35 @@
 `S.row` 是 `justify-content: space-between`,拉宽只会把标签与数值甩到两端;非整数倍缩放
 会和「整数 px / 整数字重」那条规则打架(125%~150% 下合成加粗、重新栅格化)。
 
-- 位置模型:默认 `right/bottom: 12`;拖过之后改 `left/top` 并把 `right/bottom` 置 auto —— 同一
-  时刻只留一套锚点。竖直方向只保证留得下读数空间(展开 220 / 药丸 48),高度上限跟着顶边算。
+- 位置模型:默认 `right/bottom: 12`;拖过之后改 **`left` + `bottom`**(左下角锚),只把 `right`
+  置 auto —— 锚点仍然是底边,所以展开永远是向上长、底边不动。竖直方向只保证留得下读数空间
+  (展开 220 / 药丸 48),高度上限与默认位置同一套算法:`min(82vh, 视口 − bottom − 12)`。
 - 拖动期间**直接写 DOM**,不走 React state:每次 pointermove 都 setState 就是每次重建整块面板,
   而面板自己正在测帧。松手才落盘 + `bump()`(否则 React 的 style diff 里没有这些内联样式,
   「恢复默认布局」删不掉它们)。
 - 指针用 window 级监听,不在面板上做 pointer capture —— capture 会重定向后续 click,标题栏里的
   按钮就点不动了(`dsh-better-sidebar` 的 `FloatingWindow` 同一条结论)。
-- 落盘键 `dsh-perf-hud:pos:v1`(`{v,left,top,w}`);没有键 = 默认右下角;宽容解析 + 按当前视口
+- 落盘键 `dsh-perf-hud:pos:v1`(`{v,left,bottom}`);没有键 = 默认右下角;宽容解析 + 按当前视口
   再夹一次(换屏幕 / 改窗口大小之后旧坐标可能整体在外面)。
-- **让位只对默认位置生效**:自定义位置下再自动让位,两边会抢同一组 `left/top`,手动摆好的面板
-  会在审批卡弹出时跳走。默认位置下 `hudDodge` 行为不变。
+- **让位只对默认位置生效**:自定义位置下再自动让位,两边会抢同一组 `left` / `bottom`,手动摆好的
+  面板会在审批卡弹出时跳走。默认位置下 `hudDodge` 行为不变。
 - 修:`modelDeps()` 漏传 `HUD_POS_*` 三个常量 —— 分片里是 `undefined`,位置算术静默变成 NaN,
   落盘成 `{"left":null,"top":null}`,面板跳到 (0,0)。
 - 修:`hudPosMaxHeight(top, W.innerHeight)` 把**数字**喂进了要 `{ h }` 对象的参数 —— `viewport.h` 是
   undefined、`max-height: NaNpx` 被 CSSOM 忽略,面板在自定义位置下没有高度上限,拖到屏幕下半截就
   伸到视口外。两处调用点都改成 `{ h: W.innerHeight }`,并加静态断言钉住调用形态。
-- 修:位置落盘不再存宽度(`{v,left,top}`),夹紧统一用 `panelWidthFor(innerWidth)`。收起态的宽度
-  由内容决定(已关 chip 168 / 药丸 ~396),而 `S.root` 收起态的 `maxWidth` 就是 panelWidth ——
-  拿"上次拖动时量到的宽度"当尺子,会让"chip 拖到右边 → 打开药丸"直接越界一截。宽度仍然只有一个来源。**离线三套件全绿,只有真页面验收抓得到**;
-  同时补了两条断言:分片解构的键必须由 `modelDeps()` 提供、`modelDeps()` 的每个裸名字必须已声明。
-- 断言 +9(601),合计 653;i18n 423 键(新增 `dragHint`)。`tools/check-panel.mjs` 新增 5 条真页面
-  断言:跟手移动、不越界、松手落盘、刷新回到同一格、双击回右下角且键被删掉。
+- 修:位置落盘不再存宽度,夹紧统一用 `panelWidthFor(innerWidth)`。收起态宽度由内容决定
+  (已关 chip 168 / 药丸 ~396),而 `S.root` 收起态的 `maxWidth` 就是 panelWidth —— 拿"上次拖动时
+  量到的宽度"当尺子,会让"chip 拖到右边 → 打开药丸"直接越界一截。宽度仍然只有一个来源。
+- 补两条断言把"分片依赖"这一类钉住:分片解构的键必须由 `modelDeps()` 提供、`modelDeps()` 的每个
+  裸名字必须已声明。`modelDeps()` 漏传时不会报错,而是常量变 undefined、数值静默成 NaN ——
+  离线三套件全绿,只有真页面验收抓得到。
+- 修:**锚点从左上角改成左下角**。第一版记 `left/top`,面板摆到屏幕中部点开就变成向下长,底边
+  掉到视口底、正文被挤成一条缝 —— 和默认位置(底边钉住、向上长)是两种手感。改成 `left` + `bottom`
+  之后,收起 / 展开全程底边不动,与默认位置同构。真页面新增一条断言:折叠再展开两次,底边必须
+  回到原处(实测 expanded / collapsed / reopened 三次数值一致)。
+- 断言 +9(601),合计 653;i18n 423 键(新增 `dragHint`)。`tools/check-panel.mjs` 新增 6 条真页面
+  断言:跟手移动、不越界、松手落盘、刷新回到同一格、折叠 / 展开底边不动、双击回右下角且键被删掉。
 
 ### 可疑脚本:合并批 URL 收敛成「合并批(N)」(2026-10-20)
 

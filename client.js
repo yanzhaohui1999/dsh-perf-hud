@@ -435,7 +435,7 @@ window.__ModuleLoader__.load({
 			collapsed: false,
 			since: Date.now(),
 			root: null,              // HUD 根元素:DOM 统计里排除它
-			pos: null,               // 面板左上角 `{ left, top }`;null = 停默认右下角(不落盘)
+			pos: null,               // 面板左下角 `{ left, bottom }`;null = 停默认右下角(不落盘)
 			fps: 0,
 			windowStart: 0,
 			windowFrames: 0,
@@ -2942,14 +2942,14 @@ window.__ModuleLoader__.load({
 		};
 
 		/**
-		 * 面板位置落盘:有自定义位置就写 `{ v: 1, left, top }`,回到默认位置就把键删掉 ——
+		 * 面板位置落盘:有自定义位置就写 `{ v: 1, left, bottom }`,回到默认位置就把键删掉 ——
 		 * "没有键"必须等价于"停在右下角",否则恢复逻辑要分三种情况。
 		 * 宽度**不进这个键**:收起态宽度由内容决定,存下来的旧宽度只会让夹紧算错(见 hudPosClamp)。
 		 */
 		function saveHudPos() {
 			try {
 				if (state.pos === null) localStorage.removeItem(LS_POS);
-				else localStorage.setItem(LS_POS, JSON.stringify({ v: 1, left: state.pos.left, top: state.pos.top }));
+				else localStorage.setItem(LS_POS, JSON.stringify({ v: 1, left: state.pos.left, bottom: state.pos.bottom }));
 			} catch (error) { /* 记不住就本次会话有效 */ }
 		}
 

@@ -3759,26 +3759,29 @@ check('卡片不可见 / 在视口下方 / 占满整屏 / 根本没有卡片 →
 // ── 面板位置(拖动 / 记忆)──────────────────────────────────────────────
 // 规则:整块放得下就整块留在视口里;竖直只要求还留得下 room 那么高(展开 220 / 药丸 48);
 // 落盘宽容解析(手改 / 旧版本 / 非数字一律当"没拖过")。
-const posAt = (left, top, w, room) => EX.hudPosClamp({ left, top }, { w }, { w: 1400, h: 757 }, room);
-check('位置夹进视口:左上贴 12,右下不越界(展开态留 220,药丸留 48)', [
+// 锚点是**左下角**(left + bottom):底边钉住、内容多了向上长 —— 与默认位置（右下角）同一套生长方向。
+const posAt = (left, bottom, w, room) => EX.hudPosClamp({ left, bottom }, { w }, { w: 1400, h: 757 }, room);
+check('位置夹进视口:左边贴 12、底边贴 12,上边不越界(展开态留 220,药丸留 48)', [
 	posAt(-50, -80, 396, EX.HUD_POS_MIN_ROOM),
 	posAt(5000, 5000, 396, EX.HUD_POS_MIN_ROOM),
 	posAt(5000, 5000, 396, EX.HUD_POS_PILL_ROOM),
 ], [
-	{ left: 12, top: 12 },
-	{ left: 992, top: 537 },
-	{ left: 992, top: 709 },
+	{ left: 12, bottom: 12 },
+	{ left: 992, bottom: 537 },
+	{ left: 992, bottom: 709 },
 ]);
-check('窄屏:面板比视口宽时贴左边(而不是给负的左偏移)', posAt(300, 20, 1600, EX.HUD_POS_MIN_ROOM), { left: 12, top: 20 });
+check('窄屏:面板比视口宽时贴左边(而不是给负的左偏移)', posAt(300, 20, 1600, EX.HUD_POS_MIN_ROOM), { left: 12, bottom: 20 });
 // 宽度必须由调用点按**当前状态的上界**传(panelWidth),不能存"上次拖动时量到的宽度":
 // 收起态的宽度由内容决定,拿旧读数夹会让"chip 拖到右边 → 打开药丸"越界一截。
 check('位置夹紧的宽度来自 panelWidth,不是落盘里存下来的旧宽度(宽度只有一个来源)',
 	[(/state\.pos\.w/.test(allSource) === false), (/hudPosParse\(localStorage\.getItem\(LS_POS\)\)/.test(source))],
 	[true, true]);
-check('自定义位置的高度上限跟着顶边算(默认那套 82vh 是"从底边往上长")', [
-	EX.hudPosMaxHeight(100, { w: 1400, h: 757 }),
+// 底边钉住时的上限:min(82vh, 视口 − bottom − 12)。默认位置(bottom = 12)时 82vh 生效;
+// 面板往上摆(bottom 大)时由顶边决定 —— 两种位置共用一套算法,不各写一份。
+check('自定义位置的高度上限跟着底边算(与默认位置的 82vh 同一套算法)', [
+	EX.hudPosMaxHeight(12, { w: 1400, h: 757 }),
 	EX.hudPosMaxHeight(600, { w: 1400, h: 757 }),
-	EX.hudPosMaxHeight(900, { w: 1400, h: 757 }),
+	EX.hudPosMaxHeight(800, { w: 1400, h: 757 }),
 ], [621, 145, 0]);
 // 契约在调用点也得钉住:viewport 是个**对象**。传数字进去 `viewport.h` 是 undefined,
 // 算术变成 NaN,`max-height: NaNpx` 被 CSSOM 直接忽略 —— 面板在页面上没有高度上限,
@@ -3787,16 +3790,18 @@ check('hudPosMaxHeight 的调用点传的是 { h } 视口对象,不是数字',
 	[(uiSource.match(/hudPosMaxHeight\(/g) ?? []).length, (uiSource.match(/hudPosMaxHeight\([^)]*\{ h: W\.innerHeight \}\)/g) ?? []).length],
 	[2, 2]);
 check('位置落盘宽容解析:数字才认,旧版本里多出来的字段一律忽略', [
-	EX.hudPosParse('{"v":1,"left":120,"top":80,"w":396}'),
-	EX.hudPosParse('{"left":120.4,"top":80.6}'),
-	EX.hudPosParse('{"left":"120","top":80}'),
+	EX.hudPosParse('{"v":1,"left":120,"bottom":80,"w":396}'),
+	EX.hudPosParse('{"left":120.4,"bottom":80.6}'),
+	EX.hudPosParse('{"left":"120","bottom":80}'),
+	// 上一版存的是 { left, top }:没有 bottom → 当作没拖过(停回右下角),不猜方向
+	EX.hudPosParse('{"v":1,"left":120,"top":80}'),
 	EX.hudPosParse('null'),
 	EX.hudPosParse('not json'),
 	EX.hudPosParse(null),
 ], [
-	{ left: 120, top: 80 },
-	{ left: 120, top: 81 },
-	null, null, null, null,
+	{ left: 120, bottom: 80 },
+	{ left: 120, bottom: 81 },
+	null, null, null, null, null,
 ]);
 check('位置也是布局:拖过之后 layoutDirty 才为真', (() => {
 	const watchSaved = { ...box.state.watch };

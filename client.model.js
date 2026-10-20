@@ -2385,22 +2385,24 @@ window.__ModuleLoader__.load({
 			return viewportWidth < PILL_COMPACT_BELOW;
 		}
 		// ── 面板位置(拖动 / 记忆)────────────────────────────────────────────
-		// 默认位置是右下角(`right/bottom: 12`)。用户拖过一次之后改成 `left/top`,并把
-		// right/bottom 置 auto —— 同一时刻只留一套锚点,否则"改回去"要同时动四个值。
+		// 锚点是**左下角**(`left` + `bottom`),不是左上角。为什么:默认位置就是右下角
+		// (`right/bottom: 12`,底边钉住、内容多了向上长),拖动之后必须还是这套生长方向 ——
+		// 换成左上角锚,面板拖到屏幕中部点开就会**向下长**,底边一路掉到视口底、正文被挤成一条缝。
+		// 收起(药丸)→ 展开(面板)时底边不动、向上长,与默认位置完全同构。
 		// 坐标全是整数 px(与面板其它尺寸同一条规矩:分数坐标在 125%~150% 缩放下会发糊)。
 		// 三个尺寸常量由主文件传入(deps,与 PANEL_WIDTH 同一套来源)。
 
 		/**
 		 * 位置落盘的**宽容解析**:只有数字才认,别的(手改 / 旧版本 / NaN)一律当"没拖过"。
-		 * `w` 是拖动时量到的面板宽度 —— 收起态宽度由内容决定,恢复时得拿它算右边界才不越界。
+		 * 键里只有 `left` / `bottom` 两个数:宽度不进键(收起态的宽度由内容决定,存旧读数只会算错)。
 		 */
 		function hudPosParse(raw) {
 			if (typeof raw !== 'string' || raw === '') return null;
 			let parsed = null;
 			try { parsed = JSON.parse(raw); } catch (error) { return null; }
 			if (parsed === null || typeof parsed !== 'object') return null;
-			if (Number.isFinite(parsed.left) === false || Number.isFinite(parsed.top) === false) return null;
-			return { left: Math.round(parsed.left), top: Math.round(parsed.top) };
+			if (Number.isFinite(parsed.left) === false || Number.isFinite(parsed.bottom) === false) return null;
+			return { left: Math.round(parsed.left), bottom: Math.round(parsed.bottom) };
 		}
 
 		/**
@@ -2417,20 +2419,22 @@ window.__ModuleLoader__.load({
 			const keep = room ?? HUD_POS_MIN_ROOM;
 			const width = size !== null && size !== undefined && Number.isFinite(size.w) && size.w > 0 ? size.w : 0;
 			const maxLeft = Math.max(HUD_POS_MARGIN, Math.round(viewport.w - width - HUD_POS_MARGIN));
-			const maxTop = Math.max(HUD_POS_MARGIN, Math.round(viewport.h - keep));
+			// 底边至少离视口底 12,同时上边还得留得下 keep 那么高(否则面板会整体滑出顶部)
+			const maxBottom = Math.max(HUD_POS_MARGIN, Math.round(viewport.h - keep));
 			return {
 				left: Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.left)), maxLeft),
-				top: Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.top)), maxTop),
+				bottom: Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.bottom)), maxBottom),
 			};
 		}
 
 		/**
-		 * 自定义位置下的高度上限:面板锚在顶部,长高只能长到底边以内。
-		 * 默认位置是"从底边往上长"(`bottom: 12` + `maxHeight: 82vh`),两者不能共用一套算法。
+		 * 自定义位置下的高度上限:底边钉住,长高只能长到顶边以内。
+		 * 与默认位置是同一套算法(默认 `bottom: 12` 时 `视口 − bottom − 12` 远大于 82vh,于是 82vh 生效;
+		 * 用户把面板摆到屏幕上半部时,是"顶边"先到,于是由顶边决定) —— 两套锚点不能各写一份。
 		 */
-		function hudPosMaxHeight(top, viewport) {
+		function hudPosMaxHeight(bottom, viewport) {
 			const cap = Math.round(viewport.h * 0.82);
-			return Math.max(0, Math.min(cap, Math.round(viewport.h - top - HUD_POS_MARGIN)));
+			return Math.max(0, Math.min(cap, Math.round(viewport.h - bottom - HUD_POS_MARGIN)));
 		}
 		/**
 		 * **审批卡让位**:审批面板是 composer takeover,「拒绝 / 允许一次」两个按钮在卡片右下角 ——
