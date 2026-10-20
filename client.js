@@ -846,6 +846,7 @@ window.__ModuleLoader__.load({
 		function evidencePlace(...args) { return model().evidencePlace(...args); }
 		function evidenceWhereText(...args) { return model().evidenceWhereText(...args); }
 		function evidenceLine(...args) { return model().evidenceLine(...args); }
+		function evidenceGroupLine(...args) { return model().evidenceGroupLine(...args); }
 		function incidentScriptEvidence(...args) { return model().incidentScriptEvidence(...args); }
 		function incidentEvidenceAt(...args) { return model().incidentEvidenceAt(...args); }
 		function incidentEvidenceLines(...args) { return model().incidentEvidenceLines(...args); }
