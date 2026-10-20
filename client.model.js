@@ -55,6 +55,7 @@ window.__ModuleLoader__.load({
 				WATCH_GAP_MS,
 				WATCH_INCIDENT_MAX,
 				WATCH_KEEP_MAX,
+				WATCH_PERSIST_MAX_BYTES,
 				WATCH_POST_MS,
 				WATCH_PRE_MS,
 				WATCH_REACTION_MS,
@@ -1210,7 +1211,7 @@ window.__ModuleLoader__.load({
 		 * 字节按 UTF-16 码元 ×2 估(与浏览器配额的计量口径接近);枚举不到(某些沙箱)就返回全 0。
 		 */
 		function storageReport(storage) {
-			const report = { total: 0, incidents: 0, maps: 0, other: 0, keys: 0, entries: [] };
+			const report = { total: 0, incidents: 0, maps: 0, other: 0, keys: 0, cap: WATCH_PERSIST_MAX_BYTES, entries: [] };
 			const store = storage === undefined ? localStorage : storage;
 			if (store === null || store === undefined || typeof store.key !== 'function' || typeof store.length !== 'number') return report;
 			try {
@@ -1229,6 +1230,13 @@ window.__ModuleLoader__.load({
 			} catch (error) { /* 读不到就当没有,不抛 */ }
 			report.entries.sort((a, b) => b.bytes - a.bytes);
 			return report;
+		}
+		/** 字节数的面板写法:>=1MB 保留一位小数,>=1KB 取整,其余按 B。 */
+		function bytesText(bytes) {
+			const n = typeof bytes === 'number' && Number.isFinite(bytes) ? Math.max(0, bytes) : 0;
+			if (n >= 1048576) return `${Math.round((n / 1048576) * 10) / 10}MB`;
+			if (n >= 1024) return `${Math.round(n / 1024)}KB`;
+			return `${Math.round(n)}B`;
 		}
 		function manifestFor(row, options) {
 			const caps = capabilities();
@@ -3288,6 +3296,7 @@ window.__ModuleLoader__.load({
 				causeCandidates,
 				manifestFor,
 				storageReport,
+				bytesText,
 				diagnosticSummary,
 				packReadme,
 				buildPack,

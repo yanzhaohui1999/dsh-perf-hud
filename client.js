@@ -639,6 +639,7 @@ window.__ModuleLoader__.load({
 				WATCH_GAP_MS,
 				WATCH_INCIDENT_MAX,
 				WATCH_KEEP_MAX,
+				WATCH_PERSIST_MAX_BYTES,
 				WATCH_POST_MS,
 				WATCH_PRE_MS,
 				WATCH_REACTION_MS,
@@ -822,6 +823,7 @@ window.__ModuleLoader__.load({
 		function touchMapCache(...args) { return model().touchMapCache(...args); }
 		function saveMapCache(...args) { return model().saveMapCache(...args); }
 		function storageReport(...args) { return model().storageReport(...args); }
+		function bytesText(...args) { return model().bytesText(...args); }
 		function pruneMapCache(...args) { return model().pruneMapCache(...args); }
 		function loadBundleMap(...args) { return model().loadBundleMap(...args); }
 		function loadBundleMapByProbe(...args) { return model().loadBundleMapByProbe(...args); }
@@ -3540,6 +3542,8 @@ window.__ModuleLoader__.load({
 				barSegments,
 				blame,
 				bump,
+				bytesText,
+				storageReport,
 				causeCandidates,
 				causePlainLead,
 				clearIncidentsNow,

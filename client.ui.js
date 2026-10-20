@@ -37,6 +37,8 @@ window.__ModuleLoader__.load({
 				barSegments,
 				blame,
 				bump,
+				bytesText,
+				storageReport,
 				causeCandidates,
 				causePlainLead,
 				clearIncidentsNow,
@@ -355,6 +357,8 @@ window.__ModuleLoader__.load({
 		function settingsView(props) {
 			const t = translate;
 			const kept = state.watch.incidents.length;
+			// 插件在 localStorage 里的实际占用(只读):事故 / sourcemap 缓存 / 其余,与落盘上限并排给
+			const storage = storageReport();
 			return [
 				h('div', { style: S.block },
 					h('div', { style: S.blockLabel }, t('settingsMode')),
@@ -368,6 +372,10 @@ window.__ModuleLoader__.load({
 					h('div', { style: S.blockLabel }, t('settingsRetain')),
 					h('div', { style: S.blockValue }, t('retainText')),
 					h('div', { style: S.sub }, `${t('watchKept')} ${kept}${t('tallyUnit')} · ${t('watchLost')} ${props.trend.lost}${t('tallyUnit')} · ${t('watchTrimmed')} ${state.watch.trimmedByBytes}${t('tallyUnit')}`),
+					h('div', { style: S.sub, title: t('storageUseHint') },
+						`${t('storageUse')} ${bytesText(storage.total)} · ${t('storageCap')} ${bytesText(storage.cap)}`),
+					h('div', { style: S.sub },
+						`${t('storageIncidents')} ${bytesText(storage.incidents)} · ${t('storageMaps')} ${bytesText(storage.maps)} · ${t('storageOther')} ${bytesText(storage.other)}`),
 					h('div', { style: S.buttons },
 						h('button', { type: 'button', style: S.btn, disabled: kept === 0, title: t('clearIncidentsHint'), onClick: () => props.onClearIncidents() }, t('clearIncidentsBtn')),
 						h('button', { type: 'button', style: S.btn, title: t('clearHint'), onClick: () => props.onClearAll() }, t('clear')))),

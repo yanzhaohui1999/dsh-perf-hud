@@ -500,6 +500,7 @@ const newPieces = [
 	'const WATCH_POST_MS = ',
 	'const WATCH_DAILY_DAYS = ',
 	'const WATCH_RECENT_MAX = ',
+	'const WATCH_PERSIST_MAX_BYTES = ',
 	'const WATCH_KEEP_MAX = ',
 	'function keepIncident(',
 	'function dayKeyOf(',
@@ -677,6 +678,7 @@ const newPieces = [
 	'function frameMixPctText(',
 	'function frameMixRows(',
 	'function storageReport(',
+	'function bytesText(',
 	'const pad = ',
 	'const clock = (ms) => {',
 	'const mb = ',
@@ -762,7 +764,7 @@ const box = new Function(`${sandbox}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_RECENT_MAX, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -2193,6 +2195,9 @@ check('可能原因:没有 JS 证据时「缺少证据」排第一,窗口级候�
 		script.limits.some((line) => line.includes('没有时间重叠'))];
 })(), ['unknown', 3, 'weak', 'weak', true]);
 
+check('字节写法:MB / KB / B 三档,负数与坏值都落到 0',
+	[EX.bytesText(3145728), EX.bytesText(1234), EX.bytesText(999), EX.bytesText(-5), EX.bytesText(NaN)],
+	['3MB', '1KB', '999B', '0B', '0B']);
 check('存储占用报告:按 key 归类(事故 / sourcemap 缓存 / 其余),字节按 UTF-16 ×2 估',
 	(() => {
 		const store = {
