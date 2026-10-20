@@ -499,6 +499,7 @@ const newPieces = [
 	'const WATCH_PRE_MS = ',
 	'const WATCH_POST_MS = ',
 	'const WATCH_DAILY_DAYS = ',
+	'const WATCH_RECENT_MAX = ',
 	'const WATCH_KEEP_MAX = ',
 	'function keepIncident(',
 	'function dayKeyOf(',
@@ -758,7 +759,7 @@ const box = new Function(`${sandbox}
 		setFlushSync: (value) => { flushSync = value; },
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
-		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_KEEP_MAX,
+		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_RECENT_MAX, WATCH_KEEP_MAX,
 		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
@@ -1141,48 +1142,61 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 			return [split.topNames.map((row) => row[0]), split.self.map((row) => [row[0], row[1]]), split.selfTotal];
 		})(), [['ChatView'], [['PerfHud', 2]], 2]);
 
-// ── D3:留存策略 = 全局最差 10 条 + 每天最差 1 条(最多 7 天)────────────
+// ── D3:留存策略 = 最差 10 + 每天最差 1(最近 7 天)+ 最近 3(不看严重度)────
 {
-	const mk = (id, severity, day) => ({
+	const mk = (id, severity, day, minute = 0) => ({
 		id, severity, cause: 'frame', note: null, kept: null,
-		at: new Date(2026, 9, day, 12, 0, 0).toISOString(),
+		at: new Date(2026, 9, day, 12, minute, 0).toISOString(),
 	});
 	const reset = () => {
 		box.state.watch.incidents.length = 0;
 		box.state.watch.dropped = 0;
 		box.state.watch.captured = 0;
 	};
+	const ids = () => box.state.watch.incidents.map((row) => row.id);
 	reset();
-	// 严重度递减:后来者挤不进最差档,也不可能是"当天最差" → 才谈得上 dropped
-	for (let i = 1; i <= 12; i += 1) { box.state.watch.captured += 1; EX.keepIncident(mk(`a${i}`, 100 - i, 8)); }
-	check('D3:同一天抓 12 次只留最差 10 条,其余记 dropped',
-		[box.state.watch.incidents.length, box.state.watch.dropped, box.state.watch.incidents[0].id], [10, 2, 'a1']);
+	// 同一天连抓 12 次,严重度递减、时间递增:最差 10 与最近 3 取并集 = 12 条全留
+	for (let i = 1; i <= 12; i += 1) { box.state.watch.captured += 1; EX.keepIncident(mk(`a${i}`, 100 - i, 8, i)); }
+	check('D3:最差 10 与最近 3 取并集 —— 只靠最差榜会被丢的 a11/a12 也留下',
+		[box.state.watch.incidents.length, box.state.watch.dropped, ids().includes('a12'),
+			box.state.watch.incidents.find((row) => row.id === 'a12').tier], [12, 0, true, 'recent']);
 	check('D3:第二天最差的一条即使更轻也留下(靠"每天最差"档),并标出 tier',
 		(() => {
-			const verdict = EX.keepIncident(mk('b1', 50, 9));
+			const verdict = EX.keepIncident(mk('b1', 50, 9, 0));
 			const row = box.state.watch.incidents.find((item) => item.id === 'b1');
-			return [verdict, box.state.watch.incidents.length, row.tier];
-		})(), ['kept', 11, 'daily']);
-	check('D3:同一天再来一条更轻的不留(当天最差只有一条)',
-		(() => { box.state.watch.dropped = 0; return [EX.keepIncident(mk('b2', 40, 9)), box.state.watch.dropped]; })(),
-		['dropped', 1]);
-	check('D3:更重的一条仍按全局最差档进,并顶掉最弱的(当天最差也随之换人)',
+			return [verdict, row.tier];
+		})(), ['kept', 'daily']);
+	check('D3:更轻的只要够新就留下(最近档),并挤掉更老的最近档成员 a11',
 		(() => {
-			const verdict = EX.keepIncident(mk('c1', 999, 9));
-			return [verdict, box.state.watch.incidents.length, box.state.watch.incidents[0].id, box.state.watch.incidents.some((row) => row.id === 'b1')];
-		})(), ['replaced', 10, 'c1', false]);
+			EX.keepIncident(mk('b2', 40, 9, 1));
+			const row = box.state.watch.incidents.find((item) => item.id === 'b2');
+			// 新触发一定是最新的 → 一定进最近档;dropped 只数"新触发没留下",不是被挤掉的老条目
+			return [row === undefined ? null : row.tier, box.state.watch.dropped, ids().includes('a11'), ids().includes('a12')];
+		})(), ['recent', 0, false, true]);
+	check('D3:最近档只留 3 条 —— 更老的最近档成员消失,但都不算 dropped',
+		(() => {
+			EX.keepIncident(mk('b3', 35, 9, 2));
+			EX.keepIncident(mk('b4', 30, 9, 3));
+			return [box.state.watch.dropped, ids().includes('a11'), ids().includes('a12'), ids().includes('b1')];
+		})(), [0, false, false, true]);
+	check('D3:更重的一条仍按全局最差档进,并把只靠最近档的挤出去',
+		(() => {
+			const verdict = EX.keepIncident(mk('c1', 999, 9, 4));
+			return [verdict, box.state.watch.incidents[0].id, ids().includes('b2'), ids().includes('b4')];
+		})(), ['replaced', 'c1', false, true]);
 	reset();
 	EX.keepIncident(mk('early', 10, 1));                                  // 最早那天,轻得不值一提
 	for (let day = 2; day <= 8; day += 1) EX.keepIncident(mk(`d${day}`, 900 + day, day));
-	for (let i = 0; i < 10; i += 1) EX.keepIncident(mk(`f${i}`, 100 + i, 8));   // 把最差档灌满
-	const keptIds = box.state.watch.incidents.map((row) => row.id);
+	for (let i = 0; i < 10; i += 1) EX.keepIncident(mk(`f${i}`, 100 + i, 8, 10 + i));   // 把最差档灌满
+	const keptIds = ids();
 	check('D3:"每天最差"档只保留最近 7 天 —— 更早那天的即使更轻也不再单独留',
 		[keptIds.includes('early'), keptIds.includes('d8'), keptIds.length], [false, true, 10]);
-	check('D3:上限常量 = 两档之和;每条都带 day 与 tier',
-		[box.WATCH_KEEP_MAX, box.WATCH_KEEP_MAX === box.WATCH_INCIDENT_MAX + box.WATCH_DAILY_DAYS,
+	check('D3:上限常量 = 三档之和;每条都带 day 与 tier',
+		[box.WATCH_KEEP_MAX, box.WATCH_KEEP_MAX === box.WATCH_INCIDENT_MAX + box.WATCH_DAILY_DAYS + box.WATCH_RECENT_MAX,
 			box.state.watch.incidents.every((row) => typeof row.tier === 'string' && typeof row.day === 'string')],
-		[17, true, true]);
+		[20, true, true]);
 }
+
 	// 命中率说明不了问题(DOM 腿在流式时几乎必然命中)——要看名字分布。
 	// 并且钉住"命中"与"分布"是同一套判定(旧版 ltBlamed 漏了 dom 腿,两者对不上)。
 	box.state.ltNames.clear();

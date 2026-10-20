@@ -96,9 +96,11 @@ window.__ModuleLoader__.load({
 		const WATCH_SCRIPT_MAX = 12;           // 一条长动画帧最多记多少个脚本
 		const WATCH_INCIDENT_MAX = 10;         // 全局最差档:自动留存最差几次(真正的天花板是 WATCH_PERSIST_MAX_BYTES)
 		const WATCH_DAILY_DAYS = 7;            // 每天最差档:最多留最近几天的"当天最差一条"
-		// 两档合起来的上限。单靠全局最差那一档不行:实测一次会话「捕获 40 · 丢弃 38」,
-		// 最差 10 条会全挤在同一小时里,于是"昨天下午那次卡"永远留不下来。
-		const WATCH_KEEP_MAX = WATCH_INCIDENT_MAX + WATCH_DAILY_DAYS;
+		const WATCH_RECENT_MAX = 3;            // 最近档:不管严重度,最近这几次也留下 —— 刚发生的那几下才有用
+		// 三档并集的上限。单靠全局最差那一档不行:实测一次会话「捕获 40 · 丢弃 38」,
+		// 最差 10 条会全挤在同一小时里,于是"昨天下午那次卡"永远留不下来;
+		// 最近档补的是另一件事:100–150ms 的小现场永远挤不进最差榜,而它才是"刚才那一下"。
+		const WATCH_KEEP_MAX = WATCH_INCIDENT_MAX + WATCH_DAILY_DAYS + WATCH_RECENT_MAX;
 		const WATCH_PRE_MS = 10000;            // 前摇:事件发生前的 10 秒
 		const WATCH_POST_MS = 3000;            // 后摇:事件发生后再等 3 秒才切片
 		const WATCH_TRIGGER_MS = 100;          // 帧间隔 / blockingDuration 越过它就起一次捕获
@@ -638,6 +640,7 @@ window.__ModuleLoader__.load({
 				WATCH_POST_MS,
 				WATCH_PRE_MS,
 				WATCH_REACTION_MS,
+				WATCH_RECENT_MAX,
 				WATCH_TRIGGER_MS,
 				WIN_HOME_PATH,
 				blame,
@@ -736,6 +739,7 @@ window.__ModuleLoader__.load({
 				WATCH_POST_MS,
 				WATCH_PRE_MS,
 				WATCH_REACTION_MS,
+				WATCH_RECENT_MAX,
 				WATCH_SCRIPT_MAX,
 				WATCH_TRIGGER_MS,
 				bumpTally,

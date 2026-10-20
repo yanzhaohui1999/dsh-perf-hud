@@ -27,6 +27,7 @@ window.__ModuleLoader__.load({
 				WATCH_POST_MS,
 				WATCH_PRE_MS,
 				WATCH_REACTION_MS,
+				WATCH_RECENT_MAX,
 				WATCH_SCRIPT_MAX,
 				WATCH_TRIGGER_MS,
 				bumpTally,
@@ -248,10 +249,13 @@ window.__ModuleLoader__.load({
 			return null;
 		}
 		/**
-		 * 留存策略:两档并集。
+		 * 留存策略:三档并集。
 		 *   ① 全局最差 WATCH_INCIDENT_MAX 条;
-		 *   ② 每天最差 1 条,最多最近 WATCH_DAILY_DAYS 天。
-		 * 只有 ① 时,短时间里连抓 10 次就把更早的整天挤掉了;② 保证"每天至少留一条证据"。
+		 *   ② 每天最差 1 条,最多最近 WATCH_DAILY_DAYS 天;
+		 *   ③ 最近 WATCH_RECENT_MAX 条(**不看严重度**)。
+		 * 只有 ① 时,短时间里连抓 10 次就把更早的整天挤掉了;② 保证"每天至少留一条证据";
+		 * ③ 保证"刚才那一下"还在清单里 —— 100–150ms 的小现场永远挤不进最差榜,
+		 * 而它恰恰是使用者回头要点的第一条。
 		 * "抓到了但没留存"和"没抓到"是两件事,所以 dropped 单独计数,不混进 captured。
 		 */
 		function keepIncident(incident) {
@@ -276,7 +280,7 @@ window.__ModuleLoader__.load({
 			return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 		}
 		/**
-		 * 按两档策略裁一次,并给活下来的每条写上 `tier`(它是靠哪一档留下的)。
+		 * 按三档策略裁一次,并给活下来的每条写上 `tier`(它是靠哪一档留下的)。
 		 * 出入都按**严重度降序** —— 落盘的字节裁切(`list.pop()` 丢最弱的)依赖这个不变量。
 		 */
 		function pruneIncidents(list) {
@@ -291,14 +295,20 @@ window.__ModuleLoader__.load({
 				bestOfDay.set(key, row);
 			}
 			const days = [...bestOfDay.keys()].sort().slice(-WATCH_DAILY_DAYS);   // 最近的 N 天
+			// 最近档按**时刻**排(不是严重度):没有可解析时刻的条目没有资格占这个名额
+			const recent = list
+				.filter((row) => Number.isFinite(Date.parse(row === null || row === undefined ? '' : row.at)))
+				.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+				.slice(0, WATCH_RECENT_MAX);
 			const kept = new Set(worst);
 			for (const key of days) kept.add(bestOfDay.get(key));
+			for (const row of recent) kept.add(row);
 			const daily = new Set(days.map((key) => bestOfDay.get(key)));
 			const out = sorted.filter((row) => kept.has(row));
 			for (const row of out) {
 				const inWorst = worst.indexOf(row) !== -1;
 				const inDaily = daily.has(row);
-				row.tier = inWorst && inDaily ? 'both' : (inWorst ? 'worst' : 'daily');
+				row.tier = inWorst ? (inDaily ? 'both' : 'worst') : (inDaily ? 'daily' : 'recent');
 			}
 			return out;
 		}
@@ -584,7 +594,13 @@ window.__ModuleLoader__.load({
 					return false;
 				}
 				if (payload.length > WATCH_PERSIST_MAX_BYTES && list.length > 1) {
-					list.pop();   // 列表按严重度降序,去掉最弱的那条
+					// 按严重度降序裁最弱的那条,但**最近档**最后才动:它是使用者回头要点的那几条。
+					// 全清单只剩最近档时退回"丢掉最弱的",否则会死循环。
+					let at = list.length - 1;
+					for (let i = list.length - 1; i >= 0; i -= 1) {
+						if (list[i].tier !== 'recent') { at = i; break; }
+					}
+					list.splice(at, 1);
 					continue;
 				}
 				try {

@@ -57,6 +57,7 @@ window.__ModuleLoader__.load({
 				WATCH_POST_MS,
 				WATCH_PRE_MS,
 				WATCH_REACTION_MS,
+				WATCH_RECENT_MAX,
 				WATCH_TRIGGER_MS,
 				WIN_HOME_PATH,
 				blame,
@@ -1691,7 +1692,7 @@ window.__ModuleLoader__.load({
 					thresholds: {
 						triggerMs: WATCH_TRIGGER_MS, gapMs: WATCH_GAP_MS,
 						preMs: WATCH_PRE_MS, postMs: WATCH_POST_MS,
-						keep: WATCH_INCIDENT_MAX, dailyDays: WATCH_DAILY_DAYS, keepMax: WATCH_KEEP_MAX,
+						keep: WATCH_INCIDENT_MAX, dailyDays: WATCH_DAILY_DAYS, recent: WATCH_RECENT_MAX, keepMax: WATCH_KEEP_MAX,
 						reactionMs: WATCH_REACTION_MS,
 					},
 					missing,
@@ -1717,7 +1718,7 @@ window.__ModuleLoader__.load({
 						'incident.integrity.captureComplete 为 false 时,这份现场**采集本身丢过记录**(loafDropped / longTaskDropped 是窗口内的条数;reasons 写明是环形缓冲溢出还是前摇已经滚出环)—— 它仍是一份真实切片,但不能当成"完整的那 13 秒";hiddenGaps 是另一回事(rAF 被挂起,不是我们丢数据)',
 						'incident.summary 是上面几块的汇总(含窗口自己的 p50/p90/p99),方便直接和 incident.baseline 比;这一层不做推断,结论请自己下',
 						'context.watch.kept 按**严重度降序**,不是时间序;带 restored 的条目来自上一次会话(时间靠 env.perfOrigin 对齐),所以 id 与时间看起来会跳',
-						'context.watch.kept[].tier 说明这条是靠哪一档留下来的:worst = 全局最差那一档(前 10 条)、daily = 它那一天最差的一条(最多留最近 7 天)、both = 两档都占。留存是**两档并集**,所以条数上限是 10 + 7 而不是 10 —— 单靠全局最差档时,"昨天下午那次卡"会被同一小时里的 10 次挤掉',
+						'context.watch.kept[].tier 说明这条是靠哪一档留下来的:worst = 全局最差那一档(前 10 条)、daily = 它那一天最差的一条(最多留最近 7 天)、recent = 最近 3 次(不看严重度)、both = 最差与当天最差两档都占。留存是**三档并集**,所以条数上限是 10 + 7 + 3 = 20 而不是 10 —— 单靠全局最差档时,"昨天下午那次卡"会被同一小时里的 10 次挤掉,而"刚才那一下"永远进不了榜',
 					],
 				},
 				incident,
@@ -3120,8 +3121,9 @@ window.__ModuleLoader__.load({
 			return `${marker}${index + 1}. ${row.id} · ${row.cause} · ${Math.round(row.severity)}ms` +
 				(Number.isFinite(at) ? ` · ${clock(at)}` : '') +
 				(row.restored === true ? ` · ${translate('watchRestored')}` : '') +
-				// 靠"每天最差"那一档留下的要标出来,否则读者会奇怪它为什么没被更差的事故挤掉
+				// 靠"每天最差"/"最近"档留下的要标出来,否则读者会奇怪它为什么没被更差的事故挤掉
 				(row.tier === 'daily' ? ` · ${translate('watchDaily')}` : '') +
+				(row.tier === 'recent' ? ` · ${translate('watchRecent')}` : '') +
 				(row.note === null || row.note === undefined ? '' : ` · ${row.note}`);
 		}
 		/** 概览的 hover:把口径(四条腿)与名字分布都摊开,免得只看到一个被抬高的命中率。 */

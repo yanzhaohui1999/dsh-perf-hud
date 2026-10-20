@@ -26,8 +26,8 @@ one `PerformanceObserver` (LoAF, Chrome 123+):
 - a per-frame ring buffer (12000 frames ≈ 3.3 minutes at 60fps);
 - any frame over **100ms** (or LoAF `blockingDuration` over 100ms) is captured automatically: the
   **10 seconds before** and 3 seconds after are sliced out verbatim;
-- retention is the **union of two tiers**: the worst **10** overall plus **one worst-per-day** (at most the
-  last 7 days, marked "daily worst" in the list) — ranking by global severity alone lets ten stalls in the
+- retention is the **union of three tiers**: the worst **10** overall, **one worst-per-day** (at most the
+  last 7 days, marked "daily worst" in the list), and the **3 most recent** stalls regardless of severity — ranking by global severity alone lets ten stalls in the
   same hour push yesterday's stall out entirely (measured: `captured 40 · dropped 38`);
 - kept incidents are persisted (localStorage, 2MB cap) and survive a reload; `watch().restored` says how many came back;
 - stalls that were captured but not good enough to keep are counted
@@ -42,7 +42,7 @@ one `PerformanceObserver` (LoAF, Chrome 123+):
   - **merged triggers (coalesced)** — how many triggers were merged into that burst. It is a **density, not a
     count**: adding the two together turns a single stall into a dozen (measured on a real page: a 3-second
     post-window triggers on every frame);
-  - **evidence kept = the length of the retention list** — capacity-limited (worst 10 + one per day), **not** the
+  - **evidence kept = the length of the retention list** — capacity-limited (worst 10 + one per day + 3 most recent), **not** the
     number of stalls;
   - **lost = (triggered − captured) + dropped + trimmed + failed** — captures that never became a scene / captured
     but not worth keeping / dropped by the byte cap / failed to persist; listed separately, never folded into "seen".
@@ -164,7 +164,7 @@ so it has to be cheap, switchable and reversible itself:
 
 | Tier | When | What it does | Cost |
 |---|---|---|---|
-| **Night watch** (default) | always on | per-frame ring buffer + LoAF observer + interaction timing; keeps the worst 10 stalls plus one worst-per-day | **zero instrumentation**: only the rAF loop that is already running and two `PerformanceObserver`s; patches nothing |
+| **Night watch** (default) | always on | per-frame ring buffer + LoAF observer + interaction timing; keeps the worst 10 stalls, one worst-per-day and the 3 most recent | **zero instrumentation**: only the rAF loop that is already running and two `PerformanceObserver`s; patches nothing |
 | **Live view** | you open the panel | overview / worst event / top-3 callback attribution / the night-watch line; the other five groups collapse | **the same tier as night watch** — opening the panel does not change what is measured |
 | **Deep record** | the "deep" switch in the Developer-details tab row / Settings | only then are `setTimeout` / `setInterval` / `rAF` and the DOM-write hooks wrapped, and the 12MB combo sourcemap is fetched (precise attribution) | has a cost and must be turned on explicitly; switching it off restores the natives immediately |
 
@@ -325,9 +325,9 @@ the offline suites assert its shape directly — a future UI rewrite or MCP serv
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 582 assertions: real functions extracted from client.js + static checks + length budgets
+node tests/logic.mjs         # 583 assertions: real functions extracted from client.js + static checks + length budgets
 node tests/host.mjs          # 41 assertions: real index.js driven by a fake ctx
-# 634 offline assertions total, no running DSH required
+# 635 offline assertions total, no running DSH required
 ```
 
 The i18n dictionary now has **402 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).

@@ -18,7 +18,7 @@
 
 | 模式 | 什么时候 | 做什么 | 成本 |
 |---|---|---|---|
-| **守夜**(默认常开) | 一直 | 帧级环形缓冲 + LoAF 观察器;自动留存**最差 10 次 + 每天最差 1 条**(最多 7 天)并落盘 | 零插桩:只挂本来就在跑的 rAF 与两个 `PerformanceObserver`(LoAF + 交互计时) |
+| **守夜**(默认常开) | 一直 | 帧级环形缓冲 + LoAF 观察器;自动留存**最差 10 次 + 每天最差 1 条**(最多 7 天)+ **最近 3 次**(不看严重度)并落盘 | 零插桩:只挂本来就在跑的 rAF 与两个 `PerformanceObserver`(LoAF + 交互计时) |
 | **现场**(展开面板) | 想看一眼 | **主界面**只回答五个问题(当前状态 / 最近一次卡顿 / 可能原因 / 最近趋势 / 下一步);技术数据进**开发者详情**的五个标签页(帧与归因 / DOM 与堆 / 宿主与链路 / 工具箱 / 原始数据,内层仍是 `state.groups` = `detail` / `cross` / `dom` / `host` / `tools` / `tech`)。**卡顿详情**是"普通用户也会走到"的技术屏,所以它分两层:结论层常显(上下文标题 / 这条事故的两个动作 / 回放范围 / 归因状态 / 历史帧时间轴),技术读数全在默认收起的 `tech`(「技术细节」)里 —— 与开发者详情**共用同一份渲染**(`techGroup`) | 可忽略 |
 | **深录**(显式) | 要抓全 | 才打开原型插桩(DOM 写入 1/10 采样 + 调度点抓栈)与「精确归因」 | 有代价,必须显式开 |
 
@@ -65,7 +65,7 @@
 | `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(456 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 三套离线断言(634 条)+ 两套线上 + `fixtures/incident-real.json` | 每次改完(§3) |
+| `tests/` | 三套离线断言(635 条)+ 两套线上 + `fixtures/incident-real.json` | 每次改完(§3) |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 七份参考文档 + `images/`(9 张 README 截图)+ `plans/`(三份档案 + 索引) | 按需查,别通读(§9) |
 | `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 | 改挂载、发版(§10) |
@@ -104,11 +104,11 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑三套件**(合计 **634** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑三套件**(合计 **635** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 582 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 583 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 

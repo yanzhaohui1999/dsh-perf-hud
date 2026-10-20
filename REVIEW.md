@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ `cordis.patch.yml` 形态正确 —— 这是市场收录最常见的被拒原因 |
 | 4 | 公开仓库 + topic | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场 |
 | 5 | 产物无死链 | ✅ 0.6.0 `npm pack` **29 个文件**(0.5.0 的 23 + 6 个 `client.*.js` 分片);`release.yml` 逐份核(含 `tools/`、`locale/` 按目录核) |
-| 6 | 门禁全绿 | ✅ **634** 条离线断言(attribution 11 / logic 582 / host 41);CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ **635** 条离线断言(attribution 11 / logic 583 / host 41);CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ✅ 2026-10-18 提 PR [awesome-dsh-plugin#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814)(单文件 `data/plugins/…yml`),**2026-10-19 01:29 已合并** |
 | 8 | 兼容性声明 | ✅ `engines.dsh` 与三个客户端 inject 包统一 `>=0.2.0-rc.2 <0.3.0-0`;本机 `0.2.1-rc.1` 下五个真页面验收器全绿 |
 
@@ -31,7 +31,7 @@
 3. **`stress()` 没有可读结果**:控制台自测能给 longtask / fiber / DOM 写入三条腿造受控输入,但不返回结果;`state.stress` 的记账是留给「接回面板」的钩子。
 4. **`tallyScripts().unresolvedMs` 没有运行时读者**:算出来、写进 tally、只有单测断言它。要么给它消费者,要么删。
 5. **`captureNow()` 语义含糊**:把「已起了一次、还没结算」和「被并进 pending」都回成 `coalesced`;产品语义未改。
-6. **手动标记可能没留下证据且无提示**:标记的 severity 是 0,留存是「最差 10 + 每天 1」,清单里已有真实卡顿时会被 `dropped`;按钮不看返回值。
+6. **手动标记的反馈**:标记的 severity 是 0,以前会被「最差 10 + 每天 1」挤掉;现在有「最近 3 次」档兜底,标记一定进清单 —— 剩下的债是按钮仍不看返回值(留下的是哪一条,界面上没有回执)。
 7. **`dshVersion` 恒为 `null`**:客户端读 `state.host.dshVersion`,`index.js` 从未下发。要么宿主补(要重启),要么客户端别读。
 8. **跨分片共享的 94 字段 `state` 仍是单一对象**:`client.js` 已从 8,595 收到 3,751 行(1 主 + 6 片,`createModel` / `createWatch` / `createUi` 显式收依赖),但状态没有按视图归拢 —— 7 个文件里共 794 处 `state.` 引用,测试仍抽源码文本。拆分已落地,状态切分仍按 `docs/plans/2026-10-13-code-review.md` §5(P2-10) 记着。
 
