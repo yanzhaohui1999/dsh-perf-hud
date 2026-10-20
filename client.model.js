@@ -1267,7 +1267,7 @@ window.__ModuleLoader__.load({
 					frames: Array.isArray(row.frames) ? row.frames.length : 0,
 					loafEntries: Array.isArray(row.loaf) ? row.loaf.length : 0,
 					longTasks: Array.isArray(row.longTasks) ? row.longTasks.length : 0,
-					interactions: Array.isArray(row.interactions) ? row.interactions.length : 0,
+					interactions: uniqueInteractions(row.interactions).length,
 					integrity: row.integrity ?? null,
 				},
 				tally: tallyReport(),
@@ -2049,6 +2049,28 @@ window.__ModuleLoader__.load({
 		 * (见 AGENTS:交互只当端到端时长,不能读成帧内拆分),而这里是给分析者的交接件,
 		 * 所以照实写、并写明"端到端、不拆帧内"。
 		 */
+		/**
+		 * Event Timing 的**事件** → **交互**:一次点击会同时报 pointerup / mouseup / click,
+		 * 共享同一个 `interactionId`;直接数条数会把 1 次点击说成 3 次。
+		 * 只收 `isInteraction`(interactionId > 0)的那些:interactionId=0 的是**延迟事件**
+		 * (实测两个 keyup 272ms 其实是启动阻塞期间排队的按键),把它们算成交互会读成"用户点了两下"。
+		 * 同一 id 只留耗时最长的那个当代表。
+		 */
+		function uniqueInteractions(rows) {
+			const list = Array.isArray(rows) ? rows : [];
+			const byId = new Map();
+			const loose = [];
+			for (const row of list) {
+				if (row === null || row === undefined) continue;
+				const id = typeof row.interactionId === 'number' && row.interactionId > 0 ? row.interactionId : null;
+				const isInteraction = row.isInteraction === true || id !== null;
+				if (isInteraction === false) continue;
+				if (id === null) { loose.push(row); continue; }
+				const prev = byId.get(id);
+				if (prev === undefined || (row.ms ?? 0) > (prev.ms ?? 0)) byId.set(id, row);
+			}
+			return loose.concat([...byId.values()]);
+		}
 		function incidentSummaryText(row) {
 			if (row === null || row === undefined) return '';
 			const summary = row.summary ?? {};
@@ -2065,8 +2087,9 @@ window.__ModuleLoader__.load({
 			if (row.integrity?.captureComplete === false) {
 				lines.push(`${translate('integrityIncomplete')} · LoAF ${row.integrity.loafDropped} · longtask ${row.integrity.longTaskDropped}(${row.integrity.reasons.join(' · ')})`);
 			}
-			// 事件来源:窗口里 ≥100ms 的交互(端到端)。没有就整段不写,不摆 0。
-			const interactions = Array.isArray(row.interactions) ? row.interactions : [];
+			// 事件来源:窗口里 ≥100ms 的**交互**(端到端)。没有就整段不写,不摆 0。
+			// 先按 interactionId 合并、再只留真交互 —— 条数直接当"交互次数"是错的。
+			const interactions = uniqueInteractions(row.interactions);
 			if (interactions.length > 0) {
 				const top = interactions.slice().sort((a, b) => (b.ms ?? 0) - (a.ms ?? 0)).slice(0, 2);
 				lines.push(`${translate('handoffInteractions')} ${interactions.length}${translate('times')}: ${top.map((item) => `${item.name ?? item.type ?? '?'} ${Math.round(item.ms ?? 0)}ms`).join(' · ')}${translate('handoffInteractionsScope')}`);
@@ -3296,6 +3319,7 @@ window.__ModuleLoader__.load({
 				causeCandidates,
 				manifestFor,
 				storageReport,
+				uniqueInteractions,
 				bytesText,
 				diagnosticSummary,
 				packReadme,

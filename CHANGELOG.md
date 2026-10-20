@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 交互计数按 interactionId 合并,interactionId=0 的延迟事件不算交互(2026-10-20)
+
+事故 i4296 的摘要写着「窗口内 ≥100ms 的交互 2 次:keyup 272ms · keyup 272ms」——
+两个 keyup 的 `interactionId` 都是 **0**、`isInteraction` 都是 false:它们是启动阻塞期间
+**排队等待**的按键事件(输入延迟 248ms),Chrome 并不把它算成一次交互。把它算进去,
+一条"启动时卡了一下"的事故会被读成"用户点了两下"。
+
+- `uniqueInteractions(rows)`:只收 `interactionId > 0` 的事件;同一 id 合并成一条(取耗时最长的
+  那个当代表)。复制摘要与 `summary.interactionsInWindow` 都走它。
+- 顺带修掉"一次点击报成 3 次":pointerup / mouseup / click 共享同一个 interactionId。
+- 摘要里的口径说明补一句"按 interactionId 合并"。
+
 ### 设置页显示插件占用,不用开控制台(2026-10-20)
 
 `localStorage` 到底被这个插件占了多少、离上限还有多远 —— 之前只能 `__perfHud.storage()`

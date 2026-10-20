@@ -99,7 +99,7 @@ window.__ModuleLoader__.load({
 				pkgNamed: '定到包',
 				viaDirect: '直接读出来', viaInferred: '分段推断', viaNotPlugin: '不是插件脚本', viaFailed: '解析失败', viaNotFetched: '还没预取(只有深录才拉脚本文本)', viaUnavailable: '还没到位/拿不到',
 				// 交接件(复制摘要)里那两行:措辞要能让**没看过面板的人**直接用
-				handoffInteractions: '窗口内 ≥100ms 的交互', handoffInteractionsScope: '(端到端时长,不是帧内拆分)',
+				handoffInteractions: '窗口内 ≥100ms 的交互', handoffInteractionsScope: '(端到端时长,不是帧内拆分;一次交互的 pointerup / click 等按 interactionId 合并)',
 				evidenceCaliberPlain: '口径:函数名与毫秒由 LoAF 直接测量;包 / 文件 / 行号由 URL 与 sourcemap 分段推断(pkg= / line= 是原始 via 码);行号是脚本文件自己的行,不是原始源码行 —— 合并批里它是合并后大文件的行,所以只给文件 + 「合并脚本行 N」,不拼成 文件:行。',
 				evidenceMissingPlain: '缺:原始源码行号与调用栈(要解 section 内层 mappings 或录 Chrome trace);交互只有端到端时长,没有输入延迟/处理/呈现的拆分。',
 				hourUnit: '小时', minUnit: '分', secUnit: '秒',
@@ -315,7 +315,7 @@ window.__ModuleLoader__.load({
 				fnUnknown: 'no function name', pkgUnresolvedShort: 'package unknown', fileUnresolved: 'file unknown',
 				pkgNamed: 'named',
 				viaDirect: 'read directly', viaInferred: 'inferred from sections', viaNotPlugin: 'not a plugin script', viaFailed: 'resolution failed', viaNotFetched: 'not fetched yet (only deep mode pulls script text)', viaUnavailable: 'not ready / unavailable',
-				handoffInteractions: 'interactions >=100ms in the window', handoffInteractionsScope: ' (end-to-end duration, not a frame breakdown)',
+				handoffInteractions: 'interactions >=100ms in the window', handoffInteractionsScope: ' (end-to-end duration, not a frame breakdown; events of one interaction are merged by interactionId)',
 				evidenceCaliberPlain: 'Scope: the function name and milliseconds are measured by LoAF; the package / file / line are inferred from the URL and sourcemap sections (pkg= / line= are the raw via codes); the line is a line in the script file itself, not an original-source line — in a combo batch it is a line in the merged big file, so only the file plus "line in merged script N" is shown, never joined into file:line.',
 				evidenceMissingPlain: 'Missing: original source line and call stack (needs the inner section mappings or a Chrome trace); interactions only give an end-to-end duration, with no input-delay/processing/presentation split.',
 				hourUnit: 'h', minUnit: 'm', secUnit: 's',

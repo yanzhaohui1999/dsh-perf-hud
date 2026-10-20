@@ -760,6 +760,7 @@ window.__ModuleLoader__.load({
 				scriptEvidence,
 				start,
 				state,
+				uniqueInteractions,
 			};
 		}
 		function watch() {
@@ -823,6 +824,7 @@ window.__ModuleLoader__.load({
 		function touchMapCache(...args) { return model().touchMapCache(...args); }
 		function saveMapCache(...args) { return model().saveMapCache(...args); }
 		function storageReport(...args) { return model().storageReport(...args); }
+		function uniqueInteractions(...args) { return model().uniqueInteractions(...args); }
 		function bytesText(...args) { return model().bytesText(...args); }
 		function pruneMapCache(...args) { return model().pruneMapCache(...args); }
 		function loadBundleMap(...args) { return model().loadBundleMap(...args); }

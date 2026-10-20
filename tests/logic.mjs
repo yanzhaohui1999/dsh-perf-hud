@@ -341,7 +341,7 @@ process.exitCode = failed === 0 ? 0 : 1;
 
 	// A4:交互延迟这一层"只进导出件",而且必须两个导出件都带(事故包只带窗口内的)
 	check('A4:交互延迟进两个导出件(事故包按窗口过滤)',
-		[/interactionsInWindow: interactions\.length/, /const interactions = \(state\.watch\.interactions \?\? \[\]\)\.filter/, /records: state\.watch\.interactions,/].every((re) => re.test(allSource)), true);
+		[/interactionsInWindow: uniqueInteractions\(interactions\)\.length/, /const interactions = \(state\.watch\.interactions \?\? \[\]\)\.filter/, /records: state\.watch\.interactions,/].every((re) => re.test(allSource)), true);
 	check('A4:交互延迟不进面板渲染区(只进导出件)',
 		renderSource.slice(renderSource.indexOf('function PerfHud(')).includes('interactions'), false);
 }
@@ -678,6 +678,7 @@ const newPieces = [
 	'function frameMixPctText(',
 	'function frameMixRows(',
 	'function storageReport(',
+	'function uniqueInteractions(',
 	'function bytesText(',
 	'const pad = ',
 	'const clock = (ms) => {',
@@ -764,7 +765,7 @@ const box = new Function(`${sandbox}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_RECENT_MAX, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, uniqueInteractions, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -1421,7 +1422,7 @@ check('复制摘要:事故里有脚本时带上「可疑脚本」证据行(交�
 	})(), [true, true, true, true, true, true, true]);
 check('复制摘要:窗口里有 ≥100ms 交互时写出事件来源(并标明是端到端、不是帧内拆分)',
 	(() => {
-		const row = { ...incidentRow, interactions: [{ type: 'event', name: 'click', ms: 168, waitMs: 7, handlerMs: 160 }] };
+		const row = { ...incidentRow, interactions: [{ type: 'event', name: 'click', ms: 168, waitMs: 7, handlerMs: 160, interactionId: 7, isInteraction: true }] };
 		const text = EX.incidentSummaryText(row);
 		return [text.includes('click 168ms'), text.includes('端到端')];
 	})(), [true, true]);
@@ -2195,6 +2196,15 @@ check('可能原因:没有 JS 证据时「缺少证据」排第一,窗口级候�
 		script.limits.some((line) => line.includes('没有时间重叠'))];
 })(), ['unknown', 3, 'weak', 'weak', true]);
 
+check('交互计数:按 interactionId 合并,interactionId=0 的延迟事件不算交互',
+	(() => {
+		const list = EX.uniqueInteractions([
+			{ name: 'pointerup', ms: 128, interactionId: 9, isInteraction: true },
+			{ name: 'mouseup', ms: 120, interactionId: 9, isInteraction: true },
+			{ name: 'keyup', ms: 272, interactionId: 0, isInteraction: false },
+		]);
+		return [list.length, list[0].name, list[0].ms];
+	})(), [1, 'pointerup', 128]);
 check('字节写法:MB / KB / B 三档,负数与坏值都落到 0',
 	[EX.bytesText(3145728), EX.bytesText(1234), EX.bytesText(999), EX.bytesText(-5), EX.bytesText(NaN)],
 	['3MB', '1KB', '999B', '0B', '0B']);
@@ -2322,6 +2332,7 @@ const watchPieces = [
 	extract(source, 'function settleCapture('),
 	extract(source, 'function keepIncident('),
 	extract(source, 'function pruneIncidents('),
+	extract(source, 'function uniqueInteractions('),
 	extract(source, 'function dayKeyOf('),
 	extract(source, 'function windowIntegrity('),
 	extract(source, 'function assembleIncident('),

@@ -44,7 +44,8 @@ window.__ModuleLoader__.load({
 				round1,
 				scriptEvidence,
 				start,
-				state
+				state,
+				uniqueInteractions
 			} = deps;
 
 		/**
@@ -492,7 +493,7 @@ window.__ModuleLoader__.load({
 					pkgCoverage: { resolved: pkgResolved, total: scripts.length },   // 有名字的脚本占比
 					pkgVia,                       // 每一条脚本"是怎么定名的"(url / section / not-plugin / …)
 					longTasksInWindow: longTasks.length,
-					interactionsInWindow: interactions.length,   // A4:窗口内的交互次数(≥100ms 的那些)
+					interactionsInWindow: uniqueInteractions(interactions).length,   // A4:窗口内的**交互**次数(按 interactionId 合并,≥100ms)
 					topScripts: scripts.slice(0, 5).map((script) => ({
 						at: script.at, u: script.u, ms: script.ms, fn: script.fn,
 						invoker: script.invoker, invokerType: script.invokerType, charPos: script.charPos,
