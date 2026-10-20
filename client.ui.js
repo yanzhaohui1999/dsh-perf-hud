@@ -1010,19 +1010,19 @@ window.__ModuleLoader__.load({
 			// ── 位置(拖动 / 记忆)──────────────────────────────────────────────
 			// 默认停右下角(right/bottom);拖动之后改 left/top,右下的两个锚点必须一起置 auto,
 			// 否则两套锚点会互相拉扯。位置只活在 `state.pos` 里,渲染只负责把它写进样式。
-			// 宽度:展开态就是唯一来源 panelWidth;收起态用上次拖动量到的实宽(药丸宽度由内容决定)。
+			// 宽度只有 panelWidth 一个来源:展开态就是它,收起态由 S.root 的 maxWidth 封顶到它 ——
+			// 所以夹紧用它当上界对两种形态都成立(收起态不该拿"上次拖动时的宽度"当尺子)。
 			const isOpenPanel = open === true && state.on !== false;
-			const boxWidth = isOpenPanel || state.pos === null || !(state.pos.w > 0) ? panelWidth : state.pos.w;
 			const pos = state.pos === null ? null : hudPosClamp(
 				state.pos,
-				{ w: boxWidth },
+				{ w: panelWidth },
 				{ w: W.innerWidth, h: W.innerHeight },
 				isOpenPanel ? HUD_POS_MIN_ROOM : HUD_POS_PILL_ROOM,
 			);
 			const posStyle = pos === null ? null : {
 				left: pos.left, top: pos.top, right: 'auto', bottom: 'auto',
 				// 锚在顶部之后高度上限得跟着上边界算(默认那套 82vh 是"从底边往上长")
-				...(isOpenPanel ? { maxHeight: hudPosMaxHeight(pos.top, W.innerHeight) } : null),
+				...(isOpenPanel ? { maxHeight: hudPosMaxHeight(pos.top, { h: W.innerHeight }) } : null),
 			};
 			// 审批卡让位:那两个真按钮(拒绝 / 允许一次)在卡片右下角,正压在我们这一列上 ——
 			// 遮住批准按钮是这个面板最不该干的事。判定是纯函数(见 hudDodge),这里只量一次 DOM。
@@ -1066,7 +1066,7 @@ window.__ModuleLoader__.load({
 				const root = state.root;
 				if (root === null) return;
 				const rect = root.getBoundingClientRect();
-				const start = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, w: Math.round(rect.width) };
+				const start = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
 				const room = isOpenPanel ? HUD_POS_MIN_ROOM : HUD_POS_PILL_ROOM;
 				let moved = false;
 				const onMove = (move) => {
@@ -1075,14 +1075,14 @@ window.__ModuleLoader__.load({
 					// 3px 之内算手抖:标题栏不是按钮,但"点一下"也不该把位置改成一个和默认差 1px 的状态
 					if (moved === false && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
 					moved = true;
-					const next = hudPosClamp({ left: start.left + dx, top: start.top + dy, w: start.w },
-						{ w: start.w }, { w: W.innerWidth, h: W.innerHeight }, room);
+					const next = hudPosClamp({ left: start.left + dx, top: start.top + dy },
+						{ w: panelWidth }, { w: W.innerWidth, h: W.innerHeight }, room);
 					state.pos = next;
 					root.style.left = `${next.left}px`;
 					root.style.top = `${next.top}px`;
 					root.style.right = 'auto';
 					root.style.bottom = 'auto';
-					if (isOpenPanel === true) root.style.maxHeight = `${hudPosMaxHeight(next.top, W.innerHeight)}px`;
+					if (isOpenPanel === true) root.style.maxHeight = `${hudPosMaxHeight(next.top, { h: W.innerHeight })}px`;
 				};
 				const onUp = () => {
 					W.removeEventListener('pointermove', onMove);
@@ -1111,9 +1111,8 @@ window.__ModuleLoader__.load({
 					if (frame !== null || state.pos === null) return;
 					frame = W.requestAnimationFrame(() => {
 						frame = null;
-						const root = state.root;
-						if (root === null || state.pos === null) return;
-						const next = hudPosClamp(state.pos, { w: Math.round(root.getBoundingClientRect().width) },
+						if (state.pos === null) return;
+						const next = hudPosClamp(state.pos, { w: panelWidth },
 							{ w: W.innerWidth, h: W.innerHeight }, open === true ? HUD_POS_MIN_ROOM : HUD_POS_PILL_ROOM);
 						if (next.left === state.pos.left && next.top === state.pos.top) return;
 						state.pos = next;

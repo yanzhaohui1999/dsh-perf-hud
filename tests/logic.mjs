@@ -3765,17 +3765,28 @@ check('位置夹进视口:左上贴 12,右下不越界(展开态留 220,药丸�
 	posAt(5000, 5000, 396, EX.HUD_POS_MIN_ROOM),
 	posAt(5000, 5000, 396, EX.HUD_POS_PILL_ROOM),
 ], [
-	{ left: 12, top: 12, w: 396 },
-	{ left: 992, top: 537, w: 396 },
-	{ left: 992, top: 709, w: 396 },
+	{ left: 12, top: 12 },
+	{ left: 992, top: 537 },
+	{ left: 992, top: 709 },
 ]);
-check('窄屏:面板比视口宽时贴左边(而不是给负的左偏移)', posAt(300, 20, 1600, EX.HUD_POS_MIN_ROOM), { left: 12, top: 20, w: 1600 });
+check('窄屏:面板比视口宽时贴左边(而不是给负的左偏移)', posAt(300, 20, 1600, EX.HUD_POS_MIN_ROOM), { left: 12, top: 20 });
+// 宽度必须由调用点按**当前状态的上界**传(panelWidth),不能存"上次拖动时量到的宽度":
+// 收起态的宽度由内容决定,拿旧读数夹会让"chip 拖到右边 → 打开药丸"越界一截。
+check('位置夹紧的宽度来自 panelWidth,不是落盘里存下来的旧宽度(宽度只有一个来源)',
+	[(/state\.pos\.w/.test(allSource) === false), (/hudPosParse\(localStorage\.getItem\(LS_POS\)\)/.test(source))],
+	[true, true]);
 check('自定义位置的高度上限跟着顶边算(默认那套 82vh 是"从底边往上长")', [
 	EX.hudPosMaxHeight(100, { w: 1400, h: 757 }),
 	EX.hudPosMaxHeight(600, { w: 1400, h: 757 }),
 	EX.hudPosMaxHeight(900, { w: 1400, h: 757 }),
 ], [621, 145, 0]);
-check('位置落盘宽容解析:数字才认,w 缺省补 0', [
+// 契约在调用点也得钉住:viewport 是个**对象**。传数字进去 `viewport.h` 是 undefined,
+// 算术变成 NaN,`max-height: NaNpx` 被 CSSOM 直接忽略 —— 面板在页面上没有高度上限,
+// 拖到屏幕下半截就伸到视口外面(这个 bug 真页面跑出来过,离线套件当时全绿)。
+check('hudPosMaxHeight 的调用点传的是 { h } 视口对象,不是数字',
+	[(uiSource.match(/hudPosMaxHeight\(/g) ?? []).length, (uiSource.match(/hudPosMaxHeight\([^)]*\{ h: W\.innerHeight \}\)/g) ?? []).length],
+	[2, 2]);
+check('位置落盘宽容解析:数字才认,旧版本里多出来的字段一律忽略', [
 	EX.hudPosParse('{"v":1,"left":120,"top":80,"w":396}'),
 	EX.hudPosParse('{"left":120.4,"top":80.6}'),
 	EX.hudPosParse('{"left":"120","top":80}'),
@@ -3783,8 +3794,8 @@ check('位置落盘宽容解析:数字才认,w 缺省补 0', [
 	EX.hudPosParse('not json'),
 	EX.hudPosParse(null),
 ], [
-	{ left: 120, top: 80, w: 396 },
-	{ left: 120, top: 81, w: 0 },
+	{ left: 120, top: 80 },
+	{ left: 120, top: 81 },
 	null, null, null, null,
 ]);
 check('位置也是布局:拖过之后 layoutDirty 才为真', (() => {

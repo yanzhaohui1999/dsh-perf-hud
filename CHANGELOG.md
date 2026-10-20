@@ -23,9 +23,15 @@
 - **让位只对默认位置生效**:自定义位置下再自动让位,两边会抢同一组 `left/top`,手动摆好的面板
   会在审批卡弹出时跳走。默认位置下 `hudDodge` 行为不变。
 - 修:`modelDeps()` 漏传 `HUD_POS_*` 三个常量 —— 分片里是 `undefined`,位置算术静默变成 NaN,
-  落盘成 `{"left":null,"top":null}`,面板跳到 (0,0)。**离线三套件全绿,只有真页面验收抓得到**;
+  落盘成 `{"left":null,"top":null}`,面板跳到 (0,0)。
+- 修:`hudPosMaxHeight(top, W.innerHeight)` 把**数字**喂进了要 `{ h }` 对象的参数 —— `viewport.h` 是
+  undefined、`max-height: NaNpx` 被 CSSOM 忽略,面板在自定义位置下没有高度上限,拖到屏幕下半截就
+  伸到视口外。两处调用点都改成 `{ h: W.innerHeight }`,并加静态断言钉住调用形态。
+- 修:位置落盘不再存宽度(`{v,left,top}`),夹紧统一用 `panelWidthFor(innerWidth)`。收起态的宽度
+  由内容决定(已关 chip 168 / 药丸 ~396),而 `S.root` 收起态的 `maxWidth` 就是 panelWidth ——
+  拿"上次拖动时量到的宽度"当尺子,会让"chip 拖到右边 → 打开药丸"直接越界一截。宽度仍然只有一个来源。**离线三套件全绿,只有真页面验收抓得到**;
   同时补了两条断言:分片解构的键必须由 `modelDeps()` 提供、`modelDeps()` 的每个裸名字必须已声明。
-- 断言 +7(599),合计 651;i18n 423 键(新增 `dragHint`)。`tools/check-panel.mjs` 新增 5 条真页面
+- 断言 +9(601),合计 653;i18n 423 键(新增 `dragHint`)。`tools/check-panel.mjs` 新增 5 条真页面
   断言:跟手移动、不越界、松手落盘、刷新回到同一格、双击回右下角且键被删掉。
 
 ### 可疑脚本:合并批 URL 收敛成「合并批(N)」(2026-10-20)

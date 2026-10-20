@@ -149,20 +149,20 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	const moved = await page.evaluate(`(() => {
 		const root = document.getElementById('dsh-perf-hud-root');
 		const rect = root.getBoundingClientRect();
-		return { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width),
+		return { left: Math.round(rect.left), top: Math.round(rect.top), bottom: Math.round(rect.bottom), width: Math.round(rect.width),
 			stored: localStorage.getItem('dsh-perf-hud:pos:v1'), viewport: innerWidth, viewportH: innerHeight };
 	})()`);
-	check('拖动标题栏:面板跟手往左上移动,而且不越界', moved.left <= headRect.left - 200 && moved.left >= 12 && moved.top >= 12, JSON.stringify(moved));
+	check('拖动标题栏:面板跟手往左上移动,而且不越界', moved.left <= headRect.left - 200 && moved.left >= 12 && moved.top >= 12 && moved.bottom <= moved.viewportH, JSON.stringify(moved));
 	check('拖动之后位置落盘(没有在松手时被 React 写回去)', moved.stored !== null, String(moved.stored));
 	await page.reload();
 	await page.waitForHud();
 	const restored = await page.evaluate(`(() => {
 		const root = document.getElementById('dsh-perf-hud-root');
 		const rect = root.getBoundingClientRect();
-		return { left: Math.round(rect.left), top: Math.round(rect.top), right: Math.round(innerWidth - rect.right) };
+		return { left: Math.round(rect.left), top: Math.round(rect.top), bottom: Math.round(rect.bottom), viewportH: innerHeight };
 	})()`);
 	const saved = moved.stored === null ? null : JSON.parse(moved.stored);
-	check('刷新之后回到拖过的那一格(left/top 都还在,不是右下角)', saved !== null && Math.abs(restored.left - saved.left) <= 1 && Math.abs(restored.top - saved.top) <= 1, JSON.stringify({ restored, saved }));
+	check('刷新之后回到拖过的那一格(left/top 都还在,高度仍被上限夹在视口内)', saved !== null && Math.abs(restored.left - saved.left) <= 1 && Math.abs(restored.top - saved.top) <= 1 && restored.bottom <= restored.viewportH, JSON.stringify({ restored, saved }));
 	// 双击标题栏 = 回默认右下角(与「恢复默认布局」同一个动作),键一起删掉。
 	// ⚠️ 坐标要用**标题栏自己**的 rect:根节点有 10px 上内边距,按根的 top+8 点下去落在内边距上,
 	// 拖动/双击都不会触发(第一次真跑就是这么"失败"的)。

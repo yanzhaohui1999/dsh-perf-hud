@@ -2400,14 +2400,18 @@ window.__ModuleLoader__.load({
 			try { parsed = JSON.parse(raw); } catch (error) { return null; }
 			if (parsed === null || typeof parsed !== 'object') return null;
 			if (Number.isFinite(parsed.left) === false || Number.isFinite(parsed.top) === false) return null;
-			const w = Number.isFinite(parsed.w) && parsed.w > 0 ? Math.round(parsed.w) : 0;
-			return { left: Math.round(parsed.left), top: Math.round(parsed.top), w };
+			return { left: Math.round(parsed.left), top: Math.round(parsed.top) };
 		}
 
 		/**
 		 * 把位置夹进视口:整块放得下就整块留在里面,放不下(窄屏 / 面板比视口宽)就贴左边。
 		 * 竖直方向只要求 `room` 那么高的空间 —— 面板高度随内容与折叠态变,按高度夹会让
 		 * "展开时在上、收起时被弹走"。
+		 *
+		 * ⚠️ `size.w` 必须是**当前状态下宽度的上界**,不是"上次拖动时量到的宽度":收起态的宽度
+		 * 由内容决定(已关 chip 168 / 药丸 ~396),拿旧读数夹会让"chip 拖到右边 → 打开药丸"直接
+		 * 越界一截。调用点因此传 `panelWidthFor(innerWidth)` —— 收起态的 `maxWidth` 就是它,
+		 * 宽度只有一个来源这条规矩在这里同样成立。
 		 */
 		function hudPosClamp(pos, size, viewport, room) {
 			const keep = room ?? HUD_POS_MIN_ROOM;
@@ -2417,7 +2421,6 @@ window.__ModuleLoader__.load({
 			return {
 				left: Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.left)), maxLeft),
 				top: Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.top)), maxTop),
-				w: width > 0 ? width : 0,
 			};
 		}
 
