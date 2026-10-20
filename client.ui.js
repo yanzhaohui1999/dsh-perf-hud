@@ -371,7 +371,12 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.sep },
 					h('div', { style: S.blockLabel }, t('settingsRetain')),
 					h('div', { style: S.blockValue }, t('retainText')),
-					h('div', { style: S.sub }, `${t('watchKept')} ${kept}${t('tallyUnit')} · ${t('watchLost')} ${props.trend.lost}${t('tallyUnit')} · ${t('watchTrimmed')} ${state.watch.trimmedByBytes}${t('tallyUnit')}`),
+					h('div', { style: S.sub, title: t('retainKeptHint') },
+						`${t('watchKept')} ${kept}${t('tallyUnit')} · ${t('watchTrimmed')} ${state.watch.trimmedByBytes}${t('tallyUnit')}`),
+					// 丢失是**趋势窗口**（1 小时 / 24 小时）的数，留存是**当前**清单 —— 必须分行写窗口，
+					// 否则「18 份 · 丢失 367」会被读成"丢了 367 份现场"（实测被这么问过）
+					h('div', { style: S.sub, title: t('trendHint') },
+						`${props.trendMs === TALLY_TREND_LONG_MS ? t('mainTrend24') : t('mainTrend1')}:${t('watchDetected')} ${props.trend.detected}${t('times')} · ${t('watchLost')} ${props.trend.lost}${t('times')}`),
 					h('div', { style: S.sub, title: t('storageUseHint') },
 						`${t('storageUse')} ${bytesText(storage.total)} · ${t('storageCap')} ${bytesText(storage.cap)}`),
 					h('div', { style: S.sub },
@@ -1303,6 +1308,7 @@ window.__ModuleLoader__.load({
 				view === 'dev' ? h('div', null, devTabRow({ tab: state.devTab, onTab: setDevTab }), devKids) : null,
 				view === 'settings' ? settingsView({
 					trend,
+					trendMs: state.trendMs,
 					onClearIncidents: () => { clearIncidentsNow(); },
 					onClearAll: () => { W.__perfHud.clear(); },
 				}) : null);

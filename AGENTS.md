@@ -88,7 +88,7 @@
 | `client.model.js` | 证据链 / 能力矩阵 / 可能原因 / 诊断包 / 视图模型(159 个函数) | `apply()` 与渲染前 |
 | `client.watch.js` | 守夜层:observer 回调 / 事故组装 / 落盘(20 个函数) | 同上(采集前) |
 | `client.ui.js` | 全部渲染 | `PerfHudGate` |
-| `client.i18n.js` | 中英词典(各 415 键,纯数据) | 最前(locale 注册要用) |
+| `client.i18n.js` | 中英词典(各 416 键,纯数据) | 最前(locale 注册要用) |
 | `client.pack.js` | zip(store 模式) | `PerfHudGate` |
 | `client.tools.js` | 隔离实验 | 首次 `__perfHud.experiment()` |
 
