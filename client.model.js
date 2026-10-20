@@ -731,7 +731,11 @@ window.__ModuleLoader__.load({
 			const pkg = ev.pkg == null || ev.pkg === ''
 				? (isShellScript(ev) ? translate('shellShort') : translate('pkgUnresolvedShort'))
 				: short(ev.pkg);
-			const name = `${who} @ ${pkg}${ev.pkg === PKG ? `[${translate('recorder')}]` : ''}`;
+			// `measured` 是**深录的插桩包装**(定义在我们包里),耗时属于它包住的那段回调 ——
+			// 把它标成「记录器自身」会误导:记录器自己的开销在「记录器自身」那一行(p99 / 峰)。
+			// 两个字面量调用:死键断言只认 translate('…'),动态取键会把 instrWrapper 判成死键
+			const mark = ev.pkg === PKG ? (ev.fn === 'measured' ? `[${translate('instrWrapper')}]` : `[${translate('recorder')}]`) : '';
+			const name = `${who} @ ${pkg}${mark}`;
 			// 一条定位字段都没有的行(压缩脚本里很常见):在名字后面就地标一句「未定位」,
 			// 免得 `Rx @ 包未定名 269ms` 和真正定到名的行并排、被当成失败了的线索读 ——
 			// 它没定位,是因为没开深录,不是定位失败。毫秒仍是真的,所以不滤掉这一行。
