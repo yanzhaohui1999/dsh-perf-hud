@@ -388,7 +388,7 @@ const sandbox = `
 		// P0/P1:严重度必须是**文字**(不能只靠颜色)+ 「最差事件」块那三行的口径词
 		sevBad: '严重', sevWarn: '警告', sevOk: '低于线', sevLabel: '严重度',
 		sevBasisFrame: '帧间隔', sevBasisLoaf: 'LoAF blocking', sevBasisManual: '标记时刻',
-		shellShort: '应用外壳', instrWrapper: '插桩包装',
+		shellShort: '应用外壳', instrWrapper: '插桩包装', comboBatch: '合并批',
 		ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧',
 		groupDetail: '取证明细', groupTech: '技术细节',
 		// 摘要那几条断言量的是**人看到的字**:这里给真串,长度才对得上(不然量的是 key)
@@ -2212,6 +2212,11 @@ check('可能原因:没有 JS 证据时「缺少证据」排第一,窗口级候�
 		script.limits.some((line) => line.includes('没有时间重叠'))];
 })(), ['unknown', 3, 'weak', 'weak', true]);
 
+check('证据位置:合并批 URL 不再整条印出来,收敛成「合并批(N)」',
+	(() => {
+		const long = 'http://127.0.0.2:3080/plugins/??a/client.js,b/client.js,c/client.js&rev=1';
+		return [EX.evidencePlace({ file: null, url: long, line: null }), EX.evidencePlace({ file: null, url: '/plugins/dsh-api-gateway/client.js', line: null })];
+	})(), ['合并批(3)', '/plugins/dsh-api-gateway/client.js']);
 check('可疑脚本:应用外壳 / 插桩包装 / 记录器自己各标各的,不写成「包未定名」',
 	(() => {
 		const here = { file: '/plugins/dsh-perf-hud/client.js', url: '/plugins/dsh-perf-hud/client.js', ms: 16 };
@@ -2622,7 +2627,7 @@ const watchBox = new Function(`
 		packReadmeTitle: '# 这份诊断包里有什么', packReadmeWhat: 'w', packReadmeHow: 'h', packReadmePrivacy: 'p', packReadmeNotes: 'n',
 		sevLabel: '严重度', worstEvent: '最差事件', evWindow: '窗口', evOwner: '主要归属', deepShort: '深录', watch: '守夜', none: '无',
 		sevBasisFrame: '帧间隔', sevBasisLoaf: 'LoAF blocking', sevBasisManual: '标记时刻',
-		instrWrapper: '插桩包装', shellShort: '应用外壳',
+		instrWrapper: '插桩包装', shellShort: '应用外壳', comboBatch: '合并批',
 		verdictLabel: '归因状态', verdictConfirmed: '已确认', verdictSuspected: '可疑', verdictUnattributed: '未归因',
 		ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧', notYet: '未采集',
 		sevBad: '严重', sevWarn: '警告', sevOk: '低于线', verdictLabel: '归因状态',

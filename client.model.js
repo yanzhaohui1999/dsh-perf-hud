@@ -759,6 +759,13 @@ window.__ModuleLoader__.load({
 		function evidencePlace(ev) {
 			const file = ev.file == null ? (ev.url == null ? null : ev.url) : ev.file;
 			if (file === null && ev.line == null) return null;
+			// 合并批 URL(`/plugins/??a,b,c…`)列了 50+ 个包名:它回答不了"哪个文件",
+			// 只把一行撑成几百字(实测一条事故的 4 行全是同一条巨型 URL) —— 收敛成「合并批(N)」
+			if (typeof file === 'string' && file.indexOf('/plugins/??') !== -1) {
+				const list = file.slice(file.indexOf('/plugins/??') + 11).split('&')[0];
+				const count = list.split(',').filter((part) => part !== '').length;
+				return `${translate('comboBatch')}(${count})`;
+			}
 			const where = file === null ? translate('fileUnresolved') : short(file);
 			if (ev.line == null || ev.lineScope === 'bundle') return where;
 			return `${where}:${ev.line}`;
