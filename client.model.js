@@ -2448,10 +2448,11 @@ window.__ModuleLoader__.load({
 		function frameMixCountText(count) {
 			return String(Math.round(typeof count === 'number' ? count : 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 		}
-		/** 占比文本:**两位小数**,整数去掉 `.00`(3600 帧里 1 条 = 0.03%,整数百分比会把它抹成 0%)。 */
+		/** 占比文本:固定**两位小数**(3600 帧里 1 条 = 0.03%,整数百分比会把它抹成 0%;
+		 *  固定位数是为了让右对齐的列小数点在一条线上 —— 混着 `1.1%` 与 `28.81%` 读起来是歪的)。 */
 		function frameMixPctText(share) {
-			if (typeof share !== 'number' || !(share > 0)) return '0%';
-			return `${Number((share * 100).toFixed(2))}%`;
+			const pct = typeof share === 'number' && share > 0 ? share * 100 : 0;
+			return `${pct.toFixed(2)}%`;
 		}
 		/**
 		 * 六档成**表**(标签 / 条数 / 占比),给面板逐行渲染 —— 一条长串塞进 396px 只会

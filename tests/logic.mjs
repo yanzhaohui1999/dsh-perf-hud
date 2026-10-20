@@ -2170,16 +2170,16 @@ check('帧分布:间隙不是帧、不进分母;没有帧时返回 null',
 			Math.round(mix.shares.reduce((sum, share) => sum + share, 0) * 1e9) / 1e9,
 			EX.frameMix([]), EX.frameMix([{ t: 9, ms: 900, gap: true }])];
 	})(), [3, '2,0,0,1,0,0', 1, null, null]);
-check('帧分布:占比两位小数(3600 帧里 1 条 = 0.03%)、整数不带 .00、条数带千分位',
+check('帧分布:占比固定两位小数(3600 帧里 1 条 = 0.03%,列对齐)、条数带千分位',
 	[EX.frameMixPctText(1 / 3580), EX.frameMixPctText(0.9944), EX.frameMixPctText(0), EX.frameMixCountText(3580)],
-	['0.03%', '99.44%', '0%', '3,580']);
+	['0.03%', '99.44%', '0.00%', '3,580']);
 check('帧分布:六档成表(标签 / 条数 / 占比),空窗口返回空数组',
 	(() => {
 		const rows = EX.frameMixRows(EX.frameMix([
 			{ t: 1, ms: 16.7, gap: false }, { t: 2, ms: 60, gap: false },
 		]));
 		return [rows.length, rows[0].label, rows[0].pctText, rows[4].countText, rows[5].pctText, EX.frameMixRows(null)];
-	})(), [6, '≤16.7', '50%', '1', '0%', []]);
+	})(), [6, '≤16.7', '50.00%', '1', '0.00%', []]);
 check('可能原因:宿主那行的「最大」是事件循环 max,不再拿快照年龄冒充(曾印成「最大 -2248ms」)', (() => {
 	const hot = EX.causeCandidates({ ...causeRow, host: { eventLoop: { p50: 3, p99: 180, max: 400 }, snapshotAgeMs: -2000 } });
 	const host = hot.find((item) => item.kind === 'host');
