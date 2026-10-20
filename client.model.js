@@ -2384,20 +2384,26 @@ window.__ModuleLoader__.load({
 			const now = performance.now();
 			return frameMix(frameRing.slice(now - SPARK_SECONDS * 1000, now));
 		}
+		/** 条数的千分位。不依赖 toLocaleString 的 ICU,面板与断言拿到的是同一个串。 */
+		function frameMixCountText(count) {
+			return String(Math.round(typeof count === 'number' ? count : 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+		}
+		/** 占比文本:**两位小数**,整数去掉 `.00`(3600 帧里 1 条 = 0.03%,整数百分比会把它抹成 0%)。 */
+		function frameMixPctText(share) {
+			if (typeof share !== 'number' || !(share > 0)) return '0%';
+			return `${Number((share * 100).toFixed(2))}%`;
+		}
 		/**
-		 * 分布的文本:**两行**(3 档 + 2 档)。396px 面板放不下五档,交给浏览器折会断在
-		 * `16.7–` 这种地方 —— 自己给 \n,与其它块式长文本同一条规矩。
-		 * 四舍五入到整数,非零但不足 1% 写 <1%,零写 0%。
+		 * 五档成**表**(标签 / 条数 / 占比),给面板逐行渲染 —— 一条长串塞进 396px 只会
+		 * 交给浏览器在 `16.7–` 中间乱断。空窗口返回空数组,面板写"这一分钟还没有帧"。
 		 */
-		function frameMixText(mix) {
-			if (mix === null || mix === undefined) return '';
-			const parts = frameMixBuckets().map((bucket, index) => {
-				const count = mix.counts[index] ?? 0;
-				const pct = (mix.shares[index] ?? 0) * 100;
-				const shown = count === 0 ? '0%' : (pct < 0.5 ? '<1%' : `${Math.round(pct)}%`);
-				return `${bucket.label} ${shown}`;
-			});
-			return `${parts.slice(0, 3).join(' · ')}\n${parts.slice(3).join(' · ')}`;
+		function frameMixRows(mix) {
+			if (mix === null || mix === undefined) return [];
+			return frameMixBuckets().map((bucket, index) => ({
+				label: bucket.label,
+				countText: frameMixCountText(mix.counts[index] ?? 0),
+				pctText: frameMixPctText(mix.shares[index] ?? 0),
+			}));
 		}
 		/**
 		 * 最近 SPARK_SECONDS 秒的分格数据:一格一秒,格值 = 那一格里最差那帧的间隔;间隙另标。
@@ -3314,7 +3320,9 @@ window.__ModuleLoader__.load({
 				frameBucketOf,
 				frameMix,
 				frameMixNow,
-				frameMixText,
+				frameMixCountText,
+				frameMixPctText,
+				frameMixRows,
 				sparkBars,
 				sparkPickMap,
 				sparkCellTitle,

@@ -67,7 +67,8 @@ window.__ModuleLoader__.load({
 				frame,
 				frameArcs,
 				frameMixNow,
-				frameMixText,
+				frameMixCountText,
+				frameMixRows,
 				frameRing,
 				group,
 				h,
@@ -224,9 +225,9 @@ window.__ModuleLoader__.load({
 			const trendMs = props.trendMs;
 			const trendRaw = trendRawText(trendMs);
 			// 60 秒帧分布:守夜只收 ≥100ms 的事故,"每帧 50ms 的 20fps 段"一条都不会触发。
-			// 这一行直接读帧环回答"这一分钟里有多少帧是慢的",不需要任何新采集。
-			// 它是**当前状态的一部分**(不另起一块):面板仍是「状态 / 最近一次 / 原因 / 趋势」四块。
+			// 独立一块 + 五行表:一条长串塞进 396px 只会被浏览器在 `16.7–` 中间乱断。
 			const mix = frameMixNow();
+			const mixRows = frameMixRows(mix);
 			const kids = [
 				h('div', { style: S.block, title: health.reason === '' ? t('healthHint') : health.reason },
 					h('div', { style: S.blockLabel }, t('mainStatus')),
@@ -236,10 +237,23 @@ window.__ModuleLoader__.load({
 							color: health.level === 'ok' ? 'var(--dsw-alias-state-success-primary)'
 								: health.level === 'stall' ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-label-secondary)',
 						},
-					}, `${healthIcon(health.level)} ${healthText(health.level)} · ${health.fps.toFixed(0)} fps${health.reason === '' ? '' : ` · ${health.reason}`}`),
-					h('div', { style: { ...S.sub, whiteSpace: 'pre-line' }, title: t('frameMixHint') },
-						`${t('frameMix')} (ms)\n${mix === null ? t('frameMixEmpty') : frameMixText(mix)}`)),
+					}, `${healthIcon(health.level)} ${healthText(health.level)} · ${health.fps.toFixed(0)} fps${health.reason === '' ? '' : ` · ${health.reason}`}`)),
 			];
+			// 帧分布:每档一行(标签 / 条数 / 占比),数字右对齐、等宽数字,读起来是张表而不是一句话
+			kids.push(h('div', { style: S.sep, title: t('frameMixHint') },
+				h('div', { style: S.blockLabel }, mix === null
+					? t('frameMix')
+					: `${t('frameMix')} · ${frameMixCountText(mix.total)}${t('framesUnit')}`),
+				mix === null
+					? h('div', { style: { ...S.sub, marginTop: 2 } }, t('frameMixEmpty'))
+					: h('div', { style: { marginTop: 2 } }, mixRows.map((item) => h('div', {
+						key: item.label,
+						style: { display: 'flex', gap: 8, alignItems: 'baseline', lineHeight: 1.5, fontSize: 12 },
+					},
+						h('span', { style: { flex: '0 0 72px', color: 'var(--dsw-alias-label-secondary)', fontVariantNumeric: 'tabular-nums' } }, item.label),
+						h('span', { style: { flex: '1 1 auto' } }),
+						h('span', { style: { flex: '0 0 56px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, item.countText),
+						h('span', { style: { flex: '0 0 64px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, item.pctText))))));
 			// 最近一次卡顿:持续时间 / 何时 / 现场留没留住
 			if (row === null) {
 				kids.push(h('div', { style: S.sep },

@@ -902,7 +902,8 @@ window.__ModuleLoader__.load({
 		function splitLegend(...args) { return model().splitLegend(...args); }
 		function frameArcs(...args) { return model().frameArcs(...args); }
 		function frameMixNow(...args) { return model().frameMixNow(...args); }
-		function frameMixText(...args) { return model().frameMixText(...args); }
+		function frameMixCountText(...args) { return model().frameMixCountText(...args); }
+		function frameMixRows(...args) { return model().frameMixRows(...args); }
 		function hudDodge(...args) { return model().hudDodge(...args); }
 		function panelWidthFor(...args) { return model().panelWidthFor(...args); }
 		function pillCompact(...args) { return model().pillCompact(...args); }
@@ -3559,7 +3560,8 @@ window.__ModuleLoader__.load({
 				frame,
 				frameArcs,
 				frameMixNow,
-				frameMixText,
+				frameMixCountText,
+				frameMixRows,
 				frameRing,
 				group,
 				h,
