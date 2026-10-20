@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### 可疑脚本:标出「应用外壳」与「记录器自身」,帧级清单也合并(2026-10-20)
+
+事故 i4375 的证据里出现两种"名字像包、其实不是插件"的行:
+
+- `measured @ dsh-perf-hud · client.js:1008 · FrameRequestCallback` —— **记录器自己**每帧的
+  rAF 回调。它出现在证据里不代表它是元凶,以前只写包名,读者会当成一个插件。
+- `ue @ 包未定名 · /assets/index-CN7NIWNw.js` —— **应用外壳**(React 根那一层)。它不属于
+  任何插件,「包未定名」读起来像 sourcemap 解析失败。
+
+现在分别标成 `measured @ dsh-perf-hud[记录器自身]` 与 `ue @ 应用外壳`。另外**帧级清单**
+之前漏了合并(窗口清单已经合并),一次帧里 3 条 `received` 仍会占满 4 个名额 —— 现在两条
+清单走同一个 `evidenceGroups` + `evidenceGroupLine`。
+
+断言 +2(591),合计 643;i18n 420 键。
 ### 可疑脚本:同一函数 / 同一位置的多次调用合并成一行(2026-10-20)
 
 事故 i4337 的「可疑脚本」四行除了毫秒一字不差 —— 都是 `received @ dsh-api-gateway ·

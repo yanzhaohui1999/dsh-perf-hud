@@ -65,7 +65,7 @@
 | `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(456 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 三套离线断言(641 条)+ 两套线上 + `fixtures/incident-real.json` | 每次改完(§3) |
+| `tests/` | 三套离线断言(643 条)+ 两套线上 + `fixtures/incident-real.json` | 每次改完(§3) |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 七份参考文档 + `images/`(9 张 README 截图)+ `plans/`(三份档案 + 索引) | 按需查,别通读(§9) |
 | `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 | 改挂载、发版(§10) |
@@ -88,7 +88,7 @@
 | `client.model.js` | 证据链 / 能力矩阵 / 可能原因 / 诊断包 / 视图模型(159 个函数) | `apply()` 与渲染前 |
 | `client.watch.js` | 守夜层:observer 回调 / 事故组装 / 落盘(20 个函数) | 同上(采集前) |
 | `client.ui.js` | 全部渲染 | `PerfHudGate` |
-| `client.i18n.js` | 中英词典(各 419 键,纯数据) | 最前(locale 注册要用) |
+| `client.i18n.js` | 中英词典(各 420 键,纯数据) | 最前(locale 注册要用) |
 | `client.pack.js` | zip(store 模式) | `PerfHudGate` |
 | `client.tools.js` | 隔离实验 | 首次 `__perfHud.experiment()` |
 
@@ -104,11 +104,11 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑三套件**(合计 **641** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑三套件**(合计 **643** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 589 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 591 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 

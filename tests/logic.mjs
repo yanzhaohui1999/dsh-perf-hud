@@ -388,6 +388,8 @@ const sandbox = `
 		// P0/P1:严重度必须是**文字**(不能只靠颜色)+ 「最差事件」块那三行的口径词
 		sevBad: '严重', sevWarn: '警告', sevOk: '低于线', sevLabel: '严重度',
 		sevBasisFrame: '帧间隔', sevBasisLoaf: 'LoAF blocking', sevBasisManual: '标记时刻',
+		shellShort: '应用外壳',
+		shellShort: '应用外壳',
 		ctxLive: '实时监控', ctxFrame: '当前帧', ctxIncident: '历史事故', ctxHistoryFrame: '历史帧',
 		groupDetail: '取证明细', groupTech: '技术细节',
 		// 摘要那几条断言量的是**人看到的字**:这里给真串,长度才对得上(不然量的是 key)
@@ -682,6 +684,8 @@ const newPieces = [
 	'function uniqueInteractions(',
 	'function severityBasisText(',
 	'function evidenceGroups(',
+	'function ownerOfUrl(',
+	'function isShellScript(',
 	'function evidenceGroupLine(',
 	'function severityValueText(',
 	'function bytesText(',
@@ -2209,6 +2213,14 @@ check('可能原因:没有 JS 证据时「缺少证据」排第一,窗口级候�
 		script.limits.some((line) => line.includes('没有时间重叠'))];
 })(), ['unknown', 3, 'weak', 'weak', true]);
 
+check('可疑脚本:应用外壳与记录器自己都就地标出,不再写成「包未定名」',
+	(() => {
+		const shell = EX.evidenceName({ fn: 'ue', pkg: null, file: '/assets/index-CN7NIWNw.js', url: '/assets/index-CN7NIWNw.js', ms: 14 });
+		const self = EX.evidenceName({ fn: 'measured', pkg: 'dsh-perf-hud', file: '/plugins/dsh-perf-hud/client.js', url: '/plugins/dsh-perf-hud/client.js', ms: 16 });
+		return [shell.includes('应用外壳'), shell.includes('包未定名'), self.includes('[记录器自身]')];
+	})(), [true, false, true]);
+check('帧级证据清单与窗口清单走同一个合并 + 切边口径',
+	/for \(const ev of evidenceGroups\(frameEvidence\)\.slice\(0, EVIDENCE_MAX\)\)/.test(allSource), true);
 check('可疑脚本:同一函数 / 同一位置的多次调用合并成一行(次数 · 累计 · 最大)',
 	(() => {
 		const base = { fn: 'received', pkg: 'dsh-api-gateway', file: '/plugins/@deepseek-ai/dsh-api-gateway/client.js', line: 568, lineScope: 'bundle', lineVia: 'text', pkgVia: 'section', invoker: 'DOMWebSocket.onmessage', invokerType: 'event-listener' };
@@ -2364,6 +2376,8 @@ const watchPieces = [
 	extract(source, 'function uniqueInteractions('),
 	extract(source, 'function severityBasisText('),
 	extract(source, 'function evidenceGroups('),
+	extract(source, 'function ownerOfUrl('),
+	extract(source, 'function isShellScript('),
 	extract(source, 'function evidenceGroupLine('),
 	extract(source, 'function severityValueText('),
 	extract(source, 'function dayKeyOf('),

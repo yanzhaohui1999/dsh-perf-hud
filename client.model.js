@@ -725,8 +725,13 @@ window.__ModuleLoader__.load({
 		 */
 		function evidenceName(ev) {
 			const who = ev.fn == null || ev.fn === '' ? translate('fnUnknown') : short(ev.fn);
-			const pkg = ev.pkg == null || ev.pkg === '' ? translate('pkgUnresolvedShort') : short(ev.pkg);
-			const name = `${who} @ ${pkg}`;
+			// 两种"名字看着像包、其实不是某个插件"的行,就地标出来:
+			//   · 应用外壳(/assets/index-*.js):它不属于任何插件,`包未定名` 读起来像解析失败
+			//   · 记录器自己(dsh-perf-hud):它每帧都在跑,出现在证据里不代表它是元凶
+			const pkg = ev.pkg == null || ev.pkg === ''
+				? (isShellScript(ev) ? translate('shellShort') : translate('pkgUnresolvedShort'))
+				: short(ev.pkg);
+			const name = `${who} @ ${pkg}${ev.pkg === PKG ? `[${translate('recorder')}]` : ''}`;
 			// 一条定位字段都没有的行(压缩脚本里很常见):在名字后面就地标一句「未定位」,
 			// 免得 `Rx @ 包未定名 269ms` 和真正定到名的行并排、被当成失败了的线索读 ——
 			// 它没定位,是因为没开深录,不是定位失败。毫秒仍是真的,所以不滤掉这一行。
@@ -2149,7 +2154,8 @@ window.__ModuleLoader__.load({
 					const frameEvidence = incidentFrameEvidenceRows(row, frame);
 					if (frameEvidence.length > 0) {
 						lines.push(`${translate('ctxHistoryFrame')} ${nav.index}/${nav.count} · ${Math.round(frame.ms ?? 0)}ms · ${translate('evidenceLabel')}:`);
-						for (const ev of frameEvidence.slice(0, EVIDENCE_MAX)) lines.push(`  - ${evidenceLine(ev)}`);
+						// 与窗口那一段同一个口径:同函数 / 同位置的多次调用先合并,再取前 EVIDENCE_MAX 条
+						for (const ev of evidenceGroups(frameEvidence).slice(0, EVIDENCE_MAX)) lines.push(`  - ${evidenceGroupLine(ev)}`);
 					} else {
 						lines.push(`${translate('ctxHistoryFrame')} ${nav.index}/${nav.count} · ${Math.round(frame.ms ?? 0)}ms · ${translate('handoffFrameNoEvidence')}`);
 					}
