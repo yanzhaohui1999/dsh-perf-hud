@@ -59,6 +59,7 @@ window.__ModuleLoader__.load({
 				evidenceFooter,
 				evidenceFooterTitle,
 				evidenceLine,
+				evidenceGroupLine,
 				evidenceName,
 				evidenceScope,
 				evidenceWhereText,
@@ -589,16 +590,17 @@ window.__ModuleLoader__.load({
 					// 这一帧没有脚本记录、下面给的是窗口切片时,先把范围说出来(不含糊过去)
 					scope.missing === true ? h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } }, t('frameEvidenceMissing')) : null,
 					h('div', { style: { ...S.blockLabel, marginTop: 8 }, title: t('evidenceHint') }, scope.label),
+					// 同一个函数 / 同一个位置的多次调用已经合并(members 留着),行首给 ×N,右列是**合计**
 					h('div', { style: { marginTop: 2 } }, scope.rows.map((ev, index) => h('div', {
 						key: `ev-${index}`,
-						title: `${evidenceLine(ev)}\n${t('evidenceCopyHint')}`
+						title: `${evidenceGroupLine(ev)}\n${t('evidenceCopyHint')}`
 							+ `${evidenceLocatable(ev) === true ? '' : `\n${t('evidenceUnlocatableHint')}`}`,
 						style: { display: 'flex', gap: 8, alignItems: 'baseline', lineHeight: 1.45, cursor: 'pointer' },
-						onClick: () => copyText(evidenceLine(ev), t('copyScript')),
+						onClick: () => copyText(evidenceGroupLine(ev), t('copyScript')),
 					},
 						h('span', {
 							style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' },
-						}, evidenceName(ev)),
+						}, `${evidenceName(ev)}${(ev.count ?? 1) > 1 ? ` ×${ev.count}` : ''}`),
 						h('span', {
 							title: `${translate('evidenceWhere')} ${evidenceWhereText(ev)}`,
 							style: { flex: '0 0 auto', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums' },

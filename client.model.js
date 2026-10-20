@@ -782,6 +782,46 @@ window.__ModuleLoader__.load({
 			return parts.join(' · ');
 		}
 		/**
+		 * 把**同一次调用**的多条脚本记录合成一条:同一个函数、同一个位置(文件 + 行)、同一个来源,
+		 * 只是每次耗时不同 —— LoAF 一次回放会给出好几条,逐条列出来除了毫秒数以外一字不差
+		 * (实测一次事故里 4 行全是 `received @ dsh-api-gateway · 568 · 47/14/13/13ms`)。
+		 * 合并不是丢信息:条数、合计、最大都留着,成员仍在 `members` 里(悬停可看)。
+		 */
+		function evidenceGroups(rows) {
+			const map = new Map();
+			for (const ev of Array.isArray(rows) ? rows : []) {
+				if (ev === null || ev === undefined) continue;
+				const key = [ev.fn ?? '', ev.pkg ?? '', ev.file ?? '', ev.line ?? '', ev.invoker ?? '', ev.url ?? ''].join('|');
+				let group = map.get(key);
+				if (group === undefined) { group = { sample: ev, count: 0, totalMs: 0, maxMs: 0 }; map.set(key, group); }
+				const ms = typeof ev.ms === 'number' ? ev.ms : 0;
+				group.count += 1;
+				group.totalMs += ms;
+				if (ms > group.maxMs) { group.maxMs = ms; group.sample = ev; }
+			}
+			return [...map.values()]
+				.map((group) => ({
+					...group.sample,
+					count: group.count,
+					totalMs: round1(group.totalMs),
+					maxMs: round1(group.maxMs),
+					ms: round1(group.totalMs),   // 面板右列显示合计:一组 4 次 87ms 不能只写 47
+				}));
+			// 保持**输入顺序**(调用方已按耗时降序排好):合并只改同一 key 的行,不重排榜单
+		}
+		/** 证据行:单条与 evidenceLine 逐字一致;合并过多条时把「次数 · 累计 · 最大」写出来。 */
+		function evidenceGroupLine(ev) {
+			if (ev === null || ev === undefined || !((ev.count ?? 1) > 1)) return evidenceLine(ev);
+			const parts = [evidenceName(ev)];
+			const place = evidencePlace(ev);
+			if (place !== null) parts.push(place);
+			if (ev.line != null && ev.lineScope === 'bundle') parts.push(`${translate('evidenceBundleLine')} ${ev.line}`);
+			parts.push(`${ev.count}${translate('times')} · ${translate('cumulative')} ${round1(ev.totalMs)}ms · ${translate('maxLabel')} ${round1(ev.maxMs)}ms`);
+			if (ev.invoker != null && ev.invoker !== '') parts.push(`${translate('evidenceInvoker')} ${ev.invoker}`);
+			parts.push(`pkg=${ev.pkgVia ?? '-'} line=${ev.lineVia ?? '-'}`);
+			return parts.join(' · ');
+		}
+		/**
 		 * 事故里的一条证据:**优先用捕获时存下来的定位结果**,只有包里确实没有的字段才回退到现算。
 		 *
 		 * 为什么不能一律现算:`scriptEvidence()` 依赖**当前**会话的 `state.precise` 与内存里的
@@ -830,7 +870,8 @@ window.__ModuleLoader__.load({
 		function incidentEvidenceLines(row) {
 			const summary = row?.summary ?? {};
 			const top = Array.isArray(summary.topScripts) ? summary.topScripts : [];
-			return top.slice(0, EVIDENCE_MAX).map((script) => evidenceLine(incidentEvidenceAt(row, script)));
+			return evidenceGroups(top.map((script) => incidentEvidenceAt(row, script)))
+				.slice(0, EVIDENCE_MAX).map(evidenceGroupLine);
 		}
 		/**
 		 * 面板上「可疑脚本」那一块吃什么。**两个上下文各吃自己那一份**:
@@ -852,7 +893,7 @@ window.__ModuleLoader__.load({
 					return {
 						label: `${translate('evidenceLabel')} · ${translate('evidenceScopeIncident')} ${row.id} · ${translate('ctxHistoryFrame')}`,
 						scopeKind: 'history', frame: true, missing: false,
-						rows: locatable(frameRows).slice(0, EVIDENCE_MAX),
+						rows: locatable(evidenceGroups(frameRows)).slice(0, EVIDENCE_MAX),
 						total: frameRows.length,
 						named: frameRows.filter((item) => item.pkg !== null).length,
 						titled: frameRows.filter((item) => item.fn !== null).length,
@@ -867,7 +908,7 @@ window.__ModuleLoader__.load({
 				return {
 					label: `${translate('evidenceLabel')} · ${translate('evidenceScopeIncident')} ${row.id} · ${translate('evidenceWindowPrefix')}`,
 					scopeKind: 'window', frame: false, missing: frame !== null,
-					rows: locatable(rows).slice(0, EVIDENCE_MAX),
+					rows: locatable(evidenceGroups(rows)).slice(0, EVIDENCE_MAX),
 					total: coverage.total ?? rows.length,
 					named: coverage.resolved ?? 0,
 					titled: rows.filter((item) => item.fn !== null).length,
@@ -3338,6 +3379,8 @@ window.__ModuleLoader__.load({
 				storageReport,
 				severityBasisText,
 				severityValueText,
+				evidenceGroups,
+				evidenceGroupLine,
 				uniqueInteractions,
 				bytesText,
 				diagnosticSummary,

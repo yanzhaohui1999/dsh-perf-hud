@@ -681,6 +681,8 @@ const newPieces = [
 	'function storageReport(',
 	'function uniqueInteractions(',
 	'function severityBasisText(',
+	'function evidenceGroups(',
+	'function evidenceGroupLine(',
 	'function severityValueText(',
 	'function bytesText(',
 	'const pad = ',
@@ -768,7 +770,7 @@ const box = new Function(`${sandbox}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_RECENT_MAX, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, uniqueInteractions, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, uniqueInteractions, evidenceGroups, evidenceGroupLine, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -2207,6 +2209,13 @@ check('可能原因:没有 JS 证据时「缺少证据」排第一,窗口级候�
 		script.limits.some((line) => line.includes('没有时间重叠'))];
 })(), ['unknown', 3, 'weak', 'weak', true]);
 
+check('可疑脚本:同一函数 / 同一位置的多次调用合并成一行(次数 · 累计 · 最大)',
+	(() => {
+		const base = { fn: 'received', pkg: 'dsh-api-gateway', file: '/plugins/@deepseek-ai/dsh-api-gateway/client.js', line: 568, lineScope: 'bundle', lineVia: 'text', pkgVia: 'section', invoker: 'DOMWebSocket.onmessage', invokerType: 'event-listener' };
+		const groups = EX.evidenceGroups([{ ...base, ms: 47 }, { ...base, ms: 14 }, { ...base, ms: 13 }, { ...base, ms: 13 }]);
+		const line = EX.evidenceGroupLine(groups[0]);
+		return [groups.length, groups[0].count, groups[0].totalMs, groups[0].maxMs, line.includes('4 次'), line.includes('累计 87ms'), line.includes('最大 47ms')];
+	})(), [1, 4, 87, 47, true, true, true]);
 check('交互计数:按 interactionId 合并,interactionId=0 的延迟事件不算交互',
 	(() => {
 		const list = EX.uniqueInteractions([
@@ -2345,6 +2354,8 @@ const watchPieces = [
 	extract(source, 'function pruneIncidents('),
 	extract(source, 'function uniqueInteractions('),
 	extract(source, 'function severityBasisText('),
+	extract(source, 'function evidenceGroups('),
+	extract(source, 'function evidenceGroupLine('),
 	extract(source, 'function severityValueText('),
 	extract(source, 'function dayKeyOf('),
 	extract(source, 'function windowIntegrity('),

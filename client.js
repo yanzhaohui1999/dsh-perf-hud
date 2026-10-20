@@ -3566,6 +3566,7 @@ window.__ModuleLoader__.load({
 				evidenceFooter,
 				evidenceFooterTitle,
 				evidenceLine,
+				evidenceGroupLine,
 				evidenceName,
 				evidenceScope,
 				evidenceWhereText,
