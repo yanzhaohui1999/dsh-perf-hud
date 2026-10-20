@@ -23,6 +23,7 @@ window.__ModuleLoader__.load({
 				FREE_TEXT_KEYS,
 				HOME_PATH,
 				HOST_ROUTE,
+				LS_INCIDENTS,
 				LS_MAP,
 				LS_MAP_INDEX,
 				MAP_CACHE_MAX,
@@ -1202,6 +1203,32 @@ window.__ModuleLoader__.load({
 				if (at > 0) out.unshift(out.splice(at, 1)[0]);
 			}
 			return out.slice(0, CAUSE_MAX);
+		}
+		/**
+		 * 插件在 localStorage 里占了多少:按 key 归类(事故 / sourcemap 分段表 / 其余)。
+		 * 只读、不做任何清理 —— 给"现在占比怎么样"一个确切数字,别靠猜。
+		 * 字节按 UTF-16 码元 ×2 估(与浏览器配额的计量口径接近);枚举不到(某些沙箱)就返回全 0。
+		 */
+		function storageReport(storage) {
+			const report = { total: 0, incidents: 0, maps: 0, other: 0, keys: 0, entries: [] };
+			const store = storage === undefined ? localStorage : storage;
+			if (store === null || store === undefined || typeof store.key !== 'function' || typeof store.length !== 'number') return report;
+			try {
+				for (let i = 0; i < store.length; i += 1) {
+					const key = store.key(i);
+					if (typeof key !== 'string' || key.indexOf(PKG) !== 0) continue;
+					const value = store.getItem(key) ?? '';
+					const bytes = (key.length + value.length) * 2;
+					report.total += bytes;
+					report.keys += 1;
+					if (key === LS_INCIDENTS) report.incidents += bytes;
+					else if (key.indexOf(`${LS_MAP}:`) === 0) report.maps += bytes;
+					else report.other += bytes;
+					report.entries.push({ key, bytes });
+				}
+			} catch (error) { /* 读不到就当没有,不抛 */ }
+			report.entries.sort((a, b) => b.bytes - a.bytes);
+			return report;
 		}
 		function manifestFor(row, options) {
 			const caps = capabilities();
@@ -3260,6 +3287,7 @@ window.__ModuleLoader__.load({
 				strengthText,
 				causeCandidates,
 				manifestFor,
+				storageReport,
 				diagnosticSummary,
 				packReadme,
 				buildPack,

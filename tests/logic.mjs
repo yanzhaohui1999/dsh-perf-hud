@@ -513,6 +513,7 @@ const newPieces = [
 	'function selfStats(',
 	'function recorderText(',
 	'const LS_MAP = ',
+	'const LS_INCIDENTS = ',
 	'const LS_MAP_INDEX = ',
 	'const MAP_CACHE_MAX = ',
 	'function readMapIndex(',
@@ -675,6 +676,7 @@ const newPieces = [
 	'function frameMixCountText(',
 	'function frameMixPctText(',
 	'function frameMixRows(',
+	'function storageReport(',
 	'const pad = ',
 	'const clock = (ms) => {',
 	'const mb = ',
@@ -760,7 +762,7 @@ const box = new Function(`${sandbox}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_RECENT_MAX, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -2190,6 +2192,26 @@ check('可能原因:没有 JS 证据时「缺少证据」排第一,窗口级候�
 	return [list[0].kind, list.length, script.strength, lt.strength,
 		script.limits.some((line) => line.includes('没有时间重叠'))];
 })(), ['unknown', 3, 'weak', 'weak', true]);
+
+check('存储占用报告:按 key 归类(事故 / sourcemap 缓存 / 其余),字节按 UTF-16 ×2 估',
+	(() => {
+		const store = {
+			data: new Map([
+				['dsh-perf-hud:incidents:v1', 'x'.repeat(100)],
+				['dsh-perf-hud:map:abc', 'y'.repeat(50)],
+				['dsh-perf-hud:on', '1'],
+				['other-app:key', 'z'.repeat(999)],
+			]),
+			get length() { return this.data.size; },
+			key(index) { return [...this.data.keys()][index]; },
+			getItem(key) { return this.data.get(key) ?? null; },
+		};
+		const report = EX.storageReport(store);
+		return [report.keys, report.incidents, report.maps, report.other,
+			report.total === report.incidents + report.maps + report.other,
+			EX.storageReport(null).total];
+	})(), [3, ('dsh-perf-hud:incidents:v1'.length + 100) * 2, ('dsh-perf-hud:map:abc'.length + 50) * 2,
+		('dsh-perf-hud:on'.length + 1) * 2, true, 0]);
 
 // ═══════════ 收尾:最近 vs 最差的语义分离 / 人话原因 / 两条导出路径 ═══════════
 // 这一组盯三件事(都来自真实使用里"两个语义被混在一起"的教训):

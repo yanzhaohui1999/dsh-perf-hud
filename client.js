@@ -129,7 +129,8 @@ window.__ModuleLoader__.load({
 		const TALLY_DAYS = 30;                 // 按天汇总留最近 30 天
 		const TALLY_SAVE_DELAY_MS = 2000;      // 一次卡顿里 coalesced 会被连加很多次,落盘要合并
 		const LS_TALLY = 'dsh-perf-hud:tally:v1';
-		const WATCH_PERSIST_MAX_BYTES = 2097152;  // 事故落盘的字节上限(超了丢最弱的);512KB 时实测只装得下 8 条
+		const WATCH_PERSIST_MAX_BYTES = 3145728;  // 事故落盘的字节上限(超了丢最弱的)。2MB 只能装 ~20 条小包;
+		// 3MB 给"最近 3 档"留出余地,同时给同源的 map 缓存留位置 —— 每个源 localStorage 常见 5MB(Chrome ~10MB)
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
 		const REACT_INTERNAL = new Set(['Fragment', 'Suspense', 'StrictMode', 'Profiler', 'ForwardRef', 'Memo', 'Provider', 'Consumer', 'Root', 'Anonymous']);
 
@@ -609,6 +610,7 @@ window.__ModuleLoader__.load({
 				FREE_TEXT_KEYS,
 				HOME_PATH,
 				HOST_ROUTE,
+				LS_INCIDENTS,
 				LS_MAP,
 				LS_MAP_INDEX,
 				MAP_CACHE_MAX,
@@ -745,6 +747,7 @@ window.__ModuleLoader__.load({
 				bumpTally,
 				bundleMap,
 				ensureScriptLines,
+				evictMapEntries,
 				frame,
 				frameRing,
 				natives,
@@ -818,6 +821,7 @@ window.__ModuleLoader__.load({
 		function evictMapEntries(...args) { return model().evictMapEntries(...args); }
 		function touchMapCache(...args) { return model().touchMapCache(...args); }
 		function saveMapCache(...args) { return model().saveMapCache(...args); }
+		function storageReport(...args) { return model().storageReport(...args); }
 		function pruneMapCache(...args) { return model().pruneMapCache(...args); }
 		function loadBundleMap(...args) { return model().loadBundleMap(...args); }
 		function loadBundleMapByProbe(...args) { return model().loadBundleMapByProbe(...args); }
@@ -2759,6 +2763,8 @@ window.__ModuleLoader__.load({
 			/** 发生频次(跨刷新的时间桶):tally(ms?) 给窗口内的检测到 / 已保存 / 丢失三个数。 */
 			tally: (ms) => tallyWindow(ms, Date.now()),
 			tallyOfDay,
+			/** 插件在 localStorage 里的占用(事故 / sourcemap 缓存 / 其余),只读。 */
+			storage: storageReport,
 			tallyTitle,
 			clearTally,
 			incidents: () => state.watch.incidents.map((row) => ({

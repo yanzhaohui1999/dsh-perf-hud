@@ -33,6 +33,7 @@ window.__ModuleLoader__.load({
 				bumpTally,
 				bundleMap,
 				ensureScriptLines,
+				evictMapEntries,
 				frame,
 				frameRing,
 				natives,
@@ -621,6 +622,8 @@ window.__ModuleLoader__.load({
 					return true;
 				} catch (error) {
 					watch.persistError = error instanceof Error ? error.message : String(error);
+					// 配额不够时**先丢可重建的 sourcemap 分段表**,别拿证据换缓存;清掉之后重试一轮
+					if (typeof evictMapEntries === 'function' && evictMapEntries(2) > 0) continue;
 					if (list.length > 1) { list.length = Math.ceil(list.length / 2); continue; }
 					bumpTally('failed', Date.now());
 					return false;
