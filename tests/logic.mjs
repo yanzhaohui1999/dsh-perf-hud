@@ -433,7 +433,7 @@ const sandbox = `
 		previewTitle: '导出预览(还没生成文件)', previewFiles: '文件', previewNotesDropped: '备注:已置空', previewNotesKept: '备注:保留', previewZip: '分别下载', previewGo: '生成并导出', previewCancel: '取消', previewExcludes: '本包不含',
 		causeUnresolvedSuffix: '没定到包名', causeHostBasis: '事故前后的宿主事件循环', hostSnapshotNotInstant: '这份宿主快照每 10 秒采一次',
 		causeLongTaskLimit: '四条腿只覆盖三次调度的回调与 DOM 写入,事件处理器 / Promise / 微任务不在内(所以这是下界)',
-		causeLongTaskLimit: '四条腿只覆盖三次调度的回调与 DOM 写入,事件处理器 / Promise / 微任务不在内(所以这是下界)',
+		causeWindowOnly: '这是窗口内累计,与这一帧没有时间重叠 —— 解释不了这一帧',
 		strengthStrong: '线索较强', strengthMedium: '线索中等', strengthWeak: '线索较弱', strengthNone: '证据不足',
 		provenanceMeasured: '直接测量', provenanceInferred: '归因推断', provenanceUnknown: '无法确认',
 		pkgNamed: '定到包', scriptsUnit: '条脚本', maxLabel: '最大', hostShort: '宿主', cumulative: '累计', blame: '回调归因(耗时·下界)',
@@ -2119,6 +2119,32 @@ check('可能原因:只有 suspectedThrottle 成立时才提"更像 rAF 挂起�
 	return [unknown.strength, /更像/.test(unknown.basis.join(''))];
 })(), ['weak', true]);
 check('可能原因:没有事故就返回空数组(不造候选)', [EX.causeCandidates(null), EX.causeCandidates(undefined)], [[], []]);
+check('可能原因:宿主那行的「最大」是事件循环 max,不再拿快照年龄冒充(曾印成「最大 -2248ms」)', (() => {
+	const hot = EX.causeCandidates({ ...causeRow, host: { eventLoop: { p50: 3, p99: 180, max: 400 }, snapshotAgeMs: -2000 } });
+	const host = hot.find((item) => item.kind === 'host');
+	return [host.basis.join(' · ').includes('最大 400ms'), host.basis.join(' · ').includes('-2000') === false];
+})(), [true, true]);
+check('可能原因:同一组件命中多条 long task 时,累计数的是条数(曾把 5 条印成 1 次)', (() => {
+	const row = { ...causeRow, longTasks: [
+		{ at: 10, ms: 70, component: 'Sidebar', source: 'render' },
+		{ at: 20, ms: 50, component: 'Sidebar', source: 'render' },
+		{ at: 30, ms: 40, component: 'Other', source: 'render' },
+	] };
+	const item = EX.causeCandidates(row).find((entry) => entry.kind === 'longtask');
+	return [item.name, item.basis[1]];
+})(), ['Sidebar', '累计 2 次']);
+check('可能原因:没有 JS 证据时「缺少证据」排第一,窗口级候选降为弱线索并写明范围', (() => {
+	const row = {
+		...causeRow,
+		summary: { ...causeRow.summary, worstFrameJs: 'none', suspectedThrottle: true },
+		host: { eventLoop: { p50: 1, p99: 88, max: 414 }, snapshotAgeMs: 2248 },
+	};
+	const list = EX.causeCandidates(row);
+	const script = list.find((item) => item.kind === 'script');
+	const lt = list.find((item) => item.kind === 'longtask');
+	return [list[0].kind, list.length, script.strength, lt.strength,
+		script.limits.some((line) => line.includes('没有时间重叠'))];
+})(), ['unknown', 3, 'weak', 'weak', true]);
 
 // ═══════════ 收尾:最近 vs 最差的语义分离 / 人话原因 / 两条导出路径 ═══════════
 // 这一组盯三件事(都来自真实使用里"两个语义被混在一起"的教训):

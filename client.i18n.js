@@ -132,6 +132,7 @@ window.__ModuleLoader__.load({
 				// 可能原因(候选假设)与诊断包:线索强度 / 出处三档 / 包的固定形态
 				causeScriptLead: '脚本耗时最高的包', causeLongTaskLead: '长任务归属', causeHostLead: '宿主事件循环', causeNoEvidenceLead: '缺少 JS 阻塞证据',
 				causeUnresolvedSuffix: '没定到包名', causeHostBasis: '事故前后的宿主事件循环', causeLongTaskLimit: '四条腿只覆盖三次调度的回调与 DOM 写入,事件处理器 / Promise / 微任务不在内(所以这是下界)',
+				causeWindowOnly: '这是窗口内累计,与这一帧没有时间重叠 —— 解释不了这一帧',
 				hostSnapshotNotInstant: '这份宿主快照每 10 秒采一次,未必覆盖卡顿瞬间',
 				strengthStrong: '线索较强', strengthMedium: '线索中等', strengthWeak: '线索较弱', strengthNone: '证据不足',
 				provenanceMeasured: '直接测量', provenanceInferred: '归因推断', provenanceUnknown: '无法确认',
@@ -340,6 +341,7 @@ window.__ModuleLoader__.load({
 				// candidate causes / diagnostic pack: lead strength, provenance, fixed pack shape
 				causeScriptLead: 'package with the most script time', causeLongTaskLead: 'long-task attribution', causeHostLead: 'host event loop', causeNoEvidenceLead: 'no JS blocking evidence',
 				causeUnresolvedSuffix: ' not attributed to a package', causeHostBasis: 'host event-loop p99 around the incident', causeLongTaskLimit: 'the four legs only cover the three scheduler callbacks plus DOM writes — event handlers, promises and microtasks are not in them (so this is a lower bound)',
+				causeWindowOnly: 'this is the in-window total and does not overlap this frame — it cannot explain this frame',
 				hostSnapshotNotInstant: 'the host snapshot is taken every 10s and may not cover the stall itself',
 				strengthStrong: 'strong lead', strengthMedium: 'moderate lead', strengthWeak: 'weak lead', strengthNone: 'not enough evidence',
 				provenanceMeasured: 'measured', provenanceInferred: 'inferred', provenanceUnknown: 'unknown',

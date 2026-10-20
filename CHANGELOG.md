@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### 面板:诊断包把帧级结论挤掉,宿主 max 与 long task 次数印错(2026-10-20)
+
+真实事故 i4189(帧 619.5ms、`worstFrameJs: none`、归因状态"可疑")导出的诊断包里,
+「最可能的假设」三条分别是包 / 组件 / 宿主 —— 这一帧真正的结论「没有 JS 阻塞证据」
+一条都没写。面板说"更像 rAF 被挂起/节流",包里却在怀疑 `dsh-client-modules` 与 `Sidebar`,
+同一个函数的两个消费者互相矛盾。三处同源:
+
+1. **帧级结论排在第四位,被 `slice(0, CAUSE_MAX)` 切掉**:`causeCandidates` 按 script →
+   longtask → host → unknown 追加,unknown 永远最后。现在 `worstFrameJs === 'none'` 时把它
+   挪到第一位,并把两条窗口级候选降为 `weak`、`limits` 里写明「窗口内累计,与这一帧没有
+   时间重叠 —— 解释不了这一帧」。那条限制的措辞是新增的 `causeWindowOnly`(中英成对)。
+2. **宿主那行的「最大」印的是快照年龄**:`basis` 用 `maxLabel` 拼 `snapshotAgeMs`,于是出现
+   「最大 -2248ms」,真正的 max 是 414.19ms。快照年龄本来就在 `missing` 的 host-cpuprofile
+   行里写明,不该借这一行。现在只印 `loop.max`。
+3. **long task 的「累计 N 次」数的是不同名字的个数**:同一个组件命中 5 条时印「累计 1 次」
+   (i4189 的 Sidebar 306ms 就是 5 条)。改成按名字聚合 `{ ms, count }`,次数按**条**数。
+
+顺带:CI 的断言总数门禁还停在 620(文档已经走到 627),两边对不上;这次连同新增的 3 条
+断言一起改成 **630**(attribution 11 / logic 578 / host 41),五份文档、step 名与门禁同步。
+i18n 词典 406 键。
+
 ### 面板:三处读数让人"看了也不知道是谁卡了"(2026-10-19)
 
 > ⚠️ **同批紧接的第二个事故(展开「技术细节」整块变红字)**:shellNote 被定义在**模块作用域**,

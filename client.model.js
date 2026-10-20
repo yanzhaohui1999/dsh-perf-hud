@@ -1111,6 +1111,9 @@ window.__ModuleLoader__.load({
 			const summary = row.summary ?? {};
 			const out = [];
 			const notRoot = translate('verdictNotRootCause');
+			// 这一帧自己有没有 JS 证据。没有时下面三条**窗口级**候选都解释不了它:
+			// 要降成弱线索、写明范围,而且「缺少 JS 证据」那条必须排到第一位(slice 之前)。
+			const windowOnly = summary.worstFrameJs === 'none';
 			// ① 脚本 / 包这一支:毫秒是直接测的,包名是推断的
 			const packages = Array.isArray(row.packages) ? row.packages : [];
 			const cov = summary.pkgCoverage ?? { resolved: 0, total: 0 };
@@ -1119,13 +1122,13 @@ window.__ModuleLoader__.load({
 				const covered = cov.total === 0 ? true : cov.resolved >= cov.total * 0.8;
 				const basis = [`${top.pkg} · ${Math.round(top.ms)}ms · ${top.count}${translate('scriptsUnit')}`,
 					`${translate('pkgNamed')} ${cov.resolved}/${cov.total}`];
-				const limits = [notRoot];
+				const limits = windowOnly ? [notRoot, translate('causeWindowOnly')] : [notRoot];
 				if (cov.resolved < cov.total) limits.push(`${cov.total - cov.resolved}${translate('scriptsUnit')}${translate('causeUnresolvedSuffix')}`);
 				out.push({
 					kind: 'script',
 					lead: translate('causeScriptLead'),
 					name: top.pkg,
-					strength: top.ms >= 100 && covered ? 'strong' : 'medium',
+					strength: windowOnly ? 'weak' : (top.ms >= 100 && covered ? 'strong' : 'medium'),
 					basis,
 					limits,
 					provenance: 'inferred',
@@ -1133,22 +1136,29 @@ window.__ModuleLoader__.load({
 			}
 			// ② long task 的四条腿(owner = 调度方包名 / component = 渲染方组件名)
 			const tasks = Array.isArray(row.longTasks) ? row.longTasks : [];
+			// 同一个名字可能命中多条 long task:累计的「次」要数**条数**,不是数不同名字的个数
+			// (曾按 names 的个数印成「Sidebar · 306ms / 累计 1 次」,实际是 5 条)
 			const byWho = new Map();
 			for (const task of tasks) {
 				const name = task.component ?? task.owner ?? null;
 				if (name === null || name === undefined) continue;
-				byWho.set(name, round1((byWho.get(name) ?? 0) + (typeof task.ms === 'number' ? task.ms : 0)));
+				const agg = byWho.get(name) ?? { ms: 0, count: 0 };
+				agg.ms = round1(agg.ms + (typeof task.ms === 'number' ? task.ms : 0));
+				agg.count += 1;
+				byWho.set(name, agg);
 			}
-			const ranked = [...byWho.entries()].sort((a, b) => b[1] - a[1]);
+			const ranked = [...byWho.entries()].sort((a, b) => b[1].ms - a[1].ms);
 			if (ranked.length > 0) {
-				const [name, ms] = ranked[0];
+				const [name, agg] = ranked[0];
+				const limits = [notRoot, translate('causeLongTaskLimit')];
+				if (windowOnly) limits.push(translate('causeWindowOnly'));
 				out.push({
 					kind: 'longtask',
 					lead: translate('causeLongTaskLead'),
 					name,
-					strength: ms >= 100 ? 'medium' : 'weak',
-					basis: [`${name} · ${ms}ms`, `${translate('cumulative')} ${ranked.length}${translate('times')}`],
-					limits: [notRoot, translate('causeLongTaskLimit')],
+					strength: windowOnly ? 'weak' : (agg.ms >= 100 ? 'medium' : 'weak'),
+					basis: [`${name} · ${agg.ms}ms`, `${translate('cumulative')} ${agg.count}${translate('times')}`],
+					limits,
 					provenance: 'inferred',
 				});
 			}
@@ -1156,14 +1166,16 @@ window.__ModuleLoader__.load({
 			const host = row.host;
 			const loop = host === null || host === undefined ? null : host.eventLoop ?? null;
 			if (loop !== null && typeof loop.p99 === 'number' && loop.p99 > 50) {
-				const age = typeof host.snapshotAgeMs === 'number' ? host.snapshotAgeMs : null;
+				// 「最大」这一格只能是事件循环 max:快照年龄不属于这一行
+				// (曾把 snapshotAgeMs 当 max 印成「最大 -2248ms」,符号与含义都是错的)
+				const basis = [`${translate('causeHostBasis')} ${loop.p50}ms / ${loop.p99}ms`];
+				if (typeof loop.max === 'number') basis.push(`${translate('maxLabel')} ${loop.max}ms`);
 				out.push({
 					kind: 'host',
 					lead: translate('causeHostLead'),
 					name: translate('hostShort'),
 					strength: loop.p99 > 200 ? 'strong' : 'medium',
-					basis: [`${translate('causeHostBasis')} ${loop.p50}ms / ${loop.p99}ms`,
-						age === null ? translate('notYet') : `${translate('maxLabel')} ${age >= 0 ? '-' : '+'}${Math.abs(age)}ms`],
+					basis,
 					limits: [notRoot, translate('hostSnapshotNotInstant')],
 					provenance: 'measured',
 				});
@@ -1180,6 +1192,13 @@ window.__ModuleLoader__.load({
 					limits: [translate('jsNo')],
 					provenance: 'unknown',
 				});
+			}
+			// 这一帧没有 JS 证据时,「缺少 JS 证据」是**帧级**结论:挪到第一位,
+			// 否则它会被三条窗口级候选挤出 CAUSE_MAX —— 面板归因状态说"可疑/节流",
+			// 「可能原因」与诊断包里却一条都不提,两处自相矛盾。
+			if (windowOnly) {
+				const at = out.findIndex((item) => item.kind === 'unknown');
+				if (at > 0) out.unshift(out.splice(at, 1)[0]);
 			}
 			return out.slice(0, CAUSE_MAX);
 		}

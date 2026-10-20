@@ -38,9 +38,9 @@ jobs:
           node --check client.js
           for file in tools/*.mjs; do node --check "$file"; done
 
-      # 620 条离线断言:attribution 11 / logic 568 / host 41。
+      # 630 条离线断言:attribution 11 / logic 578 / host 41。
       # logic.mjs 会把 client.js 里的真函数抽进沙箱,所以它同时是客户端半的回归门。
-      - name: Offline suites (620 assertions)
+      - name: Offline suites (630 assertions)
         run: |
           node tests/attribution.mjs
           node tests/logic.mjs
@@ -57,9 +57,9 @@ jobs:
             total=$((total + count))
           done
           echo "total: $total"
-          test "$total" -eq 620
+          test "$total" -eq 630
           # 文档里的数字也要跟着走:CONTRIBUTING 曾经停在 325 / 39 / 358,而这条门禁
           # 以前只核总数 —— 五份文档里任何一份漏改,读者看到的就不是实际条数。
           for doc in README.md README_EN.md REVIEW.md AGENTS.md CONTRIBUTING.md; do
-            grep -q "620" "$doc" || { echo "$doc 里没有 620"; exit 1; }
+            grep -q "630" "$doc" || { echo "$doc 里没有 630"; exit 1; }
           done

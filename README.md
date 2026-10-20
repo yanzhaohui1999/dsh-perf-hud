@@ -332,12 +332,12 @@ dsh plugin --profile web add "$PWD"
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 568 条:从 client.js 与其分片抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 578 条:从 client.js 与其分片抽真函数进沙箱 + 静态检查 + 长度预算
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js
-# 合计 627 条断言,离线,无需 DSH 在跑
+# 合计 630 条断言,离线,无需 DSH 在跑
 ```
 
-i18n 词典现在是**中英各 405 键**(两本字典键集合必须一致,且每个键都得有人引用 —— 撤下界面时留下的死键会被断言报出来)。
+i18n 词典现在是**中英各 406 键**(两本字典键集合必须一致,且每个键都得有人引用 —— 撤下界面时留下的死键会被断言报出来)。
 
 线上验证(需要先换 cookie,步骤见 [环境与验证](docs/verification.md)):
 
