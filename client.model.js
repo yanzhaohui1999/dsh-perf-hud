@@ -2385,46 +2385,63 @@ window.__ModuleLoader__.load({
 			return viewportWidth < PILL_COMPACT_BELOW;
 		}
 		// ── 面板位置(拖动 / 记忆)────────────────────────────────────────────
-		// 锚点是**左下角**(`left` + `bottom`),不是左上角。为什么:默认位置就是右下角
-		// (`right/bottom: 12`,底边钉住、内容多了向上长),拖动之后必须还是这套生长方向 ——
-		// 换成左上角锚,面板拖到屏幕中部点开就会**向下长**,底边一路掉到视口底、正文被挤成一条缝。
-		// 收起(药丸)→ 展开(面板)时底边不动、向上长,与默认位置完全同构。
+		// 竖直方向锚**底边**(`bottom`):默认位置就是右下角(`right/bottom: 12`,底边钉住、内容多了
+		// 向上长),拖动之后必须还是这套生长方向 —— 换成顶边锚,面板拖到屏幕中部点开就会**向下长**,
+		// 底边一路掉到视口底、正文被挤成一条缝。收起(药丸)→ 展开(面板)时底边不动、向上长。
+		//
+		// 水平方向锚**贴得近的那一边**(`left` 或 `right`,二选一):这不只是手感 —— 收起态的胶囊
+		// 只有 ~168px、展开态 396px,宽度差一倍多。锚左时胶囊贴到最右、一点开必然向右溢出;锚右时
+		// 右边缘钉住,变宽只会**向左长**,不会有任何跳变。所以拖动松手时按"哪边边距小"记锚点,
+		// 与默认位置(右锚)同一套语义。
 		// 坐标全是整数 px(与面板其它尺寸同一条规矩:分数坐标在 125%~150% 缩放下会发糊)。
 		// 三个尺寸常量由主文件传入(deps,与 PANEL_WIDTH 同一套来源)。
 
 		/**
 		 * 位置落盘的**宽容解析**:只有数字才认,别的(手改 / 旧版本 / NaN)一律当"没拖过"。
-		 * 键里只有 `left` / `bottom` 两个数:宽度不进键(收起态的宽度由内容决定,存旧读数只会算错)。
+		 * 键里是 `bottom` + `left` 或 `right` 之一:宽度不进键(收起态的宽度由内容决定,存旧读数只会算错)。
 		 */
 		function hudPosParse(raw) {
 			if (typeof raw !== 'string' || raw === '') return null;
 			let parsed = null;
 			try { parsed = JSON.parse(raw); } catch (error) { return null; }
 			if (parsed === null || typeof parsed !== 'object') return null;
-			if (Number.isFinite(parsed.left) === false || Number.isFinite(parsed.bottom) === false) return null;
-			return { left: Math.round(parsed.left), bottom: Math.round(parsed.bottom) };
+			if (Number.isFinite(parsed.bottom) === false) return null;
+			const bottom = Math.round(parsed.bottom);
+			if (Number.isFinite(parsed.left)) return { left: Math.round(parsed.left), bottom };
+			if (Number.isFinite(parsed.right)) return { right: Math.round(parsed.right), bottom };
+			return null;
 		}
 
 		/**
-		 * 把位置夹进视口:整块放得下就整块留在里面,放不下(窄屏 / 面板比视口宽)就贴左边。
+		 * 把位置夹进视口:整块放得下就整块留在里面,放不下(窄屏 / 面板比视口宽)就贴边。
 		 * 竖直方向只要求 `room` 那么高的空间 —— 面板高度随内容与折叠态变,按高度夹会让
 		 * "展开时在上、收起时被弹走"。
 		 *
-		 * ⚠️ `size.w` 必须是**当前状态下宽度的上界**,不是"上次拖动时量到的宽度":收起态的宽度
-		 * 由内容决定(已关 chip 168 / 药丸 ~396),拿旧读数夹会让"chip 拖到右边 → 打开药丸"直接
-		 * 越界一截。调用点因此传 `panelWidthFor(innerWidth)` —— 收起态的 `maxWidth` 就是它,
-		 * 宽度只有一个来源这条规矩在这里同样成立。
+		 * ⚠️ `size.w` 必须是**当前状态下宽度的上界**:收起态宽度由内容决定(胶囊 168 / 药丸 ~396),
+		 * 调用点传 `panelWidthFor(innerWidth)` —— 收起态的 `maxWidth` 就是它,宽度只有一个来源。
 		 */
 		function hudPosClamp(pos, size, viewport, room) {
 			const keep = room ?? HUD_POS_MIN_ROOM;
 			const width = size !== null && size !== undefined && Number.isFinite(size.w) && size.w > 0 ? size.w : 0;
-			const maxLeft = Math.max(HUD_POS_MARGIN, Math.round(viewport.w - width - HUD_POS_MARGIN));
+			const maxOffset = Math.max(HUD_POS_MARGIN, Math.round(viewport.w - width - HUD_POS_MARGIN));
 			// 底边至少离视口底 12,同时上边还得留得下 keep 那么高(否则面板会整体滑出顶部)
 			const maxBottom = Math.max(HUD_POS_MARGIN, Math.round(viewport.h - keep));
-			return {
-				left: Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.left)), maxLeft),
-				bottom: Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.bottom)), maxBottom),
-			};
+			const bottom = Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.bottom)), maxBottom);
+			if (Number.isFinite(pos.left)) return { left: Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.left)), maxOffset), bottom };
+			return { right: Math.min(Math.max(HUD_POS_MARGIN, Math.round(pos.right)), maxOffset), bottom };
+		}
+
+		/**
+		 * 松手时把"这一块矩形"翻译成位置:**贴哪边更近就锚哪边**,竖直永远锚底边。
+		 * 输入 `rect` 是元素的绝对矩形(`left/right/bottom`),`viewport` 是 `{ w, h }`。
+		 * 胶囊拖到最右(gapRight = 12)→ 记 `right: 12`,打开成面板时右边缘不动,只向左长。
+		 */
+		function hudPosMake(rect, viewport) {
+			const bottom = Math.round(viewport.h - rect.bottom);
+			const gapLeft = Math.round(rect.left);
+			const gapRight = Math.round(viewport.w - rect.right);
+			if (gapRight <= gapLeft) return { right: gapRight, bottom };
+			return { left: gapLeft, bottom };
 		}
 
 		/**
@@ -3514,6 +3531,7 @@ window.__ModuleLoader__.load({
 				HUD_POS_PILL_ROOM,
 				hudPosParse,
 				hudPosClamp,
+				hudPosMake,
 				hudPosMaxHeight,
 				frameSeverity,
 				worstLoaf,

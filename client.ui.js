@@ -19,6 +19,7 @@ window.__ModuleLoader__.load({
 				pillCompact,
 				// 拖动 / 位置记忆:纯函数与落盘都在主文件那侧(与 panelWidthFor 同一套来源)
 				hudPosClamp,
+				hudPosMake,
 				hudPosMaxHeight,
 				HUD_POS_MIN_ROOM,
 				HUD_POS_PILL_ROOM,
@@ -1020,8 +1021,11 @@ window.__ModuleLoader__.load({
 				{ w: W.innerWidth, h: W.innerHeight },
 				isOpenPanel ? HUD_POS_MIN_ROOM : HUD_POS_PILL_ROOM,
 			);
+			// 水平只写**一个**锚点:左锚为 left,右锚为 right,另一个置 auto。
+			// 右锚是"贴右边"的语义 —— 胶囊(168px)贴在最右,打开成面板(396px)时右边缘不动、只向左长。
 			const posStyle = pos === null ? null : {
-				left: pos.left, bottom: pos.bottom, right: 'auto', top: 'auto',
+				bottom: pos.bottom, top: 'auto',
+				...(Number.isFinite(pos.left) ? { left: pos.left, right: 'auto' } : { right: pos.right, left: 'auto' }),
 				// 底边钉住之后,高度上限是"顶边还剩多少"(与默认位置的 82vh 同一套算法)
 				...(isOpenPanel ? { maxHeight: hudPosMaxHeight(pos.bottom, { h: W.innerHeight }) } : null),
 			};
@@ -1060,6 +1064,26 @@ window.__ModuleLoader__.load({
 			 * ③ 松手才落盘 + bump 一次,让 React 的 style diff 跟上(否则下一次「恢复默认布局」
 			 *    删不掉拖动留下的内联样式)。
 			 */
+			/**
+			 * 把位置写进**根节点的内联样式**(拖动中与松手时共用)。
+			 * 为什么要自己写而不是只交给 React:拖动期间我们直接改了 DOM 的 `left/right`,
+			 * 而 React 的 style diff 只跟它上次的 props 比 —— 若松手后的 props 与拖动前**恰好相同**
+			 * (典型:胶囊贴到最右,`right` 前后都是 12),React 认为没变化就不会重写,于是 DOM 停在
+			 * 拖动时写下的 `right: auto` 上,元素掉到左边(实测:胶囊拖到最右后 left = 0)。
+			 * 所以松手时按最终锚点自己写一遍,保证 DOM 与"下一次渲染会写出的值"一致。
+			 */
+			const applyPosStyle = (element, p, openNow) => {
+				if (Number.isFinite(p.left)) {
+					element.style.left = `${p.left}px`;
+					element.style.right = 'auto';
+				} else {
+					element.style.right = `${p.right}px`;
+					element.style.left = 'auto';
+				}
+				element.style.bottom = `${p.bottom}px`;
+				element.style.top = 'auto';
+				if (openNow === true) element.style.maxHeight = `${hudPosMaxHeight(p.bottom, { h: W.innerHeight })}px`;
+			};
 			const startDrag = (event) => {
 				if (event.pointerType === 'mouse' && event.button !== 0) return;
 				const target = event.target;
@@ -1067,8 +1091,10 @@ window.__ModuleLoader__.load({
 				const root = state.root;
 				if (root === null) return;
 				const rect = root.getBoundingClientRect();
-				// 量的是**底边距视口底**的距离:拖动只改 left / bottom,底边这个锚点全程不换
-				const start = { x: event.clientX, y: event.clientY, left: rect.left, bottom: Math.round(W.innerHeight - rect.bottom) };
+				// 量的是**底边距视口底**的距离:拖动只改 left / bottom,底边这个锚点全程不换。
+				// `w` 是拖动开始时这一块的真实宽度 —— 夹紧必须按它算:胶囊只有 ~168px,按 panelWidth(396)
+				// 算的话它永远拖不到最右边(左边被卡在"视口 − 396 − 12")。
+				const start = { x: event.clientX, y: event.clientY, left: rect.left, bottom: Math.round(W.innerHeight - rect.bottom), w: Math.round(rect.width) };
 				const room = isOpenPanel ? HUD_POS_MIN_ROOM : HUD_POS_PILL_ROOM;
 				let moved = false;
 				const onMove = (move) => {
@@ -1078,19 +1104,22 @@ window.__ModuleLoader__.load({
 					if (moved === false && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
 					moved = true;
 					const next = hudPosClamp({ left: start.left + dx, bottom: start.bottom - dy },
-						{ w: panelWidth }, { w: W.innerWidth, h: W.innerHeight }, room);
+						{ w: start.w }, { w: W.innerWidth, h: W.innerHeight }, room);
 					state.pos = next;
-					root.style.left = `${next.left}px`;
-					root.style.bottom = `${next.bottom}px`;
-					root.style.right = 'auto';
-					root.style.top = 'auto';
-					if (isOpenPanel === true) root.style.maxHeight = `${hudPosMaxHeight(next.bottom, { h: W.innerHeight })}px`;
+					applyPosStyle(root, next, isOpenPanel);
 				};
 				const onUp = () => {
 					W.removeEventListener('pointermove', onMove);
 					W.removeEventListener('pointerup', onUp);
 					W.removeEventListener('pointercancel', onUp);
 					if (moved === false) return;
+					// 松手这一下才决定水平锚点:贴哪边近就锚哪边(见 hudPosMake)。拖动过程中一直是
+					// 左锚的临时写法,两种写法的像素位置完全相同,所以这里换锚不会跳。
+					const finalRect = root.getBoundingClientRect();
+					const finalPos = hudPosClamp(hudPosMake({ left: finalRect.left, right: finalRect.right, bottom: finalRect.bottom },
+						{ w: W.innerWidth, h: W.innerHeight }), { w: panelWidth }, { w: W.innerWidth, h: W.innerHeight }, room);
+					state.pos = finalPos;
+					applyPosStyle(root, finalPos, isOpenPanel);
 					saveHudPos();
 					bump();
 				};
@@ -1116,7 +1145,8 @@ window.__ModuleLoader__.load({
 						if (state.pos === null) return;
 						const next = hudPosClamp(state.pos, { w: panelWidth },
 							{ w: W.innerWidth, h: W.innerHeight }, open === true ? HUD_POS_MIN_ROOM : HUD_POS_PILL_ROOM);
-						if (next.left === state.pos.left && next.bottom === state.pos.bottom) return;
+						const sameOffset = Number.isFinite(next.left) ? next.left === state.pos.left : next.right === state.pos.right;
+						if (sameOffset && next.bottom === state.pos.bottom) return;
 						state.pos = next;
 						saveHudPos();
 						bump();

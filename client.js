@@ -435,7 +435,7 @@ window.__ModuleLoader__.load({
 			collapsed: false,
 			since: Date.now(),
 			root: null,              // HUD 根元素:DOM 统计里排除它
-			pos: null,               // 面板左下角 `{ left, bottom }`;null = 停默认右下角(不落盘)
+			pos: null,               // 左下角 `{ left, bottom }` 或右下角 `{ right, bottom }`;null = 默认位置
 			fps: 0,
 			windowStart: 0,
 			windowFrames: 0,
@@ -929,6 +929,7 @@ window.__ModuleLoader__.load({
 		// 面板位置:纯函数在 model(离线可断言),这里只留同步包装(与 panelWidthFor 同一套规矩)。
 		function hudPosParse(...args) { return model().hudPosParse(...args); }
 		function hudPosClamp(...args) { return model().hudPosClamp(...args); }
+		function hudPosMake(...args) { return model().hudPosMake(...args); }
 		function hudPosMaxHeight(...args) { return model().hudPosMaxHeight(...args); }
 		function frameSeverity(...args) { return model().frameSeverity(...args); }
 		function worstLoaf(...args) { return model().worstLoaf(...args); }
@@ -2942,14 +2943,16 @@ window.__ModuleLoader__.load({
 		};
 
 		/**
-		 * 面板位置落盘:有自定义位置就写 `{ v: 1, left, bottom }`,回到默认位置就把键删掉 ——
+		 * 面板位置落盘:有自定义位置就写 `{ v: 1, left|right, bottom }`,回到默认位置就把键删掉 ——
 		 * "没有键"必须等价于"停在右下角",否则恢复逻辑要分三种情况。
+		 * 水平只存**贴得近的那一边**(见 hudPosMake):胶囊贴到最右时存 right,打开成面板右边缘不动。
 		 * 宽度**不进这个键**:收起态宽度由内容决定,存下来的旧宽度只会让夹紧算错(见 hudPosClamp)。
 		 */
 		function saveHudPos() {
 			try {
 				if (state.pos === null) localStorage.removeItem(LS_POS);
-				else localStorage.setItem(LS_POS, JSON.stringify({ v: 1, left: state.pos.left, bottom: state.pos.bottom }));
+				else if (Number.isFinite(state.pos.left)) localStorage.setItem(LS_POS, JSON.stringify({ v: 1, left: state.pos.left, bottom: state.pos.bottom }));
+				else localStorage.setItem(LS_POS, JSON.stringify({ v: 1, right: state.pos.right, bottom: state.pos.bottom }));
 			} catch (error) { /* 记不住就本次会话有效 */ }
 		}
 
@@ -3638,6 +3641,7 @@ window.__ModuleLoader__.load({
 				hostSummary,
 				hudDodge,
 				hudPosClamp,
+				hudPosMake,
 				hudPosMaxHeight,
 				HUD_POS_MIN_ROOM,
 				HUD_POS_PILL_ROOM,

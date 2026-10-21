@@ -31,6 +31,40 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	await page.waitForHud();
 	check('HUD 挂上且面板渲染出来', true);
 
+	/**
+	 * 让标题栏真的可点。别的插件可能挂一层 `position: fixed` + 高 z-index 的浮层盖在上面
+	 * (实测 `dsh-tablet` 的 `dshtb-root` 是 2147482000,叠在 HUD 的 60 之上)—— 那时 CDP 的鼠标
+	 * 事件全落在那一层上,拖动断言会以"位置没变"失败,而代码其实是对的。这里只临时隐藏**命中点上方
+	 * 的 fixed 高 z 层**,打完标签(而不是静默跳过),属主元素在 reload 后自然回来。
+	 */
+	const unhideOccluders = async () => {
+		await page.evaluate(`(() => { for (const el of document.querySelectorAll('[data-dsh-check-hidden]')) { el.style.removeProperty('display'); delete el.dataset.dshCheckHidden; } })()`);
+	};
+	const ensureClickable = async (label) => {
+		const hidden = await page.evaluate(`(() => {
+			const root = document.getElementById('dsh-perf-hud-root');
+			if (root === null) return [];
+			const rect = root.firstElementChild.getBoundingClientRect();
+			const x = Math.round(rect.left + 24);
+			const y = Math.round(rect.top + rect.height / 2);
+			const hit = document.elementFromPoint(x, y);
+			if (hit === null || root.contains(hit)) return [];
+			const hidden = [];
+			for (const el of document.elementsFromPoint(x, y)) {
+				if (root.contains(el)) break;
+				if (el === document.body || el === document.documentElement) continue;
+				const style = getComputedStyle(el);
+				if (style.position !== 'fixed' || Number(style.zIndex) <= 60) continue;
+				el.dataset.dshCheckHidden = '1';
+				el.style.display = 'none';
+				hidden.push(String(el.className).slice(0, 40) || el.tagName);
+			}
+			return hidden;
+		})()`);
+		if (hidden.length > 0) console.log(`     (${label})标题栏被别的浮层挡住,已临时隐藏:${hidden.join(', ')}`);
+	};
+	await ensureClickable('起跑');
+
 	// 位置落盘是这次新加的键:上一次手动拖过会留下它,而"停过自定义位置"会让后面的审批卡让位
 	// 那条断言失效(让位只对默认位置生效)。所以先清掉再刷新,给整条验收一个干净起点。
 	const hadPos = await page.evaluate(`(() => { try { const value = localStorage.getItem('dsh-perf-hud:pos:v1'); if (value !== null) localStorage.removeItem('dsh-perf-hud:pos:v1'); return value !== null; } catch (error) { return false; } })()`);
@@ -130,6 +164,7 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	// ── 拖动标题栏:跟手 / 越界夹住 / 落盘 / 刷新恢复 / 双击复位 ─────────────────
 	// 这里只能真发鼠标事件:拖动走的是 pointerdown + window 级 pointermove,离线套件测不到
 	// "按钮还能不能点""React 会不会在拖动中把位置写回去"这类只在该路径发生的事。
+	await ensureClickable('拖动');
 	const headRect = await page.evaluate(`(() => {
 		const root = document.getElementById('dsh-perf-hud-root');
 		const rect = root.firstElementChild.getBoundingClientRect();
@@ -160,13 +195,17 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 		const root = document.getElementById('dsh-perf-hud-root');
 		const rect = root.getBoundingClientRect();
 		return { left: Math.round(rect.left), top: Math.round(rect.top), bottom: Math.round(rect.bottom),
-			gap: Math.round(innerHeight - rect.bottom), viewportH: innerHeight };
+			gap: Math.round(innerHeight - rect.bottom), rightGap: Math.round(innerWidth - rect.right), viewportH: innerHeight };
 	})()`);
 	const saved = moved.stored === null ? null : JSON.parse(moved.stored);
 	// 锚点是左下角:键里的 bottom 是"距视口底多少",刷新之后要能对得上
 	// (底边钉住 = 展开仍然是向上长,而不是从标题栏往下长)
-	check('刷新之后回到拖过的那一格(left / 距底 bottom 都对得上,高度仍夹在视口内)',
-		saved !== null && Math.abs(restored.left - saved.left) <= 1 && Math.abs(restored.gap - saved.bottom) <= 1 && restored.bottom <= restored.viewportH,
+	// 水平锚点可能是 left 或 right(贴哪边近记哪边),两种都要对得上
+	const horizontalOk = saved !== null && (saved.left !== undefined
+		? Math.abs(restored.left - saved.left) <= 1
+		: Math.abs(restored.rightGap - saved.right) <= 1);
+	check('刷新之后回到拖过的那一格(水平锚点 / 距底 bottom 都对得上,高度仍夹在视口内)',
+		horizontalOk && saved !== null && Math.abs(restored.gap - saved.bottom) <= 1 && restored.bottom <= restored.viewportH,
 		JSON.stringify({ restored, saved }));
 	// 用户在意的正是这一条:**展开时向上长**(底边不动),而不是从标题栏往下掉。
 	// 点两次折叠/展开,底边必须回到原处(±1),否则就是锚点换方向了。
@@ -211,6 +250,56 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	})()`);
 	check('双击标题栏 → 回到右下角,位置键被删掉', reset.stored === null && Math.abs(reset.left - reset.expectedLeft) <= 1 && Math.abs(reset.bottom - (reset.viewportH - 12)) <= 1, JSON.stringify(reset));
 
+	// ── 关闭后的胶囊:必须能贴到最右边,而且打开成药丸时右边缘不动 ─────────────────
+	// 胶囊只有 ~168px、展开态 396px。左锚时按 panelWidth 夹,胶囊右边会永远空着一截死区;
+	// 现在松手按"贴哪边近"记锚点,贴右就记 right。
+	await page.evaluate(`(() => {
+		localStorage.setItem('dsh-perf-hud:on', '0');
+		localStorage.setItem('dsh-perf-hud:collapsed', '1');
+		localStorage.removeItem('dsh-perf-hud:pos:v1');
+	})()`);
+	await page.reload();
+	await page.waitForHud();
+	await new Promise((resolve) => setTimeout(resolve, 400));
+	await ensureClickable('胶囊');
+	const chip = await page.evaluate(`(() => {
+		const root = document.getElementById('dsh-perf-hud-root');
+		const head = root.firstElementChild.getBoundingClientRect();
+		const rect = root.getBoundingClientRect();
+		return { x: Math.round(head.left + head.width / 2), y: Math.round(head.top + head.height / 2),
+			width: Math.round(rect.width), left: Math.round(rect.left), right: Math.round(innerWidth - rect.right) };
+	})()`);
+	// 往右下角拖:目标点 = 视口右下角外面一点,靠夹紧把它顶到边上
+	await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: chip.x, y: chip.y, button: 'left', buttons: 1, clickCount: 1 });
+	for (let step = 1; step <= 6; step += 1) {
+		await page.send('Input.dispatchMouseEvent', {
+			type: 'mouseMoved', x: chip.x + step * 120, y: chip.y + step * 20, button: 'left', buttons: 1,
+		});
+	}
+	await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: chip.x + 720, y: chip.y + 120, button: 'left', buttons: 0, clickCount: 1 });
+	await new Promise((resolve) => setTimeout(resolve, 400));
+	const chipPlaced = await page.evaluate(`(() => {
+		const rect = document.getElementById('dsh-perf-hud-root').getBoundingClientRect();
+		return { left: Math.round(rect.left), right: Math.round(innerWidth - rect.right), width: Math.round(rect.width),
+			stored: localStorage.getItem('dsh-perf-hud:pos:v1') };
+	})()`);
+	check('关闭后的胶囊能拖到最右边(右间距 = 12,而不是按 396 卡住)',
+		chipPlaced.right <= 13 && chipPlaced.stored !== null && JSON.parse(chipPlaced.stored).right !== undefined,
+		JSON.stringify({ chip, chipPlaced }));
+	// 打开:药丸比胶囊宽一倍多,右边缘必须还贴着右边(向左长),不许越界
+	await page.evaluate(`(() => { localStorage.setItem('dsh-perf-hud:on', '1'); localStorage.setItem('dsh-perf-hud:collapsed', '1'); })()`);
+	await page.reload();
+	await page.waitForHud();
+	await new Promise((resolve) => setTimeout(resolve, 500));
+	const chipOpened = await page.evaluate(`(() => {
+		const rect = document.getElementById('dsh-perf-hud-root').getBoundingClientRect();
+		return { left: Math.round(rect.left), right: Math.round(innerWidth - rect.right), width: Math.round(rect.width), viewport: innerWidth };
+	})()`);
+	check('胶囊打开成药丸:右边缘不动(向左长),而且不越界',
+		chipOpened.right <= 13 && chipOpened.left >= 12 && chipOpened.width > chipPlaced.width,
+		JSON.stringify(chipOpened));
+	await page.evaluate(`(() => { try { localStorage.removeItem('dsh-perf-hud:pos:v1'); localStorage.setItem('dsh-perf-hud:on', '1'); } catch (error) { /* 隐私模式之类 */ } })()`);
+
 	// 窄屏(手机 / 分栏):定宽 396 会溢出去(实测 393px 视口:left = −15,标题被切掉一截),
 	// 现在宽度走 panelWidthFor → "视口 − 两边各 12"。用 CDP 的设备模拟把视口压到 393×851。
 	await page.send('Emulation.setDeviceMetricsOverride', { width: 393, height: 851, deviceScaleFactor: 3, mobile: true });
@@ -233,6 +322,7 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	const ok = threw === false && (typeof value === 'boolean' ? value === true : true);
 	check(`断言通过:${expression.slice(0, 72)}`, ok, threw === true ? value : (typeof value === 'boolean' ? JSON.stringify(value) : ''));
 	if (typeof value !== 'boolean') console.log(`     读数 ${JSON.stringify(value)}`);
+	await unhideOccluders();
 });
 
 console.log(failed === 0 ? 'ALL PASS(真页面)' : `FAILURES=${failed}`);

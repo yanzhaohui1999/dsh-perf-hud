@@ -471,6 +471,7 @@ const newPieces = [
 	'function pillCompact(',
 	'function hudPosParse(',
 	'function hudPosClamp(',
+	'function hudPosMake(',
 	'function hudPosMaxHeight(',
 	'function domWriteTable(',
 	'function domWriteSnapshot(',
@@ -781,7 +782,7 @@ const box = new Function(`${sandbox}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_RECENT_MAX, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, uniqueInteractions, evidenceGroups, evidenceGroupLine, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact, hudPosParse, hudPosClamp, hudPosMaxHeight, HUD_POS_MIN_ROOM, HUD_POS_PILL_ROOM,
+		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, uniqueInteractions, evidenceGroups, evidenceGroupLine, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact, hudPosParse, hudPosClamp, hudPosMake, hudPosMaxHeight, HUD_POS_MIN_ROOM, HUD_POS_PILL_ROOM,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -3771,6 +3772,28 @@ check('位置夹进视口:左边贴 12、底边贴 12,上边不越界(展开态�
 	{ left: 992, bottom: 709 },
 ]);
 check('窄屏:面板比视口宽时贴左边(而不是给负的左偏移)', posAt(300, 20, 1600, EX.HUD_POS_MIN_ROOM), { left: 12, bottom: 20 });
+// 右锚:贴哪边就夹哪边。胶囊(168)贴到最右是 right = 12,打开成面板时右边缘不动、向左长 ——
+// 这正是"关闭之后的胶囊能不能拖到最右边"那个问题:左锚会按 panelWidth 把左边界卡在 992,
+// 胶囊的右边永远留着一截死区。
+const posRightAt = (right, bottom, w, room) => EX.hudPosClamp({ right, bottom }, { w }, { w: 1400, h: 757 }, room);
+check('右锚同样夹进视口(左右两侧的边距都是 12)', [
+	posRightAt(-20, 12, 396, EX.HUD_POS_MIN_ROOM),
+	posRightAt(5000, 5000, 396, EX.HUD_POS_MIN_ROOM),
+], [
+	{ right: 12, bottom: 12 },
+	{ right: 992, bottom: 537 },
+]);
+check('松手时按"贴哪边近"定锚:贴右 → right,贴左 → left,正中偏右也算右',
+	[
+		EX.hudPosMake({ left: 1220, right: 1388, bottom: 709 }, { w: 1400, h: 757 }),   // 胶囊贴最右:右间距 12 < 左 1220
+		EX.hudPosMake({ left: 12, right: 180, bottom: 709 }, { w: 1400, h: 757 }),     // 胶囊贴最左
+		EX.hudPosMake({ left: 700, right: 1088, bottom: 709 }, { w: 1400, h: 757 }),   // 中间:左 700 / 右 312 → 右锚
+	],
+	[
+		{ right: 12, bottom: 48 },
+		{ left: 12, bottom: 48 },
+		{ right: 312, bottom: 48 },
+	]);
 // 宽度必须由调用点按**当前状态的上界**传(panelWidth),不能存"上次拖动时量到的宽度":
 // 收起态的宽度由内容决定,拿旧读数夹会让"chip 拖到右边 → 打开药丸"越界一截。
 check('位置夹紧的宽度来自 panelWidth,不是落盘里存下来的旧宽度(宽度只有一个来源)',
@@ -3789,19 +3812,22 @@ check('自定义位置的高度上限跟着底边算(与默认位置的 82vh 同
 check('hudPosMaxHeight 的调用点传的是 { h } 视口对象,不是数字',
 	[(uiSource.match(/hudPosMaxHeight\(/g) ?? []).length, (uiSource.match(/hudPosMaxHeight\([^)]*\{ h: W\.innerHeight \}\)/g) ?? []).length],
 	[2, 2]);
-check('位置落盘宽容解析:数字才认,旧版本里多出来的字段一律忽略', [
+check('位置落盘宽容解析:数字才认,left / right 二选一,旧版本一律忽略', [
 	EX.hudPosParse('{"v":1,"left":120,"bottom":80,"w":396}'),
 	EX.hudPosParse('{"left":120.4,"bottom":80.6}'),
+	EX.hudPosParse('{"v":1,"right":12,"bottom":48}'),
 	EX.hudPosParse('{"left":"120","bottom":80}'),
 	// 上一版存的是 { left, top }:没有 bottom → 当作没拖过(停回右下角),不猜方向
 	EX.hudPosParse('{"v":1,"left":120,"top":80}'),
+	EX.hudPosParse('{"bottom":80}'),
 	EX.hudPosParse('null'),
 	EX.hudPosParse('not json'),
 	EX.hudPosParse(null),
 ], [
 	{ left: 120, bottom: 80 },
 	{ left: 120, bottom: 81 },
-	null, null, null, null, null,
+	{ right: 12, bottom: 48 },
+	null, null, null, null, null, null,
 ]);
 check('位置也是布局:拖过之后 layoutDirty 才为真', (() => {
 	const watchSaved = { ...box.state.watch };
