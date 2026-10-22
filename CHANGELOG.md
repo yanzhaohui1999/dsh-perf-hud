@@ -233,6 +233,18 @@ i18n 词典 406 键。
   及其两个常量(它们必须排在 `PKG` 之后:`SELF_NAMES` 用它)。
 
 
+### 发布(2026-10-22,0.7.0)
+
+- **npm**:`latest → 0.7.0`,带 provenance(CI OIDC),包内 **29 个文件 / 995,482 字节**;`release.yml` 的
+  「tag 与 version 一致」→ 655 条离线断言 → `Pack and inspect` → registry 幂等检查 → `npm publish`
+  全程绿(25 秒)。
+- **门禁**:655 条离线断言(attribution 11 / logic 603 / host 41);五个真页面验收器与 `dead-code`
+  全绿;连续三轮跑 `check-counts` 不再变色(冷启动时序两条、原因块形态一条,都与产品行为无关)。
+- **CHANGELOG 结构修复**:上一版发布后 `## [0.6.0]` 的标题丢了,0.6.0 的条目与之后的条目混在一个
+  `## [Unreleased]` 里。这次拆开归档,顶部留空 Unreleased。
+- **文档同步**:README / README_EN 的徽章与固定版本安装命令 → `v0.7.0`;REVIEW 门槛 #2 / #5;
+  `release.yml` 的断言数字 620 → 655。
+
 ## [0.6.0] - 2026-10-19
 
 ### 客户端(2026-10-18,拆成包内分片)

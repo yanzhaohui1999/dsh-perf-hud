@@ -20,7 +20,7 @@
 | 7 | 投稿形式 | ✅ 2026-10-18 提 PR [awesome-dsh-plugin#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814)(单文件 `data/plugins/…yml`),**2026-10-19 01:29 已合并** |
 | 8 | 兼容性声明 | ✅ `engines.dsh` 与三个客户端 inject 包统一 `>=0.2.0-rc.2 <0.3.0-0`;本机 `0.2.1-rc.1` 下五个真页面验收器全绿 |
 
-**对外项已全部闭环(2026-10-19)**:收录 PR 已合并;npm 文本搜索索引已恢复 —— `/-/v1/search?text=dsh-perf-hud` 第 1 条就是 `dsh-perf-hud 0.5.0`(0.5.0 发布后索引自行追上,2026-10-19 实测)。两条原来的未完成项与证据见 [验收档案](docs/plans/2026-10-11-acceptance-evidence.md)。
+**对外项已全部闭环(2026-10-19;2026-10-22 的 0.7.0 复跑一遍仍全绿)**:收录 PR 已合并;npm 文本搜索索引已恢复 —— `/-/v1/search?text=dsh-perf-hud` 第 1 条就是 `dsh-perf-hud 0.5.0`(0.5.0 发布后索引自行追上,2026-10-19 实测)。两条原来的未完成项与证据见 [验收档案](docs/plans/2026-10-11-acceptance-evidence.md)。
 
 ---
 
