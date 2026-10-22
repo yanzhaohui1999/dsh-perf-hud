@@ -195,7 +195,9 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	const zipInfo = await evaluate(`(async () => {
 		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 		let row = null;
-		for (let attempt = 0; attempt < 60 && row === null; attempt += 1) {
+		// 冷启动的页面很忙:首屏卡顿会让守夜连续触发,pending 可能要挂十几秒才有空窗(实测最多 29 秒),
+		// 所以上限给到 120 次(约 60 秒),而不是 30 秒就断言"抓不到"。
+		for (let attempt = 0; attempt < 120 && row === null; attempt += 1) {
 			// 先等自动捕获的后摇结束:手动标记会被并进 pending,那样样本不带备注。
 			// 每次尝试前再清一次留存清单:severity=0 的手动标记会被"最差 10 条"挤掉。
 			if (window.__perfHud.watch().pending !== null) {
@@ -205,8 +207,12 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 			window.__perfHud.clearIncidents();
 			const result = window.__perfHud.capture('验收:带备注 token=SECRET_NOTE');
 			if (result !== null && result !== undefined && result.ok === true && result.incident !== null && result.incident !== undefined) {
-				await sleep(300);   // 结算后的那一条要落进留存清单
-				row = window.__perfHud.incidents().find((item) => item.id === result.incident.id) ?? null;
+				// 结算(切片 → 留存 → 落盘)是异步的:手动标记回退 WATCH_REACTION_MS 之后还要等定时器。
+				// 固定 sleep(300) 在繁忙页面里会抢跑 —— 轮询到它真的出现在留存清单里(最多 3 秒)。
+				for (let wait = 0; wait < 20 && row === null; wait += 1) {
+					await sleep(150);
+					row = window.__perfHud.incidents().find((item) => item.id === result.incident.id) ?? null;
+				}
 			}
 			if (row === null) await sleep(500);
 		}
