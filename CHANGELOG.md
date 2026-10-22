@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-21
+
 ### 面板可拖动,位置落盘(2026-10-20)
 
 标题栏原来只是一行标题 + 控件;现在整行(按钮除外)都是拖动带:按住拖到任意位置、松手记住、
@@ -230,6 +232,8 @@ i18n 词典 406 键。
 - `logic.mjs` 守夜盒补 `blameText` / `blameName` / `looksLikeInfrastructure` / `isRecorderName`
   及其两个常量(它们必须排在 `PKG` 之后:`SELF_NAMES` 用它)。
 
+
+## [0.6.0] - 2026-10-19
 
 ### 客户端(2026-10-18,拆成包内分片)
 
@@ -616,6 +620,7 @@ i18n 词典 406 键。
   [AGENTS.md](AGENTS.md) §0.1,`LANDSCAPE.md`(生态与撞车矩阵)并进 [AGENTS.md](AGENTS.md) §12 —— 三份带日期的
   记录文档删除,git 历史里还在
 
+[0.7.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.7.0
 [0.6.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.6.0
 [0.5.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.5.0
 [0.4.0]: https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v0.4.0
