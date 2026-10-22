@@ -108,6 +108,13 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	console.log(`     page = ${privacy.page}`);
 
 	// ── 计数:清干净 → 手动标记一次 → 口径与落盘都要对 ──
+	// ⚠️ 清计数之前先等守夜把 pending 结算掉:否则"触发"发生在 clearTally 之前、"结算"发生在之后,
+	// 留存里多出一条而计数桶里没有它 —— `kept ≤ detected` 会在清空那一瞬假失败(实测偶发)。
+	await evaluate(`(async () => {
+		const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		for (let i = 0; i < 20 && window.__perfHud.watch().pending !== null; i += 1) await sleep(300);
+		return true;
+	})()`);
 	const before = await evaluate(`(() => {
 		window.__perfHud.clearTally();
 		window.__perfHud.clearIncidents();
@@ -136,8 +143,11 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 		};
 	})()`);
 	check('口径在真页面上也成立:检测到 = triggered', [after.detected, after.triggered], [after.triggered, after.triggered]);
-	check('coalesced 不是次数 —— 一次卡顿在后摇窗口里每帧触发,把两者相加会虚报',
-		[after.coalesced === 0 ? true : after.detected !== after.captured + after.coalesced], [true]);
+	// ⚠️ 这里原先用 `detected !== captured + coalesced` 来证明"两者不能相加" —— 数值一巧合就假红
+	// (实测三轮里红一轮,而产品行为没问题)。改成直接钉**上下界**:切成现场的次数与留存条数
+	// 都不可能超过检测次数;被并掉的触发(triggered)不在这里加一,两个数各有各的名字。
+	check('切现场 / 留存的次数都不会超过检测次数',
+		[after.captured <= after.detected, after.kept <= after.detected], [true, true]);
 	check('真捕获进了桶(至少 +1)', [after.captured >= 1, after.detected >= 1], [true, true]);
 	check('留存份数是另一个数:kept ≤ detected(它只多不少不了)', after.kept <= after.detected, true);
 	check('计数落盘了(不是只在内存里)', after.storedBuckets >= 1 && after.storedCaptured >= 1, true);
@@ -251,20 +261,32 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	await evaluate(`localStorage.setItem('dsh-perf-hud:collapsed','0'); localStorage.setItem('dsh-perf-hud:view:v1', JSON.stringify({ v: 1, view: 'main', devTab: 'frames', trendMs: 3600000 }))`);
 	await reload();
 	const mainText = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
-	check('主界面:原因块在,而且默认**不出现**包名(普通用户看到的是人话线索)',
-		[/可能原因/.test(mainText), /某个脚本模块的耗时偏高|这一段时间里有较重的渲染任务|宿主进程那侧偏忙|缺少能解释这次停顿的 JS 证据/.test(mainText),
-			/@deepseek-ai\/|dsh-/.test(mainText)],
+	// 原因块有**两种如实形态**:给了人话线索,或者明确说"没有足够证据"。后者不是失败 ——
+	// 手动标记的那条样本可能整段窗口都没有长任务 / LoAF(冷启动的空闲页就是这样),
+	// 这时 `causeCandidates()` 返回空,面板按规则**不渲染**「为什么这样判断?」按钮(按钮按需出现)。
+	// 以前这里假定"一定有候选",于是同一份代码在忙页面上绿、空闲页面上红(实测三轮两色)。
+	const causeHuman = /某个脚本模块的耗时偏高|这一段时间里有较重的渲染任务|宿主进程那侧偏忙|缺少能解释这次停顿的 JS 证据/.test(mainText);
+	const causeNone = mainText.includes('没有足够证据给出候选原因');
+	check('主界面:原因块只有两种形态(人话线索 / 明确说没有候选),两种都不印包名',
+		[/可能原因/.test(mainText), causeHuman !== causeNone, /@deepseek-ai\/|dsh-/.test(mainText)],
 		[true, true, false]);
-	check('主界面:默认不铺展开区(支持 / 限制要先点开)',
-		[mainText.includes('以下是原始证据'), mainText.includes('为什么这样判断?')], [false, true]);
 
-	const why = await clickText(evaluate, '为什么这样判断?');
-	const expanded = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
-	check('展开「为什么这样判断?」之后才给原始包名与支持 / 限制(要查的时候够得着)',
-		[why, expanded.includes('以下是原始证据'), expanded.includes('支持:'), expanded.includes('限制:'),
-			/不等于已定位根因/.test(expanded)],
-		['clicked', true, true, true, true]);
-	console.log(`     展开后片段 = ${JSON.stringify(expanded.slice(expanded.indexOf('以下是原始证据'), expanded.indexOf('以下是原始证据') + 120).replace(/\s+/g, ' '))}`);
+	if (causeHuman) {
+		check('主界面:默认不铺展开区(支持 / 限制要先点开)',
+			[mainText.includes('以下是原始证据'), mainText.includes('为什么这样判断?')], [false, true]);
+		const why = await clickText(evaluate, '为什么这样判断?');
+		const expanded = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
+		// 限制那一句**按候选类型不同**:脚本 / 长任务 / 宿主三类都带"不等于已定位根因",
+		// 而「缺少 JS 证据」那条的限制是"没有 JS 证据",两者都算如实 —— 只钉住"限制存在且非空"。
+		check('展开「为什么这样判断?」之后才给原始包名与支持 / 限制(要查的时候够得着)',
+			[why, expanded.includes('以下是原始证据'), expanded.includes('支持:'), expanded.includes('限制:'),
+				/不等于已定位根因/.test(expanded) || /没有 JS|证据不足|未归因/.test(expanded)],
+			['clicked', true, true, true, true]);
+		console.log(`     展开后片段 = ${JSON.stringify(expanded.slice(expanded.indexOf('以下是原始证据'), expanded.indexOf('以下是原始证据') + 120).replace(/\s+/g, ' '))}`);
+	} else {
+		check('没有候选原因时不渲染「为什么这样判断?」(按钮按需出现,不留点了没反应的动作)',
+			[causeNone, mainText.includes('以下是原始证据'), mainText.includes('为什么这样判断?')], [true, false, false]);
+	}
 
 	// 分享前预览:点「导出诊断报告」不许直接下载,先摊清单
 	const previewOpen = await clickText(evaluate, '导出诊断报告');
