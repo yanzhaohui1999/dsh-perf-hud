@@ -2331,10 +2331,15 @@ check('主界面只吃时间语义(结构上不碰 selectedIncident / 手选那�
 	return [seg.includes('selectedIncident') === false, seg.includes('props.latest'), /const latestRow = latestIncident\(\);/.test(renderSource)];
 })(), [true, true, true]);
 check('主界面的人话行里没有 item.name(包名只在展开区出现)', (() => {
+	// 2026-10-24 改版:原因行从 blockLabel 改成「序号 + 人话 + 强度」三格,
+	// 但**规矩没变** —— 包名只允许出现在 props.why 的展开分支里。
 	const seg = extract(renderSource, 'function mainView(');
-	const plainLine = /h\('div', \{ style: S\.blockLabel \}, `\$\{index \+ 1\}\. \$\{causePlainLead\(item\)\} · \$\{strengthText\(item\.strength\)\}`\)/.test(seg);
-	const whyBranch = /props\.why !== true \? null : h\('div', null,[\s\S]{0,400}?short\(item\.name\)/.test(seg);
-	return [plainLine, whyBranch];
+	const plainLine = /h\('span', \{ style: S\.causeText \}, causePlainLead\(item\)\)/.test(seg);
+	const whyAt = seg.indexOf('props.why === true');
+	const nameOnlyInWhy = whyAt > 0
+		&& seg.slice(0, whyAt).includes('item.name') === false
+		&& seg.slice(whyAt).includes('short(item.name)');
+	return [plainLine, nameOnlyInWhy];
 })(), [true, true]);
 
 // ── ② 人话原因:不出现包名 / 文件名 / 数字 ──

@@ -212,17 +212,20 @@ await withPage({ port: Number(opt('port', '9370')), url: opt('url', undefined), 
 	const flip = await page.evaluate(`(async () => {
 		const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 		const bottomOf = () => Math.round(document.getElementById('dsh-perf-hud-root').getBoundingClientRect().bottom);
+		// 2026-10-24:标题栏的收起/关闭换成图标按钮,文字没了 —— 按 aria-label / title 找,
+		// 纯文字按钮仍然按 textContent 找(两种都认,验收器不再绑死"按钮上有字")。
 		const clickBy = (label) => {
 			const root = document.getElementById('dsh-perf-hud-root');
-			const button = [...root.querySelectorAll('button')].find((node) => node.textContent === label);
+			const button = [...root.querySelectorAll('button')].find((node) => node.textContent === label
+				|| node.getAttribute('aria-label') === label || node.title === label);
 			if (button === undefined) throw new Error('没找到按钮 ' + label);
 			button.click();
 		};
 		const expanded = bottomOf();
-		clickBy('–');
+		clickBy('折叠');
 		await wait(600);
 		const collapsed = bottomOf();
-		clickBy('+');
+		clickBy('展开');
 		await wait(600);
 		const reopened = bottomOf();
 		return { expanded, collapsed, reopened };

@@ -210,6 +210,7 @@ window.__ModuleLoader__.load({
 			next: [['path', { d: 'M6.5 3.5L11 8l-4.5 4.5' }]],
 			copy: [['rect', { x: 5.5, y: 5.5, width: 7, height: 7, rx: 1.4 }], ['path', { d: 'M10.5 3.5h-6a1 1 0 00-1 1v6' }]],
 			download: [['path', { d: 'M8 2.5v7M5 6.8L8 9.8l3-3M3 11.5v1.2h10v-1.2' }]],
+			chev: [['path', { d: 'M6 3.5l4.5 4.5L6 12.5' }]],
 		};
 		function panelIcon(name, size) {
 			const spec = ICONS[name] ?? [];
@@ -267,71 +268,73 @@ window.__ModuleLoader__.load({
 			const trendMs = props.trendMs;
 			const trendRaw = trendRawText(trendMs);
 			// 60 秒帧分布:守夜只收 ≥100ms 的事故,"每帧 50ms 的 20fps 段"一条都不会触发。
-			// 独立一块 + 五行表:一条长串塞进 396px 只会被浏览器在 `16.7–` 中间乱断。
 			const mix = frameMixNow();
 			const mixRows = frameMixRows(mix);
-			const kids = [
-				h('div', { style: S.block, title: health.reason === '' ? t('healthHint') : health.reason },
-					h('div', { style: S.blockLabel }, t('mainStatus')),
-					h('div', {
-						style: {
-							...S.blockValue,
-							color: health.level === 'ok' ? 'var(--dsw-alias-state-success-primary)'
-								: health.level === 'stall' ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-label-secondary)',
-						},
-					}, `${healthIcon(health.level)} ${healthText(health.level)} · ${health.fps.toFixed(0)} fps${health.reason === '' ? '' : ` · ${health.reason}`}`)),
-			];
-			// 帧分布:每档一行(标签 / 条数 / 占比),数字右对齐、等宽数字,读起来是张表而不是一句话
-			kids.push(h('div', { style: S.sep, title: t('frameMixHint') },
-				h('div', { style: S.blockLabel }, mix === null
-					? t('frameMix')
-					: `${t('frameMix')} · ${frameMixCountText(mix.total)}${t('framesUnit')}`),
-				mix === null
-					? h('div', { style: { ...S.sub, marginTop: 2 } }, t('frameMixEmpty'))
-					: h('div', { style: { marginTop: 2 } }, mixRows.map((item) => h('div', {
-						key: item.label,
-						style: { display: 'flex', gap: 8, alignItems: 'baseline', lineHeight: 1.5, fontSize: 12 },
-					},
-						h('span', { style: { flex: '0 0 72px', color: 'var(--dsw-alias-label-secondary)', fontVariantNumeric: 'tabular-nums' } }, item.label),
-						h('span', { style: { flex: '1 1 auto' } }),
-						h('span', { style: { flex: '0 0 56px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, item.countText),
-						h('span', { style: { flex: '0 0 64px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' } }, item.pctText))))));
-			// 最近一次卡顿:持续时间 / 何时 / 现场留没留住
+			const kids = [];
+
+			// ① 当前帧率:这一屏唯一的大数。状态词退到它下面,而且**只在不是 ok 时**出现 ——
+			//    "健康"两个字只是把绿颜色再说一遍。
+			kids.push(h('div', { style: S.heroBlock, title: health.reason === '' ? t('healthHint') : health.reason },
+				h('div', { style: { ...S.heroNum, color: levelFrame(state.fps, state.frameWorst) } },
+					state.fps.toFixed(1), h('span', { style: S.heroUnit }, 'fps')),
+				health.level === 'ok' ? null : h('div', { style: S.heroState },
+					`${healthIcon(health.level)} ${healthText(health.level)}${health.reason === '' ? '' : ` · ${health.reason}`}`)));
+
+			// ② 60 秒帧条(一格一秒;点得动 —— 只有真能跳到那一格的长帧才给手型)。
+			kids.push(h('div', { style: S.stripWrap, title: t('sparkHint') }, sparkStrip()));
+
+			// ③ 帧分布:帧条的合计。占比在前、档位与条数在后,六格两行 —— 不再是一条 44 字的长串。
+			kids.push(mix === null
+				? h('div', { style: S.mixEmpty }, t('frameMixEmpty'))
+				: h('div', { style: S.mixGrid, title: t('frameMixHint') },
+					mixRows.map((item) => h('div', { key: item.label, style: S.mixCell },
+						h('b', { style: S.mixPct }, item.pctText),
+						h('span', { style: S.mixLabel }, `${item.label} · ${item.countText}`)))));
+
+			// ④ 最近一次卡顿:主角是"多久";原因缩进挂在它下面 —— 从属关系由位置表达,
+			//    不再写「最近一次卡顿 / 可能原因」两个眉标。
 			if (row === null) {
-				kids.push(h('div', { style: S.sep },
-					h('div', { style: S.blockLabel }, t('mainLast')),
-					h('div', { style: { ...S.blockValue, color: 'var(--dsw-alias-label-secondary)' } }, t('noStallYet'))));
+				kids.push(h('div', { style: S.emptyRow }, t('noStallYet')));
 			} else {
 				const level = severityLevel(row.severity);
-				kids.push(h('div', { style: S.sep },
-					h('div', { style: S.blockLabel }, t('mainLast')),
-					h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
-						h('span', { style: { ...S.hero, color: severityColor(level) } }, secondsText(row.severity)),
-						h('span', { style: { ...S.label, color: severityColor(level) } }, severityText(level))),
-					h('div', { style: S.sub }, lastStallSubText(row)),
-					h('div', { style: S.buttons },
-						h('button', { type: 'button', style: S.btn, onClick: () => props.onOpen(row.id) }, t('viewThisStall')),
-						// 这是**给 AI 的那条路**:先出预览(写明脱了什么),再生成
-						h('button', { type: 'button', style: S.btn, title: t('exportAiHint'), onClick: () => props.onExportPreview(row.id) }, t('exportReport')))));
-			}
-			// 可能原因:最多 3 条。**普通用户看到的只有"线索类别 + 强度"** ——
-			// 原始包名 / 毫秒 / 支持证据收进「为什么这样判断?」展开区(要查的时候够得着)。
-			// 展开区里那句限制一直在:不编模块功能,也不把相关写成根因。
-			kids.push(h('div', { style: S.sep },
-				h('div', { style: S.blockLabel }, t('mainCause')),
-				causes.length === 0
-					? h('div', { style: { ...S.blockValue, color: 'var(--dsw-alias-label-secondary)' } }, row === null ? t('noCauseYet') : t('packNoCandidate'))
-					: h('div', null, causes.map((item, index) => h('div', { key: `${index}-${item.kind}`, style: S.block },
-						h('div', { style: S.blockLabel }, `${index + 1}. ${causePlainLead(item)} · ${strengthText(item.strength)}`),
-						props.why !== true ? null : h('div', null,
+				const color = severityColor(level);
+				kids.push(h('div', {
+					style: { ...S.incBlock, borderLeftColor: color },
+					title: t('viewThisStall'),
+					onClick: () => props.onOpen(row.id),
+				},
+					h('div', { style: S.incMain },
+						h('span', { style: { ...S.incDur, color } },
+							String(Math.round(row.severity)), h('span', { style: S.incUnit }, 'ms')),
+						h('span', { style: { ...S.incSev, color } }, severityText(level)),
+						h('span', { style: S.incMeta }, lastStallSubText(row)),
+						h('button', {
+							type: 'button', className: 'picon', style: S.iconBtnSmall,
+							title: t('causeWhyHint'),
+							'aria-label': props.why === true ? t('causeWhyHide') : t('causeWhy'),
+							onClick: (event) => { event.stopPropagation(); props.onWhy(props.why !== true); },
+						}, props.why === true ? '–' : '?'),
+						h('button', {
+							type: 'button', className: 'picon', style: S.iconBtnSmall, title: t('exportAiHint'),
+							'aria-label': t('exportReport'),
+							onClick: (event) => { event.stopPropagation(); props.onExportPreview(row.id); },
+						}, panelIcon('download')),
+						panelIcon('chev', 12)),
+					h('div', { style: S.causes },
+						causes.length === 0
+							? h('div', { style: S.cause }, row === null ? t('noCauseYet') : t('packNoCandidate'))
+							: causes.map((item, index) => h('div', { key: `${index}-${item.kind}`, style: S.cause },
+								h('span', { style: S.causeN }, String(index + 1)),
+								h('span', { style: S.causeText }, causePlainLead(item)),
+								h('span', { style: S.causeStrength }, strengthText(item.strength)))),
+						// 原始线索(包名 / 毫秒 / 证据 / 限制)仍然够得着:一个小 ? 按钮,不占正文。
+						props.why === true ? causes.map((item, index) => h('div', { key: `why-${index}`, style: { ...S.sub, marginTop: 4 } },
 							h('div', { style: { ...S.sub, color: 'var(--dsw-alias-label-secondary)' } }, t('causeRawNote')),
 							h('div', { style: { ...S.sub, fontFamily: MONO_FONT } }, `${item.lead}${item.name === null ? '' : ` · ${short(item.name)}`} · ${t('packProvenance')}:${provenanceText(item.provenance)}`),
-							// 支持 / 限制各占一行:塞进一行会被折在词中间(§5「长文本用块式」)
 							h('div', { style: S.sub }, `${t('packSupport')}:${item.basis.join(' / ')}`),
-							h('div', { style: S.sub }, `${t('packLimits')}:${item.limits.join(' / ')}`))))),
-				causes.length === 0 ? null : h('div', { style: S.buttons },
-					h('button', { type: 'button', style: S.btn, title: t('causeWhyHint'), onClick: () => props.onWhy(props.why !== true) },
-						props.why === true ? t('causeWhyHide') : t('causeWhy')))));
+							h('div', { style: S.sub }, `${t('packLimits')}:${item.limits.join(' / ')}`))) : null,
+						)));
+			}
 			// 分享前预览:还没生成文件,先把"包含什么 / 脱了什么 / 少了什么"摊出来
 			if (props.preview !== null && props.preview !== undefined) {
 				const preview = props.preview;
@@ -345,19 +348,26 @@ window.__ModuleLoader__.load({
 						h('button', { type: 'button', style: S.btn, onClick: () => props.onExportGo() }, t('previewGo')),
 						h('button', { type: 'button', style: S.btn, onClick: () => props.onExportCancel() }, t('previewCancel')))));
 			}
-			// 最近趋势:次数 / 最长一次 / 重复线索 —— 窗口可切(1 小时 / 24 小时)
-			kids.push(h('div', { style: S.sep },
-				h('div', { style: { ...S.row, marginTop: 0 } },
-					h('span', { style: S.label }, trendMs === TALLY_TREND_LONG_MS ? t('mainTrend24') : t('mainTrend1')),
-					h('button', { type: 'button', style: S.btn, title: t('trendSwitchHint'), onClick: () => props.onRange(trendMs === TALLY_TREND_LONG_MS ? TALLY_TREND_SHORT_MS : TALLY_TREND_LONG_MS) },
-						`→ ${trendMs === TALLY_TREND_LONG_MS ? t('mainTrend1') : t('mainTrend24')}`)),
-				h('div', { style: S.blockValue, title: t('trendHint') }, trendText(trendMs)),
-				props.why !== true ? null : (trendRaw === null ? null : h('div', { style: { ...S.sub, fontFamily: MONO_FONT } }, trendRaw)),
-				h('div', { style: S.sub }, t('trendScope'))));
-			// 入口:只留一个 —— 「设置」在标题栏里常驻(每个视图都在),主界面再放一个就是同一个动作
-			// 在同屏出现两次。
-			kids.push(h('div', { style: { ...S.sep, display: 'flex', gap: 8, flexWrap: 'wrap' } },
-				h('button', { type: 'button', style: S.btn, title: t('devEntryHint'), onClick: () => props.onDev() }, t('devEntry'))));
+			// ⑤ 最近趋势:次数 / 最长一次 / 重复线索。窗口切换改成两格分段控件,
+			//    原来是"→ 最近 24 小时"这种带箭头的文字按钮(它把"当前"和"目标"写在同一个位置上)。
+			kids.push(h('div', { style: S.trendRow, title: t('trendScope') },
+				h('span', { style: S.trendText }, trendText(trendMs)),
+				h('div', { style: S.seg },
+					h('button', {
+						type: 'button', style: { ...S.segItem, ...(trendMs !== TALLY_TREND_LONG_MS ? S.segOn : null) },
+						title: t('mainTrend1'), onClick: () => props.onRange(TALLY_TREND_SHORT_MS),
+					}, t('mainTrend1')),
+					h('button', {
+						type: 'button', style: { ...S.segItem, ...(trendMs === TALLY_TREND_LONG_MS ? S.segOn : null) },
+						title: t('mainTrend24'), onClick: () => props.onRange(TALLY_TREND_LONG_MS),
+					}, t('mainTrend24')))));
+			if (props.why === true && trendRaw !== null) {
+				kids.push(h('div', { style: { ...S.sub, fontFamily: MONO_FONT } }, trendRaw));
+			}
+			// 入口:只留一个 —— 「设置」在标题栏里常驻(每个视图都在),主界面再放一个就是同一个动作。
+			kids.push(h('div', { style: S.linkRow },
+				h('button', { type: 'button', style: S.linkBtn, title: t('devEntryHint'), onClick: () => props.onDev() },
+					t('devEntry'), panelIcon('chev', 11))));
 			return kids;
 		}
 		/**
@@ -1231,7 +1241,7 @@ window.__ModuleLoader__.load({
 					h('span', { style: S.brand, title: t('title') }, view === 'main' ? t('title') : viewTitle),
 					// 场景标签与标题一样是**文字**,一样可以让位(先出省略号):不变的是控件。
 					h('span', { style: { ...S.label, color: scene.color, flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, scene.text),
-					h('span', { style: { ...S.num, flex: '0 0 auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(1)} fps`)),
+					view === 'main' ? null : h('span', { style: { ...S.num, flex: '0 0 auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(1)} fps`)),
 				h('div', { style: S.headRight },
 					h('button', { type: 'button', className: 'picon', style: S.iconBtn, title: t('settingsHint'), 'aria-label': t('viewSettings'), onClick: () => setView(view === 'settings' ? 'main' : 'settings') }, panelIcon('sliders')),
 					h('button', { type: 'button', className: 'picon', style: S.iconBtn, title: open ? t('collapse') : t('expand'), 'aria-label': open ? t('collapse') : t('expand'), onClick: toggle }, panelIcon(open ? 'minus' : 'plus')),
