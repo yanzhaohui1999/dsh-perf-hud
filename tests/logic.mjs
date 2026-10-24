@@ -2342,6 +2342,15 @@ check('主界面的人话行里没有 item.name(包名只在展开区出现)', (
 	return [plainLine, nameOnlyInWhy];
 })(), [true, true]);
 
+check('flow:设置与卡顿详情的返回落在来源,不是永远回主界面(静态)', (() => {
+	// 2026-10-24:进设置记下来源、← 用 backTo;卡顿详情同理(开发者详情进来就回开发者详情)。
+	const setViewSrc = extract(source, 'function setView(');
+	const recordsSource = /next === 'settings' && state\.view !== 'settings'[\s\S]{0,60}state\.settingsBack = state\.view/.test(setViewSrc);
+	const usesBackTo = /onClick: \(\) => setView\(backTo\)/.test(renderSource)
+		&& /view === 'settings' && state\.settingsBack !== 'settings' \? state\.settingsBack : 'main'/.test(renderSource);
+	return [recordsSource, usesBackTo];
+})(), [true, true]);
+
 // ── ② 人话原因:不出现包名 / 文件名 / 数字 ──
 check('每一种候选都有对应的"人话"分类(四种都非空且不相同)', (() => {
 	const kinds = ['script', 'longtask', 'host', 'unknown'];

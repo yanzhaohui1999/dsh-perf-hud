@@ -28,10 +28,13 @@ const check = (name, ok, detail = '') => {
 
 /** 按可见文字点一个按钮(面板没有 test-id,按文案点最接近"用户真的点了它")。 */
 const clickText = (page, text) => page.evaluate(`(() => {
-	const nodes = [...document.querySelectorAll('#dsh-perf-hud-root button')].filter((node) => node.textContent.trim() === ${JSON.stringify(text)});
+	const nodes = [...document.querySelectorAll('#dsh-perf-hud-root button')].filter((node) => node.textContent.trim() === ${JSON.stringify(text)}
+		|| node.getAttribute('aria-label') === ${JSON.stringify(text)});
 	if (nodes.length === 0) return 'missing';
-	if (nodes[0].disabled === true) return 'disabled';
-	nodes[0].click();
+	// 同名按钮可能有好几个(比如技术细节里那个禁用副本):优先点**可用**的那个
+	const usable = nodes.find((node) => node.disabled !== true);
+	if (usable === undefined) return 'disabled';
+	usable.click();
 	return 'clicked';
 })()`);
 
@@ -71,15 +74,23 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 
 	// 方案 1 的入口在主界面:「查看这次卡顿」→ 进历史事故详情视图。
 	// 「看这一帧」仍在开发者详情的「最差事件」块里(能力没删),所以这里先试主入口再兜底。
-	const clicked = await clickText(page, '查看这次卡顿');
+	// 2026-10-24:主界面不再有「查看这次卡顿」按钮 —— 整块事故行可点(data-incident-open)。
+	// 先点这一块,再兜底到旧的两种入口(开发者详情的「看这一帧」)。
+	const clicked = await page.evaluate(`(() => {
+		const node = document.querySelector('#dsh-perf-hud-root [data-incident-open]');
+		if (node === null) return 'missing';
+		node.click();
+		return 'clicked';
+	})()`);
 	const clickedOld = clicked === 'clicked' ? clicked : await clickText(page, '看这一帧');
-	check('主界面「查看这次卡顿」可点,并且切进了历史事故详情视图', clickedOld === 'clicked', clickedOld);
+	check('主界面事故块可点,并且切进了历史事故详情视图', clickedOld === 'clicked',
+		JSON.stringify({ entry: clicked, fallback: clicked === 'clicked' ? null : clickedOld }));
 
 	const ctxIncident = await contextBar(page);
 	check('详情区第一行是**历史事故**上下文(不是实时那一支)', typeof ctxIncident === 'string' && ctxIncident.includes('历史事故') && ctxIncident.includes('历史帧'), JSON.stringify(ctxIncident));
 	check('卡顿详情视图是独立一屏(标题带视图名,而且有返回箭头)', (await page.evaluate(`(() => {
 		const head = document.querySelector('#dsh-perf-hud-root').innerText.split(String.fromCharCode(10))[0];
-		const back = [...document.querySelectorAll('#dsh-perf-hud-root button')].some((node) => node.textContent.trim() === '←');
+		const back = [...document.querySelectorAll('#dsh-perf-hud-root button')].some((node) => node.textContent.trim() === '←' || node.getAttribute('aria-label') === '←');
 		return { head, back };
 	})()`)).back === true, '');
 	check('事故回放的时间轴在场(历史帧条)', (await frameCount(page)) > 0);
@@ -93,7 +104,7 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 			leaked: ['帧里花在哪', '可疑脚本', '按包', 'Long Task', '交叉表'].filter((needle) => text.includes(needle)),
 			timeline: text.includes('历史帧时间轴'),
 			actions: ['复制摘要', '导出事故包'].filter((label) => text.includes(label)).length,
-			back: [...document.querySelectorAll('#dsh-perf-hud-root button')].filter((node) => node.textContent.trim() === '←').length,
+			back: [...document.querySelectorAll('#dsh-perf-hud-root button')].filter((node) => node.textContent.trim() === '←' || node.getAttribute('aria-label') === '←').length,
 		};
 	})()`);
 	check('卡顿详情分层:结论层在场(时间轴 + 复制摘要 + 导出事故包),技术读数默认收起在「技术细节」里',
@@ -197,8 +208,11 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 	// 三个视图都真的能进:「←」→ 主界面 → 开发者详情(5 个标签页)→ 设置
 	const leave = await clickText(page, '←');
 	const mainView = await page.evaluate(`(() => {
-		const text = document.querySelector('#dsh-perf-hud-root').innerText;
-		return { has: text.includes('当前状态') && text.includes('可能原因'), back: [...document.querySelectorAll('#dsh-perf-hud-root button')].some((node) => node.textContent.trim() === '←') };
+		const root = document.querySelector('#dsh-perf-hud-root');
+		return {
+			has: root.querySelector('[data-incident-open]') !== null && root.querySelector('svg[viewBox="0 0 60 18"]') !== null,
+			back: [...root.querySelectorAll('button')].some((node) => node.textContent.trim() === '←' || node.getAttribute('aria-label') === '←'),
+		};
 	})()`);
 	check('「← 返回」回到主界面(那一屏只回答五个问题,不再挂返回按钮)',
 		leave === 'clicked' && mainView.has === true && mainView.back === false, JSON.stringify(mainView));
@@ -206,7 +220,7 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 	const toDev = await clickText(page, '开发者详情(技术数据)');
 	const devTabs = await page.evaluate(`(() => {
 		const text = document.querySelector('#dsh-perf-hud-root').innerText;
-		return ['帧与归因', 'DOM 与堆', '宿主与链路', '工具箱', '原始数据'].filter((label) => text.includes(label)).length;
+		return ['帧与归因', 'DOM 与堆', '宿主', '工具箱', '原始数据'].filter((label) => text.includes(label)).length;
 	})()`);
 	check('开发者详情有 5 个标签页(现有能力一个都没删)', toDev === 'clicked' && devTabs === 5, String(devTabs));
 
@@ -223,11 +237,11 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 	const toSettings = await clickText(page, '设置');
 	const settings = await page.evaluate(`(() => {
 		const text = document.querySelector('#dsh-perf-hud-root').innerText;
-		return { blocks: ['记录模式', '数据保留', '隐私与脱敏'].filter((label) => text.includes(label)).length,
-			deep: !!window.__perfHud.precise, localOnly: text.includes('默认不上传') };
+		return { blocks: ['记录', '留', '隐私'].filter((label) => text.includes(label)).length,
+			deep: !!window.__perfHud.precise, localOnly: text.includes('本机采集') };
 	})()`);
 	// ⚠️ 这个文件的 check 是 (name, ok, detail) —— ok 必须是**布尔**,传数组一律算失败(踩过)
-	check('设置页三块齐全(记录模式 / 数据保留 / 隐私与脱敏),隐私写着"默认不上传"',
+	check('设置页三块齐全(记录 / 留存 / 隐私),隐私写着"本机采集"',
 		toSettings === 'clicked' && settings.blocks === 3 && settings.localOnly === true, JSON.stringify(settings));
 	check('设置页不改变采集:深录仍然默认关(要显式开)', settings.deep === false, String(settings.deep));
 	check('设置页渲染 0 错误', (await errors(page)).length === 0);

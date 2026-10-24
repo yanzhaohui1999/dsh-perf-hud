@@ -433,6 +433,9 @@ window.__ModuleLoader__.load({
 			on: false,
 			want: true,
 			collapsed: false,
+			// 「设置」是从哪一屏进去的(2026-10-24):← 回到来源,而不是永远回主界面。
+			// 只活在本次会话里 —— 不落盘,刷新之后从设置页返回仍然回主界面。
+			settingsBack: 'main',
 			since: Date.now(),
 			root: null,              // HUD 根元素:DOM 统计里排除它
 			pos: null,               // 左下角 `{ left, bottom }` 或右下角 `{ right, bottom }`;null = 默认位置
@@ -3227,6 +3230,21 @@ window.__ModuleLoader__.load({
 			linkRow: { display: 'flex', justifyContent: 'flex-end', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l2)' },
 			linkBtn: { display: 'inline-flex', alignItems: 'center', gap: 3, border: 0, background: 'transparent', padding: 0, fontSize: 11, color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer' },
 			emptyRow: { marginTop: 14, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' },
+			// ── 开发者详情的页签行:六个描边按钮 → 五个文字页签 + 一条下划线 ──
+			tabs: { display: 'flex', alignItems: 'center', gap: 2, marginTop: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)' },
+			tab: {
+				font: 'inherit', fontSize: 11, padding: '2px 6px 6px', border: 0, background: 'transparent',
+				color: 'var(--dsw-alias-label-secondary)', borderBottom: '2px solid transparent', marginBottom: -1,
+				cursor: 'pointer', whiteSpace: 'nowrap', flex: '0 0 auto',
+			},
+			tabOn: { color: 'var(--dsw-alias-label-primary)', fontWeight: 600, borderBottomColor: 'var(--dsw-alias-label-primary)' },
+			deepSwitch: {
+				marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5, font: 'inherit',
+				fontSize: 11, color: 'var(--dsw-alias-label-secondary)', background: 'transparent', border: 0,
+				cursor: 'pointer', padding: '0 0 4px', flex: '0 0 auto',
+			},
+			deepDot: { width: 6, height: 6, borderRadius: 3, background: 'var(--dsw-alias-border-l2)', flex: '0 0 auto' },
+			deepDotOn: { background: 'var(--dsw-alias-state-warn-primary)' },
 			input: { font: 'inherit', color: 'var(--dsw-alias-label-primary)', background: 'transparent', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 7, padding: '2px 8px', flex: 1, minWidth: 0 },
 		};
 
@@ -3321,7 +3339,10 @@ window.__ModuleLoader__.load({
 		const DEV_TABS = ['frames', 'dom', 'host', 'tools', 'raw'];
 
 		function setView(name) {
-			state.view = VIEWS.indexOf(name) === -1 ? 'main' : name;
+			const next = VIEWS.indexOf(name) === -1 ? 'main' : name;
+			// 进设置时记住来源:从开发者详情 / 卡顿详情点进设置,← 应该回到那一屏。
+			if (next === 'settings' && state.view !== 'settings') state.settingsBack = state.view;
+			state.view = next;
 			saveView();
 			bump();
 		}
@@ -3581,6 +3602,8 @@ window.__ModuleLoader__.load({
 					`#${ROOT_ID} button:hover:not(:disabled) { border-color: var(--dsw-alias-state-business-primary) !important; color: var(--dsw-alias-state-business-primary) !important; }`,
 					// 图标按钮没有边框,那条 hover 只把图标染蓝;给它一块底色更像"可点"。
 					`#${ROOT_ID} button.picon:hover:not(:disabled) { color: var(--dsw-alias-label-primary) !important; background: var(--dsw-alias-bg-layer-2); }`,
+					// 页签:悬停只提亮文字,不染成业务蓝(它不是在"触发动作",是在"换一副数据")。
+					`#${ROOT_ID} button.ptab:hover:not(:disabled) { color: var(--dsw-alias-label-primary) !important; }`,
 					`#${ROOT_ID} button:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }`,
 					`#${ROOT_ID} button:disabled { opacity: .45 !important; cursor: default !important; }`,
 				].join('\n');

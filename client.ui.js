@@ -301,6 +301,8 @@ window.__ModuleLoader__.load({
 				kids.push(h('div', {
 					style: { ...S.incBlock, borderLeftColor: color },
 					title: t('viewThisStall'),
+					// 验收钩子:整块可点进卡顿详情(2026-10-24 起不再有「查看这次卡顿」按钮)
+					'data-incident-open': '1',
 					onClick: () => props.onOpen(row.id),
 				},
 					h('div', { style: S.incMain },
@@ -380,24 +382,27 @@ window.__ModuleLoader__.load({
 		function devTabRow(props) {
 			const t = translate;
 			const tab = props.tab;
-			const row = (key, label, hint) => h('button', {
-				type: 'button',
-				style: { ...S.btn, color: tab === key ? 'var(--dsw-alias-state-business-primary)' : undefined, fontWeight: tab === key ? 700 : 400 },
-				title: hint,
+			// 文字页签:原来六个描边按钮(五个页签 + 深录)会折成两行,把正文挤下去;
+			// 现在页签只占一行,「深录」退到右侧当一个开关位(它是开关,不是一屏)。
+			const item = (key, label, hint) => h('button', {
+				type: 'button', className: 'ptab',
+				style: { ...S.tab, ...(tab === key ? S.tabOn : null) },
+				title: hint, 'aria-selected': tab === key, role: 'tab',
 				onClick: () => props.onTab(key),
 			}, label);
-			return h('div', { style: { ...S.sep, display: 'flex', gap: 6, flexWrap: 'wrap' } },
-				row('frames', t('devTabFrames'), t('devTabFramesHint')),
-				row('dom', t('devTabDom'), t('devTabDomHint')),
-				row('host', t('devTabHost'), t('devTabHostHint')),
-				row('tools', t('devTabTools'), t('devTabToolsHint')),
-				row('raw', t('devTabRaw'), t('devTabRawHint')),
+			return h('div', { style: S.tabs, role: 'tablist' },
+				item('frames', t('devTabFrames'), t('devTabFramesHint')),
+				item('dom', t('devTabDom'), t('devTabDomHint')),
+				item('host', t('devTabHost'), t('devTabHostHint')),
+				item('tools', t('devTabTools'), t('devTabToolsHint')),
+				item('raw', t('devTabRaw'), t('devTabRawHint')),
 				h('button', {
-					type: 'button',
-					style: { ...S.btn, color: state.deep ? 'var(--dsw-alias-brand-primary)' : undefined },
-					title: t('deepHint'),
+					type: 'button', style: S.deepSwitch, title: t('deepHint'),
+					'aria-pressed': state.deep === true,
 					onClick: () => setDeep(state.deep === false),
-				}, `${t('deepShort')}${state.deep ? '✓' : ''}`));
+				},
+					h('span', { style: { ...S.deepDot, ...(state.deep ? S.deepDotOn : null) } }),
+					t('deepShort')));
 		}
 		/**
 		 * 设置:记录模式 / 数据保留 / 隐私与脱敏。
@@ -1228,13 +1233,15 @@ window.__ModuleLoader__.load({
 			// 不去渲染一个空的历史上下文(与 selectedIncident 的退回自动是同一条规矩)。
 			const view = state.view === 'incident' && state.watch.mode !== 'incident' ? 'main' : state.view;
 			const viewTitle = view === 'dev' ? t('viewDev') : view === 'settings' ? t('viewSettings') : t('viewIncident');
+			// 返回的落点:设置页回它来的那一屏,其余子页回主界面(2026-10-24 flow 修正)。
+			const backTo = view === 'settings' && state.settingsBack !== 'settings' ? state.settingsBack : 'main';
 			const head = h('div', { style: { ...S.head, ...S.drag }, title: t('dragHint'), onPointerDown: startDrag, onDoubleClick: resetPos },
 				h('div', { style: S.headLeft },
 					// 返回是**图标**:它每一屏都在,却只在子页出现 —— 三个汉字换成 14px 的箭头,
 					// 把这一行的宽度留给标题与读数。
 					view === 'main' ? null : h('button', {
 						type: 'button', className: 'picon', style: S.iconBtn, title: t('backHint'), 'aria-label': t('back'),
-						onClick: () => setView('main'),
+						onClick: () => setView(backTo),
 					}, panelIcon('back')),
 					// 子页只写视图名:「性能 HUD ·」那一段与下面第一行的上下文标题(`历史事故 i35xx · 历史帧 …`)
 					// 说的是同一件事(我在哪),而它是这一行里唯一能让位的文字。品牌名进悬停。
@@ -1243,7 +1250,7 @@ window.__ModuleLoader__.load({
 					h('span', { style: { ...S.label, color: scene.color, flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, scene.text),
 					view === 'main' ? null : h('span', { style: { ...S.num, flex: '0 0 auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(1)} fps`)),
 				h('div', { style: S.headRight },
-					h('button', { type: 'button', className: 'picon', style: S.iconBtn, title: t('settingsHint'), 'aria-label': t('viewSettings'), onClick: () => setView(view === 'settings' ? 'main' : 'settings') }, panelIcon('sliders')),
+					h('button', { type: 'button', className: 'picon', style: S.iconBtn, title: t('settingsHint'), 'aria-label': t('viewSettings'), onClick: () => setView(view === 'settings' ? backTo : 'settings') }, panelIcon('sliders')),
 					h('button', { type: 'button', className: 'picon', style: S.iconBtn, title: open ? t('collapse') : t('expand'), 'aria-label': open ? t('collapse') : t('expand'), onClick: toggle }, panelIcon(open ? 'minus' : 'plus')),
 					h('button', { type: 'button', className: 'picon', style: S.iconBtn, title: t('turnOff'), 'aria-label': t('turnOff'), onClick: () => setEnabled(false) }, panelIcon('close'))));
 
