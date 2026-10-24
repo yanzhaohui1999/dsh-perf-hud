@@ -117,10 +117,10 @@ The panel has **four views**, one at a time (only the view name is persisted, ne
 
 | View | For | Answers |
 |---|---|---|
-| **Overview** (default) | everyday users | Is it smooth right now / how long was the last stall and when / what might have caused it (each candidate with its **support and limits**) / how many stalls in the last hour or 24 hours and whether a lead repeats; the two primary actions are "view this stall" and "export the diagnostic report" |
+| **Overview** (default) | everyday users | One big number (current fps) + a 60-second strip (one bar per second, clickable) + frame mix / how long the last stall was, when, and what might have caused it (causes are indented under the stall) / how many stalls in the last hour or 24 hours; the whole stall row opens the detail screen and a download icon exports the diagnostic report; a "technical details" row at the bottom opens developer details |
 | **Stall detail** | looking at that one stall | Its own screen with a back arrow ("←", hover says "back to the overview"); **the conclusion layer only** — window scope, attribution state, the real timeline with its navigation (◀ prev / next ▶ plus an "only bad" filter) and the two actions for this incident (copy summary / export pack). **All technical readings sit in a collapsed "technical details" group** (frame breakdown / script split / overlapping long tasks / suspect scripts / package × source / definitions); the data still comes from **its own** incident pack |
-| **Developer details** | developers | 5 tabs: **Frames & blame** / **DOM & heap** / **Host & link** / **Toolbox** / **Raw data** — nothing was removed, it moved from one long screen with folded groups into one group per tab (the "deep" switch lives in this screen's title bar and in Settings) |
-| **Settings** | everyone | Capture mode (night watch always on / deep recording explicit), retention policy, privacy and redaction |
+| **Developer details** | developers | 5 text tabs: **Frames & blame** / **DOM & heap** / **Host** / **Toolbox** / **Raw data** — nothing was removed, it moved from one long screen with folded groups into one group per tab; the "deep" switch is a toggle at the right end of the tab row, not in the title bar |
+| **Settings** | everyone | One table: capture mode (night watch / deep), four retention numbers (kept / trimmed / detected / lost) plus storage usage and cap, privacy and redaction, shortcut; long explanations live in tooltips |
 
 The default screen never shows LoAF / p99 / RTT / package rankings / frame indices — those live in developer details. Collapsed, it is the pill in the bottom-right corner (fps / worst frame / stalls detected in the last 24 hours); expanding it returns to the overview.
 
@@ -157,9 +157,10 @@ The five tabs of **developer details** (nothing was removed, it is just split in
 ## Reading the panel
 
 > ⚠️ The line-level notes below describe the blocks inside **developer details** (see the interface structure
-> section above). The default screen is the **overview**: current status / most recent stall / possible cause /
-> recent trend plus two primary actions — no package names, frame indices, LoAF, p99 or RTT. Screenshots and
-> step-by-step instructions come after the new UI passes real-device acceptance.
+> section above). The default screen is the **overview**: how fast it is now / the 60-second strip and frame mix /
+> the last stall and its possible causes / recent trend, plus one "technical details" entry — no package names,
+> frame indices, LoAF, p99 or RTT. The eyebrow labels ("current status", "most recent stall") were removed in the
+> 2026-10-24 redesign; hierarchy is carried by type size and rules instead.
 
 The plugin has **three tiers**, and the default is the cheapest one — it measures other people's performance,
 so it has to be cheap, switchable and reversible itself:

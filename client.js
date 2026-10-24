@@ -436,6 +436,9 @@ window.__ModuleLoader__.load({
 			// 「设置」是从哪一屏进去的(2026-10-24):← 回到来源,而不是永远回主界面。
 			// 只活在本次会话里 —— 不落盘,刷新之后从设置页返回仍然回主界面。
 			settingsBack: 'main',
+			// 「卡顿详情」是从哪一屏进去的(2026-10-24):← 回到来源。今天唯一的入口在主界面,
+			// 但记的是**来源屏本身**而不是写死 main —— 以后加第二个入口不用再改返回逻辑。
+			incidentBack: 'main',
 			since: Date.now(),
 			root: null,              // HUD 根元素:DOM 统计里排除它
 			pos: null,               // 左下角 `{ left, bottom }` 或右下角 `{ right, bottom }`;null = 默认位置
@@ -3132,7 +3135,8 @@ window.__ModuleLoader__.load({
 					}
 					// 收起态/已关态**不设宽度**:内容多宽就多宽(chip 才是它该有的样子),
 					// 只封顶 —— 药丸那一长条读数在宽屏上会比展开态还宽(实测 425),窄屏上不能溢出去。
-					: { maxWidth: width, padding: '6px 10px' }),
+					// ⚠️ 封顶值不能是展开态宽度:那样药丸会被挤成省略号(品牌名先让位,实测变成「性能 H…」)。
+					: { maxWidth: Math.max(width, 460), padding: '6px 10px' }),
 			}),
 			// 正文滚动区:展开态唯一的滚动容器(`minHeight: 0` 是 flex 子项能滚起来的前提)。
 			scroll: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden' },

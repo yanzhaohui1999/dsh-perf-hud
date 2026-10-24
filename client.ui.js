@@ -1259,7 +1259,8 @@ window.__ModuleLoader__.load({
 			const view = state.view === 'incident' && state.watch.mode !== 'incident' ? 'main' : state.view;
 			const viewTitle = view === 'dev' ? t('viewDev') : view === 'settings' ? t('viewSettings') : t('viewIncident');
 			// 返回的落点:设置页回它来的那一屏,其余子页回主界面(2026-10-24 flow 修正)。
-			const backTo = view === 'settings' && state.settingsBack !== 'settings' ? state.settingsBack : 'main';
+			const backTo = view === 'settings' && state.settingsBack !== 'settings' ? state.settingsBack
+				: view === 'incident' && state.incidentBack !== 'incident' ? state.incidentBack : 'main';
 			const head = h('div', { style: { ...S.head, ...S.drag }, title: t('dragHint'), onPointerDown: startDrag, onDoubleClick: resetPos },
 				h('div', { style: S.headLeft },
 					// 返回是**图标**:它每一屏都在,却只在子页出现 —— 三个汉字换成 14px 的箭头,
@@ -1506,7 +1507,7 @@ window.__ModuleLoader__.load({
 					trendMs: state.trendMs,
 					why: state.causeOpen,
 					preview: state.packPreview !== null && latestRow !== null && state.packPreview.incident.id === latestRow.id ? state.packPreview : null,
-					onOpen: (id) => { setView('incident'); revealIncident(id); },
+					onOpen: (id) => { state.incidentBack = state.view; setView('incident'); revealIncident(id); },
 					onExportPreview: (id) => { openPackPreview(id, { dropFreeText: true }); },
 					onExportGo: () => {
 						const id = state.packPreviewId;

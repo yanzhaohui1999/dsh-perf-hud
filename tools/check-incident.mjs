@@ -237,11 +237,11 @@ await withPage({ port: Number(process.env.PORT ?? 9371) }, async (page) => {
 	const toSettings = await clickText(page, '设置');
 	const settings = await page.evaluate(`(() => {
 		const text = document.querySelector('#dsh-perf-hud-root').innerText;
-		return { blocks: ['记录', '留', '隐私'].filter((label) => text.includes(label)).length,
+		return { blocks: ['记录模式', '已保存现场', '本机采集'].filter((label) => text.includes(label)).length,
 			deep: !!window.__perfHud.precise, localOnly: text.includes('本机采集') };
 	})()`);
 	// ⚠️ 这个文件的 check 是 (name, ok, detail) —— ok 必须是**布尔**,传数组一律算失败(踩过)
-	check('设置页三块齐全(记录 / 留存 / 隐私),隐私写着"本机采集"',
+	check('设置页三块齐全(记录模式 / 留存数字 / 隐私本机采集)',
 		toSettings === 'clicked' && settings.blocks === 3 && settings.localOnly === true, JSON.stringify(settings));
 	check('设置页不改变采集:深录仍然默认关(要显式开)', settings.deep === false, String(settings.deep));
 	check('设置页渲染 0 错误', (await errors(page)).length === 0);

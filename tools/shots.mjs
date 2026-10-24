@@ -20,6 +20,12 @@ const port = Number((argv.find((row) => row.startsWith('--port=')) ?? '--port=93
 const OUT = new URL('../docs/images/', import.meta.url);
 
 const shot = async (page, file) => {
+	// 别的浮动插件(比如待办面板)会盖在 HUD 上面 —— 截图裁的是 HUD 的矩形,拍到的却是它们。
+	// 截图前把已知的其它浮层藏掉(只影响这次截图会话,不改任何插件状态)。
+	await page.evaluate(`(() => {
+		for (const node of document.querySelectorAll('.dshtb-root')) node.style.display = 'none';
+		return true;
+	})()`);
 	const rect = await page.evaluate(`(() => {
 		const node = document.getElementById('dsh-perf-hud-root');
 		if (node === null) return null;

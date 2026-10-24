@@ -2347,7 +2347,9 @@ check('flow:设置与卡顿详情的返回落在来源,不是永远回主界面(
 	const setViewSrc = extract(source, 'function setView(');
 	const recordsSource = /next === 'settings' && state\.view !== 'settings'[\s\S]{0,60}state\.settingsBack = state\.view/.test(setViewSrc);
 	const usesBackTo = /onClick: \(\) => setView\(backTo\)/.test(renderSource)
-		&& /view === 'settings' && state\.settingsBack !== 'settings' \? state\.settingsBack : 'main'/.test(renderSource);
+		&& /view === 'settings' && state\.settingsBack !== 'settings' \? state\.settingsBack/.test(renderSource)
+		&& /view === 'incident' && state\.incidentBack !== 'incident' \? state\.incidentBack : 'main'/.test(renderSource)
+		&& /state\.incidentBack = state\.view; setView\('incident'\)/.test(renderSource);
 	return [recordsSource, usesBackTo];
 })(), [true, true]);
 

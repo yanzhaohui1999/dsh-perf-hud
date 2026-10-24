@@ -103,3 +103,21 @@
 ### 折叠组默认不做昂贵分析
 
 - **折叠组默认不做昂贵分析,现在由 `group()` 的 thunk 保证**:`group(key, label, summary, ...children)` 支持"唯一一个 child 且是个函数"的形式,折叠时**连函数体都不进**;六个调用点(`detail` / `cross` / `dom` / `host` / `tools` / `tech`)全传 thunk,所以「取证明细」与「技术细节」收起时脚本按包 / 交叉表 / 帧条一次都不算。代价要记住:**`cross` 嵌在「取证明细」的 thunk 里,「技术细节」又嵌着「取证明细」那条链上的同一批块** —— 一展开任一层,调用方就先构造 `crossTable(scriptPkgTally())` 与 `kids` 数组(4×5 格,代价低),所以窗口聚合那份缓存不能省。摘要那一行(`techSummary`)即使收起也会被求值,所以它**只读已经算好的 `detail`**,不重新采、不重新解析。
+
+## 改版:撤掉眉标(2026-10-24)
+
+- **原则**:*Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.*
+  用户 2026-10-24 采纳,同时写进全局记忆。
+- **落地**:主界面不再有「当前状态 / 近 60 秒帧分布 / 最近一次卡顿 / 可能原因 / 最近 1 小时」五个眉标 ——
+  层级由 46px 大数、2px 左侧色条、1px 分隔线与原因缩进承担;卡顿详情撤掉「事故回放 / 归因状态」
+  (范围变一行数据、状态变徽章);设置页从三段散文变成一张「键 + 值」表。
+- **标题栏**:设置 / 收起 / 关闭 / 返回改成 14px 行内 SVG(`client.ui.js` 的 `ICONS` + `panelIcon`),
+  文字按钮全部撤掉。**验收器不能再按 textContent 找控件** —— `check-panel` / `check-incident` 已改成
+  「文字或 `aria-label` 匹配」;`check-incident` 的卡顿详情入口改用 `[data-incident-open]` 钩子
+  (「查看这次卡顿」按钮已并入整块事故行)。
+- **字号阶梯**:46 / 34 / 24 / 20 / 15 / 13 / 12 / 11 / 10,数字一律 `tabular-nums`;
+  同一屏里不许出现两种「看起来一样大」的层级。
+- **说明文字进 `title`**:`modeHintShort` / `retainText` / `privacyText` / `privacyRedaction` 这些长句
+  只出现在悬停里,正文只留读数与短标签。改文案时死键断言会盯住「删了界面但没删词典」。
+- **药丸没有跟着瘦身**:fps / 最差帧 / LT / 检测 四个读数一个不少(§5「折叠不是看不见」),
+  只把 ＋ / 关闭换成图标按钮。
