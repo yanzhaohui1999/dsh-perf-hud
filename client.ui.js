@@ -212,6 +212,12 @@ window.__ModuleLoader__.load({
 			download: [['path', { d: 'M8 2.5v7M5 6.8L8 9.8l3-3M3 11.5v1.2h10v-1.2' }]],
 			chev: [['path', { d: 'M6 3.5l4.5 4.5L6 12.5' }]],
 		};
+		/** 一格读数:大数字 + 小标签。主界面 / 设置 / 开发者详情共用同一套尺寸。 */
+		function statCell(value, label, first) {
+			return h('div', { style: { ...S.statCell, ...(first ? S.statCellFirst : null) } },
+				h('b', { style: S.statValue }, value),
+				h('span', { style: S.statLabel }, label));
+		}
 		/** 快捷键那一格:mac 用 ⌘⇧U,其余平台用 Ctrl+Shift+U(与 client.js 注册的那个组合一致)。 */
 		function shortcutKeyText() {
 			const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
@@ -423,9 +429,6 @@ window.__ModuleLoader__.load({
 			const segItem = (label, active, onClick, title) => h('button', {
 				type: 'button', style: { ...S.segItem, ...(active ? S.segOn : null) }, title, onClick,
 			}, label);
-			const statCell = (value, label, first) => h('div', { style: { ...S.statCell, ...(first ? S.statCellFirst : null) } },
-				h('b', { style: S.statValue }, value),
-				h('span', { style: S.statLabel }, label));
 			return [
 				// ① 记录模式:一个两格分段控件。说明句(modeHintShort)进悬停。
 				h('div', { style: S.setRow, title: t('modeHint'), 'aria-label': t('settingsMode') },
@@ -1293,11 +1296,11 @@ window.__ModuleLoader__.load({
 						h('span', { style: S.brand }, t('title')),
 						h('span', { style: { ...S.label, color: sceneChip().color } }, sceneChip().text),
 						h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(0)} fps`),
-						h('span', { style: S.label }, `${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms`),
-						worst === null ? null : h('span', { style: S.label }, `LT ${worst.ms.toFixed(0)}ms`),
+						h('span', { style: { ...S.label, fontVariantNumeric: 'tabular-nums' } }, `${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms`),
+						worst === null ? null : h('span', { style: { ...S.label, fontVariantNumeric: 'tabular-nums' } }, `LT ${worst.ms.toFixed(0)}ms`),
 						// 窄屏只让这一格(明细本来就在悬停与设置页里):实测整条读数要 ~425px,
 						// 393px 视口把它丢掉之后其余读数才不挤成"生… 空闲 2s 12 fps…"。
-						pillTally.detected === 0 || compact === true ? null : h('span', { style: S.label, title: tallyTitle(TALLY_MINUTES * TALLY_BUCKET_MS) }, `${t('watchDetected')} ${pillTally.detected}${t('times')}`),
+						pillTally.detected === 0 || compact === true ? null : h('span', { style: { ...S.label, fontVariantNumeric: 'tabular-nums' }, title: tallyTitle(TALLY_MINUTES * TALLY_BUCKET_MS) }, `${t('watchDetected')} ${pillTally.detected}${t('times')}`),
 						h('button', { type: 'button', className: 'picon', style: S.iconBtnSmall, title: t('expand'), 'aria-label': t('expand'), onClick: toggle }, panelIcon('plus')),
 						h('button', { type: 'button', className: 'picon', style: S.iconBtnSmall, title: t('turnOff'), 'aria-label': t('turnOff'), onClick: () => setEnabled(false) }, panelIcon('close'))));
 			}
@@ -1307,9 +1310,13 @@ window.__ModuleLoader__.load({
 				// ── 常显 1:当前状况(卡不卡 + 谁的锅)──
 				// 块式而不是 flex 行:这一行长文本换行在右对齐下会参差得像段落(实测被吐槽)。
 				// 标题里带「近 60 秒」:帧 / 长任务 / 命中三个数都是这个窗口的口径,不写出来只能猜。
-				h('div', { style: S.block, title: overviewTitle() },
-					h('div', { style: S.blockLabel }, `${t('overview')} · ${t('scope60s')}`),
-					h('div', { style: { ...S.blockValue, color: levelFrame(state.fps, state.frameWorst) } }, `${overviewLine1()}\n${overviewLine2()}`)),
+				h('div', { style: S.statRow, title: overviewTitle(), 'aria-label': `${t('overview')} · ${t('scope60s')}` },
+					h('div', { style: { ...S.statCell, ...S.statCellFirst } },
+						h('b', { style: { ...S.statValue, color: levelFrame(state.fps, state.frameWorst) } }, `${state.frameWorst.toFixed(0)}ms`),
+						h('span', { style: S.statLabel }, t('overviewFrame'))),
+					statCell(worst === null ? '—' : `${worst.ms.toFixed(0)}ms`, 'LT', false),
+					statCell(`${state.ltBlamed}/${state.ltTotal}`, t('hit'), false)),
+				h('div', { style: S.metaLine }, overviewLine2()),
 
 				// ── 常显 2:事故诊断入口(守夜留下的事故;严重度用**文字 + token 颜色**两样给)──
 				// 这是"事故 → 帧 → 证据 → 来源/包"那条链的起点:三个按钮都是真动作(进历史事故上下文 /
