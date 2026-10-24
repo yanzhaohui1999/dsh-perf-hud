@@ -780,11 +780,12 @@ window.__ModuleLoader__.load({
 			const level = severityLevel(frame.ms ?? 0);
 			const btn = (label, enabled, onClick) => h('button', {
 				type: 'button', disabled: enabled === false, title: t('frameNavHint'),
-				style: enabled === false ? { ...S.btn, opacity: 0.45, cursor: 'default' } : S.btn,
+				style: enabled === false ? { ...S.btnGhost, opacity: 0.45, cursor: 'default' } : S.btnGhost,
 				onClick: enabled === false ? undefined : onClick,
 			}, label);
-			return h('div', { style: S.card },
-				h('div', { style: S.cardTitle, title: t('replayTimelineHint') }, t('replayTimeline')),
+			// 时间轴不再套深色卡片:它是一条数据带,和上面的耗时长在同一层。
+			return h('div', { style: { marginTop: 12, paddingTop: 11, borderTop: '1px solid var(--dsw-alias-border-l2)' } },
+				h('div', { style: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)' }, title: t('replayTimelineHint') }, t('replayTimeline')),
 				h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 2 } },
 					h('span', { style: { ...S.sub, marginTop: 0 } }, startAt === null ? t('notYet') : clock(startAt)),
 					h('span', { style: { ...S.sub, marginTop: 0 } }, endAt === null ? '' : clock(endAt))),
@@ -803,7 +804,7 @@ window.__ModuleLoader__.load({
 					h('button', {
 						type: 'button',
 						title: t('onlyBadHint'),
-						style: { ...S.btn, color: state.watch.onlyBad === true ? 'var(--dsw-alias-state-business-primary)' : undefined },
+						style: { ...S.btnGhost, color: state.watch.onlyBad === true ? 'var(--dsw-alias-state-business-primary)' : undefined },
 						onClick: () => setOnlyBad(state.watch.onlyBad !== true),
 					}, `${t('onlyBad')}${state.watch.onlyBad === true ? '✓' : ''}`)));
 			} catch (error) {
@@ -853,11 +854,16 @@ window.__ModuleLoader__.load({
 			const t = translate;
 			const verdict = incidentVerdict(row);
 			if (verdict === null) return null;
-			return h('div', { style: S.block },
-				h('div', { style: S.row },
-					h('span', { style: S.label, title: t('verdictLabel') }, t('verdictLabel')),
-					h('span', { style: { ...S.num, color: verdictColor(verdict.level) } }, verdict.label)),
-				h('div', { style: S.sub }, verdict.detail));
+			// 「归因状态」四个字不写了:徽章本身就是状态。凭什么那一句退到 11px 的说明行。
+			return h('div', { style: { marginTop: 10 }, title: t('verdictLabel') },
+				h('span', {
+					style: {
+						display: 'inline-flex', alignItems: 'center', height: 16, padding: '0 5px', borderRadius: 4,
+						fontSize: 10, fontWeight: 600, color: verdictColor(verdict.level),
+						background: 'var(--dsw-alias-bg-layer-2)',
+					},
+				}, verdict.label),
+				h('div', { style: { ...S.sub, marginTop: 5, fontSize: 11 } }, verdict.detail));
 		}
 		/**
 		 * 「技术细节」:环 / 脚本拆解 / 重叠 long task / 可疑脚本 / 包×来源 / 口径。
@@ -906,15 +912,20 @@ window.__ModuleLoader__.load({
 			const frame = detail.frame;
 			const nav = detail.nav;
 			const kids = [];
-			kids.push(contextBar(
-				incidentFrameHeadingText(row, frame, nav),
-				frame === null ? null : `${Math.round(frame.ms ?? 0)}ms`,
-				h('button', { type: 'button', style: S.btn, title: t('backToLiveHint'), onClick: showLiveMode }, t('backToLive'))));
-			// 这一屏**唯一**的动作条:返回在标题栏(每个视图都有),这里只回答"这条事故怎么办"。
-			// 以前它在视图外面又写了一份返回 + 这两个动作 —— 同屏两个「←」返回,位置还不一样。
-			kids.push(h('div', { style: S.buttons },
-				h('button', { type: 'button', style: S.btn, title: t('copySummaryHint'), onClick: () => copyText(incidentSummaryText(row), t('copySummary')) }, t('copySummary')),
-				h('button', { type: 'button', style: S.btn, title: t('exportIncidentBtnHint'), onClick: () => exportIncident(row.id) }, t('exportIncidentBtn'))));
+			// ① 上下文行:只回答"哪条事故 / 哪一帧",视图名已经在标题栏。
+			kids.push(h('div', { 'data-ctx-bar': '1', style: S.ctxBar },
+				h('span', { style: S.ctxTitle }, incidentFrameHeadingText(row, frame, nav)),
+				h('span', { style: { marginLeft: 'auto' } },
+					h('button', { type: 'button', style: S.btnGhost, title: t('backToLiveHint'), onClick: showLiveMode }, t('backToLive')))));
+			// ② 这一屏的主角:这一帧多久。两个动作并到同一行右侧 —— 不再单独占一条动作带。
+			kids.push(h('div', { style: S.heroRow },
+				frame === null
+					? h('span', { style: S.heroBig }, '—')
+					: h('span', { style: { ...S.heroBig, color: severityColor(severityLevel(frame.ms ?? 0)) } },
+						String(Math.round(frame.ms ?? 0)), h('span', { style: S.heroUnit }, 'ms')),
+				h('div', { style: S.heroActions },
+					h('button', { type: 'button', style: S.btnGhost, title: t('copySummaryHint'), onClick: () => copyText(incidentSummaryText(row), t('copySummary')) }, t('copySummary')),
+					h('button', { type: 'button', style: S.btnGhost, title: t('exportIncidentBtnHint'), onClick: () => exportIncident(row.id) }, t('exportIncidentBtn')))));
 			// 采集本身丢过记录时,这一屏必须自己说出来 —— 否则"没看到证据"会被读成"没有证据"。
 			if (row.integrity?.captureComplete === false) {
 				const drop = row.integrity;
@@ -924,9 +935,7 @@ window.__ModuleLoader__.load({
 			const scope = replayScope();
 			if (scope !== null) {
 				// 事故 id 只在上面那行上下文标题里出现一次(这里曾重复印一遍)
-				kids.push(h('div', { style: S.block, title: t('replayHint') },
-					h('div', { style: S.blockLabel }, t('replay')),
-					h('div', { style: S.blockValue }, replaySummaryText(scope))));
+				kids.push(h('div', { style: S.metaLine, title: t('replayHint') }, replaySummaryText(scope)));
 			}
 			kids.push(verdictBlock(row));
 			if (frame === null) {

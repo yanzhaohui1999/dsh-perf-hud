@@ -3181,7 +3181,7 @@ window.__ModuleLoader__.load({
 				display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap',
 				marginTop: 2, paddingBottom: 5, borderBottom: '1px solid var(--dsw-alias-border-l2)',
 			},
-			ctxTitle: { color: 'var(--dsw-alias-label-primary)', fontWeight: 700, fontSize: 13, minWidth: 0, overflowWrap: 'break-word' },
+			ctxTitle: { color: 'var(--dsw-alias-label-secondary)', fontWeight: 400, fontSize: 11, minWidth: 0, overflowWrap: 'break-word' },
 			// 核心耗时:18px / 600 等宽数字(选中的那一帧的耗时,panel 上最大的那个数)
 			hero: { fontFamily: MONO_FONT, fontWeight: 600, fontSize: 18, fontVariantNumeric: 'tabular-nums', lineHeight: 1.25, color: 'var(--dsw-alias-label-primary)' },
 			// 卡片:紧凑、8px 圆角、细边框、次级背景(事故回放这类"自成一块"的内容用它)
@@ -3230,6 +3230,16 @@ window.__ModuleLoader__.load({
 			linkRow: { display: 'flex', justifyContent: 'flex-end', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l2)' },
 			linkBtn: { display: 'inline-flex', alignItems: 'center', gap: 3, border: 0, background: 'transparent', padding: 0, fontSize: 11, color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer' },
 			emptyRow: { marginTop: 14, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' },
+			// ── 卡顿详情:上下文行 + 主角耗时 + 两个动作 → 一行 ──
+			heroRow: { display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 10, flexWrap: 'wrap' },
+			heroBig: { fontFamily: MONO_FONT, fontSize: 34, fontWeight: 600, lineHeight: 1, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums', color: 'var(--dsw-alias-label-primary)' },
+			heroUnit: { fontFamily: MONO_FONT, fontSize: 13, fontWeight: 600, marginLeft: 1, color: 'var(--dsw-alias-label-secondary)' },
+			heroActions: { display: 'flex', gap: 6, marginLeft: 'auto', flexWrap: 'wrap' },
+			btnGhost: {
+				font: 'inherit', fontSize: 11, color: 'var(--dsw-alias-label-secondary)', background: 'transparent',
+				border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, padding: '1px 7px', cursor: 'pointer', flex: '0 0 auto',
+			},
+			metaLine: { marginTop: 8, fontSize: 11, color: 'var(--dsw-alias-label-secondary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'normal', lineHeight: 1.5 },
 			// ── 开发者详情的页签行:六个描边按钮 → 五个文字页签 + 一条下划线 ──
 			tabs: { display: 'flex', alignItems: 'center', gap: 2, marginTop: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)' },
 			tab: {
