@@ -3240,6 +3240,16 @@ window.__ModuleLoader__.load({
 				border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, padding: '1px 7px', cursor: 'pointer', flex: '0 0 auto',
 			},
 			metaLine: { marginTop: 8, fontSize: 11, color: 'var(--dsw-alias-label-secondary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'normal', lineHeight: 1.5 },
+			// ── 设置页:一张表(行 = 键 + 值),不是三段文章 ──
+			setRow: { display: 'flex', alignItems: 'center', gap: 10, height: 34, marginTop: 6 },
+			setKey: { flex: '0 0 auto', fontSize: 11, color: 'var(--dsw-alias-label-secondary)', width: 44 },
+			statRow: { display: 'flex', marginTop: 6 },
+			statCell: { flex: '1 1 0', minWidth: 0, paddingLeft: 10, borderLeft: '1px solid var(--dsw-alias-border-l2)' },
+			statCellFirst: { paddingLeft: 0, borderLeft: 0 },
+			statValue: { display: 'block', fontSize: 20, fontWeight: 600, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums', lineHeight: 1.1, fontFamily: MONO_FONT },
+			statLabel: { display: 'block', fontSize: 10, color: 'var(--dsw-alias-label-secondary)', marginTop: 3, whiteSpace: 'nowrap' },
+			setValue: { flex: '1 1 auto', minWidth: 0, fontSize: 12, fontVariantNumeric: 'tabular-nums', textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+			kbd: { fontFamily: MONO_FONT, fontSize: 11, padding: '1px 5px', borderRadius: 4, background: 'var(--dsw-alias-bg-layer-2)', color: 'var(--dsw-alias-label-primary)' },
 			// ── 开发者详情的页签行:六个描边按钮 → 五个文字页签 + 一条下划线 ──
 			tabs: { display: 'flex', alignItems: 'center', gap: 2, marginTop: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)' },
 			tab: {

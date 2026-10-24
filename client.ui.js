@@ -212,6 +212,11 @@ window.__ModuleLoader__.load({
 			download: [['path', { d: 'M8 2.5v7M5 6.8L8 9.8l3-3M3 11.5v1.2h10v-1.2' }]],
 			chev: [['path', { d: 'M6 3.5l4.5 4.5L6 12.5' }]],
 		};
+		/** 快捷键那一格:mac 用 ⌘⇧U,其余平台用 Ctrl+Shift+U(与 client.js 注册的那个组合一致)。 */
+		function shortcutKeyText() {
+			const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+			return /Mac|iPhone|iPad/.test(ua) ? '⌘ ⇧ U' : 'Ctrl+Shift+U';
+		}
 		function panelIcon(name, size) {
 			const spec = ICONS[name] ?? [];
 			return h('svg', {
@@ -414,35 +419,46 @@ window.__ModuleLoader__.load({
 			const kept = state.watch.incidents.length;
 			// 插件在 localStorage 里的实际占用(只读):事故 / sourcemap 缓存 / 其余,与落盘上限并排给
 			const storage = storageReport();
+			// 分段控件:两个互斥档位(守夜 / 深录)。文字变化由 state.deep 决定,不另存一份。
+			const segItem = (label, active, onClick, title) => h('button', {
+				type: 'button', style: { ...S.segItem, ...(active ? S.segOn : null) }, title, onClick,
+			}, label);
+			const statCell = (value, label, first) => h('div', { style: { ...S.statCell, ...(first ? S.statCellFirst : null) } },
+				h('b', { style: S.statValue }, value),
+				h('span', { style: S.statLabel }, label));
 			return [
-				h('div', { style: S.block },
-					h('div', { style: S.blockLabel }, t('settingsMode')),
-					h('div', { style: { ...S.blockValue, color: state.deep === true ? 'var(--dsw-alias-brand-primary)' : undefined } },
-						state.deep === true ? t('modeDeep') : t('modeWatch')),
-					h('div', { style: S.sub, title: t('modeHint') }, t('modeHintShort')),
-					h('div', { style: S.buttons },
-						h('button', { type: 'button', style: S.btn, title: t('deepHint'), onClick: () => setDeep(state.deep === false) }, `${t('deepShort')}${state.deep ? '✓' : ''}`),
-						h('button', { type: 'button', style: S.btn, onClick: () => setEnabled(state.on === false) }, state.on === true ? t('turnOff') : t('turnOn')))),
-				h('div', { style: S.sep },
-					h('div', { style: S.blockLabel }, t('settingsRetain')),
-					h('div', { style: S.blockValue }, t('retainText')),
-					h('div', { style: S.sub, title: t('retainKeptHint') },
-						`${t('watchKept')} ${kept}${t('tallyUnit')} · ${t('watchTrimmed')} ${state.watch.trimmedByBytes}${t('tallyUnit')}`),
-					// 丢失是**趋势窗口**（1 小时 / 24 小时）的数，留存是**当前**清单 —— 必须分行写窗口，
-					// 否则「18 份 · 丢失 367」会被读成"丢了 367 份现场"（实测被这么问过）
-					h('div', { style: S.sub, title: t('trendHint') },
-						`${props.trendMs === TALLY_TREND_LONG_MS ? t('mainTrend24') : t('mainTrend1')}:${t('watchDetected')} ${props.trend.detected}${t('times')} · ${t('watchLost')} ${props.trend.lost}${t('times')}`),
-					h('div', { style: S.sub, title: t('storageUseHint') },
-						`${t('storageUse')} ${bytesText(storage.total)} · ${t('storageCap')} ${bytesText(storage.cap)}`),
-					h('div', { style: S.sub },
-						`${t('storageIncidents')} ${bytesText(storage.incidents)} · ${t('storageMaps')} ${bytesText(storage.maps)} · ${t('storageOther')} ${bytesText(storage.other)}`),
-					h('div', { style: S.buttons },
-						h('button', { type: 'button', style: S.btn, disabled: kept === 0, title: t('clearIncidentsHint'), onClick: () => props.onClearIncidents() }, t('clearIncidentsBtn')),
-						h('button', { type: 'button', style: S.btn, title: t('clearHint'), onClick: () => props.onClearAll() }, t('clear')))),
-				h('div', { style: S.sep },
-					h('div', { style: S.blockLabel }, t('settingsPrivacy')),
-					h('div', { style: S.blockValue }, t('privacyText')),
-					h('div', { style: S.sub, title: t('privacyRedactionHint') }, t('privacyRedaction'))),
+				// ① 记录模式:一个两格分段控件。说明句(modeHintShort)进悬停。
+				h('div', { style: S.setRow, title: t('modeHint'), 'aria-label': t('settingsMode') },
+					h('span', { style: S.setKey }, t('settingsMode')),
+					h('div', { style: { ...S.seg, marginLeft: 'auto' } },
+						segItem(t('modeWatchShort'), state.deep !== true, () => setDeep(false), `${t('modeHintShort')}\n${t('modeWatch')}`),
+						segItem(t('deepShort'), state.deep === true, () => setDeep(true), `${t('deepHint')}\n${t('modeDeep')}`))),
+				// ② 留存:三个数(保存 / 裁掉 / 丢失)+ 占用一行小字。留住策略(retainText)进悬停。
+				h('div', { style: S.statRow, title: t('retainText'), 'aria-label': t('settingsRetain') },
+					h('div', { style: { ...S.statCell, ...S.statCellFirst }, title: t('retainKeptHint') },
+						h('b', { style: S.statValue }, String(kept)),
+						h('span', { style: S.statLabel }, t('watchKept'))),
+					statCell(String(state.watch.trimmedByBytes), t('watchTrimmed'), false),
+					h('div', { style: S.statCell, title: t('trendHint') },
+						h('b', { style: S.statValue }, String(props.trend.detected)),
+						h('span', { style: S.statLabel }, t('watchDetected'))),
+					statCell(String(props.trend.lost), t('watchLost'), false)),
+				h('div', { style: S.keys, title: `${t('storageUseHint')}\n${t('storageCap')}` },
+					`${t('storageUse')} ${bytesText(storage.total)} / ${bytesText(storage.cap)} · ${t('storageIncidents')} ${bytesText(storage.incidents)} · ${t('storageMaps')} ${bytesText(storage.maps)} · ${t('storageOther')} ${bytesText(storage.other)}`),
+				h('div', { style: { display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' } },
+					h('button', { type: 'button', style: S.btnGhost, disabled: kept === 0, title: t('clearIncidentsHint'), onClick: () => props.onClearIncidents() }, t('clearIncidentsBtn')),
+					h('button', { type: 'button', style: S.btnGhost, title: t('clearHint'), onClick: () => props.onClearAll() }, t('clear')),
+				),
+				// ③ 隐私 / 脱敏 / 快捷键:三行只说事实,长解释(privacyText / privacyRedaction)进悬停。
+				h('div', { style: S.setRow, title: t('privacyText'), 'aria-label': t('settingsPrivacy') },
+					h('span', { style: S.setKey }, t('settingsPrivacyShort')),
+					h('span', { style: S.setValue }, t('privacyShort'))),
+				h('div', { style: S.setRow, title: `${t('privacyRedaction')}\n${t('privacyRedactionHint')}` },
+					h('span', { style: S.setKey }, t('settingsRedact')),
+					h('span', { style: S.setValue }, t('redactionShort'))),
+				h('div', { style: S.setRow },
+					h('span', { style: S.setKey }, t('settingsShortcut')),
+					h('span', { style: S.setValue }, h('span', { style: S.kbd }, shortcutKeyText()), h('span', { style: { marginLeft: 6, color: 'var(--dsw-alias-label-secondary)' } }, `${t('expand')} / ${t('collapse')}`))),
 			];
 		}
 		/**
