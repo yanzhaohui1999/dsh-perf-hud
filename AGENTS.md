@@ -231,31 +231,12 @@ URL 形态、分段换算、四条腿边界、宿主 API、`locale/` 的 ENOENT 
 
 ## 9. 文档地图
 
-> 六份活文档 + 七份参考资料 + 一份历史档案。**不在根目录新增带日期的记录文档** —— 结论并进对应文档,历史进 [docs/plans/](docs/plans/) 或 [CHANGELOG.md](CHANGELOG.md)。
+> 完整地图(每份一句话职责 + 什么时候读)在 [docs/README.md](docs/README.md) —— **本文不复述**。
+> **不在根目录新增带日期的记录文档** —— 结论并进对应文档,历史进 [docs/plans/](docs/plans/) 或 [CHANGELOG.md](CHANGELOG.md)。
 
-**活文档**(每次开发都会用到):
+**改代码前必读**:[docs/reading-panel.md](docs/reading-panel.md)(读数口径)、[docs/panel-rules.md](docs/panel-rules.md)(布局 / 文案 / 交互)、[docs/mechanisms.md](docs/mechanisms.md)(归因链路);环境与验证见 [docs/verification.md](docs/verification.md),动手前先查 [docs/dead-ends.md](docs/dead-ends.md)。
 
-| 文件 | 管什么 |
-|---|---|
-| [README.md](README.md) | 用户视角:装什么、怎么装、读数怎么看、有什么风险 |
-| [README_EN.md](README_EN.md) | 英文版(摘要式,结论与中文版一致) |
-| [AGENTS.md](AGENTS.md)(本文) | 开发规则 + 边界 + 代码约定 + 测试门禁 |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献流程:报 bug、提 PR、提交前自检 |
-| [REVIEW.md](REVIEW.md) | 发布:对外门槛、未还的债、当前边界 |
-| [CHANGELOG.md](CHANGELOG.md) | 版本变更 |
-
-**参考**(按需查,不要在没事时通读):
-
-| 文件 | 管什么 |
-|---|---|
-| [docs/reading-panel.md](docs/reading-panel.md) | 面板读数口径(改读数 / 渲染前必读) |
-| [docs/panel-rules.md](docs/panel-rules.md) | 面板布局 / 文案 / 交互约定(改渲染 / 文案前必读) |
-| [docs/verification.md](docs/verification.md) | cookie、验收器、401/404、残留 Chrome、worktree 验证 |
-| [docs/mechanisms.md](docs/mechanisms.md) | 归因机制:URL / sourcemap / 四条腿 / 宿主 API |
-| [docs/dead-ends.md](docs/dead-ends.md) | 19 条已知坑与已证伪的路 |
-| [docs/release.md](docs/release.md) | npm 发版、staged publishing、Trusted Publisher |
-| [docs/landscape.md](docs/landscape.md) | 官方开发者工具对照、竞品、市场数据 |
-| [docs/plans/](docs/plans/) | 历史档案:按日期的决策与实测证据,**不是必读** |
+**入口约定**:新增 / 移动 / 改名任何 md → 先在 [docs/README.md](docs/README.md) 登记 → `npm run docs:check`(断链 + 孤儿);提交时 `tools/git-pre-commit.sh` 自动跑同一检查。
 
 ---
 
