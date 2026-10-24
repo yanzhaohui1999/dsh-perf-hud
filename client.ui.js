@@ -1210,7 +1210,7 @@ window.__ModuleLoader__.load({
 				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false, panelWidth), ...posStyle, ...dodgeStyle } },
 					h('div', { style: { ...S.head, ...S.drag }, title: t('dragHint'), onPointerDown: startDrag, onDoubleClick: resetPos },
 						h('span', { style: S.label }, `${t('title')} · ${t('off')}`),
-						h('button', { type: 'button', style: S.btn, onClick: () => setEnabled(true) }, t('turnOn'))));
+						h('button', { type: 'button', className: 'picon', style: S.iconBtnSmall, title: t('turnOn'), 'aria-label': t('turnOn'), onClick: () => setEnabled(true) }, panelIcon('plus'))));
 			}
 
 			const worst = worstLongTask();
@@ -1272,8 +1272,8 @@ window.__ModuleLoader__.load({
 						// 窄屏只让这一格(明细本来就在悬停与设置页里):实测整条读数要 ~425px,
 						// 393px 视口把它丢掉之后其余读数才不挤成"生… 空闲 2s 12 fps…"。
 						pillTally.detected === 0 || compact === true ? null : h('span', { style: S.label, title: tallyTitle(TALLY_MINUTES * TALLY_BUCKET_MS) }, `${t('watchDetected')} ${pillTally.detected}${t('times')}`),
-						h('button', { type: 'button', style: S.btn, title: t('expand'), onClick: toggle }, '+'),
-						h('button', { type: 'button', style: S.btn, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff'))));
+						h('button', { type: 'button', className: 'picon', style: S.iconBtnSmall, title: t('expand'), 'aria-label': t('expand'), onClick: toggle }, panelIcon('plus')),
+						h('button', { type: 'button', className: 'picon', style: S.iconBtnSmall, title: t('turnOff'), 'aria-label': t('turnOff'), onClick: () => setEnabled(false) }, panelIcon('close'))));
 			}
 
 			// ── 开发者详情:原来那一整套技术数据(一个都没删),按标签页分组,一次看一组 ──
