@@ -3147,6 +3147,13 @@ window.__ModuleLoader__.load({
 			// 工具条的按钮比正文里的按钮窄一点(padding 8→6):这一行是不可换行的,省下的 4px × 3
 			// 就是"标题还能不能完整显示"的差价(实测:不收紧时 zh 详情页差 14px,标题被裁到 48px)
 			headBtn: { padding: '2px 6px' },
+			// 标题栏的图标按钮:24×24、无边框 —— 文字按钮(设置/收起/关闭)在窄屏上就是"标题被裁"
+			// 的来源;图标 + 悬停 tooltip 把这一行的宽度还给标题与读数。
+			iconBtn: {
+				width: 24, height: 24, padding: 0, display: 'grid', placeItems: 'center',
+				background: 'transparent', border: '0', borderRadius: 6, cursor: 'pointer',
+				color: 'var(--dsw-alias-label-secondary)', flex: '0 0 auto',
+			},
 			// 标题是这一行里唯一可以让步的元素:窄了出省略号,而不是把控件挤到第二行。
 			brand: { fontWeight: 700, fontSize: 14, color: 'var(--dsw-alias-label-primary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 			row: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginTop: 4 },
@@ -3533,6 +3540,8 @@ window.__ModuleLoader__.load({
 				style.textContent = [
 					`#${ROOT_ID} button { transition: border-color .12s ease, color .12s ease; }`,
 					`#${ROOT_ID} button:hover:not(:disabled) { border-color: var(--dsw-alias-state-business-primary) !important; color: var(--dsw-alias-state-business-primary) !important; }`,
+					// 图标按钮没有边框,那条 hover 只把图标染蓝;给它一块底色更像"可点"。
+					`#${ROOT_ID} button.picon:hover:not(:disabled) { color: var(--dsw-alias-label-primary) !important; background: var(--dsw-alias-bg-layer-2); }`,
 					`#${ROOT_ID} button:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }`,
 					`#${ROOT_ID} button:disabled { opacity: .45 !important; cursor: default !important; }`,
 				].join('\n');

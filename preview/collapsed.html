@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>性能 HUD · 收起态</title>
+<link rel="stylesheet" href="hud.css">
+</head>
+<body>
+<div class="stage">
+  <div class="col" style="width:520px">
+
+    <div class="cap">现在 · 一行六个读数,展开态的三分之一宽</div>
+    <img class="old" style="width:490px" src="../docs/images/09-pill.png" alt="当前药丸">
+
+    <div class="cap" style="margin-top:26px"><b>新</b> · 收起态:一个数 + 一次事故</div>
+    <div class="pill">
+      <span class="num">12.8</span><span class="lbl">fps</span>
+      <span class="spark" id="spark"></span>
+      <span class="sep"></span>
+      <span class="ev"><b>166</b>ms</span>
+      <button class="iconbtn" style="width:20px;height:20px" title="展开"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button>
+      <button class="iconbtn" style="width:20px;height:20px" title="关闭"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+    </div>
+
+    <div class="cap" style="margin-top:22px">窄屏 &lt; 480px · 丢掉帧条,读数一个不少</div>
+    <div class="pill">
+      <span class="num">12.8</span><span class="lbl">fps</span>
+      <span class="sep"></span>
+      <span class="ev"><b>166</b>ms</span>
+      <button class="iconbtn" style="width:20px;height:20px" title="展开"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button>
+      <button class="iconbtn" style="width:20px;height:20px" title="关闭"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+    </div>
+
+    <div class="cap" style="margin-top:22px">已关闭</div>
+    <div class="pill off-state">
+      <span style="font-size:12px;color:rgba(249,250,251,.72)">性能 HUD</span>
+      <span class="off" style="font-size:11px">已关</span>
+      <button class="iconbtn" style="width:20px;height:20px" title="打开"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const spark = document.getElementById('spark');
+  [7, 9, 6, 8, 7, 9, 6, 7, 8, 6, 9, 7, 8, 12, 6, 7].forEach((v, i) => {
+    const el = document.createElement('i');
+    el.style.height = v + 'px';
+    if (i === 13) el.className = 'w';
+    spark.appendChild(el);
+  });
+</script>
+<script>addEventListener("load", () => { document.documentElement.dataset.h = String(document.body.scrollHeight); });</script>
+</body>
+</html>

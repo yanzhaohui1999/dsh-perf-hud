@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>性能 HUD · 设置</title>
+<link rel="stylesheet" href="hud.css">
+</head>
+<body>
+<div class="stage">
+
+  <div class="col">
+    <div class="cap">现在 · v0.7.0（三段说明文 + 六个按钮）</div>
+    <img class="old" src="../docs/images/07-settings.png" alt="当前设置页">
+  </div>
+
+  <div class="col">
+    <div class="cap"><b>新</b> · 设置是一张表,不是一篇文章</div>
+    <div class="hud">
+
+      <header class="hd">
+        <div class="hd-l">
+          <button class="iconbtn" title="返回"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3.5L5 8l4.5 4.5"/></svg></button>
+          <div class="title">设置</div>
+        </div>
+        <div class="hd-r">
+          <button class="iconbtn" title="关闭"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+        </div>
+      </header>
+
+      <div class="set" style="margin-top:8px;border-top:0">
+        <span class="k">记录</span>
+        <span class="v" style="text-align:right">
+          <span class="seg"><span class="on">守夜</span><span>深录</span></span>
+        </span>
+      </div>
+
+      <div class="stats">
+        <div class="cell"><b>7</b><span>已保存现场</span></div>
+        <div class="cell"><b>27</b><span>已丢弃</span></div>
+        <div class="cell"><b>0</b><span>已裁掉</span></div>
+      </div>
+
+      <div class="keys" style="margin-top:6px">全局最差 10 次 + 每天最差 1 条 · 最多 7 天 · 2MB 上限</div>
+
+      <div class="btnrow" style="margin-top:8px">
+        <button class="btn ghost">清空事故现场</button>
+        <button class="btn ghost">清空全部</button>
+      </div>
+
+      <div class="set"><span class="k">隐私</span><span class="v">本机采集,不上传</span></div>
+      <div class="set"><span class="k">脱敏</span><span class="v" style="font-size:11px;color:var(--muted)">地址 → origin+path · 目录 → ~ · UA 截断</span></div>
+      <div class="set"><span class="k">快捷键</span><span class="v"><span class="chip">⌘ ⇧ U</span> <span style="font-size:11px;color:var(--muted)">展开 / 收起</span></span></div>
+
+    </div>
+  </div>
+
+</div>
+<script>addEventListener("load", () => { document.documentElement.dataset.h = String(document.body.scrollHeight); });</script>
+</body>
+</html>

@@ -189,6 +189,38 @@ window.__ModuleLoader__.load({
 			} = deps;
 
 		/**
+		 * 标题栏图标。**行内 SVG,不引任何图标库**:面板只依赖 React 与自身分片,
+		 * 多加一个包就多一份"插件加载失败"的面。
+		 *
+		 * knobs(设置的三条滑杆)用 `bg-overlay` 填色,和小圆点背后的面板底色一致 ——
+		 * 换成白色小圆点会像"进度条上的三个点"。
+		 */
+		const ICONS = {
+			sliders: [
+				['path', { d: 'M2.5 5h11' }], ['path', { d: 'M2.5 8h11' }], ['path', { d: 'M2.5 11h11' }],
+				['circle', { cx: 5.5, cy: 5, r: 1.6, fill: 'var(--dsw-alias-bg-overlay)' }],
+				['circle', { cx: 10.5, cy: 8, r: 1.6, fill: 'var(--dsw-alias-bg-overlay)' }],
+				['circle', { cx: 5.5, cy: 11, r: 1.6, fill: 'var(--dsw-alias-bg-overlay)' }],
+			],
+			minus: [['path', { d: 'M3.5 8h9' }]],
+			plus: [['path', { d: 'M8 3.5v9M3.5 8h9' }]],
+			close: [['path', { d: 'M4.5 4.5l7 7M11.5 4.5l-7 7' }]],
+			back: [['path', { d: 'M9.5 3.5L5 8l4.5 4.5' }]],
+			prev: [['path', { d: 'M9.5 3.5L5 8l4.5 4.5' }]],
+			next: [['path', { d: 'M6.5 3.5L11 8l-4.5 4.5' }]],
+			copy: [['rect', { x: 5.5, y: 5.5, width: 7, height: 7, rx: 1.4 }], ['path', { d: 'M10.5 3.5h-6a1 1 0 00-1 1v6' }]],
+			download: [['path', { d: 'M8 2.5v7M5 6.8L8 9.8l3-3M3 11.5v1.2h10v-1.2' }]],
+		};
+		function panelIcon(name, size) {
+			const spec = ICONS[name] ?? [];
+			return h('svg', {
+				viewBox: '0 0 16 16', width: size ?? 14, height: size ?? 14, 'aria-hidden': 'true',
+				fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round', strokeLinejoin: 'round',
+				style: { display: 'block', pointerEvents: 'none' },
+			}, spec.map((item, index) => h(item[0], { key: index, ...item[1] })));
+		}
+
+		/**
 		 * 自测用的重组件:一次提交塞进 count 个节点,制造真实的渲染型 longtask。
 		 *
 		 * ⚠️ 这个声明曾被"排版改造"整段替换时吞掉过一次:文件里 h(PerfHudStress, …) 还在、
@@ -1188,18 +1220,22 @@ window.__ModuleLoader__.load({
 			const viewTitle = view === 'dev' ? t('viewDev') : view === 'settings' ? t('viewSettings') : t('viewIncident');
 			const head = h('div', { style: { ...S.head, ...S.drag }, title: t('dragHint'), onPointerDown: startDrag, onDoubleClick: resetPos },
 				h('div', { style: S.headLeft },
+					// 返回是**图标**:它每一屏都在,却只在子页出现 —— 三个汉字换成 14px 的箭头,
+					// 把这一行的宽度留给标题与读数。
+					view === 'main' ? null : h('button', {
+						type: 'button', className: 'picon', style: S.iconBtn, title: t('backHint'), 'aria-label': t('back'),
+						onClick: () => setView('main'),
+					}, panelIcon('back')),
 					// 子页只写视图名:「性能 HUD ·」那一段与下面第一行的上下文标题(`历史事故 i35xx · 历史帧 …`)
 					// 说的是同一件事(我在哪),而它是这一行里唯一能让位的文字。品牌名进悬停。
 					h('span', { style: S.brand, title: t('title') }, view === 'main' ? t('title') : viewTitle),
-					view === 'main' ? null : h('button', { type: 'button', style: { ...S.btn, ...S.headBtn }, title: t('backHint'), onClick: () => setView('main') }, t('back')),
 					// 场景标签与标题一样是**文字**,一样可以让位(先出省略号):不变的是控件。
-					// 少了这一条,开发者详情那一屏(返回 + 深录 + 设置 + 收起 + 关闭)在 zh 下仍会超 ~16px。
 					h('span', { style: { ...S.label, color: scene.color, flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, scene.text),
 					h('span', { style: { ...S.num, flex: '0 0 auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(1)} fps`)),
 				h('div', { style: S.headRight },
-					h('button', { type: 'button', style: { ...S.btn, ...S.headBtn }, title: t('settingsHint'), onClick: () => setView(view === 'settings' ? 'main' : 'settings') }, t('viewSettings')),
-					h('button', { type: 'button', style: { ...S.btn, ...S.headBtn }, title: open ? t('collapse') : t('expand'), onClick: toggle }, open ? '–' : '+'),
-					h('button', { type: 'button', style: { ...S.btn, ...S.headBtn }, title: t('turnOff'), onClick: () => setEnabled(false) }, t('turnOff'))));
+					h('button', { type: 'button', className: 'picon', style: S.iconBtn, title: t('settingsHint'), 'aria-label': t('viewSettings'), onClick: () => setView(view === 'settings' ? 'main' : 'settings') }, panelIcon('sliders')),
+					h('button', { type: 'button', className: 'picon', style: S.iconBtn, title: open ? t('collapse') : t('expand'), 'aria-label': open ? t('collapse') : t('expand'), onClick: toggle }, panelIcon(open ? 'minus' : 'plus')),
+					h('button', { type: 'button', className: 'picon', style: S.iconBtn, title: t('turnOff'), 'aria-label': t('turnOff'), onClick: () => setEnabled(false) }, panelIcon('close'))));
 
 			if (open === false) {
 				// 折叠不是"看不见":至少留下 fps / 最差帧 / 最差 longtask 三个读数。

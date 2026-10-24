@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>性能 HUD · 卡顿详情</title>
+<link rel="stylesheet" href="hud.css">
+</head>
+<body>
+<div class="stage">
+
+  <div class="col">
+    <div class="cap">现在 · v0.7.0</div>
+    <img class="old" src="../docs/images/08-incident.png" alt="当前卡顿详情">
+  </div>
+
+  <div class="col">
+    <div class="cap"><b>新</b> · 事故只有一个主角:166ms</div>
+    <div class="hud">
+
+      <header class="hd">
+        <div class="hd-l">
+          <button class="iconbtn" title="回到实时"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3.5L5 8l4.5 4.5"/></svg></button>
+          <div class="title">卡顿详情</div>
+          <div class="vitals"><b>11.5</b> fps</div>
+        </div>
+        <div class="hd-r">
+          <button class="iconbtn" title="复制摘要"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5.5" y="5.5" width="7" height="7" rx="1.4"/><path d="M10.5 3.5h-6a1 1 0 00-1 1v6" stroke-linecap="round"/></svg></button>
+          <button class="iconbtn" title="导出事故包"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v7M5 6.8L8 9.8l3-3M3 11.5v1.2h10v-1.2"/></svg></button>
+          <button class="iconbtn" title="关闭"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+        </div>
+      </header>
+
+      <div class="meta mt12">
+        <span>i35</span><span class="dot"></span><span>帧 23 / 56</span>
+        <span style="margin-left:auto">23:05:22</span>
+      </div>
+
+      <div class="rowline mt8">
+        <div class="val" style="font-size:34px">166<span class="unit" style="font-size:12px">ms</span></div>
+        <span class="badge warn">警告</span>
+      </div>
+
+      <div class="axis">
+        <span class="t">23:05:12</span>
+        <div class="ticks" id="ticks" title="56 帧 · 点一根跳到那一帧"></div>
+        <span class="t">23:05:25</span>
+      </div>
+
+      <div class="nav">
+        <button class="iconbtn" style="width:20px;height:20px" title="上一帧"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3.5L5 8l4.5 4.5"/></svg></button>
+        <span class="pos">帧 23 / 56</span>
+        <button class="iconbtn" style="width:20px;height:20px" title="下一帧"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5L11 8l-4.5 4.5"/></svg></button>
+        <span class="spacer"></span>
+        <button class="chipbtn" title="只翻异常帧">只看异常</button>
+      </div>
+
+      <div class="stats mt12">
+        <div class="cell"><b class="sm">46.6</b><span>p50 ms</span></div>
+        <div class="cell"><b class="sm">166.3</b><span>p99 ms</span></div>
+        <div class="cell"><b class="sm">13s</b><span>窗口 · 56 帧</span></div>
+      </div>
+
+      <div class="attr">
+        <div class="l1"><span class="badge ok">已确认</span><b>dsh-client-modules</b><span class="ms">82ms</span></div>
+        <div class="l2">窗口 56 帧 · LoAF 24 · 按包 1/6</div>
+      </div>
+
+      <div class="group" style="margin-top:10px">
+        <svg class="glyph" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 2l4 3-4 3"/></svg>
+        技术细节
+        <span class="sum">166.3ms · 脚本 0ms · LT 0</span>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // 56 帧的历史时间轴:大部分正常,第 23 帧(白色)是这次事故
+  const ticks = document.getElementById('ticks');
+  for (let i = 1; i <= 56; i++) {
+    const el = document.createElement('i');
+    const v = i === 23 ? 26 : (i % 11 === 0 ? 16 : 6 + (i * 7) % 9);
+    el.style.height = v + 'px';
+    if (i === 23) el.className = 'sel';
+    else if (i % 11 === 0) el.className = 'w';
+    ticks.appendChild(el);
+  }
+</script>
+<script>addEventListener("load", () => { document.documentElement.dataset.h = String(document.body.scrollHeight); });</script>
+</body>
+</html>

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>性能 HUD · 屏幕与跳转</title>
+<style>
+  html, body { margin: 0; background: #0e0e10; }
+  svg { display: block; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif; }
+</style>
+</head>
+<body>
+<svg width="1200" height="740" viewBox="0 0 1200 740" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#9aa3ac"/>
+    </marker>
+    <marker id="ard" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#c9924a"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="740" fill="#0e0e10"/>
+
+  <text x="40" y="46" fill="#f2f4f6" font-size="17" font-weight="600">性能 HUD · 屏幕与跳转</text>
+  <text x="40" y="70" fill="#8b949e" font-size="11">按 v0.7.0 源码逐条核对：setView / toggle / setEnabled / revealIncident / showLiveMode</text>
+
+  <line x1="880" y1="42" x2="916" y2="42" stroke="#9aa3ac" stroke-width="1.2" marker-end="url(#ar)"/>
+  <text x="924" y="46" fill="#9aa3ac" font-size="10">按钮跳转</text>
+  <line x1="1000" y1="42" x2="1036" y2="42" stroke="#c9924a" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ard)"/>
+  <text x="1044" y="46" fill="#c9924a" font-size="10">子页入口 / 状态恢复</text>
+
+  <!-- 已关闭 -->
+  <rect x="40" y="300" width="170" height="64" rx="8" fill="#2c3035" stroke="#3f444b"/>
+  <text x="58" y="328" fill="#f2f4f6" font-size="14" font-weight="600">已关闭</text>
+  <text x="58" y="348" fill="#98a0a8" font-size="10">on = false</text>
+
+  <!-- 收起态 -->
+  <rect x="40" y="150" width="170" height="64" rx="8" fill="#2c3035" stroke="#3f444b"/>
+  <text x="58" y="178" fill="#f2f4f6" font-size="14" font-weight="600">收起态</text>
+  <text x="58" y="198" fill="#98a0a8" font-size="10">collapsed = true</text>
+
+  <!-- 主界面 -->
+  <rect x="330" y="150" width="250" height="120" rx="10" fill="#22252a" stroke="#4b5159"/>
+  <text x="348" y="182" fill="#f2f4f6" font-size="15" font-weight="600">主界面</text>
+  <text x="348" y="204" fill="#98a0a8" font-size="10">view = main</text>
+  <text x="348" y="230" fill="#cbd2d9" font-size="11">12.8 fps · 166ms · 49 次</text>
+  <text x="348" y="252" fill="#8b949e" font-size="10">入口：查看这次卡顿 / 开发者详情 / 设置</text>
+
+  <!-- 设置 -->
+  <rect x="330" y="370" width="250" height="110" rx="10" fill="#22252a" stroke="#4b5159"/>
+  <text x="348" y="402" fill="#f2f4f6" font-size="15" font-weight="600">设置</text>
+  <text x="348" y="424" fill="#98a0a8" font-size="10">view = settings</text>
+  <text x="348" y="450" fill="#8b949e" font-size="10">记录 / 留存 / 隐私 / 脱敏 / 快捷键</text>
+
+  <!-- 卡顿详情 -->
+  <rect x="740" y="60" width="240" height="100" rx="10" fill="#22252a" stroke="#4b5159"/>
+  <text x="758" y="92" fill="#f2f4f6" font-size="15" font-weight="600">卡顿详情</text>
+  <text x="758" y="114" fill="#98a0a8" font-size="10">view = incident · watch.mode = incident</text>
+  <text x="758" y="136" fill="#8b949e" font-size="10">技术细节（组，就地展开）</text>
+
+  <!-- 开发者详情 -->
+  <rect x="740" y="210" width="240" height="120" rx="10" fill="#22252a" stroke="#4b5159"/>
+  <text x="758" y="242" fill="#f2f4f6" font-size="15" font-weight="600">开发者详情</text>
+  <text x="758" y="264" fill="#98a0a8" font-size="10">view = dev · devTab 五选一</text>
+  <text x="758" y="288" fill="#8b949e" font-size="10">页签只换内容，不换屏</text>
+  <text x="758" y="308" fill="#8b949e" font-size="10">「看这一帧」只切上下文（就地）</text>
+
+  <!-- 收起 ↔ 主界面 -->
+  <line x1="212" y1="190" x2="326" y2="190" stroke="#9aa3ac" stroke-width="1.2" marker-end="url(#ar)" marker-start="url(#ar)"/>
+  <text x="222" y="182" fill="#cbd2d9" font-size="10">＋ / －</text>
+  <text x="222" y="236" fill="#8b949e" font-size="10">展开 = 强制回主界面</text>
+
+  <!-- 已关闭 ↔ 收起 -->
+  <line x1="125" y1="296" x2="125" y2="218" stroke="#c9924a" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ard)" marker-start="url(#ard)"/>
+  <text x="136" y="264" fill="#c9924a" font-size="10">× / 开启</text>
+
+  <!-- 主界面 → 已关闭（任一屏） -->
+  <path d="M330 256 C 286 276 236 296 212 314" fill="none" stroke="#9aa3ac" stroke-width="1.2" marker-end="url(#ar)"/>
+  <text x="230" y="300" fill="#cbd2d9" font-size="10">× 关闭（每屏都有）</text>
+
+  <!-- 主界面 ↔ 卡顿详情 -->
+  <path d="M580 168 C 640 148 680 124 736 114" fill="none" stroke="#9aa3ac" stroke-width="1.2" marker-end="url(#ar)" marker-start="url(#ar)"/>
+  <text x="592" y="128" fill="#cbd2d9" font-size="10">查看这次卡顿</text>
+  <text x="600" y="196" fill="#8b949e" font-size="10">← 返回 · 回到实时</text>
+
+  <!-- 主界面 ↔ 开发者详情 -->
+  <line x1="582" y1="250" x2="736" y2="258" stroke="#9aa3ac" stroke-width="1.2" marker-end="url(#ar)" marker-start="url(#ar)"/>
+  <text x="596" y="240" fill="#cbd2d9" font-size="10">开发者详情</text>
+  <text x="612" y="286" fill="#8b949e" font-size="10">← 返回</text>
+
+  <!-- 主界面 ↔ 设置 -->
+  <line x1="440" y1="272" x2="440" y2="366" stroke="#9aa3ac" stroke-width="1.2" marker-end="url(#ar)" marker-start="url(#ar)"/>
+  <text x="452" y="324" fill="#cbd2d9" font-size="10">设置 / ←</text>
+
+  <!-- 子页的「设置」总线 -->
+  <path d="M980 110 L 1040 110 L 1040 520 L 560 520 L 560 486" fill="none" stroke="#c9924a" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ard)"/>
+  <path d="M980 270 L 1040 270" fill="none" stroke="#c9924a" stroke-width="1.2" stroke-dasharray="4 4"/>
+  <text x="640" y="538" fill="#c9924a" font-size="10">子页的「设置」按钮：进得去，再点一次回的是主界面</text>
+
+  <!-- 说明 -->
+  <line x1="40" y1="566" x2="1160" y2="566" stroke="#2b2f34"/>
+
+  <text x="40" y="596" fill="#f2f4f6" font-size="12" font-weight="600">现在的规则</text>
+  <g fill="#98a0a8" font-size="11">
+    <text x="40" y="622">· 返回只有一个落点：主界面，不记来源</text>
+    <text x="40" y="646">· 展开（＋）强制回主界面；收起（－）保留当前视图（每屏都有）</text>
+    <text x="40" y="670">· 关闭不丢屏：开启回到关闭前的状态（含收起态）</text>
+    <text x="40" y="694">· 刷新会恢复到上次的屏（view / devTab 落盘）</text>
+  </g>
+
+  <text x="470" y="596" fill="#f2f4f6" font-size="12" font-weight="600">三处不一致</text>
+  <g fill="#c9b79a" font-size="11">
+    <text x="470" y="622">· 收起再展开 → 主界面；刷新却能落回子页</text>
+    <text x="470" y="646">· 子页「设置」→ 设置页，再点一次回主界面：来源丢了</text>
+    <text x="470" y="670">· 卡顿详情没有中间层，← 一步砸回主界面</text>
+  </g>
+
+  <text x="880" y="596" fill="#f2f4f6" font-size="12" font-weight="600">新版顺带动的 flow</text>
+  <g fill="#98a0a8" font-size="11">
+    <text x="880" y="622">· 导出诊断报告：主界面 → 卡顿详情右上角</text>
+    <text x="880" y="646">· 「设置」只在主界面，子页那条路砍掉</text>
+    <text x="880" y="670">· 深录：页签堆里 → 页签行右侧开关位</text>
+  </g>
+</svg>
+</body>
+</html>

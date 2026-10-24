@@ -1,0 +1,237 @@
+/* 性能 HUD · 新版面板设计系统（预览用，落地时映射成 client.ui.js 的 S.* 内联样式） */
+
+:root {
+  --page: #0e0e10;
+  --surface: #61666b;
+  --text: #f9fafb;
+  --muted: rgba(249, 250, 251, .62);
+  --dim: rgba(249, 250, 251, .40);
+  --line: rgba(249, 250, 251, .14);
+  --line-strong: rgba(249, 250, 251, .24);
+  --warn: #f59e0b;
+  --bad: #f86b5f;
+  --ok: #4ade80;
+}
+
+* { box-sizing: border-box }
+
+body {
+  margin: 0;
+  padding: 28px 24px 32px;
+  background: var(--page);
+  color: var(--text);
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.stage { display: flex; gap: 40px; align-items: flex-start }
+.grid { display: grid; grid-template-columns: 396px 396px; gap: 34px 40px; align-items: start }
+.col { width: 396px; flex: 0 0 auto }
+.cap { font-size: 11px; letter-spacing: .04em; color: rgba(255, 255, 255, .34); margin-bottom: 10px }
+.cap b { color: rgba(255, 255, 255, .66); font-weight: 600; letter-spacing: 0 }
+img.old { width: 396px; display: block; border-radius: 8px; border: 1px solid rgba(255, 255, 255, .08) }
+
+/* ---------- 面板壳 ---------- */
+.hud {
+  width: 396px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, .10);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .38), 0 1px 0 rgba(255, 255, 255, .05) inset;
+  padding: 12px 14px 10px;
+  color: var(--text);
+}
+.hud.narrow { width: 368px }
+
+/* ---------- 标题栏：左组可压缩，右组固定 ---------- */
+.hd { display: flex; align-items: center; height: 24px; gap: 8px }
+.hd-l { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0 }
+.hd-r { display: flex; align-items: center; gap: 4px; flex: 0 0 auto }
+.title { font-size: 13px; font-weight: 600; letter-spacing: .01em; flex: 0 0 auto; white-space: nowrap }
+.title em { font-style: normal; font-size: 10px; font-weight: 600; letter-spacing: .12em; color: var(--muted); margin-left: 3px }
+.stat { font-size: 11px; color: var(--muted); flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden }
+.vitals { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap }
+.vitals b { color: var(--warn); font-weight: 600 }
+
+.iconbtn {
+  width: 24px; height: 24px; display: grid; place-items: center;
+  border: 0; border-radius: 6px; padding: 0; background: transparent;
+  color: rgba(249, 250, 251, .62); cursor: pointer;
+}
+.iconbtn:hover { background: rgba(255, 255, 255, .09); color: var(--text) }
+.iconbtn svg { width: 14px; height: 14px }
+
+/* ---------- 主读数 ---------- */
+.hero { margin-top: 14px }
+.val {
+  font-size: 46px; line-height: .94; font-weight: 600; letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums; color: var(--warn);
+  display: flex; align-items: baseline; gap: 7px;
+}
+.val .unit { font-size: 11px; font-weight: 600; letter-spacing: .08em; color: var(--muted) }
+.strip { display: flex; align-items: flex-end; gap: 2px; height: 26px; margin-top: 11px }
+.strip i { flex: 1 1 auto; background: rgba(249, 250, 251, .26); border-radius: 1px; min-height: 2px }
+.strip i.w { background: var(--warn) }
+.strip i.b { background: var(--bad) }
+
+.rule { height: 1px; background: var(--line); margin: 12px 0 }
+
+/* ---------- 事件块 ---------- */
+.inc { border-left: 2px solid var(--warn); padding: 2px 0 2px 11px; cursor: pointer }
+.inc.calm { border-left-color: var(--line-strong) }
+.inc-main { display: flex; align-items: baseline; gap: 8px }
+.dur { font-size: 24px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1 }
+.dur span { font-size: 13px; font-weight: 600; margin-left: 1px; color: rgba(249, 250, 251, .8) }
+.time {
+  margin-left: auto; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .02em;
+}
+.chev { width: 14px; height: 14px; color: rgba(249, 250, 251, .45); margin-left: 2px; align-self: center; flex: 0 0 auto }
+.causes { margin-top: 9px; display: flex; flex-direction: column; gap: 5px }
+.cause { display: flex; align-items: center; gap: 7px; font-size: 12px; color: rgba(249, 250, 251, .88) }
+.cause .n { font-size: 11px; color: var(--dim); width: 9px; flex: 0 0 auto; font-variant-numeric: tabular-nums }
+.cause .txt { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+
+/* ---------- 趋势 / 分段 ---------- */
+.trend { display: flex; align-items: center; gap: 9px; height: 26px; margin-top: 2px }
+.t-num { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.01em }
+.t-num span { font-size: 11px; font-weight: 500; color: var(--muted); margin-left: 3px }
+.t-max { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums }
+.t-max b { font-weight: 600; color: rgba(249, 250, 251, .86) }
+.seg { margin-left: auto; display: inline-flex; background: rgba(0, 0, 0, .14); border-radius: 7px; padding: 2px; gap: 2px }
+.seg span { font-size: 11px; color: var(--muted); padding: 2px 8px; border-radius: 5px; line-height: 1.5; cursor: pointer }
+.seg span.on { background: rgba(255, 255, 255, .16); color: var(--text); font-weight: 600 }
+
+footer { display: flex; justify-content: flex-end; margin-top: 4px }
+.more {
+  font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 0 2px 8px; cursor: pointer; background: none; border: 0;
+}
+.more:hover { color: var(--text) }
+.more svg { width: 11px; height: 11px }
+
+/* ---------- 标签页 ---------- */
+.tabs { display: flex; align-items: center; gap: 2px; margin-top: 10px; border-bottom: 1px solid var(--line) }
+.tab {
+  font-size: 11px; color: var(--muted); padding: 3px 6px 6px; border: 0; background: none;
+  cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap;
+}
+.tab:hover { color: var(--text) }
+.tab.on { color: var(--text); font-weight: 600; border-bottom-color: rgba(249, 250, 251, .85) }
+.tabs .deep {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 11px;
+  color: var(--muted); cursor: pointer; padding-bottom: 3px;
+}
+.tabs .deep i { width: 6px; height: 6px; border-radius: 50%; background: rgba(249, 250, 251, .28) }
+.tabs .deep.on { color: var(--text) }
+.tabs .deep.on i { background: var(--warn) }
+
+/* ---------- 统计格 ---------- */
+.stats { display: flex; margin-top: 12px }
+.cell { flex: 1 1 0; min-width: 0; padding-left: 10px; border-left: 1px solid var(--line) }
+.cell:first-child { padding-left: 0; border-left: 0 }
+.cell b { display: block; font-size: 20px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1 }
+.cell b.sm { font-size: 15px }
+.cell span { display: block; font-size: 10px; color: var(--muted); margin-top: 3px; white-space: nowrap }
+.cell b.warn { color: var(--warn) }
+.cell b.bad { color: var(--bad) }
+.cell b.ok { color: var(--ok) }
+
+/* ---------- 分组行 ---------- */
+.group {
+  display: flex; align-items: center; gap: 8px; height: 32px; border-top: 1px solid var(--line);
+  cursor: pointer; font-size: 12px; font-weight: 600;
+}
+.group .glyph { width: 10px; height: 10px; color: var(--dim); flex: 0 0 auto; transition: transform .12s }
+.group .sum { margin-left: auto; font-size: 11px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+
+/* ---------- 按钮 ---------- */
+.btn {
+  height: 24px; padding: 0 9px; border-radius: 6px; border: 1px solid rgba(249, 250, 251, .18);
+  background: transparent; color: var(--text); font-size: 11px; cursor: pointer; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.btn:hover { border-color: rgba(249, 250, 251, .34); background: rgba(255, 255, 255, .06) }
+.btn.primary { border-color: rgba(249, 250, 251, .34); background: rgba(255, 255, 255, .10); font-weight: 600 }
+.btn.ghost { border-color: transparent; color: var(--muted); padding: 0 6px }
+.btn.ghost:hover { color: var(--text); background: rgba(255, 255, 255, .06) }
+.btnrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px }
+
+/* ---------- 开关 ---------- */
+.sw { width: 28px; height: 16px; border-radius: 8px; background: rgba(0, 0, 0, .28); position: relative; flex: 0 0 auto; cursor: pointer }
+.sw i { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: rgba(255, 255, 255, .72); transition: left .12s }
+.sw.on { background: rgba(245, 158, 11, .82) }
+.sw.on i { left: 14px; background: #fff }
+
+/* ---------- 设置行 ---------- */
+.set { display: flex; align-items: center; gap: 10px; height: 34px; border-top: 1px solid var(--line) }
+.set .k { width: 44px; flex: 0 0 auto; font-size: 11px; color: var(--muted) }
+.set .v { font-size: 12px; font-variant-numeric: tabular-nums; flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden }
+.set .v b { font-weight: 600 }
+.set .v em { font-style: normal; color: var(--muted) }
+
+/* ---------- 时间轴 ---------- */
+.axis { display: flex; align-items: center; gap: 8px; margin-top: 12px }
+.axis .t { font-size: 10px; color: var(--dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; flex: 0 0 auto }
+.ticks { display: flex; align-items: flex-end; gap: 2px; height: 26px; flex: 1 1 auto; min-width: 0 }
+.ticks i { flex: 1 1 auto; background: rgba(249, 250, 251, .22); border-radius: 1px; min-height: 2px }
+.ticks i.w { background: var(--warn) }
+.ticks i.b { background: var(--bad) }
+.ticks i.sel { background: #fff; min-height: 26px; border-radius: 2px }
+.nav { display: flex; align-items: center; gap: 2px; margin-top: 6px }
+.nav .pos { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; padding-right: 4px }
+.nav .spacer { flex: 1 1 auto }
+
+/* ---------- 药丸 ---------- */
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px 0 10px;
+  border-radius: 8px; background: var(--surface); border: 1px solid rgba(255, 255, 255, .10);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .32); font-size: 12px; color: var(--text);
+}
+.pill .num { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--warn) }
+.pill .lbl { font-size: 10px; color: var(--muted); margin-left: -4px }
+.pill .sep { width: 1px; height: 12px; background: var(--line) }
+.pill .ev { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums }
+.pill .ev b { color: var(--text); font-weight: 600 }
+.pill .off { color: var(--dim) }
+.pill.off-state .num { color: var(--dim) }
+.spark { display: flex; align-items: flex-end; gap: 1px; height: 12px; width: 34px }
+.spark i { flex: 1 1 auto; background: rgba(249, 250, 251, .30); border-radius: 1px; min-height: 1px }
+.spark i.w { background: var(--warn) }
+
+/* ---------- 归因 / 徽章 ---------- */
+.badge {
+  display: inline-flex; align-items: center; height: 16px; padding: 0 5px; border-radius: 4px;
+  font-size: 10px; font-weight: 600; letter-spacing: .02em; flex: 0 0 auto;
+}
+.badge.ok { color: var(--ok); background: rgba(74, 222, 128, .14) }
+.badge.warn { color: var(--warn); background: rgba(245, 158, 11, .16) }
+.badge.plain { color: var(--muted); background: rgba(255, 255, 255, .08) }
+.attr { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 11px }
+.attr .l1 { display: flex; align-items: center; gap: 7px; font-size: 12px }
+.attr .l1 b { font-weight: 600 }
+.attr .l1 .ms { color: var(--muted); font-variant-numeric: tabular-nums }
+.attr .l2 { font-size: 11px; color: var(--muted); margin-top: 5px; font-variant-numeric: tabular-nums }
+.meta { font-size: 11px; color: var(--dim); display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums }
+.meta .dot { width: 2px; height: 2px; border-radius: 50%; background: currentColor; opacity: .7 }
+
+/* ---------- 文件 chips ---------- */
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px }
+.chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
+  color: rgba(249, 250, 251, .78); background: rgba(0, 0, 0, .16);
+  border: 1px solid rgba(255, 255, 255, .08); border-radius: 5px; padding: 2px 6px;
+}
+.keys {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; color: var(--dim);
+  margin-top: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---------- 小工具 ---------- */
+.rowline { display: flex; align-items: baseline; gap: 8px }
+.mt8 { margin-top: 8px } .mt12 { margin-top: 12px }
+.chipbtn {
+  height: 20px; padding: 0 7px; border-radius: 5px; border: 1px solid rgba(249, 250, 251, .18);
+  background: none; color: var(--muted); font-size: 10px; cursor: pointer;
+}
+.chipbtn:hover { color: var(--text); border-color: rgba(249, 250, 251, .34) }

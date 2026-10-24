@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>性能 HUD · 主界面</title>
+<link rel="stylesheet" href="hud.css">
+</head>
+<body>
+<div class="stage">
+
+  <div class="col">
+    <div class="cap">现在 · v0.7.0</div>
+    <img class="old" src="../docs/images/01-main.png" alt="当前主界面">
+  </div>
+
+  <div class="col">
+    <div class="cap"><b>新</b> · 布局自己说话</div>
+    <div class="hud">
+
+      <header class="hd">
+        <div class="hd-l">
+          <div class="title">性能<em>HUD</em></div>
+          <div class="stat">空闲 2s</div>
+        </div>
+        <div class="hd-r">
+          <button class="iconbtn" title="设置"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 5h11M2.5 8h11M2.5 11h11"/><circle cx="6" cy="5" r="1.5" fill="var(--surface)"/><circle cx="10" cy="8" r="1.5" fill="var(--surface)"/><circle cx="5" cy="11" r="1.5" fill="var(--surface)"/></svg></button>
+          <button class="iconbtn" title="收起"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3.5 8h9"/></svg></button>
+          <button class="iconbtn" title="关闭"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+        </div>
+      </header>
+
+      <section class="hero">
+        <div class="val">12.8<span class="unit">fps</span></div>
+        <div class="strip" id="strip" title="最近 60 秒 · 每根 = 1 秒"></div>
+      </section>
+
+      <div class="rule"></div>
+
+      <section class="inc" title="查看这次卡顿">
+        <div class="inc-main">
+          <div class="dur">166<span>ms</span></div>
+          <div class="time">23:05:22</div>
+          <svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 3.5l4.5 4.5L6 12.5"/></svg>
+        </div>
+        <div class="causes">
+          <div class="cause"><span class="n">1</span><span class="txt">脚本模块耗时偏高</span></div>
+          <div class="cause"><span class="n">2</span><span class="txt">宿主进程偏忙</span></div>
+        </div>
+      </section>
+
+      <div class="rule"></div>
+
+      <section class="trend" title="最差 10 次已留存">
+        <div class="t-num">49<span>次</span></div>
+        <div class="t-max">最长 <b>166ms</b></div>
+        <div class="seg"><span class="on">1 小时</span><span>24 小时</span></div>
+      </section>
+
+      <footer>
+        <button class="more">技术细节
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 3.5l4.5 4.5L6 12.5"/></svg>
+        </button>
+      </footer>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // 60 秒帧时长(ms)：基线约 78ms(=12.8fps)，两根尖刺是一次间歇卡顿 + 23:05:22 那次事故
+  const frames = [
+    76, 70, 78, 86, 67, 68, 92, 83, 69, 77, 84, 67,
+    82, 72, 67, 68, 79, 79, 68, 73, 68, 83, 79, 67,
+    92, 84, 69, 73, 86, 86, 84, 67, 84, 84, 78, 67,
+    104, 128, 96, 140, 82, 74, 69, 88, 79, 71, 80, 68,
+    76, 73, 84, 70, 170, 124, 96, 88, 74, 71, 79, 82
+  ];
+  const strip = document.getElementById('strip');
+  frames.forEach((v) => {
+    const bar = document.createElement('i');
+    bar.style.height = Math.min(26, Math.max(2, Math.round(v / 6.9))) + 'px';
+    if (v >= 150) bar.className = 'b';
+    else if (v >= 118) bar.className = 'w';
+    strip.appendChild(bar);
+  });
+</script>
+<script>addEventListener("load", () => { document.documentElement.dataset.h = String(document.body.scrollHeight); });</script>
+</body>
+</html>

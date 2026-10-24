@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>性能 HUD · 开发者详情</title>
+<link rel="stylesheet" href="hud.css">
+<style>
+  .grid { grid-template-columns: 396px 396px }
+  .hud .body { }
+</style>
+</head>
+<body>
+<div class="grid" id="grid"></div>
+
+<script>
+  const TABS = ['帧与归因', 'DOM 与堆', '宿主', '工具箱', '原始数据'];
+
+  const BACK = `<button class="iconbtn" title="返回"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 3.5L5 8l4.5 4.5"/></svg></button>`;
+  const CHEV = `<svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 3.5l4.5 4.5L6 12.5"/></svg>`;
+  const GLYPH = `<svg class="glyph" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 2l4 3-4 3"/></svg>`;
+
+  const bodies = {
+    '帧与归因': `
+      <div class="stats">
+        <div class="cell"><b class="bad">142</b><span>帧最差 ms</span></div>
+        <div class="cell"><b class="warn">82</b><span>长任务 ms</span></div>
+        <div class="cell"><b>0/1</b><span>LoAF 命中</span></div>
+      </div>
+      <div class="attr">
+        <div class="rowline">
+          <div class="dur" style="font-size:20px">166<span>ms</span></div>
+          <span class="badge warn">警告</span>
+          <span class="time">23:05:22</span>
+          ${CHEV}
+        </div>
+        <div class="l2">dsh-client-modules 82ms</div>
+        <div class="l2">窗口 56 帧 · LoAF 24 · 按包 1/6</div>
+      </div>
+      <div class="set"><span class="k">回调归因</span><span class="v"><em>深录后可见</em></span></div>
+      <div class="group">${GLYPH}取证明细<span class="sum">最差秒 166ms</span></div>`,
+
+    'DOM 与堆': `
+      <div class="stats">
+        <div class="cell"><b>1160</b><span>节点</span></div>
+        <div class="cell"><b>+33,333</b><span>每分钟</span></div>
+        <div class="cell"><b>102</b><span>消息区节点</span></div>
+      </div>
+      <div class="set"><span class="k">堆</span><span class="v"><em>深录后可见</em></span></div>`,
+
+    '宿主': `
+      <div class="stats">
+        <div class="cell"><b class="sm">67.63</b><span>宿主 p99 ms</span></div>
+        <div class="cell"><b class="sm">102.2</b><span>RTT p99 ms</span></div>
+      </div>
+      <div class="set"><span class="k">事件循环</span><span class="v">空闲 <em>· 60s 净增 0</em></span></div>`,
+
+    '工具箱': `
+      <div class="stats">
+        <div class="cell"><b>5</b><span>守夜留存</span></div>
+        <div class="cell"><b>66</b><span>24h 检测</span></div>
+        <div class="cell"><b>7</b><span>已保存现场</span></div>
+      </div>
+      <div class="btnrow"><button class="btn">导出诊断包</button><button class="btn ghost">清空</button></div>`,
+
+    '原始数据': `
+      <div class="chips">
+        <span class="chip">manifest.json</span><span class="chip">summary.md</span>
+        <span class="chip">incident.json</span><span class="chip">README.md</span>
+      </div>
+      <div class="btnrow">
+        <button class="btn primary">导出给 AI</button>
+        <button class="btn">完整导出</button>
+        <button class="btn ghost">复制预览</button>
+        <button class="btn ghost">最近一次</button>
+        <button class="btn ghost">JSON</button>
+        <button class="btn ghost">清空</button>
+      </div>
+      <div class="keys">localStorage: ring / tally / incidents / watchui / view / sessions / marks / groups / on / deep / precise / map</div>`
+  };
+
+  const grid = document.getElementById('grid');
+  TABS.forEach((tab, i) => {
+    const col = document.createElement('div');
+    col.className = 'col';
+    col.innerHTML = `
+      <div class="cap"><b>${String(i + 1).padStart(2, '0')}</b> · ${tab}</div>
+      <div class="hud">
+        <header class="hd">
+          <div class="hd-l">${BACK}<div class="title">开发者详情</div><div class="vitals"><b>12.8</b> fps</div></div>
+          <div class="hd-r">
+            <button class="iconbtn" title="收起"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3.5 8h9"/></svg></button>
+            <button class="iconbtn" title="关闭"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+          </div>
+        </header>
+        <nav class="tabs">
+          ${TABS.map((n) => `<button class="tab${n === tab ? ' on' : ''}">${n}</button>`).join('')}
+          <span class="deep"><i></i>深录</span>
+        </nav>
+        ${bodies[tab]}
+      </div>`;
+    grid.appendChild(col);
+  });
+
+  // 第六格:说明这张图改了什么
+  const note = document.createElement('div');
+  note.className = 'col';
+  note.innerHTML = `
+    <div class="cap"><b>规则</b> · 这五屏做了什么</div>
+    <div style="font-size:12px;line-height:2;color:rgba(249,250,251,.66);padding:4px 2px">
+      <div>· 六个按钮的标签行 → 五个文字页签 + 一条下划线</div>
+      <div>· 每屏只留「这一屏回答的问题」,说明句进 title</div>
+      <div>· 数字用 20px 撑起,标签退到 10px 灰字当单位</div>
+      <div>· 「深录」从页签里挪出来,变成右侧一个开关位</div>
+    </div>`;
+  grid.appendChild(note);
+</script>
+<script>addEventListener("load", () => { document.documentElement.dataset.h = String(document.body.scrollHeight); });</script>
+</body>
+</html>
