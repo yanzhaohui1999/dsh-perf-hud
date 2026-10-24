@@ -28,7 +28,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node tests/attribution.mjs && node tests/logic.mjs && node tests/host.mjs"
+    "test": "node tests/attribution.mjs && node tests/logic.mjs && node tests/host.mjs",
+    "docs:check": "node tools/check-docs.mjs"
   },
   "publishConfig": {
     "access": "public"
