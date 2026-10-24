@@ -3234,6 +3234,10 @@ window.__ModuleLoader__.load({
 			linkRow: { display: 'flex', justifyContent: 'flex-end', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l2)' },
 			linkBtn: { display: 'inline-flex', alignItems: 'center', gap: 3, border: 0, background: 'transparent', padding: 0, fontSize: 11, color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer' },
 			emptyRow: { marginTop: 14, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' },
+			fileChip: {
+				fontFamily: MONO_FONT, fontSize: 10, color: 'var(--dsw-alias-label-primary)',
+				background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 5, padding: '2px 6px',
+			},
 			// ── 卡顿详情:上下文行 + 主角耗时 + 两个动作 → 一行 ──
 			heroRow: { display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 10, flexWrap: 'wrap' },
 			heroBig: { fontFamily: MONO_FONT, fontSize: 34, fontWeight: 600, lineHeight: 1, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums', color: 'var(--dsw-alias-label-primary)' },

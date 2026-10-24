@@ -1318,38 +1318,37 @@ window.__ModuleLoader__.load({
 					statCell(`${state.ltBlamed}/${state.ltTotal}`, t('hit'), false)),
 				h('div', { style: S.metaLine }, overviewLine2()),
 
-				// ── 常显 2:事故诊断入口(守夜留下的事故;严重度用**文字 + token 颜色**两样给)──
-				// 这是"事故 → 帧 → 证据 → 来源/包"那条链的起点:三个按钮都是真动作(进历史事故上下文 /
-				// 下载这条事故包 / 复制结论),不是装饰。默认跟最差那条 —— 「最差」不是「最近」,
-				// 所以时间和"自动/已选中"都写在上面。
+				// ── 常显 2:事故诊断入口(守夜留下的事故)──
+				// 2026-10-24:撤掉「最差事件」眉标 —— 主角是那个耗时,严重度用颜色与档位文字给;
+				// 「凭什么」那句长证据退到悬停,正文只留身份 / 判定 / 窗口三行。
 				h('div', { style: S.sep },
-					h('div', { style: S.row },
-						h('span', { style: S.label, title: t('worstEventHint') }, t('worstEvent')),
-						h('span', { style: { flex: '1 1 auto', display: 'flex', alignItems: 'baseline', justifyContent: 'flex-end', gap: 6, minWidth: 0 } },
-							h('span', { style: { ...S.num, flex: '0 0 auto', color: selectedRow === null || state.watch.on === false ? 'var(--dsw-alias-label-secondary)' : severityColor(selectedLevel) }, title: t('sevBadHint') },
-								eventValueText(selectedRow)),
-							// 一键在「最差 / 最近」之间切"自动跟着谁":默认最差(事后回看的重点),但
-							// "刚刚那一下卡在哪"同样常问 —— 两个都要够得着,又不要多一张清单。
-							h('button', {
-								type: 'button', style: S.btn, title: t('evScopeHint'), disabled: selectedRow === null,
-								onClick: () => setIncidentScope(state.watch.scope === 'latest' ? 'worst' : 'latest'),
-							}, state.watch.scope === 'latest' ? t('evWorst') : t('evLatest')))),
-					selectedRow === null ? null : h('div', { style: S.sub, title: t('envPickHint') },
+					h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' },
+						title: selectedRow === null ? t('worstEventHint') : `${t('worstEvent')}\n${eventEvidenceText(selectedRow)}` },
+						// 主角只有那个数;「警告 / 标记时刻」这些词退到徽章与悬停 —— 一句话按 24px 摆
+						// 出来会变成一整行标题(实测:「警告 · 标记时刻 146ms」)。
+						selectedRow === null
+							? h('span', { style: { ...S.metaLine, marginTop: 0 } }, eventValueText(null))
+							: h('span', { style: { ...S.incDur, color: severityColor(selectedLevel) }, title: `${t('sevBadHint')}\n${eventValueText(selectedRow)}` },
+								String(Math.round(selectedRow.severity)), h('span', { style: S.incUnit }, 'ms')),
+						selectedRow === null ? null : h('span', { style: { ...S.incSev, color: severityColor(selectedLevel) } }, severityText(selectedLevel)),
+						// 一键在「最差 / 最近」之间切"自动跟着谁":默认最差(事后回看的重点),
+						// 但"刚刚那一下卡在哪"同样常问 —— 两个都要够得着,又不要多一张清单。
+						h('button', {
+							type: 'button', style: S.btnGhost, title: t('evScopeHint'), disabled: selectedRow === null,
+							onClick: () => setIncidentScope(state.watch.scope === 'latest' ? 'worst' : 'latest'),
+						}, state.watch.scope === 'latest' ? t('evWorst') : t('evLatest')),
+						h('span', { style: { flex: '1 1 auto' } }),
+						// 上下文切换:**实时 ⇄ 历史事故**。两种模式各有一个"去另一边"的动作。
+						// 「复制摘要 / 导出事故包」不在这里 —— 它们是卡顿详情那一屏自己的动作。
+						selectedRow === null ? null : (diagMode() === 'incident'
+							? h('button', { type: 'button', style: S.btnGhost, title: t('backToLiveHint'), onClick: showLiveMode }, t('backToLive'))
+							: h('button', { type: 'button', style: S.btnGhost, title: t('viewEvidenceHint'), onClick: () => revealIncident(selectedRow.id) }, t('viewEvidence')))),
+					selectedRow === null ? null : h('div', { style: S.metaLine, title: t('envPickHint') },
 						`${watchSelectedText()} · ${selected.auto ? (state.watch.scope === 'latest' ? t('evAutoLatest') : t('evAutoWorst')) : t('evPinned')}`),
-					// 归因状态:已确认 / 可疑 / 未归因 —— 文字与档位色两样一起给,"凭什么"单独一行
-					selectedRow === null ? null : h('div', { style: S.sub, title: t('verdictLabel') }, eventEvidenceText(selectedRow)),
-					selectedRow === null ? null : h('div', { style: { ...S.sub, color: verdictColor(incidentVerdict(selectedRow).level) } }, eventVerdictText(selectedRow)),
-					selectedRow === null ? null : h('div', { style: S.sub }, eventWindowText(selectedRow)),
-					selectedRow === null ? null : h('div', { style: S.buttons },
-						// 上下文切换:**实时 ⇄ 历史事故**。两种模式各有一个"去另一边"的动作,
-						// 当前在哪一边由取证明细第一行的上下文标题与这里一起说清。
-						// 「复制摘要 / 导出事故包」**不在这里** —— 它们是"对这条事故做什么",属于
-						// 卡顿详情那一屏自己的动作条(同一屏出现两份只会让人猜哪一份是真的)。
-						diagMode() === 'incident'
-							? h('button', { type: 'button', style: S.btn, title: t('backToLiveHint'), onClick: showLiveMode }, t('backToLive'))
-							: h('button', { type: 'button', style: S.btn, title: t('viewEvidenceHint'), onClick: () => revealIncident(selectedRow.id) }, t('viewEvidence'))),
-					state.copyNote === null ? null : h('div', { style: S.sub }, state.copyNote),
-					watchFlagText() === null ? null : h('div', { style: { ...S.sub, title: t('watchHint') } }, watchFlagText())),
+					selectedRow === null ? null : h('div', { style: { ...S.metaLine, color: verdictColor(incidentVerdict(selectedRow).level) }, title: t('verdictLabel') }, eventVerdictText(selectedRow)),
+					selectedRow === null ? null : h('div', { style: S.metaLine }, eventWindowText(selectedRow)),
+					state.copyNote === null ? null : h('div', { style: S.metaLine }, state.copyNote),
+					watchFlagText() === null ? null : h('div', { style: { ...S.metaLine, color: 'var(--dsw-alias-state-warn-primary)' }, title: t('watchHint') }, watchFlagText())),
 
 				// ── 常显 3:回调归因 Top3(每插件一行,hover 补 msps 与累计)──
 				// 这一块**总有**:以前没插桩时整段不渲染,于是首屏根本没有"回调归因"这一层,
@@ -1395,7 +1394,7 @@ window.__ModuleLoader__.load({
 			];
 			const devDom = [
 				// ── 折叠 2:DOM 与堆 ──
-				group('dom', t('groupDom'), domSummary(), () => [
+				h('div', { style: S.sep, 'aria-label': t('groupDom') }, [
 					h('div', { style: S.row },
 						h('span', { style: S.label }, `${t('dom')} · ${t('rateWindow')}`),
 						h('span', { style: S.num }, `${state.dom.total} · ${rateText(state.dom.series)}`)),
@@ -1419,7 +1418,7 @@ window.__ModuleLoader__.load({
 			];
 			const devHost = [
 				// ── 折叠 3:宿主与链路(排查"是页面卡还是链路卡"才看)──
-				group('host', t('groupHost'), hostSummary(), () => [
+				h('div', { style: S.sep, 'aria-label': t('groupHost') }, [
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('stream')),
 						h('span', { style: S.num }, `${state.streaming ? t('running') : t('idle')}${state.streaming || state.idleSince === 0 ? '' : ` ${Math.round((performance.now() - state.idleSince) / 1000)}s`}${state.baselineRunning ? ` · ${t('idleBase')}…` : ''}`)),
@@ -1448,7 +1447,7 @@ window.__ModuleLoader__.load({
 			];
 			const devTools = [
 				// ── 折叠 4:工具箱(事故清单 / 场景标记 / 整机导出)──
-				group('tools', t('groupTools'), toolsSummary(), () => [
+				h('div', { style: S.sep, 'aria-label': t('groupTools') }, [
 					// 守夜层:最差几次的清单 + 手动补记 + 导出最近一次
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('watchHint') }, t('watch')),
@@ -1479,20 +1478,19 @@ window.__ModuleLoader__.load({
 
 			// ── 原始数据(标签页 5):导出与交接件的入口 ──
 			const devRaw = [
-				h('div', { style: S.row },
-					h('span', { style: S.label, title: t('packFilesHint') }, t('packFilesLabel')),
-					h('span', { style: S.num }, t('packFilesValue'))),
-				h('div', { style: S.buttons },
+				// 包内四个文件:id 变成可扫的 chips,不再是一句用 · 连起来的说明行。
+				h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 10 }, title: t('packFilesHint'), 'aria-label': t('packFilesLabel') },
+					t('packFilesValue').split(' · ').map((name) => h('span', { key: name, style: S.fileChip }, name))),
+				h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10, alignItems: 'center' } },
 					// 两条路**只差自由文本**:给 AI 的那条置空并标 noteDropped,本机调试件保留。
 					// 所以标题必须自己说清是哪一条(免得"以为导出的是同一份")。
-					h('button', { type: 'button', style: S.btn, title: t('exportAiHint'), disabled: selectedRow === null, onClick: () => exportPack(selectedRow === null ? 'latest' : selectedRow.id, { dropFreeText: true }) }, t('exportAiBtn')),
-					h('button', { type: 'button', style: S.btn, title: t('exportFullHint'), disabled: selectedRow === null, onClick: () => exportPack(selectedRow === null ? 'latest' : selectedRow.id, { dropFreeText: false }) }, t('exportFullBtn')),
-					h('button', { type: 'button', style: S.btn, disabled: selectedRow === null, onClick: () => copyText(JSON.stringify(packPreview(selectedRow === null ? 'latest' : selectedRow.id, {}), null, 2), t('exportPreviewCopy')) }, t('exportPreviewCopy'))),
-				h('div', { style: S.buttons },
-					h('button', { type: 'button', style: S.btn, title: t('watchExportHint'), disabled: state.watch.incidents.length === 0, onClick: () => exportIncident('latest') }, t('watchExport')),
-					h('button', { type: 'button', style: S.btn, title: t('exportJsonHint'), onClick: exportJson }, t('exportJson')),
-					h('button', { type: 'button', style: S.btn, title: t('clearHint'), onClick: () => W.__perfHud.clear() }, t('clear'))),
-				h('div', { style: S.sub, title: t('storageKeysHint') }, t('storageKeys')),
+					h('button', { type: 'button', style: { ...S.btnGhost, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }, title: t('exportAiHint'), disabled: selectedRow === null, onClick: () => exportPack(selectedRow === null ? 'latest' : selectedRow.id, { dropFreeText: true }) }, t('exportAiBtn')),
+					h('button', { type: 'button', style: S.btnGhost, title: t('exportFullHint'), disabled: selectedRow === null, onClick: () => exportPack(selectedRow === null ? 'latest' : selectedRow.id, { dropFreeText: false }) }, t('exportFullBtn')),
+					h('button', { type: 'button', style: S.btnGhost, disabled: selectedRow === null, onClick: () => copyText(JSON.stringify(packPreview(selectedRow === null ? 'latest' : selectedRow.id, {}), null, 2), t('exportPreviewCopy')) }, t('exportPreviewCopy')),
+					h('button', { type: 'button', style: S.btnGhost, title: t('watchExportHint'), disabled: state.watch.incidents.length === 0, onClick: () => exportIncident('latest') }, t('watchExport')),
+					h('button', { type: 'button', style: S.btnGhost, title: t('exportJsonHint'), onClick: exportJson }, t('exportJson')),
+					h('button', { type: 'button', style: S.btnGhost, title: t('clearHint'), onClick: () => W.__perfHud.clear() }, t('clear'))),
+				h('div', { style: { ...S.keys, marginTop: 10 }, title: t('storageKeysHint') }, t('storageKeys')),
 			];
 
 			// ── 一次只渲染一个视图 ──
