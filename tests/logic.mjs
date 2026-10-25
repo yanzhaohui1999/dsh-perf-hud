@@ -2342,6 +2342,17 @@ check('主界面的人话行里没有 item.name(包名只在展开区出现)', (
 	return [plainLine, nameOnlyInWhy];
 })(), [true, true]);
 
+check('外壳脚本可定位到源码:证据带 charPos,界面读 shellSourceOf(静态)', (() => {
+	const evidence = extract(source, 'function scriptEvidence(');
+	const incident = extract(source, 'function incidentScriptEvidence(');
+	return [
+		/charPos: typeof script\?\.charPos === 'number'/.test(evidence),
+		/charPos: pick\('charPos'\)/.test(incident),
+		/shellSourceOf\(ev\.url, ev\.charPos\)/.test(renderSource),
+		/function ensureShellSource\(/.test(allSource) && /async function loadShellMap\(/.test(allSource),
+	];
+})(), [true, true, true, true]);
+
 check('flow:设置与卡顿详情的返回落在来源,不是永远回主界面(静态)', (() => {
 	// 2026-10-24:进设置记下来源、← 用 backTo;卡顿详情同理(开发者详情进来就回开发者详情)。
 	const setViewSrc = extract(source, 'function setView(');

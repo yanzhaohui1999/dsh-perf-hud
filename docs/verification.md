@@ -84,3 +84,33 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
    ⚠️ **验收器被强杀会留下 headless Chrome 占着 `--user-data-dir` 与调试端口,后续跑会"挂死"**(2026-10-13 踩过):症状是 `waitForHud` 之后的第一次 `evaluate` 永不返回(不是超时报错,是**一直等**),因为新实例连上的是那个残留实例。处置:`pkill -f 'remote-debugging-port=93' && rm -rf /tmp/dsh-perf-hud-chrome-*` 再跑。别花时间怀疑被测代码 —— 先看 `pgrep -fl 'remote-debugging-port=93'`。
    ⚠️ **它们不是离线门禁**:要真浏览器 + 本机跑着 `dsh web`,所以 `npm test` 与 CI 里**没有**它们(CI 只对 `tools/*.mjs` 做 `node --check`)。`check-panel.mjs` 挡的就是"三套件全绿、浏览器里插件激活或渲染失败"那类事故,所以它跑不过就别提交。
+
+### 2.4 外壳 sourcemap(可选,让"应用外壳"定位到源文件)
+
+发行包里的 `/assets/index-*.js` **没有 `.map`**(打包时剔掉),所以面板对壳内脚本只能说到
+"应用外壳 + 压缩函数名"。要细化到"哪个包/哪个文件第几行",用**同一版本的源码**自建一份放回去:
+
+```sh
+# 1. 取与发行包一致的 tag(版本号见 dsh 包的 package.json)
+git -C ~/workspace/dsh/deepseek-harness fetch --tags
+git -C ~/workspace/dsh/deepseek-harness worktree add ~/workspace/dsh/harness-rc3 dsh-v0.2.1-rc.3
+
+# 2. 构建(9 个 gate,约 30 秒;依赖装过一次之后很快)
+cd ~/workspace/dsh/harness-rc3 && pnpm install && pnpm run build
+
+# 3. 校验:产物必须与发行包**逐字节一致**,否则 map 的 charPos 对不上
+shasum -a 256 apps/web/dist/assets/index-*.js \
+  /Users/y/tools/.../@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js
+
+# 4. 把两张 map 放进发行包的 assets(升级 dsh 后要重做)
+cp apps/web/dist/assets/index-*.js.map apps/web/dist/assets/vendor-*.js.map \
+  <dsh>/node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/
+```
+
+- 实测(rc.3):`index-BXV-oxvX.js.map` **7.7 MB**(带 `sourcesContent`)、`vendor-*.js.map` 2.4 MB;
+  浏览器里冷启动一次抓取 + 解析 + 定位约 **500 ms**,按 `(url, charPos)` 缓存,第二次即时。
+- **只在点击「定位源码」时抓**,不常驻、不落 localStorage(见 `client.model.js` 的 `ensureShellSource`)。
+- 升级 dsh 之后 bundle 哈希会变,旧 map 立刻失效(文件名不同 → 页面自然 404 → 面板显示"源码定位失败")。
+- 诊断入口:`__perfHud.shellSource('/assets/index-XXXX.js', 791336)` 直接返回 `{source, line}`。
+- 注册表里那一份 map 映射到的是**编译后的 lib JS**(`packages/client/ui-primitives/lib/index.js`),
+  不是 TS 源码;要 TS 行号还得再串它们各自的 map。

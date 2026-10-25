@@ -153,6 +153,8 @@ window.__ModuleLoader__.load({
 				longTaskLabel,
 				evidenceLocatable,
 				evidencePlace,
+				shellSourceOf,
+				ensureShellSource,
 				crossSingleText,
 				setTrendMs,
 				setView,
@@ -675,6 +677,9 @@ window.__ModuleLoader__.load({
 					h('div', { style: { marginTop: 2 } }, scope.rows.map((ev, index) => {
 						const pct = shareOf(ev);
 						const place = evidencePlace(ev);
+						const isShell = ev.pkgVia === 'not-plugin' && typeof ev.url === 'string'
+							&& /\/assets\/.+\.js/.test(ev.url) && typeof ev.charPos === 'number';
+						const hit = isShell ? shellSourceOf(ev.url, ev.charPos) : null;
 						return h('div', {
 							key: `ev-${index}`,
 							title: `${evidenceGroupLine(ev)}\n${t('evidenceCopyHint')}`
@@ -692,7 +697,19 @@ window.__ModuleLoader__.load({
 								}, `${Math.round(ev.ms)}ms`),
 								pct === null ? null : h('span', { style: { ...S.evShare, flex: '0 0 auto' } }, `${pct}%`)),
 							// 定位到"哪个文件:哪一行"直接摆在第二行 —— 以前只在悬停里,读的人得先知道要悬停
-							place === null ? null : h('div', { style: S.evPlace }, place));
+							place === null ? null : h('div', { style: S.evPlace }, place),
+							// 外壳 bundle 的源码定位:map 7~8MB,点一次才抓,结果按 (url,charPos) 缓存。
+							isShell ? h('div', { style: { marginTop: 2 } },
+								hit === null
+									? h('button', {
+										type: 'button',
+										style: { ...S.btnGhost, fontSize: 10, padding: '0 6px' },
+										onClick: (event) => { event.stopPropagation(); ensureShellSource(ev.url, ev.charPos); },
+									}, t('shellSourceLocate'))
+									: h('span', { style: S.evPlace },
+										hit.state === 'ready'
+											? `${hit.source}:${hit.line}`
+											: hit.state === 'pending' ? t('shellSourcePending') : `${t('shellSourceFailed')} · ${hit.reason}`)) : null);
 					})),
 					h('div', { style: S.sub, title: evidenceFooterTitle() }, evidenceFooter(scope)));
 			} catch (error) {

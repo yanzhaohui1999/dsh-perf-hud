@@ -652,6 +652,134 @@ window.__ModuleLoader__.load({
 			if (line < 1) return { line: null, via: 'out-of-range' };
 			return { line, via: 'text' };
 		}
+
+		// ── 外壳(应用本体)sourcemap ──────────────────────────────────────────────
+		// 插件包靠合并批的 section map 定位;**外壳那条 `/assets/index-*.js` 不是合并批**,
+		// 只能读它自己的 `.map`。DSH 发行包不带 map(打包时剔掉),所以要用同一版本的源码
+		// 自建一份放回去 —— 见 docs/verification.md 的「外壳 sourcemap」。
+		// 只在**用户点开一条外壳脚本**时才抓:一张 map 7~8MB,不能常驻后台拉。
+		const SHELL_MAP_MAX = 1;
+		const shellMaps = new Map();   // url → { state, reason, doc }
+		const shellHits = new Map();   // `${url}#${charPos}` → { state, source, line, ... }
+		const VLQ_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+		function shellMapUrlOf(url) {
+			if (typeof url !== 'string' || url === '') return null;
+			if (/\.js(\?|$)/.test(url) === false) return null;
+			return url.replace(/\?.*$/, '') + '.map';
+		}
+		async function loadShellMap(url) {
+			const cached = shellMaps.get(url);
+			if (cached !== undefined) return cached;
+			const entry = { state: 'pending', reason: '', doc: null };
+			shellMaps.set(url, entry);
+			try {
+				const mapUrl = shellMapUrlOf(url);
+				if (mapUrl === null) throw new Error('不是脚本 URL');
+				const { response, text } = await fetchTextWithin(mapUrl, { credentials: 'same-origin' }, FETCH_TIMEOUT_MS.map);
+				if (response.ok === false) throw new Error(`HTTP ${response.status}`);
+				const doc = JSON.parse(text);
+				if (typeof doc?.mappings !== 'string' || Array.isArray(doc.sources) === false) throw new Error('不是 sourcemap');
+				// sourcesContent 一次都不读:留着只会多占几十 MB 内存。
+				if (Array.isArray(doc.sourcesContent)) doc.sourcesContent = null;
+				entry.doc = doc;
+				entry.state = 'ready';
+			} catch (error) {
+				entry.state = 'failed';
+				entry.reason = fetchFailureText(error, FETCH_TIMEOUT_MS.map);
+			}
+			if (shellMaps.size > SHELL_MAP_MAX) {
+				const oldest = shellMaps.keys().next().value;
+				if (oldest !== url) shellMaps.delete(oldest);
+			}
+			markResolved();
+			return entry;
+		}
+		/** VLQ 段 → 数值数组(段内每个数值一个 5-bit 组,最高位是续位)。 */
+		function vlqValues(segment) {
+			const out = [];
+			let value = 0;
+			let shift = 0;
+			for (let i = 0; i < segment.length; i += 1) {
+				const digit = VLQ_CHARS.indexOf(segment[i]);
+				if (digit < 0) return out;
+				value += (digit & 31) << shift;
+				if ((digit & 32) !== 0) { shift += 5; continue; }
+				out.push((value & 1) === 1 ? -(value >> 1) : value >> 1);
+				value = 0;
+				shift = 0;
+			}
+			return out;
+		}
+		/**
+		 * 生成位置(0-based)→ 原始位置。**只顺序扫到目标行**,不建全表 ——
+		 * 7.7MB 的 map 建数组要几百 MB,而一次点击只需要一个点。
+		 */
+		function shellLookup(doc, genLine, genCol) {
+			let src = 0;
+			let line = 0;
+			let col = 0;
+			let name = 0;
+			const rows = doc.mappings.split(';');
+			const end = Math.min(genLine, rows.length - 1);
+			for (let i = 0; i <= end; i += 1) {
+				const raw = rows[i];
+				let genCurrent = 0;
+				let best = null;
+				if (raw !== '') {
+					for (const segment of raw.split(',')) {
+						const f = vlqValues(segment);
+						if (f.length === 0) continue;
+						genCurrent += f[0];
+						if (f.length >= 4) {
+							src += f[1]; line += f[2]; col += f[3];
+							if (f.length === 5) name += f[4];
+						}
+						if (i === genLine && genCurrent <= genCol) best = { src, line, col, name: f.length === 5 ? name : null };
+					}
+				}
+				if (i === genLine) {
+					if (best === null) return null;
+					return {
+						source: doc.sources[best.src] ?? null,
+						line: best.line + 1,
+						column: best.col + 1,
+						name: best.name === null ? null : (doc.names?.[best.name] ?? null),
+					};
+				}
+			}
+			return null;
+		}
+		function shellSourceOf(url, charPos) {
+			return shellHits.get(`${url}#${charPos}`) ?? null;
+		}
+		/** 点开一条外壳脚本才抓:map + 脚本文本 → 「源文件:行」。失败照实写原因。 */
+		async function ensureShellSource(url, charPos) {
+			const key = `${url}#${charPos}`;
+			const cached = shellHits.get(key);
+			if (cached !== undefined && cached.state === 'ready') return cached;
+			shellHits.set(key, { state: 'pending' });
+			try {
+				const mapEntry = await loadShellMap(url);
+				if (mapEntry.state !== 'ready') throw new Error(mapEntry.reason || 'map');
+				let lines = scriptLines.get(url);
+				if (lines === undefined || lines.state !== 'ready') lines = await loadScriptLines(url);
+				if (lines.state !== 'ready') throw new Error(lines.reason || 'text');
+				const genLine = scriptLineOf(url, charPos);
+				if (genLine === null || genLine < 1) throw new Error('no-charpos');
+				const col = charPos - lines.starts[genLine - 1];
+				const found = shellLookup(mapEntry.doc, genLine - 1, col);
+				if (found === null || found.source === null) throw new Error('out-of-range');
+				// map 里的 source 是相对路径(`../../../../packages/...`):去掉前导 ../ 再显示,
+				// 否则 396px 里前面全是点,真正有用的路径被省略号吃掉。
+				const source = String(found.source).replace(/^(\.\.\/)+/, '');
+				shellHits.set(key, { state: 'ready', source: short(source), full: source, line: found.line, name: found.name });
+			} catch (error) {
+				shellHits.set(key, { state: 'failed', reason: (error instanceof Error ? error.message : String(error)).slice(0, 60) });
+			}
+			markResolved();
+			return shellHits.get(key);
+		}
 		/**
 		 * 「这个包名 / 这个行号是从哪来的」压成一句人话。**故意只分五类** —— 面板正文放不下
 		 * 十几个 via 码,而"直接从 URL 读出来的"与"靠 sourcemap 分段推断的"之间**信任度的差别**
@@ -719,6 +847,8 @@ window.__ModuleLoader__.load({
 				invoker: typeof script?.invoker === 'string' && script.invoker !== '' ? script.invoker : null,
 				invokerType: typeof script?.invokerType === 'string' ? script.invokerType : null,
 				url: typeof url === 'string' && url !== '' ? url : null,
+				// 外壳 bundle 定位要用它(map 是 (行,列) → 源码,charPos 换行列得靠脚本文本)
+				charPos: typeof script?.charPos === 'number' ? script.charPos : null,
 			};
 		}
 		/**
@@ -872,6 +1002,8 @@ window.__ModuleLoader__.load({
 				invoker: pick('invoker'),
 				invokerType: pick('invokerType'),
 				url: computed.url ?? (typeof url === 'string' && url !== '' ? url : null),
+				// 外壳 bundle 的源码定位要它(map 是行列映射,charPos 换行列靠脚本文本)
+				charPos: pick('charPos'),
 			};
 		}
 		/**
@@ -3443,6 +3575,8 @@ window.__ModuleLoader__.load({
 				scriptLineOf,
 				packageOfScript,
 				scriptPosition,
+				shellSourceOf,
+				ensureShellSource,
 				viaText,
 				scriptEvidence,
 				evidenceName,

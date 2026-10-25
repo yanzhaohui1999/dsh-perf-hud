@@ -850,6 +850,8 @@ window.__ModuleLoader__.load({
 		function loadScriptLines(...args) { return model().loadScriptLines(...args); }
 		function ensureScriptLines(...args) { return model().ensureScriptLines(...args); }
 		function scriptLineOf(...args) { return model().scriptLineOf(...args); }
+		function shellSourceOf(...args) { return model().shellSourceOf(...args); }
+		function ensureShellSource(...args) { return model().ensureShellSource(...args); }
 		function packageOfScript(...args) { return model().packageOfScript(...args); }
 		function scriptPosition(...args) { return model().scriptPosition(...args); }
 		function viaText(...args) { return model().viaText(...args); }
@@ -2795,6 +2797,8 @@ window.__ModuleLoader__.load({
 			})),
 			incident: pickIncident,   // 数字 = 下标(0 最差)/ id / 'latest' = 时刻最新
 			capture: captureNow,
+			/** 外壳脚本 → 源码位置(要先用同一版本源码构建出 .map 放到 assets 下)。 */
+			shellSource: ensureShellSource,
 			/** 事故包:report(id) 拿对象(不下载),exportIncident(id) 触发下载。 */
 			report: incidentReport,
 			exportIncident,
@@ -3812,6 +3816,8 @@ window.__ModuleLoader__.load({
 				longTaskLabel,
 				evidenceLocatable,
 				evidencePlace,
+				shellSourceOf,
+				ensureShellSource,
 				crossSingleText,
 				setTrendMs,
 				setView,
