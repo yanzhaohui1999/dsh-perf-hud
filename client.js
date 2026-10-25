@@ -3234,6 +3234,12 @@ window.__ModuleLoader__.load({
 			linkRow: { display: 'flex', justifyContent: 'flex-end', marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l2)' },
 			linkBtn: { display: 'inline-flex', alignItems: 'center', gap: 3, border: 0, background: 'transparent', padding: 0, fontSize: 11, color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer' },
 			emptyRow: { marginTop: 14, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' },
+			// 脚本证据的第二行:包内文件:行号(定位结果,不是推断)
+			evPlace: {
+				fontFamily: MONO_FONT, fontSize: 10, color: 'var(--dsw-alias-label-secondary)',
+				whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 1,
+			},
+			evShare: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)', fontVariantNumeric: 'tabular-nums' },
 			fileChip: {
 				fontFamily: MONO_FONT, fontSize: 10, color: 'var(--dsw-alias-label-primary)',
 				background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 5, padding: '2px 6px',
@@ -3805,6 +3811,7 @@ window.__ModuleLoader__.load({
 				shellSummary,
 				longTaskLabel,
 				evidenceLocatable,
+				evidencePlace,
 				crossSingleText,
 				setTrendMs,
 				setView,

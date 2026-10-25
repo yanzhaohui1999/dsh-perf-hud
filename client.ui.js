@@ -152,6 +152,7 @@ window.__ModuleLoader__.load({
 				shellSummary,
 				longTaskLabel,
 				evidenceLocatable,
+				evidencePlace,
 				crossSingleText,
 				setTrendMs,
 				setView,
@@ -649,10 +650,17 @@ window.__ModuleLoader__.load({
 		 * (定位)。它是**证据**,不是又一个排行榜 —— 只列 Top EVIDENCE_MAX,并把口径与缺口写在同一块里。
 		 * 实时与历史事故共用它,`scope` 由 `evidenceScope()` 按上下文给出。
 		 */
-		function evidenceBlock(scope) {
+		function evidenceBlock(scope, frameMs) {
 			const t = translate;
 			if (scope === null) return null;
 			try {
+				// 每条脚本占这一帧多少:分母是这一帧的时长(LoAF duration)。分组后 ms 是**合计**,
+				// 所以占比也是这一组在这一帧里一共吃掉多少 —— 与右列那个数同一口径。
+				const shareOf = (ev) => {
+					if (typeof frameMs !== 'number' || Number.isFinite(frameMs) === false || frameMs <= 0) return null;
+					const ms = typeof ev.ms === 'number' ? ev.ms : 0;
+					return Math.max(0, Math.min(100, Math.round((ms / frameMs) * 100)));
+				};
 				// 一条**能定位的**都没有(没开深录 / 脚本被压掉函数名)→ 换一行带分母的说明,
 				// 不摆一列 `函数名未记录 @ 包未定名 + 毫秒`(那既没缩小范围又翻了几倍行数)
 				if (scope.rows.length === 0) {
@@ -664,20 +672,28 @@ window.__ModuleLoader__.load({
 					scope.missing === true ? h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } }, t('frameEvidenceMissing')) : null,
 					h('div', { style: { ...S.blockLabel, marginTop: 8 }, title: t('evidenceHint') }, scope.label),
 					// 同一个函数 / 同一个位置的多次调用已经合并(members 留着),行首给 ×N,右列是**合计**
-					h('div', { style: { marginTop: 2 } }, scope.rows.map((ev, index) => h('div', {
-						key: `ev-${index}`,
-						title: `${evidenceGroupLine(ev)}\n${t('evidenceCopyHint')}`
-							+ `${evidenceLocatable(ev) === true ? '' : `\n${t('evidenceUnlocatableHint')}`}`,
-						style: { display: 'flex', gap: 8, alignItems: 'baseline', lineHeight: 1.45, cursor: 'pointer' },
-						onClick: () => copyText(evidenceGroupLine(ev), t('copyScript')),
-					},
-						h('span', {
-							style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' },
-						}, `${evidenceName(ev)}${(ev.count ?? 1) > 1 ? ` ×${ev.count}` : ''}`),
-						h('span', {
-							title: `${translate('evidenceWhere')} ${evidenceWhereText(ev)}`,
-							style: { flex: '0 0 auto', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums' },
-						}, `${Math.round(ev.ms)}ms`)))),
+					h('div', { style: { marginTop: 2 } }, scope.rows.map((ev, index) => {
+						const pct = shareOf(ev);
+						const place = evidencePlace(ev);
+						return h('div', {
+							key: `ev-${index}`,
+							title: `${evidenceGroupLine(ev)}\n${t('evidenceCopyHint')}`
+								+ `${evidenceLocatable(ev) === true ? '' : `\n${t('evidenceUnlocatableHint')}`}`,
+							style: { display: 'block', lineHeight: 1.45, cursor: 'pointer', marginTop: index === 0 ? 0 : 5 },
+							onClick: () => copyText(evidenceGroupLine(ev), t('copyScript')),
+						},
+							h('div', { style: { display: 'flex', gap: 8, alignItems: 'baseline' } },
+								h('span', {
+									style: { flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--dsw-alias-label-secondary)' },
+								}, `${evidenceName(ev)}${(ev.count ?? 1) > 1 ? ` ×${ev.count}` : ''}`),
+								h('span', {
+									title: `${translate('evidenceWhere')} ${evidenceWhereText(ev)}`,
+									style: { flex: '0 0 auto', fontFamily: MONO_FONT, fontVariantNumeric: 'tabular-nums' },
+								}, `${Math.round(ev.ms)}ms`),
+								pct === null ? null : h('span', { style: { ...S.evShare, flex: '0 0 auto' } }, `${pct}%`)),
+							// 定位到"哪个文件:哪一行"直接摆在第二行 —— 以前只在悬停里,读的人得先知道要悬停
+							place === null ? null : h('div', { style: S.evPlace }, place));
+					})),
 					h('div', { style: S.sub, title: evidenceFooterTitle() }, evidenceFooter(scope)));
 			} catch (error) {
 				// 派生统计算炸只降级成一行可见原文,不许带走整块面板(与其它几块同一条安全线)
@@ -908,7 +924,8 @@ window.__ModuleLoader__.load({
 				kids.push(h('div', null, scriptBreakdownRows(detail.tallyFrame, detail.tallyWindow,
 					t('ctxHistoryFrame'), t('pkgStoredHint'), t('incidentWindowScopeHint'), t('pkgIncidentWindowHint'))));
 				if (noLoaf === false) kids.push(longTaskBlock(detail.row, detail.frame));
-				kids.push(evidenceBlock(detail.evidence));
+				kids.push(evidenceBlock(detail.evidence, detail.frame === null || detail.frame === undefined
+					? null : (detail.frame.ms ?? detail.frame.dur ?? null)));
 				kids.push(crossBlock(detail.tallyWindow, t('crossIncidentHint')));
 				kids.push(h('div', { style: { ...S.sub, marginTop: 8 }, title: t('replayHint') }, t('replayScopeNote')));
 				return kids;
@@ -998,7 +1015,8 @@ window.__ModuleLoader__.load({
 				h('div', null, scriptBreakdownRows(detail.tallyFrame, detail.tallyWindow,
 					t('scopeFrame'), t('pkgHint'), t('windowScopeHint'), t('pkgWindowHint'))),
 				// ⑤ 可疑脚本(当前实时帧)
-				evidenceBlock(detail.evidence),
+				evidenceBlock(detail.evidence, detail.frame === null || detail.frame === undefined
+					? null : (detail.frame.ms ?? detail.frame.dur ?? null)),
 				// ⑥ 窗口交叉表
 				crossBlock(detail.tallyWindow),
 				// ⑦ 时间分解之后:帧里"JS 之外"的残差 —— 唯一能反映 CSS/绘制卡顿的数字
