@@ -145,8 +145,8 @@ The five tabs of **developer details** (nothing was removed, it is just split in
 ### How to reach each screen
 
 1. **Expand** the pill with `+` → the **overview** (the pill shows fps / worst frame / stalls detected in the last 24 hours);
-2. **That one stall**: "view this stall" → **stall detail** ("←" returns to the overview);
-3. **Technical data**: "developer details" at the bottom → five tabs; the "settings" button in the header → settings;
+2. **That one stall**: click the stall row on the overview → **stall detail** ("←" returns to where you came from);
+3. **Technical data**: "developer details" at the bottom → five tabs (the "deep" toggle sits at the right end of the tab row); the "settings" icon in the header → settings;
 4. **Hand it to an AI**: "export diagnostic report" → a **preview card** first (four files + zip size + "notes: blanked") → "generate and export" downloads **one zip**;
 5. **Local debugging**: developer details · raw data has "full technical export (keeps notes)" — that one **keeps** the notes you typed, it is not redacted, so do not hand it out as-is.
 

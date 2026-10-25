@@ -1,0 +1,81 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<style>html,body{margin:0;background:#0e0e10}svg{display:block;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",Arial,sans-serif}</style>
+</head><body>
+<svg width="1100" height="640" viewBox="0 0 1100 640" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#9aa3ac"/></marker>
+    <marker id="ad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#c9924a"/></marker>
+    <pattern id="hatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="6" stroke="#3b4047" stroke-width="2"/></pattern>
+  </defs>
+  <rect width="1100" height="640" fill="#0e0e10"/>
+  <text x="40" y="46" fill="#f2f4f6" font-size="17" font-weight="600">一次 454ms 卡顿:已知什么、未知什么</text>
+  <text x="40" y="70" fill="#8b949e" font-size="11">数据来自你那条事故 i5360(LoAF 直接测量)+ 本轮做出来的外壳 sourcemap(定位到 react-dom)</text>
+
+  <!-- 左:结构链 -->
+  <text x="40" y="112" fill="#f2f4f6" font-size="12" font-weight="600">这条卡顿的结构</text>
+  <rect x="40" y="130" width="420" height="52" rx="8" fill="#22252a" stroke="#4b5159"/>
+  <text x="58" y="152" fill="#f2f4f6" font-size="13">触发:DIV#root.onclick</text>
+  <text x="58" y="170" fill="#8b949e" font-size="10">LoAF scripts[].invoker · 实测</text>
+
+  <line x1="250" y1="182" x2="250" y2="204" stroke="#9aa3ac" stroke-width="1.2" marker-end="url(#a)"/>
+
+  <rect x="40" y="206" width="420" height="58" rx="8" fill="#2a2622" stroke="#c9924a"/>
+  <text x="58" y="228" fill="#ffb454" font-size="13">JS 任务 454ms(占这一帧 98%)</text>
+  <text x="58" y="248" fill="#c9b79a" font-size="10">LoAF duration / blockingDuration · 实测</text>
+
+  <line x1="250" y1="264" x2="250" y2="286" stroke="#9aa3ac" stroke-width="1.2" marker-end="url(#a)"/>
+
+  <rect x="40" y="288" width="420" height="58" rx="8" fill="#22252a" stroke="#4b5159"/>
+  <text x="58" y="310" fill="#f2f4f6" font-size="13">落在 react-dom 的提交路径</text>
+  <text x="58" y="330" fill="#8b949e" font-size="10">外壳 sourcemap:charPos → packages/…/react-dom</text>
+
+  <line x1="250" y1="346" x2="250" y2="368" stroke="#c9924a" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ad)"/>
+
+  <rect x="40" y="370" width="420" height="58" rx="8" fill="#1a1c20" stroke="#3b4047" stroke-dasharray="4 4"/>
+  <text x="58" y="392" fill="#9aa3ac" font-size="13">是哪个组件 / 哪次 setState?</text>
+  <text x="58" y="412" fill="#6f787f" font-size="10">LoAF 与 sourcemap 都给不出 · 需要调用栈</text>
+
+  <!-- 右:占比 -->
+  <text x="620" y="112" fill="#f2f4f6" font-size="12" font-weight="600">脚本耗时占比(分母 = 这一帧的时长)</text>
+  <g font-size="11">
+    <text x="620" y="146" fill="#cbd2d9">react-dom(Fx)</text>
+    <rect x="760" y="134" width="300" height="14" rx="2" fill="#2a2622" stroke="#c9924a"/>
+    <rect x="760" y="134" width="294" height="14" rx="2" fill="#ffb454"/>
+    <text x="990" y="146" fill="#f2f4f6" font-size="10">454ms · 98%</text>
+
+    <text x="620" y="180" fill="#cbd2d9">ui-conversation</text>
+    <rect x="760" y="168" width="300" height="14" rx="2" fill="#2a3038"/>
+    <rect x="760" y="168" width="11" height="14" rx="2" fill="#7fb2ff"/>
+    <text x="990" y="180" fill="#f2f4f6" font-size="10">17ms · 4%</text>
+
+    <text x="620" y="214" fill="#cbd2d9">ui-chat</text>
+    <rect x="760" y="202" width="300" height="14" rx="2" fill="#2a3038"/>
+    <rect x="760" y="202" width="11" height="14" rx="2" fill="#7fb2ff"/>
+    <text x="990" y="214" fill="#f2f4f6" font-size="10">17ms · 4%</text>
+  </g>
+  <text x="620" y="244" fill="#c9924a" font-size="10">三个百分比相加 = 106% —— 不是算错:每条脚本各自除以帧时长,脚本之间可以重叠</text>
+
+  <!-- 右下:一帧的通用结构 -->
+  <text x="620" y="286" fill="#f2f4f6" font-size="12" font-weight="600">一帧的通用结构(我们能看到的部分)</text>
+  <g font-size="10">
+    <rect x="620" y="300" width="110" height="34" fill="#2a3038" stroke="#4b5159"/><text x="632" y="322" fill="#cbd2d9">输入回调</text>
+    <rect x="730" y="300" width="150" height="34" fill="#2a2622" stroke="#c9924a"/><text x="742" y="322" fill="#ffb454">JS 脚本(实测)</text>
+    <rect x="880" y="300" width="100" height="34" fill="url(#hatch)" stroke="#3b4047"/><text x="890" y="322" fill="#9aa3ac">样式/布局</text>
+    <rect x="980" y="300" width="80" height="34" fill="url(#hatch)" stroke="#3b4047"/><text x="990" y="322" fill="#9aa3ac">绘制</text>
+  </g>
+  <text x="620" y="356" fill="#8b949e" font-size="10">LoAF 给 renderStart / styleAndLayoutStart 两个时间点,不给每段耗时;绘制多在合成线程,不进主线程</text>
+  <text x="620" y="374" fill="#8b949e" font-size="10">斜纹 = 知道它在,但拆不到具体毫秒</text>
+
+  <!-- 底部结论 -->
+  <line x1="40" y1="452" x2="1060" y2="452" stroke="#2b2f34"/>
+  <text x="40" y="482" fill="#f2f4f6" font-size="12" font-weight="600">怎么读这张图</text>
+  <g fill="#98a0a8" font-size="11">
+    <text x="40" y="508">· 能确定的:这一次 454ms 是一次点击引发的 React 提交,不在任何插件里;插件那两条各 17ms,是陪跑的</text>
+    <text x="40" y="532">· 不能确定的:提交里哪个组件最贵 —— 单点映射到 react-dom 是入口,不是热点</text>
+    <text x="40" y="556">· 要往下走:采样剖析(1～2 周,要调试端口)或壳内埋点(3～6 周,跟版本)</text>
+  </g>
+  <g fill="#c9b79a" font-size="11">
+    <text x="40" y="586">· 口径提醒:blockingDuration 只算超过 50ms 的那部分;duration 才是整段。同一条事故里两个数差 50ms 属正常</text>
+  </g>
+</svg>
+</body></html>
