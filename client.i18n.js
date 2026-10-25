@@ -88,7 +88,7 @@ window.__ModuleLoader__.load({
 				// 证据 → 代码:把「事故 → 帧 → 来源 → 包 → 文件:行」落到个体脚本上。
 				// 直接测量 / 归因推断 / 尚无法确认三者在这几句里分开写。
 				evidenceLabel: '可疑脚本', evidenceScopeIncident: '事故', evidenceWindowPrefix: '窗口内',
-				shellSourceLocate: '定位源码', shellSourcePending: '定位中…', shellSourceFailed: '源码定位失败',
+				shellSourceLocate: '定位源码', shellSourcePending: '定位中…', shellSourceFailed: '源码定位失败', shellSourceLabel: '源码',
 				evidenceHint: '把「事故 → 帧 → 来源 → 包 → 文件:行」落到个体脚本上:上面那几块给的是"时间花在哪个包 / 哪类调用"(排行),这一块给的是"打开哪个文件、哪个函数"(定位)。**历史事故上下文**里优先给选中那一帧自己的脚本(捕获时存下来的,跨会话读回仍在);这一帧没有记录时才退回**事故窗口内**的切片,并在行上写明范围。**实时上下文**里给当前实时帧的脚本。LoAF 只上报 >5ms 的脚本,所以这一层是**下界**。',
 				evidenceHoverHint: '悬停看口径与缺口',
 				evidenceCopyHint: '点这一行复制「函数 @ 包 · 文件:行 · 耗时 · 来源」',
@@ -310,7 +310,7 @@ window.__ModuleLoader__.load({
 				verdictUnattributedText: 'no JS blocking evidence sufficient to explain this frame was observed; check rAF suspension or browser throttling against the neighbouring frames and the time gaps',
 				handoffFrameNoEvidence: 'this frame has no script records in the incident pack (interval only)',
 				evidenceLabel: 'suspect scripts', evidenceScopeIncident: 'incident', evidenceWindowPrefix: 'in window',
-				shellSourceLocate: 'Locate source', shellSourcePending: 'locating…', shellSourceFailed: 'source lookup failed',
+				shellSourceLocate: 'Locate source', shellSourcePending: 'locating…', shellSourceFailed: 'source lookup failed', shellSourceLabel: 'source',
 				evidenceHint: 'Lands the chain "incident -> frame -> invoker -> package -> file:line" on individual scripts: the blocks above say where the time went (ranking), this one says which file and function to open (locating). In the **incident context** it prefers the selected history frame\'s own scripts (stored at capture time, still there after a reload); when that frame has no records it falls back to the **in-window** slice of the incident and says so. In the **live context** it shows the current live frame\'s scripts. LoAF only reports scripts over 5ms, so this layer is a **lower bound**.',
 				evidenceHoverHint: 'hover for scope & gaps',
 				evidenceCopyHint: 'Click to copy "function @ package · file:line · cost · invoker"',

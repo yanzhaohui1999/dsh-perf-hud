@@ -773,7 +773,11 @@ window.__ModuleLoader__.load({
 				// map 里的 source 是相对路径(`../../../../packages/...`):去掉前导 ../ 再显示,
 				// 否则 396px 里前面全是点,真正有用的路径被省略号吃掉。
 				const source = String(found.source).replace(/^(\.\.\/)+/, '');
-				shellHits.set(key, { state: 'ready', source: short(source), full: source, line: found.line, name: found.name });
+				// 显示只留最后两段(`lib/index.js` / `cjs/react-dom.production.min.js`),
+				// 完整路径留给复制与悬停 —— 396px 里前面那一长串 node_modules 只会把行号挤掉。
+				const parts = source.split('/');
+				const display = parts.length > 1 ? parts.slice(-2).join('/') : source;
+				shellHits.set(key, { state: 'ready', source: short(display), full: source, line: found.line, name: found.name });
 			} catch (error) {
 				shellHits.set(key, { state: 'failed', reason: (error instanceof Error ? error.message : String(error)).slice(0, 60) });
 			}
@@ -959,8 +963,18 @@ window.__ModuleLoader__.load({
 			// 保持**输入顺序**(调用方已按耗时降序排好):合并只改同一 key 的行,不重排榜单
 		}
 		/** 证据行:单条与 evidenceLine 逐字一致;合并过多条时把「次数 · 累计 · 最大」写出来。 */
+		/**
+		 * 复制 / 交接件里那一行:外壳脚本如果已经定位到源码,把「源码 文件:行」也带上 ——
+		 * 否则粘贴出去的那一行仍然只有 `pkg=not-plugin`(实测:界面上显示了源码,复制出来没有)。
+		 */
+		function withShellSource(ev, text) {
+			if (ev === null || ev === undefined || typeof ev.url !== 'string' || typeof ev.charPos !== 'number') return text;
+			const hit = shellHits.get(`${ev.url}#${ev.charPos}`);
+			if (hit === undefined || hit.state !== 'ready') return text;
+			return `${text} · ${translate('shellSourceLabel')} ${hit.full}:${hit.line}`;
+		}
 		function evidenceGroupLine(ev) {
-			if (ev === null || ev === undefined || !((ev.count ?? 1) > 1)) return evidenceLine(ev);
+			if (ev === null || ev === undefined || !((ev.count ?? 1) > 1)) return withShellSource(ev, evidenceLine(ev));
 			const parts = [evidenceName(ev)];
 			const place = evidencePlace(ev);
 			if (place !== null) parts.push(place);
@@ -968,7 +982,7 @@ window.__ModuleLoader__.load({
 			parts.push(`${ev.count}${translate('times')} · ${translate('cumulative')} ${round1(ev.totalMs)}ms · ${translate('maxLabel')} ${round1(ev.maxMs)}ms`);
 			if (ev.invoker != null && ev.invoker !== '') parts.push(`${translate('evidenceInvoker')} ${ev.invoker}`);
 			parts.push(`pkg=${ev.pkgVia ?? '-'} line=${ev.lineVia ?? '-'}`);
-			return parts.join(' · ');
+			return withShellSource(ev, parts.join(' · '));
 		}
 		/**
 		 * 事故里的一条证据:**优先用捕获时存下来的定位结果**,只有包里确实没有的字段才回退到现算。
