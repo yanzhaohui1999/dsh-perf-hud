@@ -166,6 +166,8 @@ dsh plugin --profile web add "$PWD"
 
 ### 四屏一眼看完
 
+> 截图不在发布包里:下面这些图在 **GitHub** 上能看到,npm 页面会显示成破图(用 `docs/images/` 的路径,包内没有这个目录)。
+
 | **主界面**(默认) | **卡顿详情** | **设置** |
 |---|---|---|
 | <img src="docs/images/01-main.png" width="330"> | <img src="docs/images/08-incident.png" width="330"> | <img src="docs/images/07-settings.png" width="330"> |
