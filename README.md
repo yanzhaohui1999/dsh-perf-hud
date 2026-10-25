@@ -6,14 +6,14 @@
 > **守夜层:偶发卡顿自动留存最差几次,连证据一次性导出**。
 
 <p>
-<img alt="status" src="https://img.shields.io/badge/status-v0.7.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" />
+<img alt="status" src="https://img.shields.io/badge/status-v0.8.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1-4d6bfe" />
 </p>
 
 <p align="center">🌏 <b>中文</b> · <a href="./README_EN.md">English</a></p>
 
-> ✅ **v0.7.0 已发布到 npm** —— `dsh plugin --profile web add dsh-perf-hud` 即可(发布门槛与未还的债见
+> ✅ **v0.8.0 已发布到 npm** —— `dsh plugin --profile web add dsh-perf-hud` 即可(发布门槛与未还的债见
 > [REVIEW.md](REVIEW.md))。
 
 ## 📑 目录
@@ -131,7 +131,7 @@ dsh plugin --profile web add dsh-perf-hud
 npm 装到的是 `latest`。dsh-plugin.market 的详情页会额外给一条 `github:…/dsh-perf-hud#<40 位 sha>` 的安装命令 —— 那是**把扫描时那个 commit 钉死**的复现命令(保证装到的代码与扫描证据一致),不是日常安装路径。要从 GitHub 固定版本又不想贴 sha,用 tag:
 
 ```sh
-dsh plugin --profile web add github:yanzhaohui1999/dsh-perf-hud#v0.7.0
+dsh plugin --profile web add github:yanzhaohui1999/dsh-perf-hud#v0.8.0
 ```
 
 从源码/本地目录(开发用,`link:` 安装,改客户端半刷新页面即可生效):

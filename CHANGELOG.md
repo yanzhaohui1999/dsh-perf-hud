@@ -43,6 +43,9 @@
 - `tools/check-panel.mjs` / `tools/check-incident.mjs` 跟着改:按 `aria-label` 与
   `[data-incident-open]` 钩子定位控件。
 
+**发布**:2026-10-25,OIDC 自动发布,`latest → 0.8.0`;tarball 390.3 kB / 31 个文件,
+shasum `e1b47beebf004ffaf2b645c900e325b17f2d83d0`。
+
 
 ## [0.7.0] - 2026-10-21
 
