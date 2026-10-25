@@ -353,6 +353,8 @@ const sandbox = `
 	const W = { __DSH_BOOT__: undefined, setTimeout: (fn, ms) => setTimeout(fn, ms) };
 	const navigator = { userAgent: 'test-agent' };
 	const PKG = 'dsh-perf-hud';
+	// 外壳 sourcemap 的命中表:沙箱里没有真 map,给个空表(withShellSource 只读)
+	const shellHits = new Map();
 	let streamingFlag = false;
 	// 解析推进计数(sourcemap/脚本文本异步到位):窗口聚合的缓存指纹带它,沙箱里给个可推进的桩
 	let resolveSeq = 0;
@@ -694,6 +696,7 @@ const newPieces = [
 	'function evidenceGroups(',
 	'function ownerOfUrl(',
 	'function isShellScript(',
+	'function withShellSource(',
 	'function evidenceGroupLine(',
 	'function severityValueText(',
 	'function bytesText(',
@@ -2441,6 +2444,7 @@ const watchPieces = [
 	extract(source, 'function evidenceGroups('),
 	extract(source, 'function ownerOfUrl('),
 	extract(source, 'function isShellScript('),
+	extract(source, 'function withShellSource('),
 	extract(source, 'function evidenceGroupLine('),
 	extract(source, 'function severityValueText('),
 	extract(source, 'function dayKeyOf('),
