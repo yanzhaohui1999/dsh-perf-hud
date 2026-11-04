@@ -17,3 +17,11 @@ live-verification.txt
 
 # 编辑器/系统
 .DS_Store
+
+# npm 的缓存目录。`npm pack` 在受限环境(沙箱)里默认缓存 `~/.npm/_cacache` 不可写,
+# 会以 `EPERM ... _cacache` 失败;把 `npm_config_cache` 指到这里就能跑,
+# 代价是仓库里多出一个本来会被 add 进去的缓存目录 —— 见
+# docs/plans/2026-11-05-release-audit.md §2。
+# 只挡这一个子目录:`.tmp/` 下的其它东西(如 `.tmp/chrome/` 那个给 tools/shots.mjs
+# 用的浏览器 profile)是**有意跟踪**的,整目录忽略会把它们从 git status 里藏起来。
+.tmp/npm-cache/
