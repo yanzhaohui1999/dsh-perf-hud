@@ -9,3 +9,4 @@
 | [2026-10-11-acceptance-evidence.md](2026-10-11-acceptance-evidence.md) | 2026-10-07 ~ 10-18 的阶段决策与 67 条实测证据(原 REVIEW.md §2 / §3.1 / §3.6) |
 | [2026-10-12-next-phase-plan.md](2026-10-12-next-phase-plan.md) | 0.4.0 时代的产品计划与实施清单(已基本执行完) |
 | [2026-10-13-code-review.md](2026-10-13-code-review.md) | 2026-10-13 代码审计:12 条建议,10 条已落地 |
+| [2026-11-05-release-audit.md](2026-11-05-release-audit.md) | 0.9.0 发版复核:两条 workflow 的实际结果、包内容逐项核对、`release.yml` 缺口与下版 checklist |
