@@ -62,8 +62,11 @@ jobs:
 
       # 发布产物核对:两个半边、patch、图标、许可证、package.json,以及 README / AGENTS 链接到的
       # 全部文档都必须在包里 —— 漏一份,npm 页面上就是一个死链。
-      # `tools/` 与 `locale/` 按**目录**核(它们就是 `package.json#files` 里的两个目录项):
+      # `tools/` / `locale/` / `skills/` 按**目录**核(它们就是 `package.json#files` 里的目录项):
       # 写死 `tools/inspect-incident.mjs` / `locale/en.json` 会在以后加验证器、加语言文件时漏检。
+      # 目录要**递归**展开:0.9.0 新增的 `skills/<name>/SKILL.md` 有两层,只匹配一层会看到
+      # `skills/dsh-perf-diagnosis` 这个目录名就放行 —— 那个名字在 tarball 里出现与否,
+      # 证明不了 SKILL.md 本身在不在。
       - name: Pack and inspect
         run: |
           npm pack --dry-run 2>&1 | tee /tmp/pack.txt
@@ -77,13 +80,12 @@ jobs:
             [ -e "$f" ] || continue
             grep -q "$f" /tmp/pack.txt || { echo "打包产物缺分片 $f"; exit 1; }
           done
-          for dir in tools locale; do
+          for dir in tools locale skills; do
             found=0
-            for f in "$dir"/*; do
-              [ -e "$f" ] || continue
+            while IFS= read -r f; do
               found=$((found + 1))
-              grep -q "$f" /tmp/pack.txt || { echo "打包产物缺 $f"; exit 1; }
-            done
+              grep -qF "$f" /tmp/pack.txt || { echo "打包产物缺 $f"; exit 1; }
+            done < <(find "$dir" -type f | sort)
             [ "$found" -gt 0 ] || { echo "目录 $dir 里没有文件可核 —— package.json#files 是不是漏了这个目录?"; exit 1; }
           done
 
