@@ -76,6 +76,16 @@ window.__ModuleLoader__.load({
 		const ROOT_ID = 'dsh-perf-hud-root';
 		const STYLE_ID = 'dsh-perf-hud-style';
 		const HOST_ROUTE = '/api/dsh-perf-hud/host';
+		// 宿主进程的 CPU 采样(按需、单飞)。时长口径与宿主半的 clampSeconds 对齐:
+		// 默认 5 秒、夹在 [0.1, 30] —— 两边各夹一次,免得"面板说 5 秒、宿主采了 30 秒"。
+		const HOST_PROFILE_SECONDS = 5;
+		const HOST_PROFILE_MIN_SECONDS = 0.1;
+		const HOST_PROFILE_MAX_SECONDS = 30;
+		const HOST_PROFILE_CHOICES = [1, 5, 10];      // 面板给的三档(1 秒 ≈ 82KB 的 .cpuprofile)
+		const HOST_PROFILE_POLL_MS = 250;             // 轮询宿主 running 的间隔
+		const HOST_PROFILE_POLL_GRACE_MS = 5000;      // 采样结束后的余量:收尾 + 一次回执往返
+		const HOST_PROFILE_RAW_MAX = 524288;          // 原始 .cpuprofile 随包上限(512KB),超过只带汇总
+		const HOST_PROFILE_TOP = 12;                  // 汇总里最多列几条"自身耗时"最高的函数
 		const RTT_INTERVAL_MS = 10000;
 		const LOAD_INTERVAL_MS = 60000;
 		// 宿主快照超过 2.5 个轮询周期就算过期(轮询是 10s;留一次重试的余量)。
@@ -591,6 +601,19 @@ window.__ModuleLoader__.load({
 			hostEvents: null,        // 宿主 session/event 派发计时回执 {installed, reason, stats}
 			hostWatchAsked: false,
 			hostWatchOff: false,
+			// 宿主进程 CPU 采样(按需,单飞)。这里是**最近一次尝试**的状态 + 最近一次成功的采样:
+			// phase = idle | running | done | failed;失败时不丢上一次采到的 profile(证据不因一次失败消失)。
+			// ⚠️ 它是宿主进程(Node)的采样,不是页面开销 —— 两者的口径在事故包的 howToRead 里写明。
+			hostCpuProfile: {
+				phase: 'idle',
+				seconds: 0,           // 这次请求的时长(秒,已夹到 [0.1, 30])
+				requestedAt: 0,       // 发起时刻(墙钟 ms)
+				finishedAt: 0,        // 最近一次结束(成功或失败)的时刻
+				meta: null,           // 宿主回的元信息(节点 / 采样 / 字节 / pid / node 版本)
+				profile: null,        // 原始标准 .cpuprofile(只在内存里;导出件带汇总,原始文件单独下载)
+				error: '',            // 最近一次失败时宿主回来的**错误原文**(成功时清空)
+				collections: 0,       // 宿主累计采到过几次(宿主口径,不是本页面的次数)
+			},
 			link: [],                // { t, kind, rtt, kbps?, error? }
 			loadState: 'pending',    // pending | ok | failed:吞吐那一格现在是哪种状态
 			loadKbps: null,          // 吞吐数值(KB/s),显示时 >=1024 折成 MB/s
@@ -618,6 +641,8 @@ window.__ModuleLoader__.load({
 				FREE_TEXT_KEYS,
 				HOME_PATH,
 				HOST_ROUTE,
+				HOST_PROFILE_RAW_MAX,
+				HOST_PROFILE_TOP,
 				// 拖动后的位置:三个尺寸常量与 PANEL_WIDTH 同一套来源(渲染、恢复、离线断言都从这里算)
 				HUD_POS_MARGIN,
 				HUD_POS_MIN_ROOM,
@@ -874,6 +899,9 @@ window.__ModuleLoader__.load({
 		function provenanceOf(...args) { return model().provenanceOf(...args); }
 		function capabilities(...args) { return model().capabilities(...args); }
 		function capabilityMissing(...args) { return model().capabilityMissing(...args); }
+		// 面板只读这两条文字;汇总 / 导出段在模型层内部用(事故包与整机导出件同一个构造器)
+		function hostCpuProfileText(...args) { return model().hostCpuProfileText(...args); }
+		function hostCpuProfileTopText(...args) { return model().hostCpuProfileTopText(...args); }
 		function provenanceText(...args) { return model().provenanceText(...args); }
 		function strengthText(...args) { return model().strengthText(...args); }
 		function causeCandidates(...args) { return model().causeCandidates(...args); }
@@ -2061,6 +2089,162 @@ window.__ModuleLoader__.load({
 			dirty = true;
 		}
 
+		// ───────────── D2. 宿主进程 CPU 采样(按需 / 单飞 / 不假装成功)─────────────
+		/**
+		 * 采样时长:非数字 / 非正数一律回默认 5 秒,再夹到 [0.1, 30] 并保留一位小数。
+		 * 宿主半的 clampSeconds 做同一件事 —— 两边都夹,是因为"面板要采几秒"与"宿主接受几秒"
+		 * 不该由调用方各自记一份口径。
+		 */
+		function clampHostProfileSeconds(raw) {
+			const value = Number(raw);
+			if (!Number.isFinite(value) || value <= 0) return HOST_PROFILE_SECONDS;
+			return Math.round(Math.min(Math.max(value, HOST_PROFILE_MIN_SECONDS), HOST_PROFILE_MAX_SECONDS) * 10) / 10;
+		}
+
+		/** 发起采样的 POST body。**路由形状只有这一处** —— 面板按钮与控制台都从这里发,别各写一份。 */
+		function hostCpuProfileStartBody(seconds) {
+			return { op: 'profileStart', seconds: clampHostProfileSeconds(seconds) };
+		}
+
+		/**
+		 * 宿主对 profileStart 的回执 → 新状态。**纯函数**(不读时钟、不碰闭包):成功/失败两条分支
+		 * 与面板、事故包读的是同一份 —— 所以"宿主说开不起来、面板说采集中"在结构上不会发生。
+		 * 失败时保留上一次采到的 profile(证据不因一次失败消失),只把 phase / error 照实改掉。
+		 */
+		function hostCpuProfileAfterStart(current, receipt, seconds, at) {
+			const base = current === null || current === undefined ? {} : current;
+			const next = { ...base, requestedAt: at, finishedAt: 0 };
+			const fail = (error) => ({ ...next, phase: 'failed', error: String(error), finishedAt: at });
+			if (receipt === null || typeof receipt !== 'object') return fail('宿主没有回执(路由不可达,或响应不是 JSON)');
+			const collections = typeof receipt.collections === 'number' ? receipt.collections : (base.collections ?? 0);
+			const requested = typeof receipt.seconds === 'number' ? receipt.seconds : seconds;
+			if (receipt.ok !== true) {
+				const text = typeof receipt.error === 'string' && receipt.error !== '' ? receipt.error : '宿主回了失败,但没给原因';
+				return { ...next, phase: 'failed', error: text, seconds: requested, collections, finishedAt: at };
+			}
+			// ok:true 但 running 不是 true:不假装采起来了(V8 允许多会话并存,所以这里只信宿主的回执)
+			if (receipt.running !== true) {
+				return { ...next, phase: 'failed', error: '宿主回了 ok,但没有 running:true —— 不假装采起来了', seconds: requested, collections, finishedAt: at };
+			}
+			return { ...next, phase: 'running', error: '', seconds: requested, collections };
+		}
+
+		/**
+		 * 宿主对 profileGet 的回执 → 新状态(同样是纯函数)。
+		 * `running:true` 表示"还在采",不是失败 —— 轮询继续等。
+		 */
+		function hostCpuProfileAfterGet(current, receipt, at) {
+			const base = current === null || current === undefined ? {} : current;
+			const fail = (error) => ({ ...base, phase: 'failed', error: String(error), finishedAt: at });
+			if (receipt === null || typeof receipt !== 'object') return fail('宿主没有回执(路由不可达,或响应不是 JSON)');
+			const collections = typeof receipt.collections === 'number' ? receipt.collections : (base.collections ?? 0);
+			if (receipt.ok !== true) {
+				if (receipt.running === true) return { ...base, phase: 'running', collections };
+				const text = typeof receipt.error === 'string' && receipt.error !== '' ? receipt.error : '宿主回了失败,但没给原因';
+				return { ...base, phase: 'failed', error: text, collections, finishedAt: at };
+			}
+			const profile = receipt.profile;
+			// 空对象 / 缺 nodes 不算采到:结构不对就照实报,不拿它冒充一份采样
+			if (profile === null || typeof profile !== 'object' || !Array.isArray(profile.nodes)) {
+				return { ...base, phase: 'failed', error: '回执里没有 profile.nodes —— 不拿空对象冒充采样结果', collections, finishedAt: at };
+			}
+			return {
+				...base,
+				phase: 'done',
+				error: '',
+				meta: receipt.meta === null || receipt.meta === undefined ? null : receipt.meta,
+				profile,
+				collections,
+				finishedAt: at,
+			};
+		}
+
+		/**
+		 * 采一段宿主进程的 CPU profile:POST profileStart → 按 running 轮询 profileGet → 取回。
+		 *
+		 * 三条刻意的取舍:
+		 *   1. **按需、单飞**:采样本身有开销,不常开;同一页面同时点两次会直接返回"已在进行中",
+		 *      宿主的单飞是第二道闸。
+		 *   2. **不假装成功**:开不起来 / 取不回 / 超时都写 `phase:'failed'` + 宿主回来的**错误原文**
+		 *      (面板照原样显示);只有拿到 `profile.nodes` 才算 done。
+		 *   3. **跨代丢弃**:stop() 会 abort 这一代请求,回执到了也不许再改状态(与其它异步读取同一条规矩)。
+		 *
+		 * 返回**最终状态**(不抛):控制台 `__perfHud.cpuProfile(5)` 用它拿回执。
+		 */
+		async function startHostCpuProfile(rawSeconds) {
+			if (state.hostCpuProfile.phase === 'running') return state.hostCpuProfile;
+			const seconds = clampHostProfileSeconds(rawSeconds);
+			const epoch = state.epoch;
+			const at = Date.now();
+			state.hostCpuProfile = { ...state.hostCpuProfile, phase: 'running', seconds, requestedAt: at, finishedAt: 0, error: '' };
+			bump();
+			let receipt = null;
+			try {
+				receipt = await hostOp(hostCpuProfileStartBody(seconds));
+			} catch (error) {
+				if (state.epoch !== epoch) return state.hostCpuProfile;
+				state.hostCpuProfile = { ...state.hostCpuProfile, phase: 'failed', error: fetchFailureText(error, FETCH_TIMEOUT_MS.host), finishedAt: Date.now() };
+				bump();
+				return state.hostCpuProfile;
+			}
+			if (state.epoch !== epoch) return state.hostCpuProfile;
+			state.hostCpuProfile = hostCpuProfileAfterStart(state.hostCpuProfile, receipt, seconds, Date.now());
+			bump();
+			if (state.hostCpuProfile.phase !== 'running') return state.hostCpuProfile;
+			const deadline = Date.now() + Math.round(state.hostCpuProfile.seconds * 1000) + HOST_PROFILE_POLL_GRACE_MS;
+			let lastError = '';
+			while (Date.now() < deadline) {
+				await sleep(HOST_PROFILE_POLL_MS);
+				if (state.epoch !== epoch) return state.hostCpuProfile;
+				let got = null;
+				try {
+					got = await hostOp({ op: 'profileGet' });
+				} catch (error) {
+					// 取回失败 ≠ 采样失败:宿主那一侧可能已经采完,再轮一次就好(不在这里下结论)。
+					if (state.epoch !== epoch) return state.hostCpuProfile;
+					lastError = fetchFailureText(error, FETCH_TIMEOUT_MS.host);
+					continue;
+				}
+				state.hostCpuProfile = hostCpuProfileAfterGet(state.hostCpuProfile, got, Date.now());
+				bump();
+				if (state.hostCpuProfile.phase !== 'running') return state.hostCpuProfile;
+			}
+			state.hostCpuProfile = {
+				...state.hostCpuProfile,
+				phase: 'failed',
+				error: lastError === ''
+					? `超时:${Math.round(state.hostCpuProfile.seconds * 1000) + HOST_PROFILE_POLL_GRACE_MS}ms 内宿主一直在采样(宿主单飞挡着,不会自己重试)`
+					: `取回 profile 失败:${lastError}`,
+				finishedAt: Date.now(),
+			};
+			bump();
+			return state.hostCpuProfile;
+		}
+
+		/** 只看状态、不回 profile 本体(它有几万个节点);要原始文件用 downloadHostCpuProfile()。 */
+		function hostCpuProfileState() {
+			const { profile, ...rest } = state.hostCpuProfile;
+			return { ...rest, hasProfile: profile !== null, profileNodes: profile === null ? 0 : profile.nodes.length };
+		}
+
+		/** 把最近一次采到的 .cpuprofile 存成文件(**本地**文件:导出件里只有汇总)。 */
+		function downloadHostCpuProfile() {
+			const profile = state.hostCpuProfile.profile;
+			if (profile === null) return false;
+			const meta = state.hostCpuProfile.meta;
+			const endedAt = meta !== null && meta !== undefined && typeof meta.endedAt === 'number' ? meta.endedAt : Date.now();
+			const d = new Date(endedAt);
+			const p = (n) => (String(n).length < 2 ? `0${n}` : String(n));
+			const name = `perf-hud-host-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${round1(state.hostCpuProfile.seconds)}s.cpuprofile`;
+			const url = URL.createObjectURL(new Blob([JSON.stringify(profile)], { type: 'application/json' }));
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = name;
+			link.click();
+			natives.setTimeout(() => URL.revokeObjectURL(url), 2000);
+			return true;
+		}
+
 		/**
 		 * 宿主快照的**四态**(外加路由不可达)。
 		 * 参考官方 Inspector 的 `disconnected` 标记:保留最后的快照,但必须说明它已经过期 / 没采到,
@@ -2736,6 +2920,16 @@ window.__ModuleLoader__.load({
 				state.watch.eventObserver = null;
 				state.watch.eventState = 'stopped';
 			}
+			// 宿主 CPU 采样是在**宿主进程**里跑的:关 HUD 不会取消它,但这一代的回执不该再改状态。
+			// 所以这里只把"还在等"照实标成已中止 —— 不假装采完了,也不删已经采到的那一份。
+			if (state.hostCpuProfile.phase === 'running') {
+				state.hostCpuProfile = {
+					...state.hostCpuProfile,
+					phase: 'failed',
+					error: 'HUD 关闭时中止了这次等待(宿主那一侧仍会采完并缓存,重新开启后可再采一段)',
+					finishedAt: Date.now(),
+				};
+			}
 			state.fps = 0;
 			flush(true);
 		}
@@ -2900,6 +3094,14 @@ window.__ModuleLoader__.load({
 				state.hostWatchAsked = false;
 				return requestHostEventWatch();
 			},
+			/**
+			 * 宿主进程的 CPU 采样(按需):cpuProfile(seconds) 采一段并返回最终状态;
+			 * hostCpuProfile() 只看状态(不含 profile 本体);downloadHostCpuProfile() 存 .cpuprofile。
+			 * 它是**宿主进程**的采样,不是页面开销 —— 与 __perfHud.snapshot() 的帧数据不能相加。
+			 */
+			cpuProfile: startHostCpuProfile,
+			hostCpuProfile: hostCpuProfileState,
+			downloadHostCpuProfile,
 			link: () => state.link,
 			verification,
 		};
@@ -3748,6 +3950,11 @@ window.__ModuleLoader__.load({
 				hostFreshness,
 				hostLoopStateText,
 				hostSummary,
+				hostCpuProfileText,
+				hostCpuProfileTopText,
+				HOST_PROFILE_CHOICES,
+				startHostCpuProfile,
+				downloadHostCpuProfile,
 				hudDodge,
 				hudPosClamp,
 				hudPosMake,

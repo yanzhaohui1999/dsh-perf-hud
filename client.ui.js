@@ -91,6 +91,11 @@ window.__ModuleLoader__.load({
 				hostFreshness,
 				hostLoopStateText,
 				hostSummary,
+				hostCpuProfileText,
+				hostCpuProfileTopText,
+				HOST_PROFILE_CHOICES,
+				startHostCpuProfile,
+				downloadHostCpuProfile,
 				hudDodge,
 				incidentFrameHeadingText,
 				incidentFrameStep,
@@ -1470,6 +1475,33 @@ window.__ModuleLoader__.load({
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('linkHint') }, t('link')),
 						h('span', { style: { ...S.num, color: linkSuspect ? 'var(--dsw-alias-state-warn-primary)' : (link.count > 0 ? levelUp(link.p99, 100, 300) : undefined) } }, linkRowText())),
+					// ── 宿主进程 CPU 采样(按需、单飞):"是页面卡还是宿主卡"唯一的一手证据 ──
+					// 它测的是**宿主 Node 进程**,不是页面 —— 所以放在「宿主与链路」而不是「取证明细」。
+					h('div', { style: S.row },
+						h('span', { style: S.label, title: t('hostProfileHint') }, t('hostProfile')),
+						h('span', { style: S.num }, hostCpuProfileText())),
+					h('div', { style: S.buttons },
+						// 三档时长是同一个动作的三个参数(不是三个功能):采集中一律禁用,宿主那边也有单飞闸。
+						HOST_PROFILE_CHOICES.map((seconds) => h('button', {
+							key: seconds,
+							type: 'button',
+							style: S.btnGhost,
+							disabled: state.hostCpuProfile.phase === 'running',
+							title: t('hostProfileStartHint'),
+							onClick: () => { startHostCpuProfile(seconds); },
+						}, `${t('hostProfileStart')}${seconds}${t('secondsUnit')}`)),
+						// 原始 .cpuprofile 是**本地**文件(导出件里只有汇总),所以按需出现。
+						state.hostCpuProfile.profile === null ? null : h('button', {
+							type: 'button',
+							style: S.btnGhost,
+							title: t('hostProfileSaveHint'),
+							onClick: () => { downloadHostCpuProfile(); },
+						}, t('hostProfileSave'))),
+					// 失败时宿主的**错误原文**单独一行(原样,不加工也不吞)。
+					(state.hostCpuProfile.error ?? '') === '' ? null : h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' }, title: t('hostProfileErrorHint') },
+						`${t('hostProfileErrorLabel')}: ${state.hostCpuProfile.error}`),
+					hostCpuProfileTopText() === '' ? null : h('div', { style: S.sub, title: t('hostProfileTopHint') },
+						`${t('hostProfileTop')}: ${hostCpuProfileTopText()}`),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('idleBase')),
 						h('span', { style: S.num }, idleBase === null || idleBase === undefined

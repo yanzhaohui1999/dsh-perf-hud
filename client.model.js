@@ -23,6 +23,8 @@ window.__ModuleLoader__.load({
 				FREE_TEXT_KEYS,
 				HOME_PATH,
 				HOST_ROUTE,
+				HOST_PROFILE_RAW_MAX,
+				HOST_PROFILE_TOP,
 				HUD_POS_MARGIN,
 				HUD_POS_MIN_ROOM,
 				HUD_POS_PILL_ROOM,
@@ -1156,6 +1158,169 @@ window.__ModuleLoader__.load({
 			}
 			return worst;
 		}
+		// ───────────────────── 宿主进程 CPU 采样(按需采到的那一段)─────────────────────
+		/**
+		 * 把标准 .cpuprofile 折成**可读的汇总**:每个函数自身的采样时间(不含子调用)。
+		 *
+		 * 口径(事故包的 howToRead 里有同一份,别只写在这里):
+		 *   - 它是**宿主进程(Node)**的采样,不是页面开销,不能与帧时间相加;
+		 *   - `selfMs` 用 samples[i] 对应的 timeDeltas[i](µs)折算;
+		 *   - **跳过第一个样本**:它的 timeDelta 是"profile 起点 → 第一个样本"的间隔,含 inspector
+		 *     启用的时间(真宿主实测 520~560ms),不是某个函数的 CPU 时间 —— 不跳过的话这段会被
+		 *     记到 `Profiler.start` 当时栈上的那个函数(实测把宿主自己的 `post` 顶到 36%)。
+		 *     被跳过的毫秒数记在 `leadingMs`,不静默丢弃;
+		 *   - 它是**抽样**:1 秒约 200 个样本,某函数 1% ≈ 2 个样本,低于约 5% 的份额不要当结论;
+		 *   - 归属到**函数自身**,子调用的时间记在子函数上 —— 所以"顶层函数很大"不代表它自己忙。
+		 *
+		 * 节点表里查不到的 sampleId 直接跳过(不编一个匿名桶冒充归属)。
+		 */
+		function cpuProfileSummary(profile) {
+			if (profile === null || typeof profile !== 'object') return null;
+			if (!Array.isArray(profile.nodes) || !Array.isArray(profile.samples)) return null;
+			const byId = new Map();
+			for (const node of profile.nodes) {
+				if (node === null || typeof node !== 'object') continue;
+				const frame = node.callFrame === null || typeof node.callFrame !== 'object' ? {} : node.callFrame;
+				byId.set(node.id, {
+					fn: typeof frame.functionName === 'string' && frame.functionName !== '' ? frame.functionName : '(anonymous)',
+					file: typeof frame.url === 'string' && frame.url !== '' ? frame.url : null,
+					// V8 的 callFrame.lineNumber 是 0-based,人读的行号是 1-based
+					line: typeof frame.lineNumber === 'number' && frame.lineNumber >= 0 ? frame.lineNumber + 1 : null,
+				});
+			}
+			const deltas = Array.isArray(profile.timeDeltas) ? profile.timeDeltas : [];
+			// 首样本的 delta 是"profile 起点 → 第一个样本"(含 inspector 启用),不是任何函数的 CPU
+			// 时间;照实记进 leadingMs 并跳过,别把 setup 的墙钟时间记到某个函数头上。
+			const leadingUs = profile.samples.length > 0 && typeof deltas[0] === 'number' && deltas[0] > 0 ? deltas[0] : 0;
+			const selfUs = new Map();
+			let sampledUs = 0;
+			for (let i = 1; i < profile.samples.length; i += 1) {
+				const delta = deltas[i];
+				if (typeof delta !== 'number' || delta <= 0) continue;
+				const id = profile.samples[i];
+				if (byId.has(id) === false) continue;
+				selfUs.set(id, (selfUs.get(id) ?? 0) + delta);
+				sampledUs += delta;
+			}
+			const rows = [];
+			for (const [id, us] of selfUs) {
+				const frame = byId.get(id);
+				rows.push({ ...frame, selfMs: us / 1000 });
+			}
+			rows.sort((a, b) => b.selfMs - a.selfMs);
+			const totalMs = sampledUs / 1000;
+			const summary = {
+				samples: profile.samples.length,
+				nodes: profile.nodes.length,
+				durationMs: typeof profile.startTime === 'number' && typeof profile.endTime === 'number'
+					? round1((profile.endTime - profile.startTime) / 1000)
+					: null,
+				leadingMs: round1(leadingUs / 1000),
+				sampledMs: round1(totalMs),
+				topSelf: rows.slice(0, HOST_PROFILE_TOP).map((row) => ({
+					fn: row.fn,
+					file: row.file,
+					line: row.line,
+					selfMs: round1(row.selfMs),
+					share: totalMs <= 0 ? 0 : Math.round((row.selfMs / totalMs) * 1000) / 1000,
+				})),
+			};
+			return summary;
+		}
+
+		/**
+		 * raw profile 里会带用户名的 url 先换掉:键名是 `url` 时 `redactExport` 走
+		 * `redactScriptUrl`(只剥协议 + 主机),对 `file:///Users/<用户名>/…` 不命中 ——
+		 * 这条路径会把用户名原样交出去,所以在包里先过一遍 `redactPath`。
+		 */
+		function sanitizeCpuProfile(profile) {
+			if (profile === null || typeof profile !== 'object' || !Array.isArray(profile.nodes)) return profile;
+			return {
+				...profile,
+				nodes: profile.nodes.map((node) => {
+					if (node === null || typeof node !== 'object') return node;
+					const frame = node.callFrame;
+					if (frame === null || typeof frame !== 'object' || typeof frame.url !== 'string') return node;
+					return { ...node, callFrame: { ...frame, url: redactPath(frame.url) } };
+				}),
+			};
+		}
+
+		/**
+		 * 事故包 / 整机导出件的 `context.hostCpuProfile`。**结构自定,但口径必须自证**:
+		 * 字段含义与"这是宿主进程的抽样,不是页面开销"写在 `incidentReport().context.howToRead` 里。
+		 *
+		 * `state` 是**最近一次尝试**的结局(collected / running / failed / none);`meta` / `summary` /
+		 * `raw` 是最新**一次成功**的采样 —— 所以"这次失败"不会把上一次的证据吞掉。
+		 * 原始 .cpuprofile 只在 `HOST_PROFILE_RAW_MAX` 以内随包(超了给 `rawOmitted` 与拿法):
+		 * 采样本身 1 秒就 ~82KB,直接塞进 JSON 会把事故包撑大一个数量级。
+		 */
+		function hostCpuProfileContext(record) {
+			const cur = record === null || record === undefined ? {} : record;
+			const phase = typeof cur.phase === 'string' ? cur.phase : 'idle';
+			const profile = cur.profile === undefined ? null : cur.profile;
+			const meta = cur.meta === null || cur.meta === undefined ? null : cur.meta;
+			const summary = cpuProfileSummary(profile);
+			let raw = null;
+			let rawBytes = 0;
+			let rawOmitted = null;
+			if (profile !== null && typeof profile === 'object') {
+				const sanitized = sanitizeCpuProfile(profile);
+				rawBytes = JSON.stringify(sanitized).length;
+				if (rawBytes <= HOST_PROFILE_RAW_MAX) {
+					raw = sanitized;
+				} else {
+					rawOmitted = `原始 .cpuprofile ${rawBytes} 字节,超过随包上限 ${HOST_PROFILE_RAW_MAX} 字节:只带汇总(节点 / 采样 / 自热 top ${HOST_PROFILE_TOP});原始文件在「宿主与链路 → 宿主 CPU 采样 → 下载 .cpuprofile」本地保存,不进导出件`;
+				}
+			}
+			return {
+				scope: '宿主进程(Node)的 CPU 采样 —— 不是页面开销,不能与页面帧时间相加',
+				state: summary === null ? (phase === 'running' ? 'running' : (phase === 'failed' ? 'failed' : 'none')) : 'collected',
+				requestedSeconds: typeof cur.seconds === 'number' ? cur.seconds : null,
+				attemptedAt: typeof cur.requestedAt === 'number' && cur.requestedAt > 0 ? new Date(cur.requestedAt).toISOString() : null,
+				collectedAt: meta !== null && typeof meta.endedAt === 'number' ? new Date(meta.endedAt).toISOString() : null,
+				// 宿主进程累计采到过几次(跨页面 / 跨刷新,宿主口径)—— 不是本页面点了几次
+				collections: typeof cur.collections === 'number' ? cur.collections : 0,
+				error: typeof cur.error === 'string' ? cur.error : '',
+				meta,
+				summary,
+				raw,
+				rawBytes,
+				rawOmitted,
+			};
+		}
+
+		/** 面板那一行的状态文字。失败只说"失败",宿主的错误原文由面板单独一行显示(要能读全)。 */
+		function hostCpuProfileText() {
+			const cur = state.hostCpuProfile;
+			if (cur === null || cur === undefined) return translate('hostProfileIdle');
+			if (cur.phase === 'running') {
+				const elapsed = cur.requestedAt > 0 ? Math.max((Date.now() - cur.requestedAt) / 1000, 0) : 0;
+				return `${translate('hostProfileRunning')} ${round1(elapsed)}${translate('secondsUnit')}`;
+			}
+			const summary = cpuProfileSummary(cur.profile === null || cur.profile === undefined ? null : cur.profile);
+			if (cur.phase === 'failed') {
+				// 失败时如果上一次的采样还在,要说出来 —— 否则读的人会以为这一格已经空了。
+				return summary === null ? translate('hostProfileFailed') : `${translate('hostProfileFailed')} · ${translate('hostProfileKeepLast')}`;
+			}
+			if (summary === null) return translate('hostProfileIdle');
+			const meta = cur.meta === null || cur.meta === undefined ? {} : cur.meta;
+			const samples = typeof meta.samples === 'number' ? meta.samples : summary.samples;
+			const seconds = typeof meta.seconds === 'number' ? round1(meta.seconds) : round1(summary.sampledMs / 1000);
+			const bytes = typeof meta.bytes === 'number' ? meta.bytes : 0;
+			return `${translate('hostProfileCollected')} ${seconds}${translate('secondsUnit')} · ${samples}${translate('hostProfileSamples')}${bytes > 0 ? ` · ${bytesText(bytes)}` : ''}`;
+		}
+
+		/** 面板那行下面的"自热 top3"(采样是抽样的,三条足够看出宿主在忙什么)。 */
+		function hostCpuProfileTopText() {
+			const cur = state.hostCpuProfile;
+			const summary = cur === null || cur === undefined ? null : cpuProfileSummary(cur.profile === null || cur.profile === undefined ? null : cur.profile);
+			if (summary === null) return '';
+			return summary.topSelf.slice(0, 3)
+				.map((row) => `${row.fn} ${row.share < 0.1 ? (row.share * 100).toFixed(1) : Math.round(row.share * 100)}%`)
+				.join(' · ');
+		}
+
 		// ───────────────────── 能力矩阵与证据出处(导出件的自证部分)─────────────────────
 		/**
 		 * 出处三档。**每个结论都要能回答"这是量出来的还是推出来的"** —— 这是本项目
@@ -1211,7 +1376,19 @@ window.__ModuleLoader__.load({
 						loop === null ? (state.hostError === null || state.hostError === undefined ? '还没拿到宿主快照' : `宿主路由不可达:${state.hostError}`) : `p50/p99/max 已采(${host.at ?? '—'})`),
 					events: leaf(state.hostEvents === null || state.hostEvents === undefined ? 'off' : (state.hostEvents.installed === true ? 'on' : 'degraded'), 'measured',
 						state.hostEvents === null || state.hostEvents === undefined ? '还没请求宿主事件监听' : `session/event 到达延迟:${state.hostEvents.installed === true ? '已装' : state.hostEvents.reason ?? '没装上'}`),
-					cpuProfile: leaf('off', 'unknown', '宿主路由能采 Node CPU profile,客户端还没接线(要动宿主半,排在后面)'),
+					// 宿主进程 CPU 采样:按需、单飞。接线之后这里只说**实际状态**(采到 / 正在采 / 上次失败 /
+					// 还没采),不再有"未接线"那种说法 —— 那条债还掉之后它就是假话。
+					cpuProfile: (() => {
+						const record = state.hostCpuProfile === null || state.hostCpuProfile === undefined ? {} : state.hostCpuProfile;
+						const summary = cpuProfileSummary(record.profile === undefined ? null : record.profile);
+						if (summary !== null) {
+							const samples = record.meta !== null && record.meta !== undefined && typeof record.meta.samples === 'number' ? record.meta.samples : summary.samples;
+							return leaf('on', 'measured', `已采到宿主进程的 CPU 采样:${summary.nodes} 节点 / ${samples} 采样 / ${summary.sampledMs}ms(自热口径),事故包带汇总与自热 top`);
+						}
+						if (record.phase === 'running') return leaf('degraded', 'measured', '正在采宿主进程的 CPU profile(按需、单飞;采完才进事故包)');
+						if (record.phase === 'failed') return leaf('off', 'measured', `上次采样失败:${record.error === '' || record.error === undefined ? '宿主没给原因' : record.error}`);
+						return leaf('off', 'unknown', '入口已接线,但这一段还没采 —— 采样本身有开销,所以只在面板点一下或 __perfHud.cpuProfile(5) 时才采,不常开');
+					})(),
 				},
 				link: {
 					rtt: leaf(linkCount > 0 ? 'on' : 'off', 'measured', `链路样本 ${linkCount} 条(环形缓冲里全部)`),
@@ -1283,8 +1460,24 @@ window.__ModuleLoader__.load({
 			missing.push('baseline:跨机器 / 跨浏览器的对照基线 —— context.sessionBaselines 只来自同一个浏览器 profile,而且只是粗参照');
 			if (incident === null || incident.host === null) {
 				missing.push('host:没有任何宿主快照(宿主半未加载或路由不可达)');
-			} else {
-				missing.push(`host-cpuprofile:宿主进程的 CPU 火焰图**没有自动采** —— 路由已经能采(POST {op:'profileStart', seconds} / {op:'profileGet'},真宿主实测 1 秒 = 292 节点 / 223 采样 / 82KB),但客户端还没接线,要的话手动打一次;而这份宿主快照是${incident.host.snapshotAgeMs >= 0 ? `事故前 ${incident.host.snapshotAgeMs}ms` : `事故**后** ${-incident.host.snapshotAgeMs}ms`}采的(每 10 秒一次),未必覆盖卡顿瞬间;别把它当"宿主没问题"的证据`);
+			}
+			// 宿主 CPU 采样:入口接线之后,缺的只可能是"这一段还没采"(采样按需、不自动跑)。
+			// 采到了就不再往 missing 里塞条目 —— 证据已经在 context.hostCpuProfile 里,
+			// 再写一条"没采到"就是假话(旧口径「未接线」已经还债,别再回来)。
+			const profileRecord = state.hostCpuProfile === null || state.hostCpuProfile === undefined ? {} : state.hostCpuProfile;
+			const profileSummary = cpuProfileSummary(profileRecord.profile === undefined ? null : profileRecord.profile);
+			if (profileSummary === null) {
+				const why = profileRecord.phase === 'running'
+					? '还在采,这份导出早于采样结束'
+					: profileRecord.phase === 'failed' && typeof profileRecord.error === 'string' && profileRecord.error !== ''
+						? `上次失败,宿主原文:${profileRecord.error}`
+						: '还没采过';
+				missing.push(`host-cpuprofile:宿主进程的 CPU 火焰图还没拿到(${why})—— 它是**按需**采的(采样本身有开销,不常开),不会自动出现在每份事故包里;要补就打开「宿主与链路 → 宿主 CPU 采样」点一下(或 __perfHud.cpuProfile(5)),采完这份包会带 context.hostCpuProfile`);
+			}
+			if (incident !== null && incident.host !== null) {
+				// 宿主快照(每 10 秒一次的事件循环读数)与 CPU 采样是两件事:前者也未必覆盖卡顿瞬间,
+				// 所以年龄这条一直要写清楚 —— 别让读的人把"那一格有数"当成"宿主没问题"。
+				missing.push(`host-snapshot:这份宿主快照是${incident.host.snapshotAgeMs >= 0 ? `事故前 ${incident.host.snapshotAgeMs}ms` : `事故**后** ${-incident.host.snapshotAgeMs}ms`}采的(每 10 秒一次),未必覆盖卡顿瞬间;别把它当"宿主没问题"的证据`);
 			}
 			if (incident !== null && incident.integrity?.captureComplete === false) {
 				const drop = incident.integrity;
@@ -1293,7 +1486,7 @@ window.__ModuleLoader__.load({
 			}
 			howToAdd.push('零成本、当场可做:chrome://gpu 看是不是落到了软件渲染;DevTools → Rendering 打开 Frame Rendering Stats(FPS 表)与 Paint flashing —— 页面完全静止时帧率是否也上不去');
 			howToAdd.push('判定"主线程之外":Performance 面板录 5 秒,看 Main 轨道自身的忙碌时间是否远小于墙钟 —— 注意 blocking=0 / scripts 为空**不能**当证据(见上面的读取说明),要看 Main 轨道本身');
-			howToAdd.push('宿主火焰图:插件自带路由就能采 —— 带宿主 cookie(见 docs/verification.md)POST /api/dsh-perf-hud/host {op:"profileStart", seconds:5},再 POST {op:"profileGet"} 取回标准 .cpuprofile(speedscope 打开);退一步也可以 kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record');
+			howToAdd.push('宿主火焰图:面板「宿主与链路 → 宿主 CPU 采样」点一下(或 __perfHud.cpuProfile(5)),采完这份包就会带 context.hostCpuProfile(汇总 + 自热 top);要逐帧看再点「下载 .cpuprofile」用 speedscope / Chrome DevTools 打开。等价的手动路径:带宿主 cookie(见 docs/verification.md)POST /api/dsh-perf-hud/host {op:"profileStart", seconds:5},再 POST {op:"profileGet"} 取回标准 .cpuprofile;退一步也可以 kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record');
 			return { missing, howToAdd, capabilities: caps };
 		}
 		/** 出处 / 线索强度的文字档位 —— 只给名字,颜色与排版由 UI 那一侧定。 */
@@ -1487,7 +1680,10 @@ window.__ModuleLoader__.load({
 				notIncluded: [
 					'聊天正文与提示词(本插件从不读取被测量的 DOM 内容)',
 					'Cookie / Token / 请求头(只读 performance 观察器与自己的宿主路由回执)',
-					'宿主进程的 CPU profile(路由能采,但这份包没有自动采)',
+					// 宿主 CPU 采样是**按需**的:采到的那一段在 incident.json 的 context.hostCpuProfile,
+					// 没采到时 capabilities.host.cpuProfile 与 context.missing 会写明原因 —— 所以这里
+					// 只能说"不常驻",不能说"这份包没有"(旧口径在接线之后就变成假话了)。
+					'常驻的宿主进程 CPU profile(采样按需触发、不常开;采到的那一段在 incident.json 的 context.hostCpuProfile 里,原始 .cpuprofile 单独下载)',
 				],
 				files: ['manifest.json', 'summary.md', 'incident.json', 'README.md'],
 			};
@@ -1714,6 +1910,9 @@ window.__ModuleLoader__.load({
 					'page / href:只保留 origin + path,查询串整段丢弃(DSH 首屏的 ?token=… 就在这里)',
 					`url / urls / sourceURL:去掉协议与主机,保留路径与 rev;这些键名的值会被替换成 <redacted>:${SECRET_PARAM_NAMES.join(' / ')}`,
 					'其余字符串:/Users/<用户名>、/home/<用户名>、C:\\Users\\<用户名> 一律换成 ~',
+					// 宿主 CPU 采样的 raw 里有一层 callFrame.url,键名正好是 url —— 它走上面那条
+					// 「去协议与主机」;用户名由 hostCpuProfileContext 在入包前先换成 ~(见那里的注释)。
+					'宿主 CPU 采样(context.hostCpuProfile):summary 只留函数名 / 文件 / 行号 / 自热毫秒;原始 profile 的 callFrame.url 先做 /Users/<用户名> → ~ 再按 url 规则去协议与主机,raw 超过体积上限时整段不带(只给 rawOmitted)',
 					'userAgent:只保留浏览器主版本 + 操作系统(完整 UA 能指纹到具体机器)',
 					opts.dropFreeText === true
 						? '自由文本(note / 场景标记的 note):已置空并标 noteDropped:true'
@@ -1777,6 +1976,9 @@ window.__ModuleLoader__.load({
 					capabilities: capabilities(),
 					// A2:跨会话基线(每个会话一条,只进导出件)。口径写在 note 里
 					sessionBaselines: sessionBaselines(),
+					// 宿主进程的 CPU 采样(按需采到的最近一段)。**不是页面开销** —— 段里自带 scope 说明,
+					// 完整读取口径在事故包的 howToRead;它与帧数据是两层,别相加。
+					hostCpuProfile: hostCpuProfileContext(state.hostCpuProfile),
 					thresholds: {
 						fps: { warnBelow: 50, errorBelow: 30 },
 						frameMs: { warnAbove: 120, errorAbove: 200 },
@@ -1935,6 +2137,9 @@ window.__ModuleLoader__.load({
 					tally: tallyReport(),
 					// A2:跨会话基线(只进导出件)。readonly 参照,别当回归判定
 					sessionBaselines: sessionBaselines(),
+					// 宿主进程的 CPU 采样(按需采到的最近一段)。**不是页面开销**,不能与帧时间相加;
+					// 字段含义 / 抽样口径见下面的 howToRead。
+					hostCpuProfile: hostCpuProfileContext(state.hostCpuProfile),
 					// 记录器自身开销:与整机导出件 `context.recorder` **同一个结构**(selfStats 给的
 					// p99 / max / samples),不另创一套。它是**导出时刻**的读数(与整机件同一时间基准);
 					// 事故那一刻的帧数据在 incident.frames / incident.summary 里,两者别混读。
@@ -1957,6 +2162,10 @@ window.__ModuleLoader__.load({
 						'incident.baseline 是**除这一段之外**整个帧环的分布(故意排除本窗口,否则"比会话最差还差"永远不成立)—— 拿它和 summary 比,才知道这一段是真的比平时差还是这台机器一直这样',
 						'context.sessionBaselines 是**跨会话**的帧分布(每个会话一条,最多 20 条;只进导出件,面板不显示)。它是**粗参照,不是回归判定**:会话之间的负载、视口、是否插桩都不同,帧数量级也能差一个数量级 —— 只看"这次是不是比平时差一个量级",别拿它下"变慢了"的结论',
 						'context.recorder 是**记录器自己**的 rAF 回调开销(p99 / max / samples,最近 600 帧;p99 与 max 是毫秒):它回答"这一层记录器贵不贵",**不是页面开销**;它是导出时刻的读数,`samples = 0` 表示还没采到(HUD 没跑过一帧)',
+						'context.hostCpuProfile 是**宿主进程(Node)的 CPU 采样**,不是页面开销 —— 别把它和 incident.frames / incident.summary 的帧时间相加或互相印证:一个测的是宿主 Node 进程里谁在烧 CPU,一个测的是浏览器渲染帧里花在哪。`state` 是最近一次尝试的结局(collected / running / failed / none);`meta` / `summary` / `raw` 来自最近一次**成功**的采样,所以"这次失败"不会吞掉上一次的证据。`meta.seconds` 是宿主实测窗口、`meta.samples` 是采样点数、`meta.nodes` 是调用树节点数、`meta.pid` / `meta.nodeVersion` 说明采的是哪个进程,`collections` 是宿主进程累计采到过几次(跨页面,不是本页面点了几次)。采样是**按需**触发的,所以它不一定和这条事故同时:`collectedAt` 与 `incident.at` 一比就知道是事故前还是事故后采的;它只在内存里、不落盘 —— 刷新页面后这一段就没了(要留证据就当场导出)',
+						'context.hostCpuProfile.summary.topSelf 是**自热**排行:`selfMs` 只算"采样点落在该函数自身"的时间(不含子调用,子调用的时间记在子函数上),`share` = selfMs / sampledMs。它是**抽样**:1 秒约 200 个样本,某函数 1% ≈ 2 个样本 —— 份额低于约 5% 的行只能当"出现过",不能当结论。**第一个样本被跳过**并记进 `leadingMs`:它的 timeDelta 是"profile 起点 → 第一个样本"的间隔(真宿主实测 520~560ms,含 inspector 启用的时间),不是任何函数的 CPU 时间 —— 不跳过会把宿主 setup 的函数顶到榜首。`durationMs` 是 profile 自带跨度(≈ sampledMs + leadingMs),与 `meta.seconds`(宿主墙钟)可能差半秒左右,那半秒就是这段预滚;`sampledMs` 才是真正计入自热的毫秒。`fn` 为 (idle) / (program) 是 V8 的空闲 / 非 JS 采样点,不是插件代码',
+						'context.hostCpuProfile.raw 是标准 .cpuprofile(可被 speedscope / Chrome DevTools 直接打开),只在体积 ≤ 上限时随包;超限时 `raw = null`、`rawOmitted` 写明字节数与去哪拿(面板「宿主与链路 → 宿主 CPU 采样 → 下载 .cpuprofile」)。原始文件里的脚本路径按导出规则做了脱敏(/Users/<用户名> → ~,再加去协议与主机),所以对不上本机路径是正常的;`rawBytes` 是脱敏后的字节数。`summary.topSelf[].file` 同理(路径里的用户名是 ~)',
+						'context.hostCpuProfile.error 是最近一次失败时**宿主回来的原文**(成功时为空字符串),不要在缺失声明之外二次解读它;`requestedSeconds` 是这次请求的时长(已夹到 [0.1, 30]),不是采样实际长度 —— 实际长度看 meta.seconds',
 						'summary.worstFrameJs / suspectedThrottle:最差那一帧有没有 longtask / LoAF 与它重叠;若 none 且前后帧都健康(worstFrameNeighboursMs < 100),更像浏览器把 rAF 节流或挂起了一次,不是页面真忙了那么久',
 						'脚本的 URL 不在脚本里:incident.urls 是字符串表,scripts[].u 是它的下标(u=-1 表示没有 URL)—— 抽表是因为同一个 combo URL 会重复几十遍',
 						'scripts[].pkg 是这条脚本归属的包名(合并批里靠"字符位置 → 行号 → sourcemap 分段表"还原);pkg 为 null 时看 scripts[].pkgVia:url(单包 URL 直接读出来)/ section(分段表算出来)/ precise-off(精确归因没开)/ text-pending(脚本文本还在拉)/ not-plugin(宿主自己的 bundle)…',
@@ -3526,6 +3735,12 @@ window.__ModuleLoader__.load({
 				// 面板就会一直显示旧的「已选中」(而 selectedIncident 已经换了一条)
 				state.watch.incidents.length, state.watch.selId ?? 'x', state.copyNote ?? 'x', state.pickNote ?? 'x',
 				state.causeOpen ? 1 : 0, state.packPreviewId ?? 'x',
+				// 宿主 CPU 采样:状态与"采集中已经过了几秒"都进指纹 —— 否则那一行会冻在 0.0 秒,
+				// 直到别的数字恰好变化(采样只跑 1~10 秒,面板 500ms 的 tick 够它跳)。
+				state.hostCpuProfile === null || state.hostCpuProfile === undefined ? 'x' : state.hostCpuProfile.phase,
+				state.hostCpuProfile !== null && state.hostCpuProfile !== undefined && state.hostCpuProfile.phase === 'running'
+					? Math.round((Date.now() - state.hostCpuProfile.requestedAt) / 1000)
+					: 0,
 				// 诊断上下文(实时 / 历史事故 / 事故里的哪一帧):切上下文是用户动作,必须立刻重绘,
 				// 所以它也在指纹里(否则切了模式面板可能停在旧的那一支,直到别的数字变化)
 				state.watch.mode, state.watch.frameT ?? 'x', state.watch.scope,
@@ -3621,6 +3836,11 @@ window.__ModuleLoader__.load({
 				provenanceOf,
 				capabilities,
 				capabilityMissing,
+				// 宿主进程 CPU 采样:汇总(自热)/ 导出段 / 面板文字
+				cpuProfileSummary,
+				hostCpuProfileContext,
+				hostCpuProfileText,
+				hostCpuProfileTopText,
 				provenanceText,
 				strengthText,
 				causeCandidates,

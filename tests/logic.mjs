@@ -99,6 +99,14 @@ const pieces = [
 	'function round1(',
 	'function worstSecond(',
 	'function blame(',
+	// A5 宿主进程 CPU 采样:时长夹取 / 路由请求体 / 两条回执分支都是纯函数(不读时钟、不碰闭包)
+	'const HOST_PROFILE_SECONDS = ',
+	'const HOST_PROFILE_MIN_SECONDS = ',
+	'const HOST_PROFILE_MAX_SECONDS = ',
+	'function clampHostProfileSeconds(',
+	'function hostCpuProfileStartBody(',
+	'function hostCpuProfileAfterStart(',
+	'function hostCpuProfileAfterGet(',
 ].map((header) => (header.startsWith('const ') && header.endsWith('{') === false
 	? line(header)
 	: extract(source, header))).join('\n');
@@ -106,7 +114,8 @@ const pieces = [
 const api = new Function(`${pieces}
 	const ring = [];
 	let dirty = false;
-	return { state, ring, isCore, ownerOfUrl, rate, updateRates, pluginTable, worstSecond, blame };`)();
+	return { state, ring, isCore, ownerOfUrl, rate, updateRates, pluginTable, worstSecond, blame,
+		clampHostProfileSeconds, hostCpuProfileStartBody, hostCpuProfileAfterStart, hostCpuProfileAfterGet };`)();
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -161,6 +170,88 @@ api.ring.push({ t: Date.now() - 3000, frameMs: 40, fps: 60 });
 api.ring.push({ t: Date.now() - 2000, frameMs: 220, fps: 18, ltCount: 3 });
 api.ring.push({ t: Date.now() - 1000, frameMs: 55, fps: 58 });
 check('worstSecond 取窗口内最差', api.worstSecond().frameMs, 220);
+
+// ── A5:宿主进程 CPU 采样(REVIEW §2 第 1 条:客户端接线)────────────────
+// 路由形状:面板 / 控制台 / 事故包共用同一个 body 构造器;时长两边各夹一次(宿主也夹一遍)。
+check('宿主 CPU 采样:请求体就是宿主认的 { op: "profileStart", seconds }',
+	api.hostCpuProfileStartBody(5), { op: 'profileStart', seconds: 5 });
+check('宿主 CPU 采样:时长夹到 [0.1, 30],非法值回默认 5 秒',
+	[api.hostCpuProfileStartBody(0).seconds, api.hostCpuProfileStartBody(-3).seconds, api.hostCpuProfileStartBody('x').seconds,
+		api.hostCpuProfileStartBody(0.05).seconds, api.hostCpuProfileStartBody(99).seconds],
+	[5, 5, 5, 0.1, 30]);
+check('宿主 CPU 采样:时长保留一位小数(别把 1.234 原样丢给宿主)',
+	api.hostCpuProfileStartBody(1.234).seconds, 1.2);
+
+// 两条回执分支:成功进 running、宿主说失败就照原文记失败 —— 面板与事故包读同一份结果。
+const IDLE_PROFILE = { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 };
+check('宿主 CPU 采样:开起来之后进入 running(时长以宿主回执为准)',
+	(() => {
+		const s = api.hostCpuProfileAfterStart(IDLE_PROFILE, { ok: true, running: true, seconds: 1, collections: 2 }, 5, 1000);
+		return [s.phase, s.seconds, s.collections, s.requestedAt, s.finishedAt];
+	})(),
+	['running', 1, 2, 1000, 0]);
+const HOST_START_ERROR = 'Profiler.start: 会话已被占用';
+check('宿主 CPU 采样:失败时保留宿主的错误原文(不吞、不换一句)',
+	(() => {
+		const s = api.hostCpuProfileAfterStart(IDLE_PROFILE, { ok: false, error: HOST_START_ERROR, running: false, seconds: 5 }, 5, 1000);
+		return [s.phase, s.error, s.finishedAt];
+	})(),
+	['failed', HOST_START_ERROR, 1000]);
+check('宿主 CPU 采样:失败不清掉上一次采到的 profile(证据不因一次失败消失)',
+	(() => {
+		const prev = { ...IDLE_PROFILE, phase: 'done', meta: { samples: 3 }, profile: { nodes: [{ id: 1 }], samples: [1] } };
+		const s = api.hostCpuProfileAfterStart(prev, { ok: false, error: 'x' }, 5, 2);
+		return [s.phase, s.profile !== null, s.meta.samples];
+	})(),
+	['failed', true, 3]);
+check('宿主 CPU 采样:ok:true 但没有 running:true → 失败(不假装采起来了)',
+	(() => {
+		const s = api.hostCpuProfileAfterStart(IDLE_PROFILE, { ok: true, running: false }, 5, 1);
+		return [s.phase, s.error.includes('running')];
+	})(),
+	['failed', true]);
+check('宿主 CPU 采样:没有回执(路由不可达)→ 失败并写清原因',
+	(() => {
+		const s = api.hostCpuProfileAfterStart(IDLE_PROFILE, null, 5, 1);
+		return [s.phase, typeof s.error === 'string' && s.error.length > 0];
+	})(),
+	['failed', true]);
+
+// profileGet 分支:还在采 = 继续等,不是在报错;采到 = done + meta + profile
+check('宿主 CPU 采样:profileGet 回 running:true 时继续等(不是失败)',
+	(() => {
+		const s = api.hostCpuProfileAfterGet({ ...IDLE_PROFILE, phase: 'running', seconds: 5 }, { ok: false, running: true, error: '还没采过' }, 2);
+		return [s.phase, s.error];
+	})(),
+	['running', '']);
+check('宿主 CPU 采样:还没采过时把宿主的原话留下',
+	(() => {
+		const s = api.hostCpuProfileAfterGet({ ...IDLE_PROFILE, phase: 'running' }, { ok: false, error: '还没采过' }, 2);
+		return [s.phase, s.error];
+	})(),
+	['failed', '还没采过']);
+const SAMPLE_PROFILE = { nodes: [{ id: 1 }, { id: 2 }], samples: [1, 2], timeDeltas: [0, 1000], startTime: 0, endTime: 2000 };
+check('宿主 CPU 采样:拿到 profile.nodes 才算 done,并带上宿主 meta',
+	(() => {
+		const s = api.hostCpuProfileAfterGet({ ...IDLE_PROFILE, phase: 'running' }, { ok: true, profile: SAMPLE_PROFILE, meta: { seconds: 2, samples: 2 } }, 3);
+		return [s.phase, s.profile === SAMPLE_PROFILE, s.meta.seconds, s.error, s.finishedAt];
+	})(),
+	['done', true, 2, '', 3]);
+check('宿主 CPU 采样:回执没有 profile.nodes → 失败(不拿空对象冒充采样)',
+	(() => {
+		const s = api.hostCpuProfileAfterGet({ ...IDLE_PROFILE, phase: 'running' }, { ok: true, profile: {} }, 4);
+		return [s.phase, s.error.includes('profile.nodes')];
+	})(),
+	['failed', true]);
+
+// 路由只有一个形状 + 面板入口真的存在(静态检查;行为断言在上面与下面的盒子里)
+check('A5:发起请求只用那一个 body 构造器,取回走 profileGet',
+	[/hostOp\(hostCpuProfileStartBody\(/, /hostOp\(\{ op: 'profileGet' \}\)/].map((re) => re.test(source)), [true, true]);
+check('A5:代码里不再有"客户端还没接线"这种说法(那条债已还)',
+	/客户端还没接线/.test(allSource), false);
+check('A5:面板「宿主与链路」有入口(状态 + 时长按钮 + 错误原文 + 下载原始采样)',
+	['hostCpuProfileText()', 'HOST_PROFILE_CHOICES.map', 'state.hostCpuProfile.error', 'downloadHostCpuProfile()', 'startHostCpuProfile(seconds)']
+		.map((needle) => uiSource.includes(needle)), [true, true, true, true, true]);
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;
@@ -753,6 +844,14 @@ const newPieces = [
 	'function secondsText(',
 	'function lastStallSubText(',
 	'function provenanceOf(',
+	// A5:宿主进程 CPU 采样(capabilities / capabilityMissing / incidentReport / snapshot 都会读它)
+	'const HOST_PROFILE_RAW_MAX = ',
+	'const HOST_PROFILE_TOP = ',
+	'function cpuProfileSummary(',
+	'function sanitizeCpuProfile(',
+	'function hostCpuProfileContext(',
+	'function hostCpuProfileText(',
+	'function hostCpuProfileTopText(',
 	'function capabilities(',
 	'function capabilityMissing(',
 	'function provenanceText(',
@@ -794,6 +893,8 @@ const box = new Function(`${sandbox}
 		redactExport, redactPageUrl, redactScriptUrl, redactPath, redactUserAgent, scrubParams, redactionReport, SECRET_PARAM, SECRET_PARAM_NAMES,
 		// 能力矩阵 / 可能原因 / 诊断包
 		capabilities, capabilityMissing, provenanceOf, provenanceText, strengthText, causeCandidates,
+		// A5:宿主进程 CPU 采样(汇总 / 导出段 / 面板文字)
+		cpuProfileSummary, hostCpuProfileContext, hostCpuProfileText, hostCpuProfileTopText,
 		healthIcon, healthText, healthVerdict, repeatedLead, trendSummary, trendText, secondsText, lastStallSubText, trendRawText,
 		latestIncident, causePlainLead,
 		zipStore,
@@ -1900,6 +2001,51 @@ check('isolation 段带候选/基线/结果/恢复字段',
 	Array.isArray(exported.isolation.candidates) && Array.isArray(exported.isolation.results)
 	&& exported.isolation.restored === null && exported.isolation.baseline === null, true);
 check('导出含 host 与链路', exported.host.last.eventLoop.p99 === 9.9 && exported.link.stats60s.count === 1, true);
+// A5:宿主进程 CPU 采样 —— 整机导出件与事故包**同一个字段名、同一个构造器**。
+check('A5:整机导出件带 context.hostCpuProfile(没采时 state = none,summary / raw 都是 null)',
+	[exported.context.hostCpuProfile.state, exported.context.hostCpuProfile.summary, exported.context.hostCpuProfile.raw, exported.context.hostCpuProfile.scope.includes('不是页面开销')],
+	['none', null, null, true]);
+check('A5:cpuProfileSummary 只算函数自身(子调用不叠到父函数),时长给 durationMs / sampledMs 两个口径', (() => {
+	const summary = box.EX.cpuProfileSummary({
+		nodes: [
+			{ id: 1, callFrame: { functionName: 'parent', url: '', lineNumber: 0 } },
+			{ id: 2, callFrame: { functionName: 'child', url: '', lineNumber: 4 } },
+		],
+		samples: [1, 2, 1, 2], timeDeltas: [0, 1000, 3000, 2000], startTime: 0, endTime: 6000,
+	});
+	return [summary.durationMs, summary.sampledMs, summary.topSelf.map((row) => [row.fn, row.line, row.selfMs, row.share])];
+})(), [6, 6, [['child', 5, 3, 0.5], ['parent', 1, 3, 0.5]]]);
+check('A5:首样本的 timeDelta(profile 预滚,真宿主实测 520~560ms)不算任何函数,但记进 leadingMs', (() => {
+	const summary = box.EX.cpuProfileSummary({
+		nodes: [
+			{ id: 1, callFrame: { functionName: 'setupPost', url: '', lineNumber: 0 } },
+			{ id: 2, callFrame: { functionName: 'work', url: '', lineNumber: 0 } },
+		],
+		samples: [1, 2, 2], timeDeltas: [550000, 1000, 2000], startTime: 0, endTime: 553000,
+	});
+	return [summary.leadingMs, summary.sampledMs, summary.topSelf.map((row) => [row.fn, row.selfMs])];
+})(), [550, 3, [['work', 3]]]);
+check('A5:cpuProfileSummary 对空 / 坏结构返回 null(不编数字)',
+	[box.EX.cpuProfileSummary(null), box.EX.cpuProfileSummary({}), box.EX.cpuProfileSummary({ nodes: [], samples: null })],
+	[null, null, null]);
+check('A5:采到之后整机导出件也带汇总(与事故包同一个构造器)', (() => {
+	const saved = box.state.hostCpuProfile;
+	box.state.hostCpuProfile = {
+		phase: 'done', seconds: 1, requestedAt: 0, finishedAt: 1000, error: '', collections: 1,
+		meta: { seconds: 1, nodes: 2, samples: 2, bytes: 90, pid: 7, nodeVersion: 'v24', startedAt: 0, endedAt: 1000 },
+		profile: {
+			nodes: [
+				{ id: 1, callFrame: { functionName: 'hotHost', url: '', lineNumber: 0 } },
+				{ id: 2, callFrame: { functionName: 'idle', url: '', lineNumber: -1 } },
+			],
+			// 首样本的 delta 是 0(profile 里正常形态),第二个样本落在 hotHost 上
+			samples: [2, 1], timeDeltas: [0, 1000], startTime: 0, endTime: 1000,
+		},
+	};
+	const full = box.EX.snapshot().context.hostCpuProfile;
+	box.state.hostCpuProfile = saved;
+	return [full.state, full.meta.pid, full.summary.topSelf[0].fn, full.summary.sampledMs];
+})(), ['collected', 7, 'hotHost', 1]);
 check('导出带 mapCache 上限与淘汰计数(不让缓存无声膨胀)',
 	[exported.context.mapCache.max, exported.context.mapCache.evicted, exported.context.mapCache.failed], [8, 0, 0]);
 check('导出带宿主事件计时回执',
@@ -2586,6 +2732,13 @@ const watchPieces = [
 	extract(source, 'function packPreview('),
 	// capabilities() 会遍历 bundleMaps(导出盒的 sandbox 里已经有这个桩)
 	'const bundleMaps = new Map();',
+	// A5:宿主进程 CPU 采样 —— capabilities / capabilityMissing / incidentReport 都要用它;
+	// 缺一个不会立刻响,而是等守夜盒跑到 incidentReport 才 ReferenceError(AGENTS §3 的老坑)
+	line('const HOST_PROFILE_RAW_MAX'),
+	line('const HOST_PROFILE_TOP'),
+	extract(source, 'function cpuProfileSummary('),
+	extract(source, 'function sanitizeCpuProfile('),
+	extract(source, 'function hostCpuProfileContext('),
 	extract(source, 'function provenanceOf('),
 	extract(source, 'function capabilities('),
 	extract(source, 'function capabilityMissing('),
@@ -2721,6 +2874,8 @@ const watchBox = new Function(`
 	const state = {
 		samplesLength: 1,
 		on: true, precise: false, streaming: true, heap: 1048576, host: null, hostAt: 0,
+		// A5 宿主进程 CPU 采样(与 client.js 的 state 同形;手写桩,加字段要同步)
+		hostCpuProfile: { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 },
 		dom: { total: 1234 },
 		// A1 记录器自身开销的环形缓冲(与 client.js 的 state 同形;手写桩,加字段要同步)
 		selfRing: [], selfAt: 0, selfCount: 0, selfMax: 0,
@@ -2759,6 +2914,8 @@ const watchBox = new Function(`
 		SECRET_PARAM, SECRET_PARAM_NAMES,
 		// 能力矩阵(事故包的缺失声明由它推)
 		capabilities, capabilityMissing, causeCandidates,
+		// A5:宿主进程 CPU 采样(事故包与整机导出件的 context.hostCpuProfile)
+		cpuProfileSummary, hostCpuProfileContext,
 		zipStore,
 		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview,
 		setPackApi: (api) => { packApi = api; },
@@ -4023,7 +4180,7 @@ check('事故包:宿主只有陈旧快照时说清楚"别当宿主没问题的�
 	watch.state.watch.coveredUntil = 0;
 	watch.setNow(120000);
 	const probe = watch.triggerCapture('frame', 110000, 200);
-	const line = watch.incidentReport(probe.id).context.missing.find((text) => text.startsWith('host-cpuprofile:'));
+	const line = watch.incidentReport(probe.id).context.missing.find((text) => text.startsWith('host-snapshot:'));
 	// 清掉这条探针,别影响后面的断言
 	const index = watch.state.watch.incidents.findIndex((row) => row.id === probe.id);
 	if (index !== -1) watch.state.watch.incidents.splice(index, 1);
@@ -4039,7 +4196,7 @@ check('事故包:宿主快照比事故更晚(负年龄)时说"事故后",不冒�
 	watch.state.watch.coveredUntil = 0;
 	watch.setNow(120000);
 	const probe = watch.triggerCapture('frame', 110000, 200);
-	const line = watch.incidentReport(probe.id).context.missing.find((text) => text.startsWith('host-cpuprofile:'));
+	const line = watch.incidentReport(probe.id).context.missing.find((text) => text.startsWith('host-snapshot:'));
 	const index = watch.state.watch.incidents.findIndex((row) => row.id === probe.id);
 	if (index !== -1) watch.state.watch.incidents.splice(index, 1);
 	watch.state.watch.captured -= 1;
@@ -4097,6 +4254,102 @@ check('A1:一个样本都没有时 missing 照实说"这一格是空的"(不假�
 	const line = watch.incidentReport(0).context.missing.find((text) => text.startsWith('recorder-cost:'));
 	return [line !== undefined, line === undefined ? false : line.includes('samples = 0'), line === undefined ? false : line.includes('context.recorder')];
 })(), [true, true, true]);
+// A5:宿主进程 CPU 采样进事故包(REVIEW §2 第 1 条的回归测试)。
+// 结构与口径都由 context.hostCpuProfile 一处给;missing / capabilities 读同一份状态。
+const CPU_PROFILE = {
+	nodes: [
+		{ id: 1, callFrame: { functionName: 'outerLoop', url: 'file:///Users/y/app/host.js', lineNumber: 9 } },
+		{ id: 2, callFrame: { functionName: 'innerWork', url: 'file:///Users/y/app/util.js', lineNumber: 0 } },
+		{ id: 3, callFrame: { functionName: '(idle)', url: '', lineNumber: -1 } },
+	],
+	samples: [1, 1, 2, 3], timeDeltas: [0, 2000, 3000, 5000], startTime: 100000, endTime: 110000,
+};
+const withCpuProfile = (fn) => {
+	const saved = watch.state.hostCpuProfile;
+	watch.state.hostCpuProfile = {
+		phase: 'done', seconds: 1, requestedAt: 0, finishedAt: 110000, error: '', collections: 1,
+		meta: { seconds: 1, nodes: 3, samples: 4, bytes: 300, pid: 4242, nodeVersion: 'v24.0.0', startedAt: 100000, endedAt: 110000 },
+		profile: CPU_PROFILE,
+	};
+	try {
+		return fn();
+	} finally {
+		watch.state.hostCpuProfile = saved;
+	}
+};
+check('A5:采到的宿主 CPU 采样进事故包(context.hostCpuProfile:state / meta / 汇总)',
+	withCpuProfile(() => {
+		const ctx = watch.incidentReport(0).context.hostCpuProfile;
+		return [ctx.state, ctx.meta.pid, ctx.meta.samples, ctx.scope.includes('不是页面开销'), ctx.raw !== null];
+	}),
+	['collected', 4242, 4, true, true]);
+check('A5:自热 top = 采样点落在函数自身的时间(首样本 delta=0 不记),按降序并给 share',
+	withCpuProfile(() => watch.incidentReport(0).context.hostCpuProfile.summary.topSelf
+		.map((row) => [row.fn, row.selfMs, row.share])),
+	[['(idle)', 5, 0.5], ['innerWork', 3, 0.3], ['outerLoop', 2, 0.2]]);
+check('A5:原始 .cpuprofile 在体积上限内随包(是标准 nodes / samples / timeDeltas 结构)',
+	withCpuProfile(() => {
+		const ctx = watch.incidentReport(0).context.hostCpuProfile;
+		const raw = ctx.raw;
+		return [Array.isArray(raw.nodes), raw.samples.length, raw.timeDeltas[1], ctx.rawOmitted ?? null];
+	}),
+	[true, 4, 2000, null]);
+check('A5:导出件里不出现 /Users/<用户名>(summary.file 与 raw 的 url 都脱敏)',
+	withCpuProfile(() => {
+		const text = JSON.stringify(watch.incidentReport(0).context.hostCpuProfile);
+		return [text.includes('/Users/'), text.includes('~')];
+	}),
+	[false, true]);
+check('A5:超过随包上限的原始采样只带汇总,并写清去哪拿(rawOmitted)',
+	withCpuProfile(() => {
+		watch.state.hostCpuProfile.profile = {
+			nodes: [{ id: 1, callFrame: { functionName: 'x'.repeat(600000), url: '' } }],
+			samples: [1], timeDeltas: [1000], startTime: 0, endTime: 1000,
+		};
+		const ctx = watch.incidentReport(0).context.hostCpuProfile;
+		return [ctx.state, ctx.raw, typeof ctx.rawOmitted === 'string' && ctx.rawOmitted.includes('下载 .cpuprofile')];
+	}),
+	['collected', null, true]);
+check('A5:采到之后 missing 不再出现 host-cpuprofile 条目(旧口径"客户端还没接线"已还债)',
+	withCpuProfile(() => watch.incidentReport(0).context.missing.some((line) => line.startsWith('host-cpuprofile:'))), false);
+check('A5:没采到时 missing 照实说"还没采",并给出面板 / 控制台入口(不是"没接线")', (() => {
+	const saved = watch.state.hostCpuProfile;
+	watch.state.hostCpuProfile = { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 };
+	const line = watch.incidentReport(0).context.missing.find((text) => text.startsWith('host-cpuprofile:'));
+	const out = [line !== undefined, line === undefined ? true : line.includes('客户端还没接线'), line === undefined ? false : line.includes('宿主 CPU 采样'), line === undefined ? false : line.includes('__perfHud.cpuProfile')];
+	watch.state.hostCpuProfile = saved;
+	return out;
+})(), [true, false, true, true]);
+check('A5:失败时 missing 把宿主的错误原文带出来(不吞)', (() => {
+	const saved = watch.state.hostCpuProfile;
+	watch.state.hostCpuProfile = { phase: 'failed', seconds: 1, requestedAt: 0, finishedAt: 1, meta: null, profile: null, error: 'Profiler.start: 会话已被占用', collections: 0 };
+	const line = watch.incidentReport(0).context.missing.find((text) => text.startsWith('host-cpuprofile:'));
+	const out = [line !== undefined, line === undefined ? false : line.includes('Profiler.start: 会话已被占用')];
+	watch.state.hostCpuProfile = saved;
+	return out;
+})(), [true, true]);
+check('A5:howToRead 写清 hostCpuProfile 的字段与口径(宿主进程 / 不是页面开销 / 抽样)',
+	withCpuProfile(() => {
+		const lines = watch.incidentReport(0).context.howToRead;
+		return [lines.some((line) => line.includes('hostCpuProfile') && line.includes('宿主进程')),
+			lines.some((line) => line.includes('不是页面开销')),
+			lines.some((line) => line.includes('抽样'))];
+	}),
+	[true, true, true]);
+check('A5:能力矩阵的宿主 CPU 采样按实际状态报(采到 = on / measured)',
+	withCpuProfile(() => {
+		const cap = watch.capabilities().host.cpuProfile;
+		return [cap.state, cap.provenance, cap.reason.includes('客户端还没接线')];
+	}),
+	['on', 'measured', false]);
+check('A5:没采时能力矩阵照实报 off,并说明"按需、不常开"', (() => {
+	const saved = watch.state.hostCpuProfile;
+	watch.state.hostCpuProfile = { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 };
+	const cap = watch.capabilities().host.cpuProfile;
+	const out = [cap.state, cap.reason.includes('不常开')];
+	watch.state.hostCpuProfile = saved;
+	return out;
+})(), ['off', true]);
 check('事故包:A2 落地后那条"没有对照基线"改成"跨机器 / 跨浏览器"',
 	watch.incidentReport(0).context.missing.some((line) => line.startsWith('baseline:') && line.includes('跨机器')), true);
 check('事故包:带上渲染环境(视口 / DPR / 核数)',
