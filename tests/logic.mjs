@@ -472,8 +472,12 @@ const sandbox = `
 	const translate = (key) => ({
 		sampling: '吞吐采样中', failed: '吞吐失败', suspect: '疑似链路', notYet: '未采集',
 		stressHint: 'stressHint', stressRunning: '自测进行中', stressDone: '自测结果', nodes: '节点', unblamed: '未归因',
-		stressNoTask: '未观察到长任务', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
-		stressBurn: '人为燃烧',
+		stressNoTask: '未观察到', stressCommit: '提交', stressSync: '同步', stressSliced: '切片', stressNoFlush: 'flushSync 不可用', stressFromDom: 'DOM 写入',
+		stressBurn: '人为燃烧', stressLongTask: '长任务', stressNoRender: '面板没挂载,没有可测的渲染', legFiber: 'fiber',
+		captureSaved: '已记为', captureRow: '清单第', captureRowSuffix: ' 条', captureNotKept: '没进留存清单', captureQueued: '已排上,约',
+		captureQueuedTail: ' 秒后结算', captureMerged: '并进了正在等的那一次,本次备注没单独留下',
+		captureOff: 'HUD 关着,这次没有记录', captureCovered: '落在已覆盖窗口里,没有单独留下',
+		watchRecent: '最近一次', watchDaily: '当天最差',
 		recorder: '记录器自身',
 		via: '通道', viaRemote: 'ctx.remote(客户端 remote)', viaRoute: '宿主路由 /api/dsh-perf-hud/host',
 		watch: '守夜', watchCaught: '抓到', watchWorst: '最差', watchRestored: '读回', watchOff: '未开录', watchNone: '还没抓到', watchPersistFailed: '落盘失败', watchManualNote: '手动标记', domWritesShort: 'DOM 写入',
@@ -569,6 +573,15 @@ const newPieces = [
 	'function domWriteTable(',
 	'function domWriteSnapshot(',
 	'function domWriteDelta(',
+	// 渲染型卡顿自测:常量与三个纯函数(stressReport / stressSelfTest / captureReceiptText)
+	'const STRESS_DEFAULT_NODES = ',
+	'const STRESS_MAX_NODES = ',
+	'const STRESS_DEFAULT_BURN_MS = ',
+	'const STRESS_MAX_BURN_MS = ',
+	'const STRESS_OBSERVE_MS = ',
+	'function stressReport(',
+	'async function stressSelfTest(',
+	'function captureReceiptText(',
 	'async function measureWindow(',
 	'const BUNDLE_PREFIX = ',
 	'const MUT_WINDOW_MS = ',
@@ -881,6 +894,8 @@ const box = new Function(`${sandbox}
 	${newPieces}
 	return { state, changedNodes, bundleMaps, scriptLines, ring, storage: localStorage, location, setStreaming: (value) => { streamingFlag = value; },
 		setFlushSync: (value) => { flushSync = value; },
+		setNativesTimeout: (fn) => { const previous = natives.setTimeout; natives.setTimeout = fn; return previous; },
+		stressSelfTest, stressReport, captureReceiptText,
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_RECENT_MAX, WATCH_KEEP_MAX,
@@ -2526,6 +2541,101 @@ check('人话行里不出现包名 / 文件名 / 毫秒(原始证据只在展开
 check('未知那一支说的是"缺少 JS 证据",不是"浏览器节流"(不越界下结论)',
 	[/缺少/.test(EX.causePlainLead({ kind: 'unknown' })), /节流/.test(EX.causePlainLead({ kind: 'unknown' }))], [true, false]);
 
+// ── 自测(stress):longtask / fiber / DOM 写入三条腿各自回报 ──────────────
+// stressSelfTest 的观察窗口(async)在测试里用"立即执行"的定时器代替:断言要验的是
+// 结果结构,不是 1.2 秒的墙钟等待。
+{
+	const originalRender = box.state.requestRender;
+	const originalLongTasks = box.state.longTasks;
+	const originalWrites = new Map(box.state.domWrites);
+	const originalStress = box.state.stress;
+	const realTimeout = box.setNativesTimeout((fn) => { fn(); return 1; });
+	const makeRender = (extra, commitMs) => () => {
+		extra();
+		if (box.state.stress !== null) box.state.stress.commitMs = commitMs;
+	};
+
+	// ① 三条腿全中:longtask(fiber 归属)、DOM 写入(夹具组件)、同步提交 + 人为燃烧
+	box.setFlushSync((fn) => fn());
+	box.state.longTasks = [];
+	box.state.domWrites = new Map();
+	box.state.domWrites.set('(PerfHudStress)', { count: 0, ops: 0, components: new Map() });
+	box.state.requestRender = makeRender(() => {
+		box.state.longTasks.push({ t: Date.now(), at: 1000, ms: 128.4, owner: 'dsh-x', component: 'PerfHudStress', subtreeComponent: null, domComponent: null });
+		box.state.domWrites.set('(PerfHudStress)', { count: 1200, ops: 120, components: new Map([['PerfHudStress', 1200]]) });
+	}, 300);
+	const hot = await box.stressSelfTest(1200, 80);
+	check('自测:返回结构带三条腿,都测到时各自 hit',
+		[hot.ok, hot.state, hot.legs.longtask.hit, hot.legs.fiber.hit, hot.legs.dom.hit], [true, 'settled', true, true, true]);
+	check('自测:longtask 腿给出最差那条的毫秒与归属腿',
+		[hot.legs.longtask.ms, hot.legs.longtask.component, hot.legs.longtask.leg], [128.4, 'PerfHudStress', 'fiber']);
+	check('自测:fiber 腿点名自测组件(不是只给一句"命中")',
+		[hot.legs.fiber.component, hot.legs.fiber.ms], ['PerfHudStress', 128.4]);
+	check('自测:DOM 写入腿给出估算次数与点名',
+		[hot.legs.dom.writes, hot.legs.dom.component, hot.legs.dom.targeted], [1200, 'PerfHudStress', true]);
+	check('自测:DOM 腿采样没抓到夹具时退回其它写入者,但标 targeted=false(不冒充命中)',
+		(() => {
+			const row = box.stressReport({ at: Date.now(), nodes: 1, burnMs: 0, sync: true, flush: true, rendered: true }, [],
+				[{ id: '(Other)', estimatedCount: 10, component: 'Other', components: [{ name: 'Other', count: 10 }] }]);
+			return [row.legs.dom.hit, row.legs.dom.targeted, row.legs.dom.component];
+		})(), [true, false, 'Other']);
+	check('自测:一句人话把三条腿都写出来(面板/控制台同一份)',
+		hot.text, '自测结果: 长任务 128.4ms · fiber PerfHudStress · DOM 写入 ≈1200(PerfHudStress) · 提交 300ms(同步 · 人为燃烧 80ms)');
+	check('自测:结果落回 state.stress(面板读者读的不是另一份)',
+		[box.state.stress.result === hot, box.state.stress.text === hot.text, box.state.stress.nodes], [true, true, 1200]);
+
+	// ② 没有 longtask / fiber:两条腿照实说未命中,DOM 写入腿仍给结果;切片 + flushSync 不可用
+	box.setFlushSync(null);
+	box.state.longTasks = [];
+	box.state.domWrites = new Map();
+	box.state.domWrites.set('(PerfHudStress)', { count: 0, ops: 0, components: new Map() });
+	const coldRender = makeRender(() => {
+		box.state.domWrites.set('(PerfHudStress)', { count: 500, ops: 50, components: new Map([['PerfHudStress', 500]]) });
+	}, 22.2);
+	box.state.requestRender = coldRender;
+	const cold = await box.stressSelfTest(100, 0);
+	check('自测:没有 longtask 时 longtask / fiber 照实说未命中',
+		[cold.legs.longtask.hit, cold.legs.fiber.hit, cold.legs.dom.writes], [false, false, 500]);
+	check('自测:切片提交与 flushSync 不可用写进结果',
+		cold.text, '自测结果: 长任务 未观察到(1.2s) · fiber 无 · DOM 写入 ≈500(PerfHudStress) · 提交 22.2ms(切片 · flushSync 不可用)');
+
+	// ③ 面板没挂载:不假装测到了
+	box.setFlushSync(null);
+	box.state.requestRender = null;
+	const off = await box.stressSelfTest(10, 0);
+	check('自测:面板没挂载时如实说没测到', [off.ok, off.state, off.text], [false, 'no-render', '自测结果: 面板没挂载,没有可测的渲染']);
+
+	// 还原:后面的 snapshot / 导出断言读的是原来的状态
+	box.state.requestRender = originalRender;
+	box.state.longTasks = originalLongTasks;
+	box.state.domWrites = originalWrites;
+	box.state.stress = originalStress;
+	box.setNativesTimeout(realTimeout);
+	box.setFlushSync(null);
+}
+
+// ── 手动标记回执:capture() 的返回值 → 人话(留在哪一条,不靠猜)──────────
+check('回执:没标过 = null(不铺空行)', box.captureReceiptText(null, []), null);
+check('回执:settled 说清留在清单第几条与留存档',
+	box.captureReceiptText({ ok: true, state: 'settled', incident: { id: 'i42', tier: 'recent' } }, [{ id: 'a' }, { id: 'b' }, { id: 'i42' }]),
+	'已记为 i42(清单第 3 条 · 最近一次)');
+check('回执:settled 但没进留存清单时照实说(不假装留下了)',
+	box.captureReceiptText({ ok: true, state: 'settled', incident: { id: 'i7' } }, [{ id: 'a' }]),
+	'已记为 i7(没进留存清单)');
+check('回执:pending 说"已排上、还没结算"(与 coalesced 分开)',
+	box.captureReceiptText({ ok: true, state: 'pending', waitMs: 2400 }, []), '已排上,约 3 秒后结算');
+check('回执:coalesced 说清并进了哪一次、本次没单独留下',
+	box.captureReceiptText({ ok: false, state: 'coalesced', pending: { cause: 'frame' } }, []),
+	'并进了正在等的那一次,本次备注没单独留下(frame)');
+check('回执:未开录 / 已覆盖窗口各有各的话',
+	[box.captureReceiptText({ ok: false, state: 'not-recording' }, []), box.captureReceiptText({ ok: false, state: 'covered' }, [])],
+	['HUD 关着,这次没有记录', '落在已覆盖窗口里,没有单独留下']);
+check('回执:按钮把 capture() 的返回值存进 state,面板渲染同一份(静态)',
+	[/state\.captureReceipt = W\.__perfHud\.capture\(/.test(renderSource), /captureReceiptText\(state\.captureReceipt, state\.watch\.incidents\)/.test(uiSource)],
+	[true, true]);
+check('自测结果有真实读者:面板读 state.stress.text(记账不再没人读)',
+	/state\.stress === null \? null[\s\S]{0,120}state\.stress\.text/.test(uiSource), true);
+
 // ── G:守夜层(帧环 / 触发 / 留存 / 时间对齐 / 窗口切片)──────────────────
 
 // 抽的是 client.js 里的真函数与真常量(连阈值一起抽,免得测试自己抄一份默认值)。
@@ -2597,6 +2707,7 @@ const watchPieces = [
 	extract(source, 'function windowIntegrity('),
 	extract(source, 'function assembleIncident('),
 	extract(source, 'function captureNow('),
+	extract(source, 'function captureOutcome('),
 	extract(source, 'function watchStatus('),
 	extract(source, 'function selectIncident('),
 	extract(source, 'function setIncidentScope('),
@@ -2892,7 +3003,8 @@ const watchBox = new Function(`
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		location,
-		keepIncident, windowIntegrity, assembleIncident, captureNow, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
+		keepIncident, windowIntegrity, assembleIncident, captureNow, captureOutcome, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
+		performance,
 		loafRanks, pickList, pickedLoaf, pickStep, pickAuto, frameSeverity, PICK_MIN_MS, unresolvedLabel, crossTable, crossSummary, clipName,
 		sparkBars, sparkLevel, SPARK_SECONDS, SPARK_HEIGHT, sparkPickMap, sparkCellTitle, markResolved,
 		sessionRecord, readSessionBaselines, mergeSessionBaseline, saveSessionBaseline, sessionBaselines, scriptPkgTally, pkgByUrl,
@@ -3047,8 +3159,36 @@ watch.setNow(60000);
 const manual = watch.captureNow('刚切了视图');
 check('手动标记立刻出事故', [manual.ok, manual.incident.cause, manual.incident.note], [true, 'manual', '刚切了视图']);
 check('手动标记回退' + watch.WATCH.reaction + 'ms', Math.round(manual.incident.atPerfMs), 57000);
+check('手动标记:立刻结算的分支 state=settled(旧的 ok/incident 字段保持兼容)',
+	[manual.state, manual.incident !== null && manual.incident !== undefined], ['settled', true]);
 watch.state.watch.on = false;
 check('HUD 关着时手动标记如实说没在录', watch.captureNow().ok, false);
+check('HUD 关着时 state 也分开(不再是笼统的 coalesced)',
+	watch.captureNow().state, 'not-recording');
+
+// 被并进 pending:这次标记**没留下**,与"已经起了一次、还没结算"不是一回事
+watch.state.watch.on = true;
+watch.state.watch.pending = { cause: 'frame', at: 61000, until: 64000, severity: 150, note: null };
+const merged = watch.captureNow('这次会被并掉');
+watch.state.watch.pending = null;
+check('手动标记:被并进 pending → coalesced,并带上正在等的那一次的 cause',
+	[merged.ok, merged.state, merged.pending.cause, merged.reason.startsWith('coalesced')],
+	[false, 'coalesced', 'frame', true]);
+check('手动标记:被并掉时没有假装新建了 incident', merged.incident, undefined);
+
+// 已经起了一次、后摇没到:这次标记**留下了**(只是还没结算)—— 与 coalesced 分开
+watch.setNow(100000);
+const realClock = watch.performance.now;
+let clockCalls = 0;
+// captureNow 先取一次 now(定 at),triggerCapture 再取一次算后摇;第二次回拨 3 秒 ⇒ 后摇没到。
+watch.performance.now = () => (clockCalls++ === 0 ? 100000 : 97000);
+const queued = watch.captureNow('排上但还没结算');
+watch.performance.now = realClock;
+watch.state.watch.pending = null;
+watch.state.watch.pendingTimer = 0;
+check('手动标记:已起一次但还没结算 → pending(有 waitMs,不计入 coalesced)',
+	[queued.ok, queued.state, queued.pending.cause, queued.waitMs, queued.incident],
+	[true, 'pending', 'manual', 3000, undefined]);
 
 // 状态:照实报
 watch.state.watch.on = true;

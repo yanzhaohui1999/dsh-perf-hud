@@ -671,13 +671,53 @@ window.__ModuleLoader__.load({
 			}
 		}
 		/**
+		 * `captureNow()` 的结果三态(返回值形状是产品语义,面板回执直接读它,不靠猜):
+		 *   - `settled`:这次标记已经切成事故,`incident` 就是它(带 id / tier / kept);
+		 *   - `pending`:新捕获已经起了,但后摇没到、还没结算 —— 和"被并进别人的 pending"不是一回事;
+		 *   - `coalesced`:一个字节都没新建,这次标记被并进了**已经在等**的那一次。
+		 * 纯函数(只读 watch 的 pending 与 triggerCapture 的返回值),便于离线断言两个分支。
+		 */
+		function captureOutcome(watch, incident) {
+			if (incident !== null && incident !== undefined) return { ok: true, state: 'settled', incident };
+			const pending = watch.pending;
+			if (pending !== null && pending !== undefined) {
+				return {
+					ok: true,
+					state: 'pending',
+					pending: { cause: pending.cause, at: round1(pending.at), until: round1(pending.until) },
+					waitMs: Math.max(0, Math.round(pending.until - performance.now())),
+					reason: 'pending(已起了一次,后摇没到,还没结算)',
+				};
+			}
+			// manual 不受 coveredUntil 限制,正常走不到这里;留着是为了口径完整(不冒充成功)。
+			return { ok: false, state: 'covered', reason: 'covered(落在已覆盖的窗口里,本次没有单独留下)' };
+		}
+		/**
 		 * 手动标记"刚刚卡了一下":回退 WATCH_REACTION_MS(默认 3 秒,人的反应时间),
 		 * 立刻切片(不等后摇)。note 原样进事故包,方便事后知道当时在干什么。
+		 *
+		 * ⚠️ 两种"没有 incident"以前都回 `coalesced`:"已经起了一次、还没结算"与
+		 * "被并进正在等的那一次"是两件事 —— 前者这次标记**留下了**(只是结算晚一点),
+		 * 后者**没留下**。返回值用 `state` 分开,面板/工具据此说人话。
 		 */
 		function captureNow(note) {
-			if (state.watch.on === false) return { ok: false, reason: 'not-recording(HUD 关闭时不记录)' };
+			const watch = state.watch;
+			if (watch.on === false) return { ok: false, state: 'not-recording', reason: 'not-recording(HUD 关闭时不记录)' };
+			// 已有 pending:这次标记并进它(与 triggerCapture 的归并口径一致,计数也只记一次)。
+			if (watch.pending !== null && watch.pending !== undefined) {
+				watch.coalesced += 1;
+				bumpTally('coalesced', Date.now());
+				const pending = watch.pending;
+				return {
+					ok: false,
+					state: 'coalesced',
+					pending: { cause: pending.cause, at: round1(pending.at), until: round1(pending.until) },
+					waitMs: Math.max(0, Math.round(pending.until - performance.now())),
+					reason: 'coalesced(已并进正在等的那一次,本次没有单独留下)',
+				};
+			}
 			const incident = triggerCapture('manual', performance.now() - WATCH_REACTION_MS, 0, note ?? null);
-			return incident === null ? { ok: false, reason: 'coalesced(已并进正在等的那一次)' } : { ok: true, incident };
+			return captureOutcome(watch, incident);
 		}
 		/** 守夜层状态:装没装上、录了多少、抓到几次 —— 一律照实,不写"运行中"。 */
 		function watchStatus() {
@@ -737,6 +777,7 @@ window.__ModuleLoader__.load({
 				saveIncidents,
 				restoreIncidents,
 				captureNow,
+				captureOutcome,
 				watchStatus
 			};
 		};

@@ -48,6 +48,7 @@ window.__ModuleLoader__.load({
 				storageReport,
 				causeCandidates,
 				causePlainLead,
+				captureReceiptText,
 				clearIncidentsNow,
 				clock,
 				collapseAll,
@@ -1519,6 +1520,10 @@ window.__ModuleLoader__.load({
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('watchHint') }, t('watch')),
 						h('span', { style: S.num }, watchPanelText())),
+					// 自测结果:由 console 的 __perfHud.stress() 触发;state.stress 是唯一记账处,
+					// 面板与返回值读同一份(以前记账写了但没人读,属于死代码)。
+					state.stress === null ? null
+						: h('div', { style: S.sub, title: t('stressHint') }, state.stress.text ?? t('stressRunning')),
 					// 清单按**严重度**排(不是时间序):点一条就选中它 —— 首屏「最差事件」块与
 					// 「取证明细」的翻帧都跟着走。它真能导航到同一条事故,所以才做成可点的行。
 					state.watch.incidents.length === 0 ? null : h('div', { title: t('envPickHint') },
@@ -1537,7 +1542,14 @@ window.__ModuleLoader__.load({
 							onChange: (event) => setDraft(event.target.value),
 							style: S.input,
 						}),
-						h('button', { type: 'button', style: S.btn, disabled: state.watch.on === false, title: t('watchMarkHint'), onClick: () => { W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft); setDraft(''); } }, t('watchMark'))),
+						h('button', { type: 'button', style: S.btn, disabled: state.watch.on === false, title: t('watchMarkHint'), onClick: () => {
+							// 回执读的是返回值(留在清单第几条 / 有没有留下),不是"点完就当成功"。
+							state.captureReceipt = W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft);
+							setDraft('');
+							bump();
+						} }, t('watchMark'))),
+					state.captureReceipt === null || state.captureReceipt === undefined ? null
+						: h('div', { style: S.sub, title: t('watchMarkHint') }, captureReceiptText(state.captureReceipt, state.watch.incidents)),
 					// 导出 / 清空**只在「原始数据」那一页**(见 devRaw):同四个按钮在相邻两个标签页
 					// 各摆一份,点错地方只是白点一次,读的人还要先弄清两页有什么区别。
 				]),

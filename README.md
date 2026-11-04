@@ -77,7 +77,8 @@ __perfHud.watch()             // 在不在录、覆盖多少秒、LoAF 装没装
 __perfHud.incidents()         // 最差几次的摘要(索引 0 最差)
 __perfHud.report(0)           // 完整事故包:帧序列 + LoAF 条目 + 窗口内 longtask + 环境读数
 __perfHud.exportIncident(0)   // 下载成 JSON —— 把这份丢给分析的人(或 agent)就行
-__perfHud.capture('切了视图')  // 手动标记"刚刚卡了一下"(自动回退 3 秒的反应时间)
+__perfHud.capture('切了视图')  // 手动标记"刚刚卡了一下"(自动回退 3 秒的反应时间;返回值说清留在哪一条)
+await __perfHud.stress(8000, 80) // 自测:返回 longtask / fiber / DOM 写入三条腿各测到什么(也进面板工具箱)
 __perfHud.clearIncidents()    // 只清事故;clear() 刻意不动它
 ```
 
@@ -317,7 +318,7 @@ dsh plugin --profile web add "$PWD"
 | `capabilities()` | 能力矩阵:每层证据的状态 / 原因 / 出处三档 |
 | `causes(id)` | 候选原因(每条带支持 / 限制 / 出处)—— 面板与诊断包读同一份 |
 | `pack(id)` / `preview(id)` / `exportPack(id)` | 诊断包对象 / 只为预览的清单 / **一个 store-only zip 一次下载**(四份文件都在里面) |
-| `capture(note)` | 手动标记"刚刚卡了一下"(回退 3 秒反应时间) |
+| `capture(note)` | 手动标记"刚刚卡了一下"(回退 3 秒反应时间)。返回值 `state` 分三态:`settled`(已切片,`incident` 给你 id / tier / 清单位置)、`pending`(已起一次但后摇没到、还没结算)、`coalesced`(并进了正在等的那一次,本次备注没单独留下);面板「标记刚才」的回执读同一份 |
 | `clearIncidents()` | 只清事故(**不动发生频次**:清掉的是证据,不是事实;要清频次用 `clearTally()`) |
 | `tally(ms?)` / `tallyOfDay(day)` | 发生频次:窗口内(默认 24h)的检测到 / 已保存现场 / 丢失三个数 / 某一天的汇总(**本地日期**) |
 | `clearTally()` | 只清发生频次的时间桶(与 `clearIncidents()` / `clear()` 三条路分开) |
@@ -327,7 +328,7 @@ dsh plugin --profile web add "$PWD"
 | `precise` / `setPrecise(on)` | 精确归因开关与状态 |
 | `mark(note)` | 场景标记 |
 | `experiment()` / `abortExperiment()` / `baselines()` | 隔离实验启停与基线读数 |
-| `stress(nodes?, burnMs?)` | 渲染型卡顿自测(显式燃烧,面板会标注"人为燃烧") |
+| `stress(nodes?, burnMs?)` | 渲染型卡顿自测:`await` 后返回 `{ state, nodes, burnMs, sync, commitMs, legs: { longtask, fiber, dom }, text }` —— longtask / fiber / DOM 写入三条腿各自测到什么 + 一句人话;结果同时进面板「工具箱」那一行 |
 | `hostEvents(on)` / `host()` / `link()` | 宿主事件到达延迟开关 / 宿主回执 / 链路样本 |
 
 `localStorage` 键位(清状态时按需删):`dsh-perf-hud:ring:v1`(环形缓冲)、`:tally:v1`(**发生频次**:最近 24 小时的分钟桶 + 最近 30 天的日汇总,稀疏存储,空转近乎 0 字节)、`:on`(总开关)、`:collapsed`(收放)、**`:deep`(深录 = 插桩 + 精确归因)**、`:precise`(精确归因)、`:groups`(折叠状态)、`:marks`(场景标记)、`:view:v1`(视图 / 标签页 / 趋势窗口)、`:map:<rev>:<len>`(按 rev 缓存的 sourcemap 分段表,只留最近 8 个 rev;写满配额时先淘汰旧 rev)、`:map:index`(上面那些 rev 的 LRU 索引)、`:incidents:v1`(留存的事故)、`:watchui:v1`(诊断上下文)、`:sessions:v1`(跨会话基线)。**会改变采集档位(也就是"面板贵不贵")的是 `:on` / `:deep` / `:precise` 三个。**

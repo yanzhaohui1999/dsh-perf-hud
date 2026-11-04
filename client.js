@@ -118,6 +118,13 @@ window.__ModuleLoader__.load({
 		const PICK_MIN_MS = WATCH_TRIGGER_MS;   // 翻帧清单的下限:blocking ≥ 它才值得回看(与守夜触发线同一条)
 		const WATCH_GAP_MS = 1000;             // 帧间隔超过它视为 rAF 挂起:是间隙,不是卡顿
 		const WATCH_REACTION_MS = 3000;        // 手动标记时回退的"人的反应时间"
+		// 渲染型卡顿自测(stress):一次同步提交里塞 N 个节点 + 显式燃烧,给三条腿造受控输入。
+		// 观察窗口必须异步等:longtask 由 PerformanceObserver 在任务结束后才投递。
+		const STRESS_DEFAULT_NODES = 8000;
+		const STRESS_MAX_NODES = 80000;
+		const STRESS_DEFAULT_BURN_MS = 80;
+		const STRESS_MAX_BURN_MS = 500;
+		const STRESS_OBSERVE_MS = 1200;        // 这段时间内到的 longtask / DOM 写入算这次自测的结果
 		// 历史回放条最多画多少列:一条事故窗口(13 秒)可能有几百帧,一帧一个 DOM 节点会把
 		// "画条子"变成面板自己的开销。每列取该列里**最差的那一帧**(所以尖刺不会被平均掉),
 		// 并把那一帧的引用留在格子里 —— 点击、选中、高亮都必须映射回**真实记录**,不合成帧。
@@ -514,8 +521,9 @@ window.__ModuleLoader__.load({
 			errors: [],              // 面板自己捕获的渲染错误(导出件里能读到)
 			// 分组折叠:常显只有"现在顺不顺 + 谁的锅",过程/取证/工具默认收起(头部带摘要)
 			groups: { detail: false, cross: false, dom: false, host: false, tools: false, tech: false },
-			stress: null,            // 最近一次自测 { at, nodes, burnMs, sync, commitMs }
+			stress: null,            // 最近一次自测 { at, nodes, burnMs, sync, flush, rendered, commitMs, writes0, result, text }
 			stressBurn: 0,           // 自测渲染时显式燃烧的毫秒数
+			captureReceipt: null,    // 面板「标记刚才」的回执:capture() 的返回值(不靠猜)
 			// G 守夜层:默认常开,不包装任何原型;开关跟着总开关走
 			watch: {
 				on: false,
@@ -1795,6 +1803,155 @@ window.__ModuleLoader__.load({
 			return rows;
 		}
 
+		/**
+		 * 渲染型卡顿自测的结果:longtask / fiber / DOM 写入三条腿**各自**测到什么。
+		 *
+		 * 纯函数(输入 = 自测记账 + longtask 明细 + DOM 写入增量),面板、控制台与离线断言
+		 * 读同一份结构;不再像旧版那样把三条腿揉成一句、让读的人猜哪条命中了。
+		 */
+		function stressReport(mark, longTasks, writes) {
+			if (mark === null || mark === undefined) return null;
+			const from = mark.at - 500;
+			const to = mark.at + STRESS_OBSERVE_MS + 500;
+			const rows = (Array.isArray(longTasks) ? longTasks : [])
+				.filter((row) => row !== null && typeof row === 'object'
+					&& typeof row.t === 'number' && row.t >= from && row.t <= to);
+			let top = null;
+			let fiber = null;
+			for (const row of rows) {
+				if (top === null || row.ms > top.ms) top = row;
+				if (legOf(row) !== 'fiber') continue;
+				if (fiber === null || row.ms > fiber.ms) fiber = row;
+			}
+			// DOM 写入腿:优先认自测夹具(PerfHudStress);它没被采样到,再退回这段时间写得最多的那个。
+			// 两个都要照实标:退回来的那个**不是**自测自己,别让读的人以为夹具命中了。
+			const list = Array.isArray(writes) ? writes : [];
+			let write = null;
+			let targeted = false;
+			for (const row of list) {
+				const components = Array.isArray(row.components) ? row.components : [];
+				const named = components.some((item) => item !== null && item !== undefined && item.name === 'PerfHudStress');
+				if (row.component === 'PerfHudStress' || named || String(row.id).indexOf('PerfHudStress') !== -1) { write = row; targeted = true; break; }
+			}
+			if (write === null && list.length > 0) write = list[0];
+			// 采样行里的 component 是"写得最多的那个";命中自测时优先报夹具自己的名字。
+			const writeNamed = write === null ? null
+				: (write.components ?? []).find((item) => item !== null && item !== undefined && item.name === 'PerfHudStress') ?? null;
+			const writeName = writeNamed === null ? (write === null ? null : write.component ?? null) : writeNamed.name;
+			const legs = {
+				longtask: {
+					hit: top !== null,
+					rows: rows.length,
+					ms: top === null ? null : round1(top.ms),
+					at: top === null ? null : round1(top.at),
+					t: top === null ? null : round1(top.t),
+					owner: top === null ? null : top.owner ?? null,
+					component: top === null ? null : top.component ?? null,
+					leg: top === null ? null : legOf(top),
+				},
+				fiber: {
+					hit: fiber !== null,
+					ms: fiber === null ? null : round1(fiber.ms),
+					component: fiber === null ? null : fiber.component ?? null,
+				},
+				dom: {
+					hit: write !== null && write.estimatedCount > 0,
+					targeted,
+					writes: write === null ? 0 : Math.round(write.estimatedCount),
+					id: write === null ? null : write.id ?? null,
+					component: writeName,
+					components: write === null ? [] : (write.components ?? []).slice(0, 2),
+				},
+			};
+			const base = {
+				ok: mark.rendered !== false,
+				state: mark.rendered === false ? 'no-render' : 'settled',
+				at: mark.at,
+				nodes: mark.nodes,
+				burnMs: mark.burnMs,
+				windowMs: STRESS_OBSERVE_MS,
+				sync: mark.sync === true,
+				commitMs: mark.commitMs === undefined ? null : mark.commitMs,
+				legs,
+			};
+			if (mark.rendered === false) {
+				return { ...base, text: `${translate('stressDone')}: ${translate('stressNoRender')}` };
+			}
+			const mode = mark.sync === true ? translate('stressSync') : translate('stressSliced');
+			const flush = mark.flush === false ? ` · ${translate('stressNoFlush')}` : '';
+			const burn = typeof mark.burnMs === 'number' && mark.burnMs > 0 ? ` · ${translate('stressBurn')} ${mark.burnMs}ms` : '';
+			const commit = mark.commitMs === undefined || mark.commitMs === null ? '' : ` · ${translate('stressCommit')} ${mark.commitMs}ms(${mode}${burn}${flush})`;
+			const longtask = legs.longtask.hit ? `${translate('stressLongTask')} ${legs.longtask.ms}ms` : `${translate('stressLongTask')} ${translate('stressNoTask')}(${round1(STRESS_OBSERVE_MS / 1000)}s)`;
+			const fiberText = legs.fiber.hit ? legs.fiber.component : translate('none');
+			const domText = legs.dom.hit ? `≈${legs.dom.writes}${legs.dom.component === null ? '' : `(${legs.dom.component})`}` : translate('none');
+			return {
+				...base,
+				text: `${translate('stressDone')}: ${longtask} · ${translate('legFiber')} ${fiberText} · ${translate('stressFromDom')} ${domText}${commit}`,
+			};
+		}
+
+		/**
+		 * 渲染型卡顿自测:一次提交里塞进 N 个节点 + 显式燃烧,给 longtask / fiber / DOM 写入
+		 * 三条腿造受控输入。返回 **Promise**:longtask 由观察器异步投递,不能同步给结果。
+		 *
+		 * 两个坑都踩过:① 清理定时器(原来 400ms)比面板重渲染间隔(500ms)还短,节点还没被渲染
+		 * 就被清了 —— 表现是"点了毫无反应";② 节点在屏幕外,即使生效也没有任何可见反馈。
+		 * 现在:立即触发一次重渲染,渲染完由子组件自己清空,并在面板/控制台上写明三条腿各测到什么。
+		 */
+		async function stressSelfTest(nodes, burnMs) {
+			const count = typeof nodes === 'number' && nodes > 0 ? Math.min(Math.floor(nodes), STRESS_MAX_NODES) : STRESS_DEFAULT_NODES;
+			// 实测:两万个节点连渲染带布局只要 ~28ms,靠节点数凑不出稳定的 >50ms 长任务。
+			// 所以保留节点(给 DOM 写入归因用)再显式燃烧一段 —— 面板上会写明"含人为燃烧",
+			// 这是仪器自检,不冒充自然卡顿。
+			const burn = typeof burnMs === 'number' && burnMs >= 0 ? Math.min(burnMs, STRESS_MAX_BURN_MS) : STRESS_DEFAULT_BURN_MS;
+			const mark = {
+				at: Date.now(),
+				nodes: count,
+				burnMs: burn,
+				sync: flushSync !== null,
+				flush: flushSync !== null,
+				rendered: typeof state.requestRender === 'function',
+				commitMs: undefined,
+				writes0: domWriteSnapshot(),
+				result: null,
+				text: `${translate('stressRunning')}: ${count}${translate('nodesSuffix')} …`,
+			};
+			state.stress = mark;
+			state.stressNodes = count;
+			state.stressBurn = burn;
+			const render = state.requestRender;
+			if (typeof render === 'function') {
+				if (flushSync !== null) {
+					// 一次同步提交:整个 N 节点都在同一个任务里,长任务与 fiber 归属才算数。
+					try {
+						flushSync(() => render());
+					} catch (error) {
+						mark.sync = false;   // flushSync 用不了就走普通重渲染
+						mark.flush = false;
+						render();
+					}
+				} else {
+					render();
+				}
+			}
+			// 先渲染再挂清理定时器:计时从"渲染完成"起算,5 秒足够覆盖下一次面板 tick。
+			natives.setTimeout(() => { state.stressNodes = 0; }, 5000);
+			if (mark.rendered === false) {
+				const failed = stressReport(mark, state.longTasks, []);
+				mark.result = failed;
+				mark.text = failed.text;
+				return failed;
+			}
+			await new Promise((resolve) => natives.setTimeout(resolve, STRESS_OBSERVE_MS));
+			const report = stressReport(mark, state.longTasks, domWriteDelta(mark.writes0));
+			mark.result = report;
+			mark.text = report.text;
+			// 期间又跑了一次自测:别拿旧结果覆盖新的那一份(结果仍从返回值给出)。
+			if (state.stress === mark) bump();
+			if (typeof console !== 'undefined' && typeof console.log === 'function') console.log(report.text);
+			return report;
+		}
+
 		/** DOM 写入估算表(命中者按采样步长折算)。 */
 		function domWriteTable() {
 			const rows = [];
@@ -2537,7 +2694,37 @@ window.__ModuleLoader__.load({
 			bump();
 		}
 
-		/** 验收自证:把这次要交的几条判据直接算出来,面板与导出都能读到同一份。 */
+		/**
+		 * 「标记刚才」的回执:把 `capture()` 的**返回值**翻译成一句人话 —— 这一次到底留在哪。
+		 *
+		 * 只看返回值与留存清单(`list`),不重新推一遍;`state` 三态与 captureNow 同一份口径:
+		 * settled = 已经切成事故(有 id / 清单位置),pending = 已排上还没结算,
+		 * coalesced = 并进了别人正在等的那一次(本次备注没留下)。
+		 */
+		function captureReceiptText(result, list) {
+			if (result === null || result === undefined || typeof result !== 'object') return null;
+			if (result.state === 'settled' && result.incident !== null && result.incident !== undefined) {
+				const incident = result.incident;
+				const rows = Array.isArray(list) ? list : [];
+				const index = rows.findIndex((row) => row !== null && row !== undefined && row.id === incident.id);
+				const tier = incident.tier === 'recent' ? ` · ${translate('watchRecent')}`
+					: (incident.tier === 'daily' || incident.tier === 'both' ? ` · ${translate('watchDaily')}` : '');
+				if (index === -1) return `${translate('captureSaved')} ${incident.id}(${translate('captureNotKept')}${tier})`;
+				return `${translate('captureSaved')} ${incident.id}(${translate('captureRow')} ${index + 1}${translate('captureRowSuffix')}${tier})`;
+			}
+			if (result.state === 'pending') {
+				const wait = typeof result.waitMs === 'number' && Number.isFinite(result.waitMs) ? Math.max(1, Math.ceil(result.waitMs / 1000)) : 0;
+				return `${translate('captureQueued')} ${wait}${translate('captureQueuedTail')}`;
+			}
+			if (result.state === 'coalesced') {
+				const cause = result.pending === null || result.pending === undefined || result.pending.cause === undefined ? '' : `(${result.pending.cause})`;
+				return `${translate('captureMerged')}${cause}`;
+			}
+			if (result.state === 'not-recording') return translate('captureOff');
+			if (result.state === 'covered') return translate('captureCovered');
+			return null;
+		}
+
 		function verification() {
 			const seen = new Set();
 			for (const id of state.plugins.keys()) seen.add(id);
@@ -3047,42 +3234,11 @@ window.__ModuleLoader__.load({
 			abortExperiment,
 			baselines: () => ({ idle: state.idleBaseline, experiment: experiment.baseline }),
 			/**
-			 * 渲染型卡顿自测:一次提交里塞进 N 个节点,用来验收 fiber 归因。
-			 *
-			 * 两个坑都踩过:① 清理定时器(400ms)比面板重渲染间隔(500ms)还短,节点还没被渲染
-			 * 就被清了 —— 表现是"点了毫无反应";② 节点在屏幕外,即使生效也没有任何可见反馈。
-			 * 现在:立即触发一次重渲染,渲染完由子组件自己清空,并在面板上写明进度与结果。
+			 * 渲染型卡顿自测:`await __perfHud.stress(nodes?, burnMs?)` 拿可读结果
+			 * (`legs.longtask` / `legs.fiber` / `legs.dom` 各自测到什么 + 一句 `text`);
+			 * 结果同时落在 `state.stress` 里,面板「工具箱」那一行读同一份。
 			 */
-			stress(nodes, burnMs) {
-				const count = typeof nodes === 'number' && nodes > 0 ? Math.min(nodes, 80000) : 8000;
-				// 实测:两万个节点连渲染带布局只要 ~28ms,靠节点数凑不出稳定的 >50ms 长任务。
-				// 所以保留节点(给 DOM 写入归因用)再显式燃烧一段 —— 面板上会写明"含人为燃烧",
-				// 这是仪器自检,不冒充自然卡顿。
-				const burn = typeof burnMs === 'number' && burnMs >= 0 ? Math.min(burnMs, 500) : 80;
-				state.stressNodes = count;
-				state.stressBurn = burn;
-				state.stress = {
-					at: Date.now(),
-					nodes: count,
-					burnMs: burn,
-					sync: flushSync !== null,
-					commitMs: undefined,
-					writes0: domWriteSnapshot(),
-				};
-				natives.setTimeout(() => { state.stressNodes = 0; }, 5000);
-				const render = state.requestRender;
-				if (typeof render !== 'function') return;
-				if (flushSync !== null) {
-					// 一次同步提交:整个 1.2 万节点都在同一个任务里,长任务与 fiber 归属才算数。
-					try {
-						flushSync(() => render());
-						return;
-					} catch (error) {
-						state.stress.sync = false;   // flushSync 用不了就走普通重渲染
-					}
-				}
-				render();
-			},
+			stress: stressSelfTest,
 			host: () => state.host,
 			hostEvents(on) {
 				if (on === false) {
@@ -3561,6 +3717,8 @@ window.__ModuleLoader__.load({
 			watch.restored = 0;
 			watch.trimmedByBytes = 0;
 			watch.deduped = 0;
+			// 回执指向的那条事故被清了:再留着"已记为 i42(清单第 3 条)"就是指着空气。
+			state.captureReceipt = null;
 			saveIncidents();   // 落盘的那份也要清掉,否则刷新又"复活"
 			bump();
 			return true;
@@ -3907,6 +4065,7 @@ window.__ModuleLoader__.load({
 				storageReport,
 				causeCandidates,
 				causePlainLead,
+				captureReceiptText,
 				clearIncidentsNow,
 				clock,
 				collapseAll,

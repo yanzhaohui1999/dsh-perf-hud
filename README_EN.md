@@ -50,6 +50,12 @@ one `PerformanceObserver` (LoAF, Chrome 123+):
 - multi-second "gaps" from a hidden tab are **not** stalls (rAF was suspended) and are marked `gap`;
 - `__perfHud.watch()` · `incidents()` · `report(0)` · `exportIncident(0)` · `capture(note)` · `clearIncidents()` ·
   `tally(ms?)` · `tallyOfDay(day)` · `clearTally()`.
+- `capture(note)` returns a `state`: `settled` (sliced; `incident` carries its id / tier / list position),
+  `pending` (a capture has started but its post-window has not elapsed), or `coalesced` (merged into a pending
+  capture; this note left no separate record). The panel's "Mark just now" receipt reads that same value.
+- `await __perfHud.stress(nodes?, burnMs?)` runs the render-stall self-test and returns
+  `{ state, nodes, burnMs, sync, commitMs, legs: { longtask, fiber, dom }, text }` — what each of the three legs
+  actually measured, plus a human-readable line. The same result is shown in the panel toolbox.
 
 An incident pack carries `context.missing` — what this capture does **not** contain (no DevTools trace,
 no host CPU profile, platforms without LoAF) and how to get it — and it does no attribution inference.
