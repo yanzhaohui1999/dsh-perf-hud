@@ -2499,6 +2499,10 @@ const watchPieces = [
 	extract(source, 'function incidentFileName('),
 	extract(source, 'function incidentReport('),
 	extract(source, 'function round1('),
+	// 事故包带记录器自身开销(context.recorder):capabilityMissing 会读 selfStats —— 少一个就
+	// 只在守夜盒里 ReferenceError(各盒子的 pieces 列表与桩必须同步,见 AGENTS §3)
+	extract(source, 'function percentile('),
+	extract(source, 'function selfStats('),
 	// 诊断上下文 + 历史帧数据层(实时 / 历史两支的分流点)
 	source.slice(source.indexOf('const LS_WATCHUI'), source.indexOf('\n', source.indexOf('const LS_WATCHUI'))),
 	extract(source, 'function saveWatchUI('),
@@ -2718,6 +2722,8 @@ const watchBox = new Function(`
 		samplesLength: 1,
 		on: true, precise: false, streaming: true, heap: 1048576, host: null, hostAt: 0,
 		dom: { total: 1234 },
+		// A1 记录器自身开销的环形缓冲(与 client.js 的 state 同形;手写桩,加字段要同步)
+		selfRing: [], selfAt: 0, selfCount: 0, selfMax: 0,
 		bundleKeys: new Set(),
 		longTasks: [],
 		ltSeq: 0, ltDropped: 0,
@@ -4049,9 +4055,48 @@ watch.state.watch.loafState = 'on';
 watch.state.on = false;
 check('事故包:没插桩时点明四条腿归因缺失', watch.incidentReport(0).context.missing.some((line) => line.startsWith('instrumentation:')), true);
 check('事故包:缺失项都给了补齐办法', watch.incidentReport(0).context.howToAdd.length >= 2, true);
-check('事故包:独立读者点出的三条缺口也列进 missing',
-	['compositor:', 'recorder-cost:', 'baseline:'].map((prefix) => watch.incidentReport(0).context.missing.some((line) => line.startsWith(prefix))),
-	[true, true, true]);
+check('事故包:独立读者点出的缺口也列进 missing',
+	['compositor:', 'baseline:'].map((prefix) => watch.incidentReport(0).context.missing.some((line) => line.startsWith(prefix))),
+	[true, true]);
+// A1:记录器自身开销随事故包下发(REVIEW §2 那条债的回归测试)。结构必须与整机导出件的
+// `context.recorder` 一致(p99 / 峰 / 样本数),不另创一套。
+check('A1:事故包带 context.recorder,结构与整机导出件一致(p99 / 峰 / 样本数)', (() => {
+	const saved = watch.state.selfRing.slice();
+	const savedCount = watch.state.selfCount;
+	const savedMax = watch.state.selfMax;
+	watch.state.selfRing.length = 0;
+	for (const ms of [0.1, 0.2, 0.3]) watch.state.selfRing.push(ms);
+	watch.state.selfCount = 3;
+	watch.state.selfMax = 0.3;
+	const recorder = watch.incidentReport(0).context.recorder;
+	const full = box.EX.snapshot().context.recorder;
+	const keys = Object.keys(recorder).sort();
+	const out = [keys.join(','), keys.join(',') === Object.keys(full).sort().join(','), recorder.p99, recorder.max, recorder.samples];
+	watch.state.selfRing.length = 0;
+	for (const ms of saved) watch.state.selfRing.push(ms);
+	watch.state.selfCount = savedCount;
+	watch.state.selfMax = savedMax;
+	return out;
+})(), ['max,p99,samples', true, 0.3, 0.3, 3]);
+check('A1:有样本之后 missing 不再含 recorder-cost(旧口径"没带在这份包里"已删)', (() => {
+	const saved = watch.state.selfRing.slice();
+	const savedCount = watch.state.selfCount;
+	const savedMax = watch.state.selfMax;
+	watch.state.selfRing.length = 0;
+	watch.state.selfRing.push(0.4);
+	watch.state.selfCount = 1;
+	watch.state.selfMax = 0.4;
+	const present = watch.incidentReport(0).context.missing.some((line) => line.startsWith('recorder-cost:'));
+	watch.state.selfRing.length = 0;
+	for (const ms of saved) watch.state.selfRing.push(ms);
+	watch.state.selfCount = savedCount;
+	watch.state.selfMax = savedMax;
+	return present;
+})(), false);
+check('A1:一个样本都没有时 missing 照实说"这一格是空的"(不假装有)', (() => {
+	const line = watch.incidentReport(0).context.missing.find((text) => text.startsWith('recorder-cost:'));
+	return [line !== undefined, line === undefined ? false : line.includes('samples = 0'), line === undefined ? false : line.includes('context.recorder')];
+})(), [true, true, true]);
 check('事故包:A2 落地后那条"没有对照基线"改成"跨机器 / 跨浏览器"',
 	watch.incidentReport(0).context.missing.some((line) => line.startsWith('baseline:') && line.includes('跨机器')), true);
 check('事故包:带上渲染环境(视口 / DPR / 核数)',

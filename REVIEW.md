@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ `cordis.patch.yml` 形态正确 —— 这是市场收录最常见的被拒原因 |
 | 4 | 公开仓库 + topic | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场 |
 | 5 | 产物无死链 | ✅ 0.8.0 `npm pack` **31 个文件**(0.5.0 的 23 + 6 个 `client.*.js` 分片);`release.yml` 逐份核(含 `tools/`、`locale/` 按目录核) |
-| 6 | 门禁全绿 | ✅ **657** 条离线断言(attribution 11 / logic 605 / host 41);CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ **660** 条离线断言(attribution 11 / logic 608 / host 41);CI = 两个半边的 `node --check` + 三套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ✅ 2026-10-18 提 PR [awesome-dsh-plugin#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814)(单文件 `data/plugins/…yml`),**2026-10-19 01:29 已合并** |
 | 8 | 兼容性声明 | ✅ `engines.dsh` 与三个客户端 inject 包统一 `>=0.2.0-rc.2 <0.3.0-0`;本机 `0.2.1-rc.1` 下五个真页面验收器全绿 |
 
@@ -27,7 +27,7 @@
 ## 2. 未还的债
 
 1. **宿主 CPU profile 客户端未接线**:路由已能采(`profileStart` / `profileGet`,真宿主实测 1 秒 = 292 节点 / 223 采样 / 82KB),客户端没有入口,事故包也不含宿主火焰图。`capabilities()` 里照实写「客户端还没接线」。
-2. **事故包不带记录器自身开销**:整机导出件有 `context.recorder`,事故包没有;`missing` 里还列着 `recorder-cost`。
+2. ~~**事故包不带记录器自身开销**~~ → **已还(2026-11-04)**:事故包的 `context.recorder` 与整机导出件**同一个结构**(`p99` / `max` / `samples`,`selfStats()` 一份实现),`missing` 里那条 `recorder-cost:` 只在 `samples = 0`(还没采到)时照实写「这一格是空的」,有样本时不再出现。两支都有断言钉住。
 3. **`stress()` 没有可读结果**:控制台自测能给 longtask / fiber / DOM 写入三条腿造受控输入,但不返回结果;`state.stress` 的记账是留给「接回面板」的钩子。
 4. **`tallyScripts().unresolvedMs` 没有运行时读者**:算出来、写进 tally、只有单测断言它。要么给它消费者,要么删。
 5. **`captureNow()` 语义含糊**:把「已起了一次、还没结算」和「被并进 pending」都回成 `coalesced`;产品语义未改。

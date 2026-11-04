@@ -1274,7 +1274,12 @@ window.__ModuleLoader__.load({
 			howToAdd.push('要拆交互的三段:DevTools → Performance 录制,Hover 到 Interactions 轨道上那一下,看 Input delay / Processing / Presentation');
 			howToAdd.push('DevTools → Performance → 录制(勾 include script source maps)→ Save trace → Perfetto 打开');
 			missing.push('compositor:帧时间到底花在合成 / 光栅 / GPU 的哪一段(这一层只看得到主线程侧)');
-			missing.push('recorder-cost:本记录器自身的开销**没带在这份事故包里**(它每帧跑一次 rAF 采样;面板「记录器自身」与整机导出件的 context.recorder 有 p99 / 峰 / 样本数)');
+			// 记录器自身开销**已经随包下发**(`context.recorder`,与整机导出件同一个结构),所以这里
+			// 只有一种"缺":还没采到样本。旧口径「没带在这份事故包里」已不成立。
+			const recorder = selfStats();
+			if (recorder.samples === 0) {
+				missing.push('recorder-cost:记录器自身的开销**这一格是空的**(samples = 0:自计时只在 HUD 开启后每帧跑一次,现在还没采到;context.recorder 照实给 p99 / max / samples,不编数字)');
+			}
 			missing.push('baseline:跨机器 / 跨浏览器的对照基线 —— context.sessionBaselines 只来自同一个浏览器 profile,而且只是粗参照');
 			if (incident === null || incident.host === null) {
 				missing.push('host:没有任何宿主快照(宿主半未加载或路由不可达)');
@@ -1930,6 +1935,10 @@ window.__ModuleLoader__.load({
 					tally: tallyReport(),
 					// A2:跨会话基线(只进导出件)。readonly 参照,别当回归判定
 					sessionBaselines: sessionBaselines(),
+					// 记录器自身开销:与整机导出件 `context.recorder` **同一个结构**(selfStats 给的
+					// p99 / max / samples),不另创一套。它是**导出时刻**的读数(与整机件同一时间基准);
+					// 事故那一刻的帧数据在 incident.frames / incident.summary 里,两者别混读。
+					recorder: selfStats(),
 					thresholds: {
 						triggerMs: WATCH_TRIGGER_MS, gapMs: WATCH_GAP_MS,
 						preMs: WATCH_PRE_MS, postMs: WATCH_POST_MS,
@@ -1947,6 +1956,7 @@ window.__ModuleLoader__.load({
 						'incident.interactions 是窗口内 ≥100ms 的交互(event / element timing):`ms` 是端到端(到下一次渲染更新为止),`waitMs` 是事件发生到处理器真正开始的输入延迟、`handlerMs` 是处理器本身(两个都是推导值,原始字段 processingStart/End 也在);`isInteraction` 为真的才是 interactionId>0 的真交互,pointerover 那类被动事件也会进来。**这一层不承诺帧内拆分**(输入延迟 / 处理 / 呈现得去 DevTools 的 Interactions 轨道看);`type: "element"` 的条目只可能来自带 `elementtiming` 属性的元素,DSH 页面上恒为 0',
 						'incident.baseline 是**除这一段之外**整个帧环的分布(故意排除本窗口,否则"比会话最差还差"永远不成立)—— 拿它和 summary 比,才知道这一段是真的比平时差还是这台机器一直这样',
 						'context.sessionBaselines 是**跨会话**的帧分布(每个会话一条,最多 20 条;只进导出件,面板不显示)。它是**粗参照,不是回归判定**:会话之间的负载、视口、是否插桩都不同,帧数量级也能差一个数量级 —— 只看"这次是不是比平时差一个量级",别拿它下"变慢了"的结论',
+						'context.recorder 是**记录器自己**的 rAF 回调开销(p99 / max / samples,最近 600 帧;p99 与 max 是毫秒):它回答"这一层记录器贵不贵",**不是页面开销**;它是导出时刻的读数,`samples = 0` 表示还没采到(HUD 没跑过一帧)',
 						'summary.worstFrameJs / suspectedThrottle:最差那一帧有没有 longtask / LoAF 与它重叠;若 none 且前后帧都健康(worstFrameNeighboursMs < 100),更像浏览器把 rAF 节流或挂起了一次,不是页面真忙了那么久',
 						'脚本的 URL 不在脚本里:incident.urls 是字符串表,scripts[].u 是它的下标(u=-1 表示没有 URL)—— 抽表是因为同一个 combo URL 会重复几十遍',
 						'scripts[].pkg 是这条脚本归属的包名(合并批里靠"字符位置 → 行号 → sourcemap 分段表"还原);pkg 为 null 时看 scripts[].pkgVia:url(单包 URL 直接读出来)/ section(分段表算出来)/ precise-off(精确归因没开)/ text-pending(脚本文本还在拉)/ not-plugin(宿主自己的 bundle)…',
