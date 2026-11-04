@@ -1,0 +1,142 @@
+#!/usr/bin/env node
+/**
+ * check-pack.mjs —— 发货清单门禁(无依赖)
+ *
+ * 查两件事:
+ *   1. 必带文件:`docs/release.md` §5 那份清单(两个半边 + patch + 图标 + 许可证 + 五份文档
+ *      + `tools/` + `locale/` + 0.9.0 起的 `skills/`)展开 `package.json#files` 之后是不是齐的;
+ *   2. 反向:目录型条目(`tools` / `locale` / `skills`)里的**每个**文件是不是都进包了 ——
+ *      包里新增文件却忘了登记 files,或整个目录没写进 files,这里红。
+ *
+ * 为什么不直接跑 `npm pack --dry-run`:那要求 npm 在 PATH 上且缓存目录可写,
+ * 出了 CI(尤其带沙箱的环境里)会以 `EPERM ... _cacache` 失败,于是一个"本地检查器"
+ * 反而只在它有权限的地方能跑。这里只回答"files 有没有覆盖必带清单",读 package.json
+ * 再走一遍文件系统就够;真 tarball 的核对仍然归 `release.yml` 的 Pack and inspect。
+ *
+ * 用法:node tools/check-pack.mjs [-q]
+ * 退出码:0 = 通过;1 = 有漏项。
+ */
+import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
+import { join, resolve, relative, dirname } from 'node:path'
+
+const ROOT = resolve(import.meta.dirname, '..')
+const QUIET = process.argv.includes('-q')
+const posix = p => p.split('\\').join('/')
+
+/** 必带文件:`docs/release.md` §5 与 README/AGENTS 里的链接共同要求的那一份。
+ *  `package.json` 不在此列 —— npm 不论 `files` 怎么写都会带上它。 */
+const REQUIRED_FILES = [
+  'index.js',
+  'client.js',
+  'cordis.patch.yml',
+  'icon.svg',
+  'LICENSE',
+  'locale/en.json',
+  'README.md',
+  'README_EN.md',
+  'CONTRIBUTING.md',
+  'REVIEW.md',
+  'CHANGELOG.md',
+  'AGENTS.md',
+]
+
+/** 必带目录:必须是 `files` 里的目录条目,且展开后至少有文件。 */
+const REQUIRED_DIRS = ['locale', 'tools', 'skills']
+
+function walk(abs, acc = []) {
+  for (const e of readdirSync(abs, { withFileTypes: true })) {
+    if (e.name === '.DS_Store') continue
+    const p = join(abs, e.name)
+    if (e.isDirectory()) walk(p, acc)
+    else acc.push(p)
+  }
+  return acc
+}
+
+function globToRe(glob) {
+  let re = ''
+  for (const ch of glob) {
+    re += ch === '*' ? '[^/]*' : ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  }
+  return new RegExp('^' + re + '$')
+}
+
+const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+const entries = Array.isArray(pkg.files) ? pkg.files : []
+const shipped = new Set()
+const dirEntries = []
+const problems = []
+
+if (!entries.length) problems.push('package.json 没有 files 数组 —— npm 会按 .gitignore 兜底发东西')
+
+for (const entry of entries) {
+  const clean = posix(entry).replace(/^\.\//, '')
+  const abs = join(ROOT, clean)
+
+  // 通配条目(现在只有 client.*.js):按 basename 通配,只匹配同层文件。
+  if (clean.includes('*')) {
+    const dirPart = posix(dirname(clean))
+    const base = dirPart === '.' ? ROOT : join(ROOT, dirPart)
+    if (!existsSync(base)) { problems.push(`files 里的通配项 ${clean} 所在目录不存在`); continue }
+    const pat = globToRe(clean)
+    let hit = 0
+    for (const e of readdirSync(base, { withFileTypes: true })) {
+      if (!e.isFile()) continue
+      const rel = posix(dirPart === '.' ? e.name : join(dirPart, e.name))
+      if (pat.test(rel)) { shipped.add(rel); hit += 1 }
+    }
+    if (!hit) problems.push(`files 里的通配项 ${clean} 一个文件都没匹配到`)
+    continue
+  }
+
+  if (!existsSync(abs)) { problems.push(`files 里的 ${clean} 在磁盘上不存在`); continue }
+  if (statSync(abs).isDirectory()) {
+    const list = walk(abs)
+    if (!list.length) problems.push(`files 里的目录 ${clean} 是空的`)
+    dirEntries.push(clean)
+    for (const f of list) shipped.add(posix(relative(ROOT, f)))
+  } else {
+    shipped.add(clean)
+  }
+}
+
+// 1) 必带文件
+for (const f of REQUIRED_FILES) {
+  if (!shipped.has(f)) problems.push(`必带文件 ${f} 没进包(补进 package.json#files)`)
+}
+
+// 2) 必带目录:要写成 files 里的目录条目,且真的有文件
+for (const d of REQUIRED_DIRS) {
+  if (!dirEntries.includes(d)) problems.push(`必带目录 ${d}/ 没写进 package.json#files`)
+  const inDir = [...shipped].filter(p => p.startsWith(d + '/'))
+  if (!inDir.length) problems.push(`必带目录 ${d}/ 展开后一个文件都没有`)
+}
+
+// 3) 反向:磁盘上属于目录条目的每个文件都得进包(漏登记 = 悄悄少发)
+for (const d of dirEntries) {
+  const onDisk = walk(join(ROOT, d)).map(f => posix(relative(ROOT, f)))
+  const missed = onDisk.filter(f => !shipped.has(f))
+  if (missed.length) problems.push(`${d}/ 里有 ${missed.length} 个文件没进包:${missed.join(', ')}`)
+}
+
+// 4) 包内分片(client.<suffix>.js)必须随包发出,漏一个面板启动就 404
+const shards = readdirSync(ROOT).filter(n => /^client\.[^.]+(?:\.[^.]+)*\.js$/.test(n) && n !== 'client.js')
+for (const s of shards) {
+  if (!shipped.has(s)) problems.push(`分片 ${s} 没进包(改 package.json#files 的 client.*.js 通配)`)
+}
+
+const countIn = d => [...shipped].filter(p => p.startsWith(d + '/')).length
+if (!QUIET) {
+  console.log(
+    `发货清单:files 展开 ${shipped.size} 个文件` +
+      `(tools ${countIn('tools')} / locale ${countIn('locale')} / skills ${countIn('skills')})`,
+  )
+}
+
+if (problems.length) {
+  console.error(`❌ 发货清单有 ${problems.length} 处漏项:`)
+  for (const p of problems) console.error(`   ${p}`)
+  process.exit(1)
+}
+if (!QUIET) console.log(`✅ 发货清单通过:必带 ${REQUIRED_FILES.length} 份文件 + ${REQUIRED_DIRS.length} 个目录齐全`)
+process.exit(0)

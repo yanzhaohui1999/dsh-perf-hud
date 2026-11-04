@@ -30,7 +30,8 @@
   ],
   "scripts": {
     "test": "node tests/attribution.mjs && node tests/logic.mjs && node tests/host.mjs",
-    "docs:check": "node tools/check-docs.mjs"
+    "docs:check": "node tools/check-docs.mjs",
+    "pack:check": "node tools/check-pack.mjs"
   },
   "publishConfig": {
     "access": "public"
