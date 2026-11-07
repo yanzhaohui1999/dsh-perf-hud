@@ -35,6 +35,8 @@
 | `node tools/check-storage.mjs` | **ALL PASS(真页面)** | 落盘 → 刷新 → 读回同一个值(阶段 1 写入 / 阶段 2 读回) |
 | `node tools/check-interaction.mjs` | **ALL PASS(真页面)** | 真实输入 21 条事件;`keyup` 端到端 128ms = 输入延迟 0.4ms + 处理器 0ms |
 
+> 交付全部落地后(HEAD `f2bcee2`)又把五个验收器复跑了一轮:**同样五个 ALL PASS**(读数随机波动属正常,例如那一轮 `check-counts` 是「检测到 2 / 切成现场 2」、真 ZIP ai 91,971B —— 与上表那次不是同一份现场)。
+
 > ⚠️ 真页面验收器**不进 CI**(要真浏览器 + 本机 `dsh web`),这是已知取舍,见 [milestone](2026-11-07-v1-milestone.md) §5 之外的说明与 [环境与验证](../verification.md)。
 
 ## 3. 契约冻结与向后兼容
