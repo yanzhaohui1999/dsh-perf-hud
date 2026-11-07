@@ -29,11 +29,13 @@
 1. ~~**宿主 CPU profile 客户端未接线**~~ → **已还(2026-11-04)**:开发者详情「宿主与链路」有三档入口(1/5/10 秒);事故包 `context.hostCpuProfile` 带 `meta` + 自热 top(`raw` ≤512KB 时随包,超限只带汇总并写清去哪拿);`capabilities()` 与实际一致,采到后 `missing` 不再出现 `host-cpuprofile:`。真宿主实测(空闲态)1 秒 = 96 节点 / 162 采样 / 23KB。
 2. ~~**事故包不带记录器自身开销**~~ → **已还(2026-11-04)**:事故包的 `context.recorder` 与整机导出件**同一个结构**(`p99` / `max` / `samples`,`selfStats()` 一份实现),`missing` 里那条 `recorder-cost:` 只在 `samples = 0`(还没采到)时照实写「这一格是空的」,有样本时不再出现。两支都有断言钉住。
 3. ~~**`stress()` 没有可读结果**~~ → **已还(2026-11-04)**:`stress()` 返回可读结果(三条腿各自的 ms / 组件 / 是否命中,加 `text`);面板「工具箱」有读者,未挂载时如实回 `no-render`。
-4. **`tallyScripts().unresolvedMs` 没有运行时读者**:算出来、写进 tally、只有单测断言它。要么给它消费者,要么删。
+4. ~~**`tallyScripts().unresolvedMs` 没有运行时读者**~~ → **已还(2026-11-07,`296ca33`)**:选了**删**,连同类死字段 `unresolved`(条数)一起删。理由:同一个量早就有带名字的表达 —— 未定名那部分按原因 / 文件名进 `byOther`(带毫秒),渲染层 `whoRows()` 把它和 `top` 一起喂给堆叠条,每段"名字 + ms"都印在正文里;tally 再存一份汇总只会与它漂。断言换成两条:`byOther` 给出口径内的 10ms(原来只钉一个计数 1,看不出归到哪去了)+ 不变式「`top` 合计 + `byOther` 合计 = `js`」(`tests/logic.mjs` 的「D5:按包合计 + 其余来源合计 = 脚本总耗时」)。
 5. ~~**`captureNow()` 语义含糊**~~ → **已还(2026-11-04)**:分成 `settled` / `pending`(已起一次、后摇没到,带 `waitMs`)/ `coalesced`(并进已有 pending)/ `not-recording` / `covered`;旧 `ok/incident` 判断路径不变。
 6. ~~**手动标记的反馈**~~ → **已还(2026-11-04)**:按钮读 `capture()` 返回值并显示回执(「已记为 i42(清单第 3 条 · 最近一次)」等),未进留存也照实说。
-7. **`dshVersion` 恒为 `null`**:客户端读 `state.host.dshVersion`,`index.js` 从未下发。要么宿主补(要重启),要么客户端别读。
-8. **跨分片共享的 94 字段 `state` 仍是单一对象**:`client.js` 已从 8,595 收到 3,751 行(1 主 + 6 片,`createModel` / `createWatch` / `createUi` 显式收依赖),但状态没有按视图归拢 —— 7 个文件里共 794 处 `state.` 引用,测试仍抽源码文本。拆分已落地,状态切分仍按 `docs/plans/2026-10-13-code-review.md` §5(P2-10) 记着。
+7. ~~**`dshVersion` 恒为 `null`**~~ → **已还(2026-11-07,`c7bc488`)**:选了**客户端别读** —— 字段整个从 `manifest.json` 删掉。宿主半没有可验证的版本来源(`profileContext` 只有 `name` / `dir` / `home` / `patchPath` / `overlays` / `startedBundles`,环境变量里没有 DSH 版本),补它只能猜 API(违背 §1);而一个恒 `null` 的字段会让读包的人去追一个不存在的采集失败。宿主运行时版本没丢:采过宿主 CPU profile 时在 `context.hostCpuProfile.meta.nodeVersion`。断言「诊断包:manifest 不宣称拿不到的 DSH 版本」钉住"别读回来"。
+8. **跨分片共享的 94 字段 `state` 仍是单一对象**:`client.js` 已从 8,595 行收到 4,315 行(1 主 + 6 片,`createModel` / `createWatch` / `createUi` 显式收依赖),但状态没有按视图归拢 —— 四个持有状态的分片里共 **898** 处 `state.` 引用(2026-11-07 实测:`client.js` 482 / `model` 243 / `ui` 137 / `watch` 36),测试仍抽源码文本。拆分已落地,状态切分仍按 `docs/plans/2026-10-13-code-review.md` §5(P2-10) 记着 —— 它是 [1.0 milestone](docs/plans/2026-11-07-v1-milestone.md) 的前置,**本轮明确不做**。
+9. ~~**Skill 的 `missing:` 前缀漂移没有守卫**~~ → **已还(2026-11-07,`80fb093`)**:`capabilityMissing()` 产出的是自由字符串,而诊断 Skill 按 §2.6 那张前缀表分类读包 —— 客户端换措辞 / 加前缀时三套件照绿,Skill 会静默落进"其它"类。补断言「缺失声明的前缀集合与诊断 Skill §2.6 的前缀表一一对应」:两边去重集合**双向**比(代码有而表里没有 / 表里有而代码已不生成),外加"每个 `missing.push` 都真的以 `前缀:` 开头"(把前缀拼进变量会绕过前两项)。新断言一上来就抓到真实漂移:`host-snapshot:` 与 `loaf-pkg:` 从没进过 Skill 的表,已补进「采集丢了 / 还没采到」。
+10. ~~**`tools/inspect-incident.mjs` 读不了自家 fixture**~~ → **已还(2026-11-07,`00b4706`)**:`tests/fixtures/incident-real.json` 是 `{incident, thresholds, redaction}` 的**切片**,工具按完整包判 `kind`,于是 `kind=undefined` 退出 1 —— 仓库自带的样本自己读不了。现在按形状自动认切片(`thresholds` / `redaction` 从顶层搬进 `context`,渲染仍只有一条路),其它形状明确报错并提示 `--allow-slice`;**切片会被说出来**(没有 `context.missing`,那三段显式写"切片里没有这一栏 —— 不是没有缺口")。用法写进工具头部注释,人读的入口在 [`docs/verification.md`](docs/verification.md) §2.2。
 
 ---
 
