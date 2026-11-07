@@ -56,7 +56,7 @@
 | 3 | **状态切分(P2-10)** 把 94 字段的单一 `state` 按视图归拢成 `state.ui` / `state.watch` / `state.host` / `state.render` 四片,主文件 + 6 个分片里 900 处 `state.` 引用各自只读自己那片 | `npm test` 全绿;**新静态断言**:每个分片只允许引用自己那片(白名单式,漏一个就红);五个真页面验收器全绿(`state` 是 `logic.mjs` 三个沙箱的手写桩,漏字段会在最后一个盒子炸) | — |
 | 4 | **离线渲染冒烟进 CI**(真页面验收的替代) `tools/render-smoke.mjs`:用最小 DOM 桩把主界面 / 卡顿详情 / 开发者详情五个页签 / 设置 / 收起态各渲染一遍,断言 0 抛错、关键文案在场、正文里没有漏成 key 的词典键 | CI 加一条步骤(`node tools/render-smoke.mjs`)并进 `npm test`;它挡的正是 `check-panel` 当年挡的那一类("三套件全绿、真页面一展开就 ReferenceError") | 3 |
 | 5 | **只读 MCP(P2,条件性 —— 见 §5)** `tools/hud-mcp.mjs`,stdio、零依赖、手写 JSON-RPC:三个只读工具 `list_incidents` / `get_pack` / `get_capabilities`,只吃**导出的包文件**,不连宿主、不写盘、不提供任何写操作 | 手写一个 JSON-RPC 客户端脚本跑 `initialize` → `tools/list` → `tools/call` ×3,三次返回与 `__perfHud` / `manifest.json` **同源**(对同一份 fixture 逐字节比);工具对缺字段 / 高版本 `schemaVersion` 说差异而不猜 | 1 |
-| 6 | **README 面向外部用户重写** 现在 377 行 / 63.5KB(中文)+ 355 行(英文摘要),混了开发史、已证伪的路、内部债。按三类读者重排:① 第一次装(安装 / 三个开关 / 看到什么);② 读包的人(四个文件 / `missing` / 诊断 Skill 指路);③ 贡献者(指到 AGENTS) | `wc -lc README.md` ≤ 一半;三类读者各有入口且**第一屏**能看到;`npm run docs:check` 0 断链 0 孤儿;搬走的历史进 CHANGELOG / `docs/plans/` | 4(命令名要先定) |
+| 6 | **README 面向外部用户重写** 现在 377 行 / 63.5KB(中文)+ 355 行(英文摘要),混了开发史、已证伪的路、内部债。按三类读者重排:① 第一次装(安装 / 几个开关 / 看到什么);② 读包的人(四个文件 / `missing` / 诊断 Skill 指路);③ 贡献者(指到 AGENTS) | `wc -lc README.md` ≤ 一半;三类读者各有入口且**第一屏**能看到;`npm run docs:check` 0 断链 0 孤儿;搬走的历史进 CHANGELOG / `docs/plans/` | 4(命令名要先定) |
 | 7 | **`missing:` 前缀表单一来源** 现在靠一条断言钉"代码 vs Skill 表一致",漂移仍要手改。改成 `tools/gen-prefix-table.mjs`:从 `client.model.js` 生成 §2.6 那张表 | 生成器跑一遍 → 工作区无 diff(CI 核 `git diff --exit-code`);改代码里的前缀而不跑生成器 → 红 | 1 |
 | 8 | **兼容矩阵与 1.0 声明对齐** `engines.dsh`(现 `>=0.2.0-rc.2 <0.3.0-0`)与 `package.json#dsh.compatibility.dshReleases`(现只列 `0.2.0-rc.2` / `0.2.1-rc.1`)在 1.0 要覆盖实际验证过的版本,并在 README 写"我们在哪些版本上真跑过" | `tools/check-pack.mjs` 加一条:矩阵里的每个版本都有一份真页面验收记录(`docs/plans/*-v1-acceptance.md` 里那一行);矩阵为空 / 版本不在 `engines` 范围内 → 红 | 4 |
 
@@ -85,7 +85,7 @@
 | 阶段 | 顺序 | 估时 | 为什么在这个位置 |
 |---|---|---|---|
 | S0 | 1 → 2(契约冻结 + 兼容检查) | 2–3 天 | 后面每一项都在**读**这份契约;先冻再包,不然 MCP 与 Skill 会照着还要改的形状写 |
-| S1 | 3(状态切分) | 5–7 天 | 它动 7 个文件里的 898 处引用,是本里程碑最大的回归面;放前面,后面两项(渲染冒烟 / README 的验证命令)才不用改两遍 |
+| S1 | 3(状态切分) | 5–7 天 | 它动主文件 + 6 个分片里的 900 处引用,是本里程碑最大的回归面;放前面,后面两项(渲染冒烟 / README 的验证命令)才不用改两遍 |
 | S2 | 4(离线渲染冒烟 + CI) | 2–3 天 | 依赖 3 定下来的渲染入口;它一落地,S3 的每一步都能被 CI 挡一次 |
 | S3 | 5(只读 MCP) | 3–4 天 | 依赖 1(冻结的格式);它读的就是导出的包,不需要新的采集能力 |
 | S4 | 6(README 重写) | 2 天 | 要引用 4 / 5 落地后的命令名与用法;放最后一批写,免得写完又改 |
