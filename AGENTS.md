@@ -65,7 +65,7 @@
 | `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(456 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 四套离线断言(737 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
+| `tests/` | 四套离线断言(739 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 八份参考文档(含 [pack-schema](docs/pack-schema.md))+ `images/`(9 张 README 截图)+ `plans/`(按日期归档 + 索引,含 1.0 验收档案) | 按需查,别通读(§9) |
 | `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 + `dsh.compatibility.dshReleases`(**只列真跑过的 DSH 版本**,`npm run pack:check` 核) | 改挂载、发版(§10) |
@@ -103,7 +103,7 @@
 | `state.watch` | 37 | 守夜层(环形缓冲 / 留存 / 落盘)+ 场景标签 + 捕获计数 | 主文件 + model + ui + watch + tools |
 | `state.host` | 15 | 宿主快照(`state.host.snapshot`)/ 事件回执 / CPU 采样 / 链路 | 主文件 + model + ui + watch |
 
-四条离线断言钉住它:① 字面量只有这四片且每片非空;② 四片的字段数写死(挪字段要改同一行并说明);③ 每处引用都命中真实的「片.字段」,裸引用(少一层)与错片都是红;④ 每个文件只读白名单里的片 —— `client.watch.js` 只有 `watch/render/host`,工具箱只有 `watch`,pack / i18n 一个都不许读;model 与 ui 拿全四片(它们本来就是"把四侧算成一句话"的那一层)。新增一位状态前先想清**它属于哪一层**,写到对应片里。
+六条离线断言钉住它:① 字面量只有这四片且每片非空;② 四片的字段数写死(挪字段要改同一行并说明);③ **别名解析**:`const watch = state.watch` 这类别名只许指向一片、不许指向整个 state / 解构 state、不许再赋值,且同名变量不能另有来源(否则"它指向哪片"只有运行时才知道);④ 每处引用(**含经别名的**)都命中真实的「片.字段」,裸引用(少一层)与错片都是红;⑤ 每个文件只读白名单里的片(含经别名的)—— `client.watch.js` 只有 `watch/render/host`,工具箱只有 `watch`,pack / i18n 一个都不许读,主文件是四片的所有者;⑥ `client.model.js` 虽拿全四片,但对 `state.ui` 的读点按**字段白名单**收(见 `tests/logic.mjs` 的 `STATE_FIELD_ALLOW`,新增一个要说明模型层为什么需要它)。新增一位状态前先想清**它属于哪一层**,写到对应片里。
 
 ⚠️ **装载顺序有依赖**:`apply()` 里 `Promise.all([loadI18n(), loadModel(), loadWatch()])` 之后才 `restore()` 与 `start()` —— 守夜捕获会调模型层的 `scriptEvidence` / `packageOfScript`,`restore()` 会调 `pruneMapCache`。加新的采集期调用前先确认它所在的层已经到位。
 
@@ -115,14 +115,14 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑四套件**(合计 **737** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑四套件**(合计 **739** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 673 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
+node tests/logic.mjs         # 675 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 node tests/compat.mjs        # 12 条:上一版 schemaVersion 的夹具包喂当前读方(契约没漂 + 缺键必红)
-node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 737)
+node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 739)
 ```
 
 一条命令跑完:`npm test`。线上(先按 [环境与验证](docs/verification.md) 换 cookie):

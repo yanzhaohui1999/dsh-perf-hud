@@ -449,9 +449,15 @@ process.exitCode = failed === 0 ? 0 : 1;
 
 // ═══════════════ S1:状态四片(1.0 交付 3)═══════════════
 // 以前只有一个 94 字段的 state:谁都能读写任何一位,900 处引用里"这一位到底属于哪一层"无从判断。
-// 现在按视图归成四片(state.ui / state.watch / state.host / state.render),边界靠下面四条断言钉住。
-// ⚠️ 白名单里 model / ui 拿全四片是**对的**:视图模型要把采集、守夜、宿主三侧算成一句话,
-// 渲染层要把四片都画出来。真正被约束的是**采集侧**:守夜层读不到面板状态,工具箱读不到宿主。
+// 现在按视图归成四片(state.ui / state.watch / state.host / state.render),边界靠下面六条断言钉住。
+//
+// 两条 2026-11-07 复核抓到的绕过,这里都堵上了:
+//   ① `const watch = state.watch;` 这样的别名(16 处)—— 之后的 `watch.<字段>` 不被失明的正则看见,
+//      借别名读另一片的字段曾全绿。现在**解析别名**:按别名指向的片判字段是否存在、判该文件许不许读。
+//      选"解析"而不是"禁止":别名本身是合理的(同一函数里写十几次 `state.watch.x` 只会更难读),
+//      要管的不是写法,是"它指向哪一片"这件事不能被藏起来。
+//   ② `client.js` / `client.model.js` 的白名单四片全开,而它们占 81% 的引用。主文件是**所有者**
+//      (四片都写),全开成立;视图模型对 `ui` 片的读点列成白名单 —— 新增一个就得说明模型层为什么要它。
 const STATE_FILES = {
 	'client.js': source,
 	'client.model.js': modelSource,
@@ -471,6 +477,13 @@ const STATE_WHITELIST = {
 	'client.tools.js': ['watch'],
 	'client.pack.js': [],
 	'client.i18n.js': [],
+};
+// 四片全开的文件里,**按字段**再收一层:视图模型算导出件 / 渲染指纹时会读一些界面状态,
+// 但"读哪些"要写在这里。新增一个 = 说明为什么模型层需要它(而不是把它当成随手可读的全局变量)。
+const STATE_FIELD_ALLOW = {
+	'client.model.js': {
+		ui: ['marks', 'errors', 'collapsed', 'copyNote', 'pickNote', 'causeOpen', 'packPreviewId', 'groups', 'pos', 'displayKey', 'requestRender'],
+	},
 };
 // 状态字面量就是这一片的"清单":片名 → 字段集合。片后面的右括号与片的键同缩进(3 个 tab),
 // 所以按缩进切块是可靠的;字段键在 4 个 tab 上,嵌套对象的键更深,不会误收。
@@ -495,34 +508,100 @@ check('状态四片:四片的字段数 == 23 / 53 / 37 / 15(挪字段要改这�
 	// watch 片的 37 = 守夜对象自己的 30 个键 + tally + 场景/空闲基线 6 个(它本来就是一整层)
 	[stateSlices.ui.length, stateSlices.render.length, stateSlices.watch.length, stateSlices.host.length],
 	[23, 53, 37, 15]);
-// ① 引用必须写成 state.<片>.<字段>:裸引用(少一层)与错片(字段不在那片)都是红。
-// 只需要"文件里有没有这种形状",所以扫源码文本就够 —— 不执行,也就不会被 sandbox 的桩掩盖。
-check('状态四片:每处引用都是 state.<片>.<字段>,字段真的在那一片里(裸引用 / 未知片 / 错片 = 0)', (() => {
+
+// ── 别名解析(见文件头 ①)──
+// 规则:别名只能指向**一片**(`= state.<片>`),不能指向整个 state / 解构整个 state(那样所有字段检查都会被绕过);
+// 声明之后**不许再赋值**(否则"它指向哪片"只有运行时知道);所指向的片必须在该文件白名单内。
+const stateAliases = {};
+const aliasProblems = [];
+const stateRefs = [];
+for (const [file, text] of Object.entries(STATE_FILES)) {
+	const lineOf = (index) => text.slice(0, index).split('\n').length;
+	stateAliases[file] = new Map();
+	// ① 别名声明:`const watch = state.watch;`
+	for (const match of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*state\.([A-Za-z_$][\w$]*)\s*;/g)) {
+		const [, name, slice] = match;
+		const at = `${file}:${lineOf(match.index)}`;
+		if (stateSlices[slice] === undefined) aliasProblems.push(`${at} 别名 ${name} 指向不存在的片 state.${slice}`)
+		if (STATE_WHITELIST[file].includes(slice) === false) aliasProblems.push(`${at} 别名 ${name} 指向本文件不该读的片 ${slice}`)
+		// 同名在不同函数里各声明一次是正常的(必须同片);同名**另有来源**才是问题,见下面 ②
+		const previous = stateAliases[file].get(name);
+		if (previous !== undefined && previous !== slice) {
+			aliasProblems.push(`${at} 别名 ${name} 这一处指向 ${slice},别处指向 ${previous} —— 同一个名字只能指向一片`)
+		}
+		stateAliases[file].set(name, slice);
+	}
+	// ② 指向整个 state / 从 state 解构:一律不许
+	for (const match of text.matchAll(/\b(?:const|let|var)\s+(?:\{[^}]*\}|[A-Za-z_$][\w$]*)\s*=\s*state\b(?!\s*[.[])/g)) {
+		aliasProblems.push(`${file}:${lineOf(match.index)} 出现"整个 state 的别名 / 解构" —— 字段级检查会被绕过`)
+	}
+	// ②' 别名名字必须只属于"state 的某一片":同一文件里同名变量另有来源(比如
+	//     `const watch = state.host.hostEvents`)会让别名解析张冠李戴 —— 要么换名,要么别用同名。
+	for (const [name] of stateAliases[file]) {
+		for (const match of text.matchAll(new RegExp(`\\b(?:const|let|var)\\s+${name}\\b\\s*=(?!=)`, 'g'))) {
+			const after = text.slice(match.index, match.index + 160);
+			if (new RegExp(`^\\s*(?:const|let|var)\\s+${name}\\s*=\\s*state\\.[A-Za-z_$][\\w$]*\\s*;`).test(after)) continue;
+			aliasProblems.push(`${file}:${lineOf(match.index)} \`${name}\` 既是 state 片的别名,又有别的来源 —— 别名解析不可靠,换个名字`)
+		}
+		for (const match of text.matchAll(new RegExp(`function\\s+[A-Za-z_$][\\w$]*\\s*\\(\\s*${name}\\s*[,)]`, 'g'))) {
+			aliasProblems.push(`${file}:${lineOf(match.index)} 函数参数也叫 \`${name}\`,与 state 片的别名同名`)
+		}
+	}
+	// ③ 别名再赋值(排除声明本身)
+	for (const [name] of stateAliases[file]) {
+		for (const match of text.matchAll(new RegExp(`(?<![\\w$.])${name}\\s*=(?!=)`, 'g'))) {
+			const before = text.slice(Math.max(0, match.index - 24), match.index);
+			if (/(?:const|let|var)\s+$/.test(before)) continue;
+			aliasProblems.push(`${file}:${lineOf(match.index)} 别名 ${name} 被重新赋值 —— 它指向哪片就不再是静态可判的了`)
+		}
+	}
+	// ④ 直接引用:state.<片>.<字段>(以及唯一的整片取用 state.watch)
+	for (const match of text.matchAll(/(?<![\w$.])state\.(\w+)(?:\.([A-Za-z_$][\w$]*))?/g)) {
+		stateRefs.push({ file, at: `${file}:${lineOf(match.index)}`, slice: match[1], field: match[2], via: null });
+	}
+	// ⑤ 经别名的引用:别名.<字段> 按别名指向的片记账
+	for (const [name, slice] of stateAliases[file]) {
+		for (const match of text.matchAll(new RegExp(`(?<![\\w$.])${name}\\.([A-Za-z_$][\\w$]*)`, 'g'))) {
+			stateRefs.push({ file, at: `${file}:${lineOf(match.index)}`, slice, field: match[1], via: name });
+		}
+	}
+}
+check('状态四片:别名只指向一片、指向白名单内的片、不被重新赋值、也没有整个 state 的别名/解构',
+	aliasProblems, []);
+check('状态四片:每处引用都是 state.<片>.<字段>(含经别名的),字段真的在那一片里(裸引用 / 未知片 / 错片 = 0)', (() => {
 	const bare = [];
 	const unknown = [];
 	const misplaced = [];
-	for (const [file, text] of Object.entries(STATE_FILES)) {
-		const lineOf = (index) => text.slice(0, index).split('\n').length;
-		for (const match of text.matchAll(/(?<![\w$.])state\.(\w+)(?:\.([A-Za-z_$][\w$]*))?/g)) {
-			const [, slice, field] = match;
-			const at = `${file}:${lineOf(match.index)}`;
-			// 整片取用只允许 state.watch:守夜层与视图模型都按`const watch = state.watch`取那一个对象
-			if (field === undefined) { if (slice !== 'watch') bare.push(`${at} state.${slice}`); continue }
-			if (stateSlices[slice] === undefined) { unknown.push(`${at} state.${slice}.${field}`); continue }
-			if (stateSlices[slice].includes(field) === false) misplaced.push(`${at} state.${slice}.${field}`)
+	for (const ref of stateRefs) {
+		// 整片取用只允许 state.watch:守夜层与视图模型都按`const watch = state.watch`取那一个对象
+		if (ref.field === undefined) {
+			if (ref.slice !== 'watch') bare.push(`${ref.at} state.${ref.slice}`)
+			continue;
+		}
+		if (stateSlices[ref.slice] === undefined) { unknown.push(`${ref.at} state.${ref.slice}.${ref.field}`); continue }
+		if (stateSlices[ref.slice].includes(ref.field) === false) {
+			misplaced.push(`${ref.at} ${ref.via === null ? `state.${ref.slice}` : `别名 ${ref.via}(→${ref.slice})`}.${ref.field}`)
 		}
 	}
 	return { bare, unknown, misplaced };
 })(), { bare: [], unknown: [], misplaced: [] });
-check('状态四片:每个文件只读白名单里的片(越界 = 红;采集侧读不到面板状态)', (() => {
+check('状态四片:每个文件只读白名单里的片(含经别名的;越界 = 红,采集侧读不到面板状态)', (() => {
 	const violations = [];
-	for (const [file, text] of Object.entries(STATE_FILES)) {
-		const allowed = STATE_WHITELIST[file];
-		for (const match of text.matchAll(/(?<![\w$.])state\.(\w+)/g)) {
-			if (allowed.includes(match[1]) === false) violations.push(`${file} → state.${match[1]}`);
+	for (const ref of stateRefs) {
+		if (STATE_WHITELIST[ref.file].includes(ref.slice) === false) {
+			violations.push(`${ref.file} → ${ref.via === null ? `state.${ref.slice}` : `别名 ${ref.via}(→${ref.slice})`}`);
 		}
 	}
 	return [...new Set(violations)];
+})(), []);
+check('状态四片:四片全开的文件里,client.model.js 对 state.ui 的读点只在白名单字段内', (() => {
+	const violations = [];
+	for (const ref of stateRefs) {
+		const allow = STATE_FIELD_ALLOW[ref.file]?.[ref.slice];
+		if (allow === undefined || ref.field === undefined) continue;
+		if (allow.includes(ref.field) === false) violations.push(`${ref.at} ${ref.via === null ? `state.${ref.slice}` : `别名 ${ref.via}`}.${ref.field}`);
+	}
+	return violations;
 })(), []);
 
 // ═══════════════ A/B/C/D/E 新增逻辑的离线验证 ═══════════════

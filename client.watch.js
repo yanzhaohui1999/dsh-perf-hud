@@ -677,9 +677,11 @@ window.__ModuleLoader__.load({
 		 *   - `coalesced`:一个字节都没新建,这次标记被并进了**已经在等**的那一次。
 		 * 纯函数(只读 watch 的 pending 与 triggerCapture 的返回值),便于离线断言两个分支。
 		 */
-		function captureOutcome(watch, incident) {
+		// 参数不叫 `watch`:那个名字在这一层是 `state.watch` 的别名(见「状态四片」断言),
+		// 同名会让"它指向哪一片"变成运行时才能判断的事。
+		function captureOutcome(watchState, incident) {
 			if (incident !== null && incident !== undefined) return { ok: true, state: 'settled', incident };
-			const pending = watch.pending;
+			const pending = watchState.pending;
 			if (pending !== null && pending !== undefined) {
 				return {
 					ok: true,

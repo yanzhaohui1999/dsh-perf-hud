@@ -2452,10 +2452,12 @@ window.__ModuleLoader__.load({
 		}
 
 		function hostEventsText() {
-			const watch = state.host.hostEvents;
-			if (watch === null) return translate('notYet');
-			if (watch.installed !== true) return `${translate('notInstalled')}${watch.reason === undefined || watch.reason === '' ? '' : `: ${String(watch.reason).slice(0, 22)}`}`;
-			const rows = Object.entries(watch.stats ?? {}).sort((a, b) => b[1].ms - a[1].ms);
+			// 不叫 `watch`:那个名字在这一层是 `state.watch` 的别名(见「状态四片」断言),
+			// 同名两种来源会让"它指向哪一片"变成运行时才能判断的事。
+			const receipt = state.host.hostEvents;
+			if (receipt === null) return translate('notYet');
+			if (receipt.installed !== true) return `${translate('notInstalled')}${receipt.reason === undefined || receipt.reason === '' ? '' : `: ${String(receipt.reason).slice(0, 22)}`}`;
+			const rows = Object.entries(receipt.stats ?? {}).sort((a, b) => b[1].ms - a[1].ms);
 			if (rows.length === 0) return translate('waiting');
 			return rows.slice(0, 2).map(([name, stat]) => `${name} ${stat.count}${translate('times')} · ${translate('cumulative')} ${stat.ms}ms · ${translate('peak')} ${stat.max}ms`).join(' / ');
 		}
