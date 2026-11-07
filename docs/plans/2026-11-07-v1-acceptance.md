@@ -18,7 +18,8 @@
 ## 1. 离线门禁(`npm test`)
 
 ```
-735 条断言:attribution 11 / logic 671 / host 41 / compat 12
+740 条断言:attribution 11 / logic 676 / host 41 / compat 12
+(初稿 735;S0/S1 收口补丁 +3 条后为 740)
 + tools/render-smoke.mjs(离线渲染冒烟,9 屏)
 + tools/gen-prefix-table.mjs --check(§2.6 前缀表与 capabilityMissing() 一致)
 ```
@@ -75,7 +76,7 @@
 ## 6. 复核命令(照抄就能重跑)
 
 ```sh
-npm test                                   # 735 条 + 渲染冒烟
+npm test                                   # 740 条 + 渲染冒烟
 npm run docs:check && npm run pack:check   # 文档门禁 / 发货清单
 npm run prefix:check                       # §2.6 前缀表无漂移
 node tools/check-panel.mjs                 # 下面五个都要本机 dsh web 在跑
