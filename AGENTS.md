@@ -67,8 +67,8 @@
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
 | `tests/` | 四套离线断言(735 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
-| `docs/` | 七份参考文档 + `images/`(9 张 README 截图)+ `plans/`(三份档案 + 索引) | 按需查,别通读(§9) |
-| `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 | 改挂载、发版(§10) |
+| `docs/` | 八份参考文档(含 [pack-schema](docs/pack-schema.md))+ `images/`(9 张 README 截图)+ `plans/`(按日期归档 + 索引,含 1.0 验收档案) | 按需查,别通读(§9) |
+| `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 + `dsh.compatibility.dshReleases`(**只列真跑过的 DSH 版本**,`npm run pack:check` 核) | 改挂载、发版(§10) |
 | `icon.svg`、根目录六份文档 | 图标;README / README_EN / AGENTS / CONTRIBUTING / REVIEW / CHANGELOG | §9 文档地图 |
 
 **改动的生效方式**(决定你能不能验证):

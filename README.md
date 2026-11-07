@@ -8,7 +8,7 @@
 <p>
 <img alt="status" src="https://img.shields.io/badge/status-v0.8.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
-<img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1-4d6bfe" />
+<img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.3-4d6bfe" />
 </p>
 
 <p align="center">🌏 <b>中文</b> · <a href="./README_EN.md">English</a></p>
@@ -151,6 +151,17 @@ dsh plugin --profile web add "$PWD"
 | `package.json` 的 `dsh.*` | 重装或重启 |
 
 > 宿主半是**可选**的:它没加载时面板照常工作,只是「宿主 event-loop」「宿主事件到达」两处显示不可用,并写明原因 —— 不假装成功。
+
+### 在哪些 DSH 版本上真跑过
+
+只列**在本机真跑过五个真页面验收器**的版本 —— 1.0 起"声明即已验证":矩阵在 `package.json#dsh.compatibility.dshReleases`,`npm run pack:check` 逐条对着 [1.0 验收档案](docs/plans/2026-11-07-v1-acceptance.md) 里的机器标记核,声明了却没跑过的版本会红。
+
+| DSH | 验收时间 | 五个真页面验收器 |
+|---|---|---|
+| `0.2.1-rc.3` | 2026-11-07 | 全绿 |
+| `0.2.1-rc.1` | 2026-10-19 ~ 11-04 | 全绿 |
+
+`engines.dsh` 的范围更宽(`>=0.2.0-rc.2 <0.3.0-0`)—— 它是"装上不会崩"的边界,不等于"这一版我们跑过"。
 
 ## 🧭 界面结构(方案 1:整屏切换)
 

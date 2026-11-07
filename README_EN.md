@@ -10,7 +10,7 @@
 <p>
 <img alt="status" src="https://img.shields.io/badge/status-v0.8.0%20%C2%B7%20released-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
-<img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.1-4d6bfe" />
+<img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.3-4d6bfe" />
 </p>
 
 > ✅ **v0.8.0 is on npm** — install with `dsh plugin --profile web add dsh-perf-hud` (release gates and
@@ -329,6 +329,16 @@ Three calibers, asserted in the offline suites as well:
 
 The pack is built by **pure functions** (`buildPack` / `manifestFor` / `diagnosticSummary`) with no DOM dependency, so
 the offline suites assert its shape directly — a future UI rewrite or MCP server will not have to change it.
+
+## DSH compatibility (verified, not just declared)
+
+Only versions where all **five real-page verifiers** passed on a local `dsh web` are listed. Since 1.0,
+`package.json#dsh.compatibility.dshReleases` is checked against the machine markers in the
+[1.0 acceptance archive](docs/plans/2026-11-07-v1-acceptance.md) by `npm run pack:check` — declaring a version
+we never ran on fails the gate.
+
+`0.2.1-rc.3` (2026-11-07) and `0.2.1-rc.1` (2026-10-19 ~ 11-04) are the verified ones. `engines.dsh` is wider
+(`>=0.2.0-rc.2 <0.3.0-0`): that is the "it loads" boundary, not "we ran on it".
 
 ## Development
 
