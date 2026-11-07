@@ -1,0 +1,119 @@
+# 1.0 里程碑:把数据契约冻结下来
+
+> **状态:计划**(尚未落地)。当前行为与未还的债看 [REVIEW.md](../../REVIEW.md);开发规则看 [AGENTS.md](../../AGENTS.md);本条的来历是 [2026-10-13 代码审计](2026-10-13-code-review.md) §5 P2 的两项(状态切分 / 只读 MCP)与 0.9.0 之后的三条内部债清理(`chore/hud-debt-cleanup` 分支)。
+> 数字均为 **2026-11-07 在本分支实测**,命令写在每条后面 —— 别把这里的数抄进别处当口径。
+
+---
+
+## 0. 一句话
+
+0.9.0 对外承诺的是"装得上、看得见、导得出来";**1.0 要承诺的是"这些数据格式以后不再随版本漂"** —— 只读 MCP、诊断 Skill、外部脚本与小工具读的是同一份冻结契约,破坏它要等 2.0。
+
+---
+
+## 1. 为什么是 1.0
+
+### 1.1 从"没有第二个读者"变成"有"
+
+0.x 里改形状是自由的,也确实一直在改:`timeline.last60s` 直接删、`narrow` 字段按值改、`host-snapshot:` 从 `host:` 里拆出来、`dshVersion` 删掉。每次都能一句话说清"反正只有我自己读"。
+
+现在有了第二个读者,而且是**不会报错的**那种:
+
+- [`skills/dsh-perf-diagnosis/SKILL.md`](../../skills/dsh-perf-diagnosis/SKILL.md) 随包发货,按 §2.1 的字段表与 §2.6 的前缀表读包。读者是模型:格式一变它不会崩,只会**按错的类别给出判读**。2026-11-07 新加的那条前缀断言第一次跑就抓到 `host-snapshot:` 与 `loaf-pkg:` 两个前缀从进代码起就没进过 Skill 的表 —— 中间发过两个版本,没人发现。
+- `tools/inspect-incident.mjs` 是第二个读者(读 `incident.json`)。它甚至读不了仓库自己的 fixture:切片的 `{incident, thresholds, redaction}` 被当成完整包拒收,退出 1。
+- `capabilities()` 的叶子名与 `missing:` 前缀已经是**对外文字**:用户会把它们原样贴进 issue,外部脚本会 `grep` 它们。
+
+一个格式一旦有第二个读者,它就不是"我的实现细节"了,是 API。1.0 就是把这件事写进版本号:**之后改它 = 破坏性变更**。
+
+### 1.2 `schemaVersion` 冻结具体意味着什么
+
+冻结的是**读方依赖的那一层**,不是实现:
+
+| 契约 | 冻结内容 | 加 / 删 / 改怎么走 |
+|---|---|---|
+| `manifest.json`(`schemaVersion` 现为 **2**) | `kind` / `schemaVersion` / `complete` / `capabilities` / `redaction` / `notIncluded` / `files` 与它们下面被文档点名的键 | 加**可选**字段不涨版本;删 / 改名 / 改语义 → `schemaVersion` +1,**且旧读方仍能读**(未知字段忽略、未知版本说差异) |
+| `incident.json` | 顶层键集合(`id` / `cause` / `window` / `integrity` / `summary` / `frames` / `loaf` / `longTasks` / `interactions` / `env` / `urls` / `packages` / `baseline` / `host` / `day` 等)+ `summary` 里那些判据字段 | 同上;`scripts[].pkg / pkgVia / file / line` 的**语义**也冻(推断 vs 测量不许互换) |
+| `capabilities()`(`schema: 1`) | 叶子路径(`renderer.*` / `host.*` / `link.*` / `unobserved`)与 `{state, provenance, reason}` 形状 | 加叶子可以;删叶子 / 改 `state` 取值域 = 契约破坏 |
+| `missing:` 前缀 | §2.6 那张表(现在 16 个) | 新前缀随时可加(读方按"冒号前的类别"读);**删 / 改名 = 破坏**,除非先有两个 minor 不再生成 |
+| `window.__perfHud` | 读接口(`snapshot` / `watch` / `incidents` / `report` / `capabilities` / `causes` / `pack` / `preview` / `tally` …) | 加成员可以;改签名 / 删成员 = major |
+
+**"冻结"不等于"不许更好"**:允许的是"加可选字段 + 加新前缀 + 加新读接口";不允许的是把已有的名字挪走、把单位从累计改成每秒、把 `null` 的语义从"不知道"改成"没有"。
+
+### 1.3 1.0 不承诺什么(边界不变)
+
+- **不承诺定位根因**:四条腿覆盖是下界,`capabilities().unobserved` 里那几层(GPU / 合成 / Electron 主进程 / 原始源码行号 / 帧内顺序)永远写"看不到"。
+- **不承诺跨机器可比**:基线只来自同一个浏览器 profile,包内自己写着这条。
+- **不承诺上游问题被修好**:REVIEW §3 那两条(423ms 的 `Response.json`、侧栏逐条重渲染)是交给上游的证据,不在本仓库修。
+
+---
+
+## 2. 交付清单(8 条,每条可验收)
+
+| # | 交付 | 验收(可执行) | 依赖 |
+|---|---|---|---|
+| 1 | **契约冻结:字段清单 + 版本策略** 新增 `docs/pack-schema.md`(上面 §1.2 那张表的展开版:逐键、逐层、逐前缀),`manifest.json` / `incident.json` / `capabilities()` 三份键清单各一节 | `logic.mjs` 三条断言:① `manifestFor()` 的实际键集合 == 文档清单;② `buildPack()` 四份文件的顺序与 `manifest.files` 一致(已有,扩展成核键集合);③ `PACK_SCHEMA_VERSION` 变了而清单没动 → 红 | — |
+| 2 | **兼容策略变成检查,不是文字** 加 `tests/compat.mjs`(或并入 logic 的一个盒子):用**上一版** `schemaVersion` 的夹具包喂当前读方,断言仍能读出摘要与能力矩阵 | 新套件 1 条命令全绿;故意删一个顶层键跑一遍 → 必须红(把"红"写进提交正文) | 1 |
+| 3 | **状态切分(P2-10)** 把 94 字段的单一 `state` 按视图归拢成 `state.ui` / `state.watch` / `state.host` / `state.render` 四片,7 个文件里 898 处 `state.` 引用各自只读自己那片 | `npm test` 全绿;**新静态断言**:每个分片只允许引用自己那片(白名单式,漏一个就红);五个真页面验收器全绿(`state` 是 `logic.mjs` 三个沙箱的手写桩,漏字段会在最后一个盒子炸) | — |
+| 4 | **离线渲染冒烟进 CI**(真页面验收的替代) `tools/render-smoke.mjs`:用最小 DOM 桩把主界面 / 卡顿详情 / 开发者详情五个页签 / 设置 / 收起态各渲染一遍,断言 0 抛错、关键文案在场、正文里没有漏成 key 的词典键 | CI 加一条步骤(`node tools/render-smoke.mjs`)并进 `npm test`;它挡的正是 `check-panel` 当年挡的那一类("三套件全绿、真页面一展开就 ReferenceError") | 3 |
+| 5 | **只读 MCP(P2,条件性 —— 见 §5)** `tools/hud-mcp.mjs`,stdio、零依赖、手写 JSON-RPC:三个只读工具 `list_incidents` / `get_pack` / `get_capabilities`,只吃**导出的包文件**,不连宿主、不写盘、不提供任何写操作 | 手写一个 JSON-RPC 客户端脚本跑 `initialize` → `tools/list` → `tools/call` ×3,三次返回与 `__perfHud` / `manifest.json` **同源**(对同一份 fixture 逐字节比);工具对缺字段 / 高版本 `schemaVersion` 说差异而不猜 | 1 |
+| 6 | **README 面向外部用户重写** 现在 377 行 / 63.5KB(中文)+ 355 行(英文摘要),混了开发史、已证伪的路、内部债。按三类读者重排:① 第一次装(安装 / 三个开关 / 看到什么);② 读包的人(四个文件 / `missing` / 诊断 Skill 指路);③ 贡献者(指到 AGENTS) | `wc -lc README.md` ≤ 一半;三类读者各有入口且**第一屏**能看到;`npm run docs:check` 0 断链 0 孤儿;搬走的历史进 CHANGELOG / `docs/plans/` | 4(命令名要先定) |
+| 7 | **`missing:` 前缀表单一来源** 现在靠一条断言钉"代码 vs Skill 表一致",漂移仍要手改。改成 `tools/gen-prefix-table.mjs`:从 `client.model.js` 生成 §2.6 那张表 | 生成器跑一遍 → 工作区无 diff(CI 核 `git diff --exit-code`);改代码里的前缀而不跑生成器 → 红 | 1 |
+| 8 | **兼容矩阵与 1.0 声明对齐** `engines.dsh`(现 `>=0.2.0-rc.2 <0.3.0-0`)与 `package.json#dsh.compatibility.dshReleases`(现只列 `0.2.0-rc.2` / `0.2.1-rc.1`)在 1.0 要覆盖实际验证过的版本,并在 README 写"我们在哪些版本上真跑过" | `tools/check-pack.mjs` 加一条:矩阵里的每个版本都有一份真页面验收记录(`docs/plans/*-v1-acceptance.md` 里那一行);矩阵为空 / 版本不在 `engines` 范围内 → 红 | 4 |
+
+---
+
+## 3. 明确不做(与理由)
+
+| 不做 | 理由 |
+|---|---|
+| 治理类特性(写盘频控、列表 publish gate、`content-visibility` 补丁) | `@linxin666/dsh-perf` 的地盘;重复做比谁都不做更糟 |
+| bisection 工作流(隔离 profile + 重启 + 配对 CI) | `dsh-performance-guard` 的地盘;它要动宿主重启,与本插件"零侵入"的定位冲突 |
+| 宿主侧每插件 CPU / 堆 / 磁盘 / 进程树 | `dsh-perf-lens` 的地盘,而且那层要碰宿主内部结构 |
+| 采 GPU / 合成 / Electron 主进程 / 原始源码行号 / 帧内顺序 | 页面内**没有 API**;`capabilities().unobserved` 已经把"看不到"写成字段,再许愿就是假承诺 |
+| 内置对话 / 自动修复建议 | 诊断工具给证据与限制,不给药方;加一个模型进去,幻觉会污染它自己的可信度 |
+| 相似事故聚类 / 修复前后对比 / 自动建议采集档位 | 留存只有"最差 10 + 每天 1 条 × 7 天 + 最近 3 次",样本量撑不起统计,做出来是伪相关(2026-10-12 计划里已经因此排后) |
+| MCP 的写能力(清事故 / 改采集档位 / 改 profile) | 1.0 只读;写入口要求权限模型与回执,不是这个里程碑能顺手带上的 |
+| 把 `dshVersion` 补回 manifest | 宿主半仍没有可验证的版本 API(`profileContext` 只有 name / dir / home);REVIEW §2 第 7 条已按"客户端别读"还清,不来回摇摆 |
+| 改 `cordis.patch.yml` / profile 持久化配置 | 仓库硬约束(AGENTS §1):那是组合声明,不是配置面 |
+
+---
+
+## 4. 顺序与时间(依赖决定先后)
+
+单人节奏,**总估 ~3 周**;每一步都是"绿着提交",不攒大提交。
+
+| 阶段 | 顺序 | 估时 | 为什么在这个位置 |
+|---|---|---|---|
+| S0 | 1 → 2(契约冻结 + 兼容检查) | 2–3 天 | 后面每一项都在**读**这份契约;先冻再包,不然 MCP 与 Skill 会照着还要改的形状写 |
+| S1 | 3(状态切分) | 5–7 天 | 它动 7 个文件里的 898 处引用,是本里程碑最大的回归面;放前面,后面两项(渲染冒烟 / README 的验证命令)才不用改两遍 |
+| S2 | 4(离线渲染冒烟 + CI) | 2–3 天 | 依赖 3 定下来的渲染入口;它一落地,S3 的每一步都能被 CI 挡一次 |
+| S3 | 5(只读 MCP) | 3–4 天 | 依赖 1(冻结的格式);它读的就是导出的包,不需要新的采集能力 |
+| S4 | 6(README 重写) | 2 天 | 要引用 4 / 5 落地后的命令名与用法;放最后一批写,免得写完又改 |
+| S5 | 7(前缀表生成器)→ 8(兼容矩阵) | 1 天 | 收尾项:7 依赖 1 的清单形状,8 依赖 4 的验收记录 |
+
+**1.0 发布门**(缺一不发布):
+
+1. `npm test` / `npm run docs:check` / `npm run pack:check` 全绿,断言总数与文档一致(CI 已核);
+2. 五个真页面验收器在本机 `dsh web` 上全绿,截图与输出存进 `docs/plans/<date>-v1-acceptance.md`(真页面**不进 CI**,这是已知取舍,见 §5);
+3. **向后兼容实测**:用 0.9.0 导出的一份真包喂当前读方(CLI / Skill 路径)仍能读出摘要与缺失声明;
+4. 发版:tag `v1.0.0` + provenance,CHANGELOG 的"破坏性变更"一节**应为空**。
+
+---
+
+## 5. 1.0 最不该包含的一件事:只读 MCP
+
+理由不是"它没用",而是**它和这个里程碑的主题相反**:
+
+1. **1.0 的价值是"把已有契约冻住",MCP 是"加一个新表面"**。一个 MCP server 不只是一段 JSON-RPC —— 它是常驻进程、一套权限模型(谁能调、能读哪些包)、一条新的版本矩阵(MCP 协议版本 × 插件版本)。这三样里没有一样能被"冻结 schemaVersion"顺带解决。
+2. **真实需求还没出现**。2026-10-12 的计划把 MCP 排 P2 的原话是"等真实需求;`capabilities()` 与 `manifest.schemaVersion` 就是留给它的接口"。到现在为止,消费方是 Skill 与 `inspect-incident.mjs`,两者都直接读文件 —— **没有一次**是"非 MCP 不可"。
+3. **冻结之后再加更便宜**。MCP 读的是导出的包。1.0 把包冻结下来,1.1 再加 MCP:它不用改格式、不用改 Skill、发布风险只落在新增的一个工具上,而且它反过来证明冻结这件事有意义。
+
+所以本文把 MCP 列进交付清单(见 §2 #5)但标**条件性**:若 S3 阶段发现工时或权限模型超预期,这是唯一可以整体推迟到 1.1 的一项,且推迟不影响其他 7 项。**不带病发 1.0。**
+
+---
+
+## 6. 与当前债的关系
+
+- 本里程碑的前置债已在 `chore/hud-debt-cleanup` 还掉三条:`tallyScripts` 的两个冗余字段(删)、`dshVersion`(删字段)、`inspect-incident` 的切片支持;并给 `missing:` 前缀加了跨文件断言 —— **那条断言是第 7 项生成器的雏形**(先钉住,再生成)。
+- **仍未还、且 1.0 必须解决**:状态切分(REVIEW §2 第 8 条 = §2 #3)。
+- **不属于 1.0、继续挂着的**:REVIEW §3 的两条上游证据(要上游改)、REVIEW §4 的能力边界(结构上做不到)。

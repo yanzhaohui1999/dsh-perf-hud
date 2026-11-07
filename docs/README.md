@@ -13,6 +13,7 @@
 | 发版、staged publishing | [release.md](release.md) |
 | 动手之前查"是不是踩过的坑" | [dead-ends.md](dead-ends.md) |
 | 对外说法、跟官方开发者工具比 | [landscape.md](landscape.md) |
+| 定下一个 milestone(1.0 交什么、为什么) | [plans/2026-11-07-v1-milestone.md](plans/2026-11-07-v1-milestone.md) |
 
 ## 根目录的活文档
 
