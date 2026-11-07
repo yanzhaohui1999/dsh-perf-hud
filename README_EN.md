@@ -119,7 +119,7 @@ the version policy; `tests/compat.mjs` proves packs from the previous schema ver
 |---|---|
 | `manifest.json` | format version, capture tier, **capability matrix** (what was captured / missing / why), redaction statement, what is not included |
 | `summary.md` | human summary in five fixed sections (summary / candidate causes / missing evidence / next steps / meta) |
-| `incident.json` | structured evidence (frames / LoAF / window long tasks / interactions / env / cross-session baselines) |
+| `incident.json` | structured evidence (frames / LoAF / window long tasks / interactions / env / cross-session baselines); when a host CPU profile overlaps the window it also carries `timeline[]` (optional: host vs page share) |
 | `README.md` | what this pack is, privacy stance |
 
 - **Preview before export**: it lists what will be included, redacted and missing. The **"for AI"** export blanks free
@@ -127,6 +127,7 @@ the version policy; `tests/compat.mjs` proves packs from the previous schema ver
 - **Redaction is subtraction, not anonymisation**: page URLs keep origin + path only; script URLs drop protocol/host and
   keep `rev`; secret parameter values become `<redacted>`; `/Users/<name>` becomes `~`; UA keeps major version + OS.
   Chat text, prompts, cookies, tokens and headers are **never collected**. `context.redaction` states all three lists.
+- **One timeline for host + page**: run `__perfHud.cpuProfile(5)`, reproduce the stall, then export that incident — `incident.timeline[0].share.hostPct` gives the host share, with the raw `host.samples[]` / `frames[]` sequences alongside. Acceptance: `node tools/check-timeline.mjs`.
 - **Read one incident**: `node tools/inspect-incident.mjs <file.json>`; **hand it to an AI**: send the `-ai.zip` — the
   bundled [diagnosis Skill](skills/dsh-perf-diagnosis/SKILL.md) reads it by its field table and prefix table.
 
@@ -161,13 +162,13 @@ the version policy; `tests/compat.mjs` proves packs from the previous schema ver
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 676 assertions: real functions extracted from client.js + static checks + coverage of the frozen contract
+node tests/logic.mjs         # 684 assertions: real functions extracted from client.js + static checks + coverage of the frozen contract
 node tests/host.mjs          # 41 assertions: real index.js driven by a fake ctx
 node tests/compat.mjs        # 12 assertions: a previous-schemaVersion pack fed to the current readers
 node tests/replay.mjs        # 8 assertions: the replay site re-derives the summary from frames and matches the pack
 node tools/render-smoke.mjs  # offline render smoke: six screens + "HUD off", no browser needed
 node tools/gen-prefix-table.mjs --check  # diagnosis Skill §2.6 prefix table in sync with capabilityMissing()
-# 748 assertions + one smoke run, no running DSH required; `npm test` runs them all
+# 756 assertions + one smoke run, no running DSH required; `npm test` runs them all
 ```
 
 Any change to rendering / `apply()` / `start()` also needs a **real-page** pass (`node tools/check-panel.mjs` at

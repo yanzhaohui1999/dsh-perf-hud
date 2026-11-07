@@ -38,10 +38,10 @@ jobs:
           node --check client.js
           for file in tools/*.mjs; do node --check "$file"; done
 
-      # 748 条离线断言:attribution 11 / logic 676 / host 41 / compat 12 / replay 8。
+      # 756 条离线断言:attribution 11 / logic 684 / host 41 / compat 12 / replay 8。
       # logic.mjs 会把 client.js 里的真函数抽进沙箱,所以它同时是客户端半的回归门;
       # compat.mjs 用**上一版 schemaVersion** 的夹具包喂当前读方(1.0 的冻结承诺靠它)。
-      - name: Offline suites (748 assertions)
+      - name: Offline suites (756 assertions)
         run: |
           node tests/attribution.mjs
           node tests/logic.mjs
@@ -72,9 +72,9 @@ jobs:
             total=$((total + count))
           done
           echo "total: $total"
-          test "$total" -eq 748
+          test "$total" -eq 756
           # 文档里的数字也要跟着走:CONTRIBUTING 曾经停在 325 / 39 / 358,而这条门禁
           # 以前只核总数 —— 五份文档里任何一份漏改,读者看到的就不是实际条数。
           for doc in README.md README_EN.md REVIEW.md AGENTS.md CONTRIBUTING.md; do
-            grep -q "748" "$doc" || { echo "$doc 里没有 748"; exit 1; }
+            grep -q "756" "$doc" || { echo "$doc 里没有 756"; exit 1; }
           done

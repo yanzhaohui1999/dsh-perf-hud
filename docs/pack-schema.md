@@ -192,10 +192,12 @@ tier
 day
 restored
 noteDropped
+timeline
 ```
 
 - `integrity` 是 v3 才有的;没有它 = **不知道采全没有**,不是"采全了"。
 - `tier` / `day` 在留存时填;`restored` 表示这条是刷新后读回来的;`noteDropped` 只在"给 AI"的那条导出路径上出现(`note` 被置空时标 `true`)。
+- `timeline` 是 **1.0 / A4 新增的可选数组**:只有"最近一次宿主 CPU 采样"与这条事故的窗口有交集时才出现(没有就是没采到同一段时间,不是空数组)。它是**宿主 + 客户端同一时间轴**,不是新的一份帧数据 —— 形状见 §3.7。
 - `severity` 是 `round1` 过的毫秒数;`at` 是 ISO 字符串,`atPerfMs` 是 perf 毫秒 —— 两者靠 `env.perfOrigin` 换算。
 
 ### 3.4 `window` / `integrity` / `env` / `host`
@@ -287,6 +289,24 @@ suspectedThrottle
 | `summary.topScripts[]` | `at` `u` `ms` `fn` `invoker` `invokerType` `charPos` `pkg` `pkgVia` `file` `line` `lineVia` `lineScope` | 与 `loaf[].scripts[]` 是同一批,按 ms 降序取前 5 |
 | `urls[]` | — | 纯字符串数组(脚本 URL 表) |
 | `baseline` | `p50` `p90` `p99` `max` `worstMs` `frames` … | 帧环**除本窗口之外**的分布;整段可为 `null` |
+
+### 3.7 `incident.timeline[]`(可选,1.0 / A4)
+
+一个宿主 CPU profile 一段(当前实现最多一段)。键名与口径:
+
+| 键 | 是什么 |
+|---|---|
+| `fromMs` / `toMs` / `from` / `to` | profile 覆盖范围与事故窗口的交集;`*Ms` 是 perf 毫秒(与 `incident.frames[].t` 同一坐标系),`from/to` 是 ISO 墙钟 |
+| `profile` | `{ startedAt, endedAt, durationMs, samples }`;前两个是宿主的 `Date.now()` 锚点,`durationMs` 是 profile 自带跨度 |
+| `alignment` | `{ basis, perfOrigin, offsetMs, errorMs }`;`errorMs` 是两端锚点跨度差(对齐不确定度的估计,不是保证) |
+| `stall` | `{ fromMs, toMs, ms, basis }`;这条事故**最差那一帧**的区间(`basis: 'worst-frame'`);没有有效帧时退成 `'profile-intersection'` |
+| `share` | `{ hostMs, hostPct, pageMs, pagePct, jsMs, nativeMs, idleMs, coveredMs, coveragePct, partial, basis }`;只在 profile 盖住 stall ≥50% 时出现。`hostPct = (jsMs + nativeMs) / stall.ms`;**`pagePct` 是剩余部分,不等于页面 JS 全忙**;`coveragePct < 100` 时 `hostPct` 是下界 |
+| `shareOmitted` | `share` 不出现时说明原因(短于可测范围 / profile 没盖住 / 覆盖不足),不把"没采到"读成"宿主不忙" |
+| `host.samples[]` | 宿主原始采样序列:`{ t, ms, fn, kind }`,`kind ∈ js / native / idle`;`t` 是样本结束的 perf 毫秒,`[t-ms, t]` 是它覆盖的区间。卡顿区间内的样本优先保留,总条数封顶并用 `omitted` 写明截掉多少 |
+| `host` 其余 | `kept` / `omitted` / `leadingMs`(首样本被跳过的毫秒)/ `jsMs` / `nativeMs` / `idleMs` |
+| `frames[]` | 窗口内的客户端帧序列(与 `incident.frames` 是同一批,只保留与 profile 交集重叠的):`{ t, ms, hostMs, hostPct, jsMs, nativeMs, coveragePct }`;`hostMs` 是与该帧 `[t-ms, t]` 重叠的宿主采样时间 |
+
+读法:先看 `share.hostPct` 回答"最差这一帧宿主占多少",再看 `host.samples[]` / `frames[]` 自己复核(两段原始序列都在);`share.pagePct` 只能读成"不是宿主",不能读成"页面 JS 全忙"。对齐靠宿主 `Date.now()` 与页面 `performance.timeOrigin`:同一台机器上是同一时钟;跨机器访问时两侧系统时钟偏差不在这条公式里,不承诺 ≤1 帧。完整口径见 [reading-panel](reading-panel.md) 与包内 `context.howToRead`。
 
 ---
 
@@ -392,7 +412,7 @@ README.md
 | incident `schema: 1` → `2` | 脚本 URL 从每条脚本里抽成 `incident.urls` + `scripts[].u` |
 | incident `schema: 2` → `3` | 加 `incident.integrity`(窗口完整性:到底采全没有) |
 | manifest `schemaVersion: 1` → `2` | 加 `manifest.complete` 与 `manifest.incident.integrity`(都来自上面那条) |
-| 不升版本的加字段 | `context.hostCpuProfile` / `context.recorder`(0.9.x)、`summary.worstFrameJs` 一类的派生读数 —— 都是**可选**,老包里没有照样读 |
+| 不升版本的加字段 | `context.hostCpuProfile` / `context.recorder`(0.9.x)、`summary.worstFrameJs` 一类的派生读数、`incident.timeline`(1.0 / A4)—— 都是**可选**,老包里没有照样读 |
 | 不升版本的删字段 | `manifest.dshVersion`(0.9.0)—— **违反本节规则的那一条**,已记进 [REVIEW](../REVIEW.md) §2;以后不许再这样 |
 
 ---

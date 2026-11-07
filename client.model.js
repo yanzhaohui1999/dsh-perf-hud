@@ -53,6 +53,8 @@ window.__ModuleLoader__.load({
 				TALLY_BUCKET_MS,
 				TALLY_MINUTES,
 				TARGETS,
+				TIMELINE_MIN_COVERAGE,
+				TIMELINE_SAMPLE_MAX,
 				TOP_N,
 				W,
 				WATCH_DAILY_DAYS,
@@ -1228,6 +1230,267 @@ window.__ModuleLoader__.load({
 			return summary;
 		}
 
+		// ───────────── A4:宿主 CPU profile ↔ 客户端帧环(同一时间轴)─────────────
+		/**
+		 * 宿主 profile 的时间基准。**.cpuprofile 的 `startTime` / `endTime` 是 V8 自己的微秒时钟**
+		 * (实测本机是开机以来的单调时钟,不是 Unix 毫秒),而宿主回执里的 `meta.startedAt` /
+		 * `meta.endedAt` 是宿主进程的 `Date.now()`(墙上毫秒)。两者做一条**仿射映射**:
+		 * `startTime→startedAt`、`endTime→endedAt`。
+		 *
+		 * 为什么用两端而不是只信一端:`Profiler.start` 的往返会让 `startedAt` 比真正开始采样晚
+		 * 几毫秒(实测 10ms 上下),`Profiler.stop` 之后记的 `endedAt` 则贴近 `endTime`;只信起点
+		 * 会把整条时间轴平移 10ms 左右,仿射把这点跨度差按比例摊开 —— 在夹具上把跨帧误差压到
+		 * ≤1 帧(见 tests/fixtures/timeline-host.json 与 tools/check-timeline.mjs)。
+		 *
+		 * `errorMs` 是两端跨度的差(`|墙钟跨度 − profile 跨度|`),**是估计不是保证**:它把
+		 * 采样启停往返算进去了;跨机器时钟偏差不在这条公式里(见 docs/reading-panel.md)。
+		 */
+		function timelineHostAnchor(record) {
+			const cur = record === null || record === undefined ? {} : record;
+			const profile = cur.profile;
+			const meta = cur.meta;
+			if (profile === null || typeof profile !== 'object' || meta === null || typeof meta !== 'object') return null;
+			const startTime = Number(profile.startTime);
+			const endTime = Number(profile.endTime);
+			const startedAt = Number(meta.startedAt);
+			const endedAt = Number(meta.endedAt);
+			if (![startTime, endTime, startedAt, endedAt].every((value) => Number.isFinite(value))) return null;
+			if (endTime <= startTime) return null;
+			const profileSpanMs = (endTime - startTime) / 1000;
+			const wallSpanMs = endedAt - startedAt;
+			const scale = wallSpanMs > 0 ? wallSpanMs / profileSpanMs : 1;
+			return {
+				startTime, endTime, startedAt, endedAt, scale,
+				profileSpanMs: round1(profileSpanMs),
+				wallSpanMs: round1(wallSpanMs),
+				errorMs: round1(Math.abs(wallSpanMs - profileSpanMs)),
+			};
+		}
+
+		/** profile 的微秒时间戳 → 宿主墙钟毫秒(仿射,见 timelineHostAnchor)。 */
+		function timelineAnchorWallAt(anchor, us) {
+			return anchor.startedAt + ((us - anchor.startTime) / 1000) * anchor.scale;
+		}
+
+		/**
+		 * 把 .cpuprofile 折成**带区间的采样序列**(原始序列的原料):每条样本覆盖
+		 * `[上一个样本, 本样本]` 这一段,`timeDeltas[i]` 就是它的长度。
+		 *
+		 * 与 cpuProfileSummary 同一条纪律:**跳过第一个样本** —— 它的 delta 是"profile 起点 →
+		 * 第一个样本"(含 inspector 启用的时间),不是任何函数的 CPU 时间;跳过的毫秒进 `leadingMs`。
+		 * 节点表里查不到的 sampleId 也跳过,不编匿名桶。
+		 *
+		 * 三档:js / native / idle。`(program)` 与 `(root)` 是 V8 的非 JS 采样点(实测 Node 在
+		 * 等 libuv 时也会出 `(program)`),单列成 native;`(idle)` 才是空闲。宿主占比把 js 与
+		 * native 都算"宿主在忙",但面板 / 文档要把这三档说清楚,不能把 native 读成页面脚本。
+		 */
+		function timelineHostSamples(profile, anchor, perfOriginMs) {
+			if (profile === null || typeof profile !== 'object') return null;
+			if (!Array.isArray(profile.nodes) || !Array.isArray(profile.samples) || !Array.isArray(profile.timeDeltas)) return null;
+			const names = new Map();
+			for (const node of profile.nodes) {
+				if (node === null || typeof node !== 'object') continue;
+				const frame = node.callFrame === null || typeof node.callFrame !== 'object' ? {} : node.callFrame;
+				const fn = typeof frame.functionName === 'string' && frame.functionName !== '' ? frame.functionName : '(anonymous)';
+				names.set(node.id, fn);
+			}
+			const out = [];
+			let cursor = profile.startTime;
+			let leadingMs = 0;
+			for (let i = 0; i < profile.samples.length; i += 1) {
+				const delta = profile.timeDeltas[i];
+				if (typeof delta !== 'number' || delta <= 0) continue;
+				const fromUs = cursor;
+				const toUs = cursor + delta;
+				cursor = toUs;
+				if (i === 0) { leadingMs = delta / 1000; continue; }
+				const fn = names.get(profile.samples[i]);
+				if (fn === undefined) continue;
+				const from = round1(timelineAnchorWallAt(anchor, fromUs) - perfOriginMs);
+				const to = round1(timelineAnchorWallAt(anchor, toUs) - perfOriginMs);
+				if (to <= from) continue;
+				out.push({
+					from, to, ms: round1(to - from), fn,
+					idle: fn === '(idle)',
+					native: fn === '(program)' || fn === '(root)',
+				});
+			}
+			return { samples: out, leadingMs: round1(leadingMs) };
+		}
+
+		/** 一段区间里三档采样各占多少毫秒(区间外的不算;样本按 from 升序)。 */
+		function timelineOverlap(samples, from, to) {
+			let busy = 0;
+			let native = 0;
+			let idle = 0;
+			for (const sample of samples) {
+				if (sample.to <= from) continue;
+				if (sample.from >= to) break;
+				const lo = Math.max(sample.from, from);
+				const hi = Math.min(sample.to, to);
+				if (hi <= lo) continue;
+				if (sample.idle) idle += hi - lo;
+				else if (sample.native) native += hi - lo;
+				else busy += hi - lo;
+			}
+			return { busy: round1(busy), native: round1(native), idle: round1(idle) };
+		}
+
+		/**
+		 * 事故包的可选段 `incident.timeline[]`:把最近一次采到的宿主 CPU profile 与这条事故的
+		 * 帧环按**墙上时间**对齐,回答"这一段卡顿里宿主在忙多少"。
+		 *
+		 * 只在同时满足下面几条时产出(否则返回 null,**键不出现在包里** —— 这是可选字段的定义,
+		 * 不是"采到了但是空的"):
+		 *   ① 有一次成功的宿主采样(profile + meta 都在);
+		 *   ② profile 的时间段与事故窗口有交集;
+		 *   ③ 事故带着 `env.perfOrigin`(跨会话读回的事故也有,它是捕获时写下的)。
+		 *
+		 * `stall` 始终是**这条事故最差那一帧**的区间(不是整段 13 秒窗口);profile 没盖住它时
+		 * `share` 省略并写 `shareOmitted`,不拿"没采到"冒充"宿主不忙"。
+		 *
+		 * `frames[]` 是窗口内的帧序列(带对齐后的宿主毫秒),`host.samples[]` 是宿主原始采样序列
+		 * (带区间与三档);两段都截断到 `TIMELINE_SAMPLE_MAX` 以内(卡顿内的样本优先保留),
+		 * `omitted` 写明被截掉多少条 —— 与原始 .cpuprofile 超过 512KB 只带汇总同一条纪律。
+		 */
+		function incidentTimeline(row, record) {
+			if (row === null || typeof row !== 'object') return null;
+			const anchor = timelineHostAnchor(record);
+			if (anchor === null) return null;
+			const env = row.env === null || typeof row.env !== 'object' ? {} : row.env;
+			const perfOriginMs = Date.parse(env.perfOrigin);
+			if (!Number.isFinite(perfOriginMs)) return null;
+			const win = row.window === null || typeof row.window !== 'object' ? {} : row.window;
+			const winFrom = Number(win.fromMs);
+			const winTo = Number(win.toMs);
+			if (!Number.isFinite(winFrom) || !Number.isFinite(winTo) || winTo <= winFrom) return null;
+			const profileFrom = timelineAnchorWallAt(anchor, anchor.startTime) - perfOriginMs;
+			const profileTo = timelineAnchorWallAt(anchor, anchor.endTime) - perfOriginMs;
+			const fromMs = Math.max(winFrom, profileFrom);
+			const toMs = Math.min(winTo, profileTo);
+			if (!(toMs > fromMs)) return null;
+			const extracted = timelineHostSamples(record.profile, anchor, perfOriginMs);
+			if (extracted === null || extracted.samples.length === 0) return null;
+			const samples = extracted.samples.filter((sample) => sample.to > fromMs && sample.from < toMs);
+			if (samples.length === 0) return null;
+			const frames = Array.isArray(row.frames) ? row.frames : [];
+			let worst = null;
+			for (const frame of frames) {
+				if (frame === null || typeof frame !== 'object' || frame.gap === true) continue;
+				const t = Number(frame.t);
+				const ms = Number(frame.ms);
+				if (!Number.isFinite(t) || !Number.isFinite(ms) || ms <= 0) continue;
+				if (worst === null || ms > worst.ms) worst = { t, ms };
+			}
+			const stall = worst === null
+				? { fromMs: round1(fromMs), toMs: round1(toMs), ms: round1(toMs - fromMs), basis: 'profile-intersection' }
+				: { fromMs: round1(worst.t - worst.ms), toMs: round1(worst.t), ms: round1(worst.ms), basis: 'worst-frame' };
+			// 逐帧对齐:每一帧只吃与它时间重叠的采样,不把邻帧的宿主时间算进来。
+			const frameRows = [];
+			for (const frame of frames) {
+				if (frame === null || typeof frame !== 'object' || frame.gap === true) continue;
+				const t = Number(frame.t);
+				const ms = Number(frame.ms);
+				if (!Number.isFinite(t) || !Number.isFinite(ms) || ms <= 0) continue;
+				if (t <= fromMs || t - ms >= toMs) continue;
+				const part = timelineOverlap(samples, t - ms, t);
+				const covered = part.busy + part.native + part.idle;
+				const hostMs = round1(part.busy + part.native);
+				frameRows.push({
+					t: round1(t), ms: round1(ms),
+					hostMs,
+					hostPct: round1((hostMs / ms) * 100),
+					jsMs: round1(part.busy),
+					nativeMs: round1(part.native),
+					coveragePct: round1(Math.min(100, (covered / ms) * 100)),
+				});
+			}
+			// 占比只对"最差那一帧"给;profile 没盖住它 / 盖得太少时宁可不给数字。
+			const stallFrom = Math.max(stall.fromMs, fromMs);
+			const stallTo = Math.min(stall.toMs, toMs);
+			const part = stallTo > stallFrom ? timelineOverlap(samples, stallFrom, stallTo) : { busy: 0, native: 0, idle: 0 };
+			const coveredMs = round1(part.busy + part.native + part.idle);
+			let share = null;
+			let shareOmitted = null;
+			if (stall.ms <= 0) shareOmitted = '卡顿帧短于可测范围(ms<=0),不给占比';
+			else if (coveredMs <= 0) shareOmitted = 'profile 没有盖住这条事故的最差帧,不给占比(不把"没采到"读成"宿主不忙")';
+			else if (coveredMs / stall.ms < TIMELINE_MIN_COVERAGE) {
+				shareOmitted = `profile 只盖住了最差帧的 ${round1((coveredMs / stall.ms) * 100)}%(低于 ${TIMELINE_MIN_COVERAGE * 100}%),不给占比 —— 那会把"没采到"读成"宿主不忙"`;
+			} else {
+				const hostMs = round1(Math.min(part.busy + part.native, stall.ms));
+				const hostPct = round1((hostMs / stall.ms) * 100);
+				share = {
+					hostMs,
+					hostPct,
+					pageMs: round1(Math.max(0, stall.ms - hostMs)),
+					pagePct: round1(100 - hostPct),
+					jsMs: round1(part.busy),
+					nativeMs: round1(part.native),
+					idleMs: round1(part.idle),
+					coveredMs,
+					coveragePct: round1((coveredMs / stall.ms) * 100),
+					partial: coveredMs / stall.ms < 0.99,
+					basis: '宿主占比 = 最差帧区间里宿主采样到非 idle 的毫秒 / 帧间隔;pagePct 是剩余部分,不等于页面 JS 全忙;coveragePct < 100 时 hostPct 是下界',
+				};
+			}
+			// 原始序列截断:卡顿区间内的样本先留,再用窗口内更早的样本补满;不按"前 N 条"截,
+			// 否则最该看的卡顿段可能整段被截掉。
+			let kept = samples;
+			const inStall = samples.filter((sample) => sample.to > stallFrom && sample.from < stallTo);
+			if (samples.length > TIMELINE_SAMPLE_MAX) {
+				const rest = samples.filter((sample) => sample.to <= stallFrom || sample.from >= stallTo);
+				kept = inStall.slice(0, TIMELINE_SAMPLE_MAX)
+					.concat(rest.slice(0, Math.max(0, TIMELINE_SAMPLE_MAX - Math.min(inStall.length, TIMELINE_SAMPLE_MAX))));
+				kept.sort((a, b) => a.from - b.from);
+			}
+			let jsMs = 0;
+			let nativeMs = 0;
+			let idleMs = 0;
+			for (const sample of samples) {
+				if (sample.idle) idleMs += sample.ms;
+				else if (sample.native) nativeMs += sample.ms;
+				else jsMs += sample.ms;
+			}
+			const segment = {
+				fromMs: round1(fromMs),
+				toMs: round1(toMs),
+				from: new Date(perfOriginMs + fromMs).toISOString(),
+				to: new Date(perfOriginMs + toMs).toISOString(),
+				profile: {
+					startedAt: new Date(anchor.startedAt).toISOString(),
+					endedAt: new Date(anchor.endedAt).toISOString(),
+					durationMs: anchor.profileSpanMs,
+					samples: extracted.samples.length,
+				},
+				// 对齐口径必须自证:读包的人要能重建这条轴,而不是信一个数。
+				alignment: {
+					basis: 'host meta.startedAt/endedAt ↔ incident.env.perfOrigin(两侧都是 Date.now / performance.timeOrigin 的毫秒)',
+					perfOrigin: new Date(perfOriginMs).toISOString(),
+					offsetMs: round1(anchor.startedAt - perfOriginMs),
+					errorMs: anchor.errorMs,
+				},
+				stall,
+				host: {
+					samples: kept.map((sample) => ({
+						t: round1(sample.to),
+						ms: round1(sample.ms),
+						fn: sample.fn,
+						kind: sample.idle ? 'idle' : (sample.native ? 'native' : 'js'),
+					})),
+					kept: kept.length,
+					omitted: samples.length - kept.length,
+					leadingMs: extracted.leadingMs,
+					jsMs: round1(jsMs),
+					nativeMs: round1(nativeMs),
+					idleMs: round1(idleMs),
+				},
+				frames: frameRows,
+			};
+			if (share === null) segment.shareOmitted = shareOmitted;
+			else segment.share = share;
+			return [segment];
+		}
+
 		/**
 		 * raw profile 里会带用户名的 url 先换掉:键名是 `url` 时 `redactExport` 走
 		 * `redactScriptUrl`(只剥协议 + 主机),对 `file:///Users/<用户名>/…` 不命中 ——
@@ -2127,6 +2390,9 @@ window.__ModuleLoader__.load({
 			const gaps = capabilityMissing(incident);
 			const missing = gaps.missing;
 			const howToAdd = gaps.howToAdd;
+			// A4:最近一次宿主 CPU 采样与这条事故的窗口重叠时,才把 `timeline[]` 放进包里。
+			// 没重叠 / 没采过 → 键不存在(可选字段的定义,不是"空数组"也不是"采到了但空")。
+			const timeline = incidentTimeline(incident, state.host.hostCpuProfile);
 			const payload = {
 				plugin: PKG,
 				kind: 'perf-hud-incident',
@@ -2185,9 +2451,10 @@ window.__ModuleLoader__.load({
 						'context.watch.kept 按**严重度降序**,不是时间序;带 restored 的条目来自上一次会话(时间靠 env.perfOrigin 对齐),所以 id 与时间看起来会跳',
 						'context.watch.kept[].tier 说明这条是靠哪一档留下来的:worst = 全局最差那一档(前 10 条)、daily = 它那一天最差的一条(最多留最近 7 天)、recent = 最近 3 次(不看严重度)、both = 最差与当天最差两档都占。留存是**三档并集**,所以条数上限是 10 + 7 + 3 = 20 而不是 10 —— 单靠全局最差档时,"昨天下午那次卡"会被同一小时里的 10 次挤掉,而"刚才那一下"永远进不了榜',
 						'手动标记(`__perfHud.capture` / 面板「标记刚才」)的返回值分三态:settled 有 incident(已经切片,id / tier / 清单位置都在)、pending 表示已起了一次但后摇没到还没结算、coalesced 表示并进了正在等的那一次(本次备注没有单独留下)。面板回执读同一份返回值,不另猜',
+						'incident.timeline[] 是**可选**的:只有"最近一次宿主 CPU 采样"与这条事故的窗口有交集时才出现,一个 profile 一段(不是每帧一条)。`fromMs/toMs` 是对齐后的区间(perf 毫秒,与 incident.frames 同一坐标系),`profile.startedAt/endedAt` 是宿主的 Date.now 锚点,`alignment.errorMs` 是两端锚点跨度差(对齐不确定度的估计,不是保证)。`stall` 是这条事故**最差那一帧**的区间;`share.hostMs/hostPct` 只算这一段,`pageMs/pagePct` 是剩余部分(**不等于页面 JS 全忙**;宿主空闲、profile 没采到的部分都在里面),`coveragePct < 100` 时 hostPct 是下界。`host.samples[]` 与 `frames[]` 是两段原始序列:`host.samples[]` 每条是 [t-ms, t] 的宿主采样(三档 js / native / idle),`frames[]` 每帧带对齐后的宿主毫秒 —— 拿到包的人可以自己重算占比,不用信一个孤立的百分比。宿主序列超过上限时按"卡顿内的优先"截断并写 `omitted`。⚠️ 对齐靠两侧的 Date.now / performance.timeOrigin:同一台机器上是同一时钟,跨机器访问(DSH 在 Mac、浏览器在 Windows)时仍有系统时钟偏差,这条轴不承诺跨机器误差 ≤1 帧',
 					],
 				},
-				incident,
+				incident: timeline === null ? incident : { ...incident, timeline },
 			};
 			const safe = redactExport(payload, options);
 			safe.context.redaction = redactionReport(options);

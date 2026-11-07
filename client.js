@@ -86,6 +86,11 @@ window.__ModuleLoader__.load({
 		const HOST_PROFILE_POLL_GRACE_MS = 5000;      // 采样结束后的余量:收尾 + 一次回执往返
 		const HOST_PROFILE_RAW_MAX = 524288;          // 原始 .cpuprofile 随包上限(512KB),超过只带汇总
 		const HOST_PROFILE_TOP = 12;                  // 汇总里最多列几条"自身耗时"最高的函数
+		// A4 同一时间轴:每个 profile 段最多带多少条宿主原始采样(卡顿区间内的优先),以及
+		// profile 至少盖住卡顿帧多少比例才给"宿主占比" —— 低于它宁可不给数字,免得把
+		// "没采到"读成"宿主不忙"。
+		const TIMELINE_SAMPLE_MAX = 4000;
+		const TIMELINE_MIN_COVERAGE = 0.5;
 		const RTT_INTERVAL_MS = 10000;
 		const LOAD_INTERVAL_MS = 60000;
 		// 宿主快照超过 2.5 个轮询周期就算过期(轮询是 10s;留一次重试的余量)。
@@ -686,6 +691,8 @@ window.__ModuleLoader__.load({
 				TALLY_BUCKET_MS,
 				TALLY_MINUTES,
 				TARGETS,
+				TIMELINE_MIN_COVERAGE,
+				TIMELINE_SAMPLE_MAX,
 				TOP_N,
 				W,
 				WATCH_DAILY_DAYS,
