@@ -518,9 +518,11 @@ const stateRefs = [];
 for (const [file, text] of Object.entries(STATE_FILES)) {
 	const lineOf = (index) => text.slice(0, index).split('\n').length;
 	stateAliases[file] = new Map();
-	// ① 别名声明:`const watch = state.watch;`
-	for (const match of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*state\.([A-Za-z_$][\w$]*)\s*;/g)) {
-		const [, name, slice] = match;
+	// ① 别名声明:`const watch = state.watch;` —— 方括号写法 `const s = state["watch"];` 等价,
+	// 也必须登记(复核抓到的洞:只认点号形式时,方括号别名后面 `s.frames` 谁都不管)
+	for (const match of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*state(?:\.([A-Za-z_$][\w$]*)|\[\s*(['"])([A-Za-z_$][\w$]*)\3\s*\])\s*;/g)) {
+		const name = match[1];
+		const slice = match[2] ?? match[4];
 		const at = `${file}:${lineOf(match.index)}`;
 		if (stateSlices[slice] === undefined) aliasProblems.push(`${at} 别名 ${name} 指向不存在的片 state.${slice}`)
 		if (STATE_WHITELIST[file].includes(slice) === false) aliasProblems.push(`${at} 别名 ${name} 指向本文件不该读的片 ${slice}`)
@@ -540,7 +542,8 @@ for (const [file, text] of Object.entries(STATE_FILES)) {
 	for (const [name] of stateAliases[file]) {
 		for (const match of text.matchAll(new RegExp(`\\b(?:const|let|var)\\s+${name}\\b\\s*=(?!=)`, 'g'))) {
 			const after = text.slice(match.index, match.index + 160);
-			if (new RegExp(`^\\s*(?:const|let|var)\\s+${name}\\s*=\\s*state\\.[A-Za-z_$][\\w$]*\\s*;`).test(after)) continue;
+			// 声明式(点号或方括号)都算"就是这个别名",不算另有来源
+			if (new RegExp(`^\\s*(?:const|let|var)\\s+${name}\\s*=\\s*state(?:\\.[A-Za-z_$][\\w$]*|\\[\\s*['\"][A-Za-z_$][\\w$]*['\"]\\s*\\])\\s*;`).test(after)) continue;
 			aliasProblems.push(`${file}:${lineOf(match.index)} \`${name}\` 既是 state 片的别名,又有别的来源 —— 别名解析不可靠,换个名字`)
 		}
 		for (const match of text.matchAll(new RegExp(`function\\s+[A-Za-z_$][\\w$]*\\s*\\(\\s*${name}\\s*[,)]`, 'g'))) {
@@ -574,9 +577,23 @@ for (const [file, text] of Object.entries(STATE_FILES)) {
 		stateRefs.push({ file, at: `${file}:${lineOf(match.index)}`, slice: match[1] ?? match[2], field: match[3], via: null, how: 'bracket' });
 	}
 	for (const match of text.matchAll(/(?<![\w$.])state\s*\[/g)) {
-		const after = text.slice(match.index, match.index + 120);
-		if (/^state\s*\[\s*['"]/.test(after)) continue;
-		aliasProblems.push(`${file}:${lineOf(match.index)} 用表达式选 state 的片(state[…]) —— 读哪一片必须是静态可判的`);
+		// ⚠️ 判据是"**整个**括号内容 == 一个完整的引号字面量",不是"以引号开头"
+		// (复核抓到的洞:`state["wa"+"tch"]` 以引号开头,曾按字面量放行)
+		const open = text.indexOf('[', match.index);
+		let depth = 0;
+		let end = -1;
+		let quote = null;
+		for (let i = open; i < text.length; i += 1) {
+			const ch = text[i];
+			if (quote !== null) { if (ch === '\\') i += 1; else if (ch === quote) quote = null; continue }
+			if (ch === "'" || ch === '"') { quote = ch; continue }
+			if (ch === '[') depth += 1;
+			else if (ch === ']') { depth -= 1; if (depth === 0) { end = i; break } }
+		}
+		if (end === -1) { aliasProblems.push(`${file}:${lineOf(match.index)} state[…] 的方括号没有闭合`); continue }
+		const inner = text.slice(open + 1, end);
+		if (/^\s*(['"])[A-Za-z_$][\w$]*\1\s*$/.test(inner)) continue;
+		aliasProblems.push(`${file}:${lineOf(match.index)} 用表达式选 state 的片(state[${inner.trim().slice(0, 40)}]) —— 读哪一片必须是静态可判的`);
 	}
 	// (d) 赋值式别名:`w = state.<片>;`(不是 const 声明)一样绕开解析 —— 一律不许,改用 const 声明。
 	for (const match of text.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*=\s*state\.([A-Za-z_$][\w$]*)\s*;/g)) {
