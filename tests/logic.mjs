@@ -4623,12 +4623,21 @@ watch.state.watch.loaf = [
 ];
 watch.pkgByUrl.set('u-a', { pkg: 'dsh-a', via: 'url' });
 watch.pkgByUrl.set('u-b', { pkg: 'dsh-b', via: 'url' });
-check('D5:窗口聚合:按包降序;纯执行 / 强制样式布局 / 暂停三分;定不到包的单独计数',
+check('D5:窗口聚合:按包降序;纯执行 / 强制样式布局 / 暂停三分;定不到包的按原因进 byOther(带毫秒)',
 	(() => {
 		const tally = watch.scriptPkgTally();
-		return [tally.top, tally.js, tally.exec, tally.forced, tally.pause, tally.unresolved, tally.unresolvedMs];
+		return [tally.top, tally.js, tally.exec, tally.forced, tally.pause, tally.byOther];
 	})(),
-	[[['dsh-b', 70], ['dsh-a', 60]], 140, 122, 8, 10, 1, 10]);
+	[[['dsh-b', 70], ['dsh-a', 60]], 140, 122, 8, 10, [['u-x', 10]]]);
+// REVIEW §2「unresolvedMs 没有运行时读者」还债时钉的不变式:定不到的毫秒**只**在 byOther 里,
+// 所以「按包 + 其余来源」必须正好拼回脚本总耗时 —— 删掉那个冗余汇总字段之后,这条守住同一条口径。
+check('D5:按包合计 + 其余来源合计 = 脚本总耗时(未定名的毫秒只在 byOther 里算一次)',
+	(() => {
+		const tally = watch.scriptPkgTally();
+		const sum = (rows) => Math.round(rows.reduce((acc, [, ms]) => acc + ms, 0) * 10) / 10;
+		return [sum(tally.top) + sum(tally.byOther), tally.js];
+	})(),
+	[140, 140]);
 check('D5:LoAF 窗口没变就复用上一次的结果(不让面板每 tick 重算 200×12 条脚本)',
 	watch.scriptPkgTally() === watch.scriptPkgTally(), true);
 check('D5:窗口变了才重算',
@@ -4656,7 +4665,7 @@ check('D5:本帧没有脚本时给 0(而不是 null);"没有这一帧"才给 nul
 // 现在死分支已删,断言改成**实际渲染的那份数据**:面板喂给按包那条堆叠条的就是 whoRows(tally)。
 check('一个包名都没定到时:按包那一条渲染的是「其余来源」段(带名字与毫秒),不是一行"0 条定到名"',
 	(() => {
-		const tally = { top: [], byOther: [['index-abc.js', 266], ['无 URL(内联脚本)', 12]], unresolved: 2, unresolvedMs: 278, byInvoker: [], byPair: {} };
+		const tally = { top: [], byOther: [['index-abc.js', 266], ['无 URL(内联脚本)', 12]], byInvoker: [], byPair: {} };
 		const rows = watch.whoRows(tally);            // ← 渲染层 bar('win-pkg', …, whoRows(window), …) 吃的就是它
 		const segs = watch.barSegments(rows).segs;    // ← 条上的段由它算
 		return [rows.length, segs.map((seg) => [seg.name, Math.round(seg.ms)])];
