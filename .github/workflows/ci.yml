@@ -38,28 +38,30 @@ jobs:
           node --check client.js
           for file in tools/*.mjs; do node --check "$file"; done
 
-      # 719 条离线断言:attribution 11 / logic 667 / host 41。
-      # logic.mjs 会把 client.js 里的真函数抽进沙箱,所以它同时是客户端半的回归门。
-      - name: Offline suites (719 assertions)
+      # 731 条离线断言:attribution 11 / logic 667 / host 41 / compat 12。
+      # logic.mjs 会把 client.js 里的真函数抽进沙箱,所以它同时是客户端半的回归门;
+      # compat.mjs 用**上一版 schemaVersion** 的夹具包喂当前读方(1.0 的冻结承诺靠它)。
+      - name: Offline suites (731 assertions)
         run: |
           node tests/attribution.mjs
           node tests/logic.mjs
           node tests/host.mjs
+          node tests/compat.mjs
 
       # 面板文案的长度预算与单位一致性断言在 logic.mjs 里;这里再核一次
       # 「断言总数」与文档声称的一致(改数字忘了同步文档时,这条会红)。
       - name: Assertion count matches the docs
         run: |
           total=0
-          for suite in attribution logic host; do
+          for suite in attribution logic host compat; do
             count=$(node "tests/$suite.mjs" | grep -c '^ok')
             echo "$suite: $count"
             total=$((total + count))
           done
           echo "total: $total"
-          test "$total" -eq 719
+          test "$total" -eq 731
           # 文档里的数字也要跟着走:CONTRIBUTING 曾经停在 325 / 39 / 358,而这条门禁
           # 以前只核总数 —— 五份文档里任何一份漏改,读者看到的就不是实际条数。
           for doc in README.md README_EN.md REVIEW.md AGENTS.md CONTRIBUTING.md; do
-            grep -q "719" "$doc" || { echo "$doc 里没有 719"; exit 1; }
+            grep -q "731" "$doc" || { echo "$doc 里没有 731"; exit 1; }
           done

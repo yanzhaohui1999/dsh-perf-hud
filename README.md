@@ -339,7 +339,8 @@ dsh plugin --profile web add "$PWD"
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
 node tests/logic.mjs         # 667 条:从 client.js 与其分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js
-# 合计 719 条断言,离线,无需 DSH 在跑
+node tests/compat.mjs        # 12 条:上一版 schemaVersion 的夹具包喂当前读方(契约没漂)
+# 合计 731 条断言,离线,无需 DSH 在跑
 ```
 
 i18n 词典现在是**中英各 423 键**(两本字典键集合必须一致,且每个键都得有人引用 —— 撤下界面时留下的死键会被断言报出来)。
@@ -362,7 +363,7 @@ node tools/check-incident.mjs     # 抓一条真事故 → 逐帧回看 / 上一
 ```
 
 ⚠️ 这一组**不是离线门禁**:要真浏览器 + 本机跑着 `dsh web`,所以 `npm test` 与 CI 里都没有它(CI 只对
-`tools/*.mjs` 做语法检查)。离线三套件只抽纯函数、**不跑 `apply()` 与渲染**,而"三套件全绿、浏览器里
+`tools/*.mjs` 做语法检查)。离线四套件只抽纯函数、**不跑 `apply()` 与渲染**,而"四套件全绿、浏览器里
 面板整块消失"这种事本项目真出过 —— 所以改那两条路径时别只跑 `npm test`。
 
 开发规则、提交规范、代码约定见 [AGENTS.md](AGENTS.md);源码级归因机制见 [docs/mechanisms.md](docs/mechanisms.md),已证伪的死路见 [docs/dead-ends.md](docs/dead-ends.md);
@@ -370,7 +371,7 @@ node tools/check-incident.mjs     # 抓一条真事故 → 逐帧回看 / 上一
 
 ## 🤝 参与贡献
 
-欢迎报 bug 与提 PR。提交前请跑完上面三套离线断言,并阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [AGENTS.md](AGENTS.md)。
+欢迎报 bug 与提 PR。提交前请跑完上面四套离线断言,并阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [AGENTS.md](AGENTS.md)。
 
 ## 📄 License
 

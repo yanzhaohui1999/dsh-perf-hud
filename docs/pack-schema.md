@@ -407,5 +407,7 @@ README.md
 | `manifestFor()` 的键集合 == §2 的清单(`manifest.json` + `manifest.incident`) | `tests/logic.mjs`「契约冻结:manifestFor() 的键集合…」 | 代码加/删键而文档没动 |
 | `buildPack()` 的四份文件顺序 == `manifest.files` == §6 | `tests/logic.mjs`「诊断包:manifest 里描述的 files 顺序…」 | 顺序不一致(读方按下标就会读错) |
 | 包内三个版本号 == §0 表里的版本 | `tests/logic.mjs`「契约冻结:包内版本号与清单同步…」 | 升了 `PACK_SCHEMA_VERSION` 却没改清单 |
+| 上一版(`manifest` v1 / `incident` v2)的包仍能读出摘要与能力矩阵 | `tests/compat.mjs` | 老包被新读方弄坏 |
+| 缺一个必需键 → 读方必须拒绝,并点名缺的是哪个 | `tests/compat.mjs` | "少了一半还静默通过" |
 
-改这份文件之后跑:`npm test`、`npm run docs:check`。
+改这份文件之后跑:`npm test`(含 `compat`)、`npm run docs:check`。
