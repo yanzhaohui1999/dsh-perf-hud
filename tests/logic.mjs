@@ -8,6 +8,7 @@
  * 断言行为。测试与实现同源,不存在"测的是另一份代码"的问题。
  */
 import { readFileSync } from 'node:fs';
+import { loadPackSchema } from './schema.mjs';
 
 const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 // 诊断 / 视图模型的实现在包内分片里(主文件只剩同名同步包装):extract 先找分片,
@@ -39,6 +40,9 @@ const packChunk = loadPackChunk();
 // 一份**真的**事故切片(真页面手动 capture → report() → 脱敏后落盘),不是合成的形状;
 // 用来钉住"文件格式与真实数据对得上",而不是只测我们想象出来的字段。
 const realFixture = JSON.parse(readFileSync(new URL('./fixtures/incident-real.json', import.meta.url), 'utf8'));
+// 导出包契约(1.0 冻结):键清单写在 docs/pack-schema.md 的 ```schema 块里,这里是它的产方那一侧。
+// 改 client.*.js 里的导出形状而不同步那份清单 → 下面「契约冻结」那两条会红(读方与产方共用一份清单)。
+const packSchema = loadPackSchema();
 
 /**
  * 按 header 抽出"从 header 起到配对右括号"的源码;识别字符串/模板串与行注释。
@@ -4836,9 +4840,37 @@ check('诊断包:manifest 带 schemaVersion / 能力矩阵 / 缺口清单 / 脱�
 		manifest.range.fromMs === undefined ? manifest.range.from !== undefined : true,
 		manifest.captureTier, manifest.complete];
 })(), [2, 'dsh-perf-hud-diagnostic-pack', 1, 3, true, true, 'watch', null]);
-check('诊断包:manifest 里描述的 files 顺序 == 包里真实的顺序(它是入口,指错等于骗人)',
-	[JSON.parse(pack.files[0].text).files, pack.files.map((file) => file.name)],
-	[['manifest.json', 'summary.md', 'incident.json', 'README.md'], ['manifest.json', 'summary.md', 'incident.json', 'README.md']]);
+check('诊断包:manifest 里描述的 files 顺序 == 包里真实的顺序 == docs/pack-schema.md 的 pack.files(它是入口,指错等于骗人)', (() => {
+	const declared = JSON.parse(pack.files[0].text).files;
+	return [declared, pack.files.map((file) => file.name), packSchema.required('pack.files')];
+})(), [['manifest.json', 'summary.md', 'incident.json', 'README.md'], ['manifest.json', 'summary.md', 'incident.json', 'README.md'], ['manifest.json', 'summary.md', 'incident.json', 'README.md']]);
+// ── 契约冻结(1.0 / S0)──
+// 这三条是 docs/pack-schema.md 的产方一侧。刀口在"双向":既挡"代码加了字段没写进文档",
+// 也挡"文档写了一堆键、代码产不出" —— 后者更隐蔽,读方会照着一份假的契约写。
+// 改导出形状时**必须**同一条提交里改文档清单,否则这里红;这正是"冻结"的可执行部分。
+check('契约冻结:manifestFor() 的键集合与 docs/pack-schema.md 的清单一致(双向,manifest 与 manifest.incident 两层)', (() => {
+	const manifest = JSON.parse(pack.files[0].text);
+	const docTop = packSchema.keys('manifest.json');
+	const docInner = packSchema.keys('manifest.incident');
+	const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+	return {
+		// 代码产出了清单外的键(加字段没写进文档)
+		keysNotInDoc: Object.keys(manifest).filter((key) => docTop.includes(key) === false).sort(),
+		// 必需键缺了(读方会把它当坏包,这里先红)
+		requiredMissing: packSchema.required('manifest.json').filter((key) => has(manifest, key) === false).sort(),
+		incidentKeysNotInDoc: Object.keys(manifest.incident).filter((key) => docInner.includes(key) === false).sort(),
+		incidentRequiredMissing: packSchema.required('manifest.incident').filter((key) => has(manifest.incident, key) === false).sort(),
+	};
+})(), { keysNotInDoc: [], requiredMissing: [], incidentKeysNotInDoc: [], incidentRequiredMissing: [] });
+// PACK_SCHEMA_VERSION 变了而清单没动 → 红。期望值写死是**故意**的:升版本 = 同时改三处
+// (代码常量 / 文档清单块 / 这一行),少一处就红 —— 只比"代码 == 文档"的话,两边一起忘就绿了。
+check('契约冻结:包内三个版本号与清单同步(升版本必须同时改文档清单,改动这一行要单独交代)', (() => {
+	const manifest = JSON.parse(pack.files[0].text);
+	const incident = JSON.parse(pack.files.find((file) => file.name === 'incident.json').text);
+	return [manifest.schemaVersion, packSchema.version('manifest.json'),
+		incident.schema, packSchema.version('incident.json'),
+		manifest.capabilities.schema, packSchema.version('capabilities')];
+})(), [2, 2, 3, 3, 1, 1]);
 // ── P2:真事故 fixture(真页面 capture → report → 脱敏落盘)──
 check('golden fixture:真事故切片的形状完整(frames / loaf / longTasks / summary / urls)',
 	(() => {

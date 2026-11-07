@@ -65,7 +65,7 @@
 | `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(456 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 三套离线断言(717 条)+ 两套线上 + `fixtures/incident-real.json` | 每次改完(§3) |
+| `tests/` | 三套离线断言(719 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 七份参考文档 + `images/`(9 张 README 截图)+ `plans/`(三份档案 + 索引) | 按需查,别通读(§9) |
 | `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 | 改挂载、发版(§10) |
@@ -104,11 +104,11 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑三套件**(合计 **717** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑三套件**(合计 **719** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 665 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算
+node tests/logic.mjs         # 667 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 ```
 
@@ -234,7 +234,7 @@ URL 形态、分段换算、四条腿边界、宿主 API、`locale/` 的 ENOENT 
 > 完整地图(每份一句话职责 + 什么时候读)在 [docs/README.md](docs/README.md) —— **本文不复述**。
 > **不在根目录新增带日期的记录文档** —— 结论并进对应文档,历史进 [docs/plans/](docs/plans/) 或 [CHANGELOG.md](CHANGELOG.md)。
 
-**改代码前必读**:[docs/reading-panel.md](docs/reading-panel.md)(读数口径)、[docs/panel-rules.md](docs/panel-rules.md)(布局 / 文案 / 交互)、[docs/mechanisms.md](docs/mechanisms.md)(归因链路);环境与验证见 [docs/verification.md](docs/verification.md),动手前先查 [docs/dead-ends.md](docs/dead-ends.md)。
+**改代码前必读**:[docs/reading-panel.md](docs/reading-panel.md)(读数口径)、[docs/panel-rules.md](docs/panel-rules.md)(布局 / 文案 / 交互)、[docs/mechanisms.md](docs/mechanisms.md)(归因链路)、[docs/pack-schema.md](docs/pack-schema.md)(导出包契约,1.0 起冻结);环境与验证见 [docs/verification.md](docs/verification.md),动手前先查 [docs/dead-ends.md](docs/dead-ends.md)。
 
 **入口约定**:新增 / 移动 / 改名任何 md → 先在 [docs/README.md](docs/README.md) 登记 → `npm run docs:check`(断链 + 孤儿);提交时 `tools/git-pre-commit.sh` 自动跑同一检查。
 

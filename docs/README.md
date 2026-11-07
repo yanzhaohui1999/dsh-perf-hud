@@ -9,6 +9,7 @@
 |---|---|
 | 改面板读数口径 / 渲染 | [reading-panel.md](reading-panel.md) · [panel-rules.md](panel-rules.md) |
 | 改归因链路(URL / sourcemap / 四条腿) | [mechanisms.md](mechanisms.md) |
+| 改导出包格式、读别人给的包 | [pack-schema.md](pack-schema.md) |
 | 改代码前准备环境、改完验证 | [verification.md](verification.md) |
 | 发版、staged publishing | [release.md](release.md) |
 | 动手之前查"是不是踩过的坑" | [dead-ends.md](dead-ends.md) |
@@ -31,6 +32,7 @@
 | 文件 | 管什么 | 什么时候读 |
 |---|---|---|
 | [reading-panel.md](reading-panel.md) | 面板读数口径 | 改读数 / 渲染前 |
+| [pack-schema.md](pack-schema.md) | 导出包契约(1.0 冻结):三份键清单 + 版本策略 + 旧包怎么读 | 改导出 / 读包前 |
 | [panel-rules.md](panel-rules.md) | 布局 / 文案 / 交互约定 | 改渲染 / 文案前 |
 | [verification.md](verification.md) | cookie、验收器、401/404、残留 Chrome、worktree 验证 | 改代码前后 |
 | [mechanisms.md](mechanisms.md) | 归因机制:URL / sourcemap / 四条腿 / 宿主 API | 改归因链路前 |
