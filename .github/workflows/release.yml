@@ -54,11 +54,39 @@ jobs:
           echo "tag=$tag package=$pkg"
           test "$tag" = "$pkg"
 
-      - name: Offline suites (717 assertions)
+      # 发版路径也要过语法门:与 ci.yml 同一条。node --check 只看语法、不执行 ——
+      # client.js 是浏览器脚本(靠模块表拿 react),index.js 是宿主插件,tools/*.mjs 里有
+      # 真页面验收器(它们要浏览器与运行中的 dsh web,所以这里只做语法检查,不跑)。
+      # 少了这一步,一次"语法都过不了"的提交只要 tag 打得够快就能走到 npm publish。
+      - name: Syntax check
+        run: |
+          node --check index.js
+          node --check client.js
+          for file in tools/*.mjs; do node --check "$file"; done
+
+      - name: Offline suites (731 assertions)
         run: |
           node tests/attribution.mjs
           node tests/logic.mjs
           node tests/host.mjs
+          node tests/compat.mjs
+
+      # 与 ci.yml 同一条:断言总数与文档声称的一致。以前只有 ci.yml 核这个,
+      # 而发版是**从 release 事件**进来的 —— 文档里的数字写错了,发版路径照样绿着走到 publish。
+      # 五份文档逐个核(不只是总数):CONTRIBUTING 曾经停在 325 / 39 / 358。
+      - name: Assertion count matches the docs
+        run: |
+          total=0
+          for suite in attribution logic host compat; do
+            count=$(node "tests/$suite.mjs" | grep -c '^ok')
+            echo "$suite: $count"
+            total=$((total + count))
+          done
+          echo "total: $total"
+          test "$total" -eq 731
+          for doc in README.md README_EN.md REVIEW.md AGENTS.md CONTRIBUTING.md; do
+            grep -q "731" "$doc" || { echo "$doc 里没有 731"; exit 1; }
+          done
 
       # 发布产物核对:两个半边、patch、图标、许可证、package.json,以及 README / AGENTS 链接到的
       # 全部文档都必须在包里 —— 漏一份,npm 页面上就是一个死链。

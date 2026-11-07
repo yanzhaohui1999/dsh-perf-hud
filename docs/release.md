@@ -5,6 +5,7 @@
 ## 10. npm 发版
 
 1. bump `package.json.version`,跑完 [测试与门禁](../AGENTS.md#3-测试与门禁) 并全绿。
+   `release.yml` 自己也跑同一套门:两个半边的 `node --check`、四套离线断言、**断言总数与五份文档的数字一致**(2026-11-07 起)。所以"文档里的数字写错"不会走到 publish —— 它会在发版路径的第一步就红;dry-run(`workflow_dispatch` 的 `dry_run`)也照跑这三步。
 2. 打 tag `vX.Y.Z`(**tag 必须与 `version` 一致**),在 GitHub 建 Release。
 3. `.github/workflows/release.yml` 在该 Release 发布时自动 `npm publish`(用 **npm Trusted Publishing / OIDC**,不配 `NPM_TOKEN`)。它对该版本**幂等**:发布前先 `npm view` 查 registry,查到就跳过发布并写 notice(所以给手工首发那一版建 Release 不会发失败,只会跳过);**查询失败照实报错退出**,不当成"没发过"。
 4. **第一个版本**:OIDC **直接** `npm publish` 发不了首版(npmjs.com 要到包已经存在之后才能配 Trusted Publisher,上游 [npm/cli#8544](https://github.com/npm/cli/issues/8544) 仍 open)。0.4.0 实测走的是 **staged publishing**:`npm stage publish`(registry 见到包还不存在,先建一个占位版本 `0.0.0-stage` 把包名占住)→ 维护者在 npmjs.com 的 **Staged Packages** 页点 Approve,或 `npm stage approve <stage-id>`,用 **2FA approve** 之后才公开。

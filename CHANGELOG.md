@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **导出包契约冻结(1.0 / S0)**:新增 [`docs/pack-schema.md`](docs/pack-schema.md) —— `manifest.json` / `incident.json` / `capabilities()` 三份键清单(逐键逐层、必需与可选分开)、三个版本号各自的升级条件、旧包怎么读的四步,以及已经发生过的变更史。清单写在 ```schema 代码块里当门禁的输入(`tests/schema.mjs` 解析),所以"代码改了文档没改"与"文档写了代码产不出"都会红。`tests/logic.mjs` 加三条断言:`manifestFor()` 的键集合双向下标、`buildPack()` 的四份文件顺序 == `manifest.files` == 文档、三个版本号与清单同步(期望值写死,升版本要同时改三处)。
+- **兼容套件 `tests/compat.mjs`(12 条)**:用**上一版 `schemaVersion`** 的包(真事故切片按 `manifest` v1 / `incident` v2 的契约降级得到)喂当前读方,断言摘要与能力矩阵仍读得出来;`tools/inspect-incident.mjs` 也真跑一遍。缺一个必需顶层键必须拒绝并点名(实测:删 `capabilities` → `缺必需键:manifest.json.capabilities`)。旧包的兼容点都是真问题:v1 的 `manifest.files` 把 `manifest.json` 写在第二位(读方必须按名字找)、带 0.9.0 已删的 `dshVersion`(未知键忽略)、没有 `integrity` / `complete`(按"不知道"读)。
+
 ### 修复
 
 - **诊断包不再输出恒为 `null` 的 `dshVersion`**(REVIEW §2 第 7 条):宿主半从不下发这个字段,`manifest.json` 里那一格永远是 `null` —— 在给上游看的包里,恒 `null` 比没有这个键更糟(读包的人会去找一个不存在的"采集失败")。宿主半也没有可验证的版本来源(`profileContext` 只有 name / dir / home 等),按「不凭记忆写 API」不补;宿主运行时版本仍在 `context.hostCpuProfile.meta.nodeVersion`。断言「诊断包:manifest 不宣称拿不到的 DSH 版本」钉住"别读回来",`pluginVersion` 照旧透传。
@@ -14,11 +19,14 @@
 
 - **`tallyScripts()` 删掉两个没有读者的字段**(REVIEW §2 第 4 条):`unresolvedMs`(毫秒)与 `unresolved`(条数)。未定名那部分早就有带名字的表达 —— `byOther` 按原因 / 文件名给毫秒,渲染层 `whoRows()` 每一行都印"名字 + ms";同一个量两份表达只会漂。断言改成读 `byOther`(10ms 归到 `u-x`,原来只钉一个计数 1)+ 新不变式「`top` 合计 + `byOther` 合计 = `js`」。
 - **测试 714 → 717**(logic 662 → 665):删 1 条旧断言、新增 3 条(未定名毫秒改从 `byOther` 读;不变式 `top + byOther = js`;manifest 的版本字段边界)+ 1 条 Skill 前缀表断言。CI 的断言总数与五份文档里的数字跟着走。
+- **测试 717 → 731**(logic 665 → 667,新增 `compat` 12):契约冻结两条 + 兼容套件一条命令;`npm test`、CI 与五份文档的数字同批改完。
+- **发版路径补两条门禁**(`release.yml`):`node --check`(index.js / client.js / tools/*.mjs)与「断言总数与五份文档一致」从 `ci.yml` 搬过来。以前只有 CI 核这个,而发版是从 `release` 事件进来的 —— 文档里的数字写错了,发版路径照样绿着走到 publish。dry-run(`workflow_dispatch`)也照跑这三步。
 
 ### 文档
 
 - `REVIEW.md` §2:三条内部债标记**已还**并给出提交号与断言名(`296ca33` / `c7bc488` / `80fb093` / `00b4706`);新增两条原本没入账的(前缀漂移、fixture 切片)。
 - 新增 `docs/plans/2026-11-07-v1-milestone.md`:下一个 milestone(1.0)—— 为什么是 1.0、8 条可验收交付(契约冻结 / 状态切分 / 离线渲染冒烟 / 只读 MCP / README 重写 / 前缀表生成器 / 兼容矩阵)、明确不做清单、按依赖排的顺序与发布门,以及"1.0 最不该包含的一件事"(只读 MCP,推迟到 1.1)。
+- 新增 `docs/pack-schema.md` 并在 `docs/README.md` 登记、列进 `AGENTS.md` §9「改代码前必读」(改导出 / 读包前);`docs/release.md` 与 `AGENTS.md` §10 写明发版路径也跑同一套门禁。
 
 
 ## [0.9.0] - 2026-11-04
