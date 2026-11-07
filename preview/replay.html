@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>事故回放 · dsh-perf-hud</title>
+<link rel="stylesheet" href="hud.css">
+<style>
+  body { padding: 28px 24px 40px }
+  .wrap { max-width: 860px }
+  #drop { border: 1px dashed rgba(255,255,255,.24); border-radius: 10px; padding: 26px; text-align: center; color: var(--muted); cursor: pointer }
+  #drop.hot { border-color: var(--warn); color: var(--text) }
+  #drop b { color: var(--text); font-weight: 600 }
+  #err { color: var(--bad); white-space: pre-wrap; margin-top: 12px }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0 }
+  .row .k { color: var(--muted); flex: 0 0 auto }
+  .row .v { font-variant-numeric: tabular-nums; text-align: right; flex: 1 1 auto }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px }
+  th, td { text-align: left; padding: 4px 0; border-bottom: 1px solid var(--line); vertical-align: top }
+  th { color: var(--muted); font-weight: 500; font-size: 11px }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap }
+  .verdict { margin-top: 10px; font-size: 12px }
+  .verdict.ok { color: var(--ok) }
+  .verdict.bad { color: var(--bad) }
+  .hint { color: var(--dim); font-size: 11px; margin-top: 10px }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="cap"><b>事故回放</b> · 读 dsh-perf-hud 导出的 zip / incident.json / 事故切片</div>
+  <div id="drop">把 <b>.zip</b> / <b>incident.json</b> 拖进来,或点这里选文件</div>
+  <input id="file" type="file" accept=".zip,.json,application/zip,application/json" hidden>
+  <div id="err"></div>
+  <div id="out"></div>
+  <div class="hint">回放器与面板各算一遍:面板显示的是包里的 <code>summary</code>,回放器从 <code>frames</code> / <code>loaf</code> 现算 ——
+  两边不一致会直接标红(口径与面板同一组阈值:≥100ms 红 / ≥50ms 黄)。</div>
+</div>
+<script src="replay-core.js"></script>
+<script>
+(function () {
+  'use strict';
+  var C = window.ReplayCore;
+  var drop = document.getElementById('drop');
+  var input = document.getElementById('file');
+  var out = document.getElementById('out');
+  var err = document.getElementById('err');
+  var el = function (tag, cls, text) { var node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = String(text); return node; };
+  var row = function (k, v) { var wrap = el('div', 'row'); wrap.appendChild(el('span', 'k', k)); wrap.appendChild(el('span', 'v', v)); return wrap; };
+
+  function show(message) { err.textContent = message === undefined ? '' : message; }
+  function clear() { out.textContent = ''; }
+
+  function readFile(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        show();
+        render(file.name, reader.result);
+      } catch (cause) { clear(); show(String(cause && cause.message ? cause.message : cause)); }
+    };
+    var binary = /\.zip$/i.test(file.name);
+    if (binary) reader.readAsArrayBuffer(file); else reader.readAsText(file);
+  }
+
+  function parse(name, payload) {
+    if (payload instanceof ArrayBuffer) return C.parsePack(C.unzipStore(new Uint8Array(payload)));
+    return C.parsePack(payload);
+  }
+
+  function render(name, payload) {
+    var pack = parse(name, payload);
+    var incident = pack.incident;
+    var cmp = C.compareSummary(incident);
+    var attribution = C.attribution(incident);
+    clear();
+
+    var shell = el('div', 'hud');
+    var head = el('div', 'hd');
+    var left = el('div', 'hd-l');
+    left.appendChild(el('span', 'title', '性能 HUD'));
+    left.appendChild(el('span', 'stat', '事故回放'));
+    head.appendChild(left);
+    var right = el('div', 'hd-r');
+    right.appendChild(el('span', 'vitals', String(incident.id || '?') + ' · ' + (incident.at || '?')));
+    head.appendChild(right);
+    shell.appendChild(head);
+
+    // 帧条:一格一帧(事故窗口内),高度按帧时长;阈值与面板同一组
+    var frames = Array.isArray(incident.frames) ? incident.frames : [];
+    var strip = el('div', 'strip');
+    strip.title = '事故窗口内每一帧:高度 = 帧间隔;≥100ms 红 / ≥50ms 黄 / 灰点 = rAF 挂起';
+    frames.forEach(function (frame) {
+      var level = C.frameLevel(frame.ms, frame.gap);
+      var bar = el('i', level === 'bad' ? 'b' : level === 'warn' ? 'w' : '');
+      bar.style.height = level === 'gap' ? '2px' : Math.max(4, Math.min(100, (frame.ms / 200) * 100)) + '%';
+      if (level === 'gap') bar.style.background = 'rgba(249,250,251,.18)';
+      bar.title = (level === 'gap' ? '间隙' : frame.ms.toFixed(1) + 'ms');
+      strip.appendChild(bar);
+    });
+    if (frames.length === 0) strip.appendChild(el('span', 'hint', '包里没有帧记录'));
+    shell.appendChild(strip);
+
+    shell.appendChild(el('div', 'rule'));
+    shell.appendChild(row('帧数', cmp.computed.frames + ' 帧 · 超 50ms ' + cmp.computed.framesOver50Ms + ' · 超 100ms ' + cmp.computed.framesOver100Ms + ' · 间隙 ' + cmp.computed.hiddenGaps));
+    shell.appendChild(row('分位(现算)', 'p50 ' + (cmp.computed.p50 ?? '—') + 'ms · p90 ' + (cmp.computed.p90 ?? '—') + 'ms · p99 ' + (cmp.computed.p99 ?? '—') + 'ms'));
+    shell.appendChild(row('最差帧', (cmp.computed.worstFrameMs ?? '—') + 'ms' + (cmp.computed.worstFrameAt ? ' @ ' + cmp.computed.worstFrameAt : '')));
+    shell.appendChild(row('长动画帧', cmp.computed.loafEntries + ' 条 · 累计 blocking ' + cmp.computed.blockingMs + 'ms'));
+    shell.appendChild(row('窗口内 longtask', cmp.computed.longTasksInWindow + ' 条'));
+
+    var verdict = el('div', 'verdict ' + (cmp.matches ? 'ok' : 'bad'));
+    verdict.textContent = cmp.matches
+      ? '✓ 与包内 summary 逐项一致(' + cmp.compared.length + ' 项)'
+      : '✗ 与包内 summary 不一致:' + cmp.diffs.map(function (diff) { return diff.key + ' 包内 ' + JSON.stringify(diff.pack) + ' / 现算 ' + JSON.stringify(diff.computed); }).join(' · ');
+    shell.appendChild(verdict);
+
+    if (pack.manifest) {
+      shell.appendChild(el('div', 'rule'));
+      var caps = pack.manifest.capabilities || {};
+      var leaves = 0;
+      ['renderer', 'host', 'link'].forEach(function (group) { if (caps[group]) leaves += Object.keys(caps[group]).length; });
+      shell.appendChild(row('包', pack.manifest.plugin + ' ' + (pack.manifest.pluginVersion || '?') + ' · schema ' + pack.manifest.schemaVersion + ' · 能力叶子 ' + leaves));
+      shell.appendChild(row('采集', pack.manifest.captureTier + (pack.manifest.instrumented ? ' · 插桩开' : ' · 未插桩') + (pack.manifest.complete === false ? ' · 现场不完整' : '')));
+    }
+
+    shell.appendChild(el('div', 'rule'));
+    shell.appendChild(el('div', 'cap', '按包(脚本耗时降序)'));
+    shell.appendChild(el('table'));
+    var table = shell.lastChild;
+    var thead = el('thead');
+    var hr = el('tr');
+    ['包', '毫秒', '条数'].forEach(function (label) { hr.appendChild(el('th', '', label)); });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    var tbody = el('tbody');
+    attribution.packages.forEach(function (item) {
+      var tr = el('tr');
+      tr.appendChild(el('td', '', item.pkg || '(未定名)'));
+      tr.appendChild(el('td', 'num', item.ms));
+      tr.appendChild(el('td', 'num', item.count));
+      tbody.appendChild(tr);
+    });
+    if (attribution.packages.length === 0) { var empty = el('tr'); var cell = el('td', '', '这一条事故里没有定到包名的脚本'); cell.colSpan = 3; empty.appendChild(cell); tbody.appendChild(empty); }
+    table.appendChild(tbody);
+
+    shell.appendChild(el('div', 'rule'));
+    shell.appendChild(el('div', 'cap', '可疑脚本(按耗时,最多 5 条)'));
+    var suspects = el('table');
+    var sh = el('tr');
+    ['调用者 / 函数', '包(怎么定到的)', '毫秒'].forEach(function (label) { sh.appendChild(el('th', '', label)); });
+    suspects.appendChild(sh);
+    attribution.suspects.forEach(function (script) {
+      var tr = el('tr');
+      tr.appendChild(el('td', '', (script.fn || script.invoker || '(未知)') + (script.invoker && script.fn ? ' · ' + script.invoker : '')));
+      tr.appendChild(el('td', '', (script.pkg || '未定到') + (script.pkgVia ? ' · ' + script.pkgVia : '')));
+      tr.appendChild(el('td', 'num', script.ms));
+      suspects.appendChild(tr);
+    });
+    shell.appendChild(suspects);
+
+    if (attribution.longTasks.length > 0) {
+      shell.appendChild(el('div', 'rule'));
+      shell.appendChild(el('div', 'cap', '窗口内 longtask'));
+      var tasks = el('table');
+      var th = el('tr');
+      ['开始(perf ms)', '毫秒', '归属'].forEach(function (label) { th.appendChild(el('th', '', label)); });
+      tasks.appendChild(th);
+      attribution.longTasks.forEach(function (task) {
+        var tr = el('tr');
+        tr.appendChild(el('td', 'num', task.at));
+        tr.appendChild(el('td', 'num', task.ms));
+        tr.appendChild(el('td', '', (task.owner || '—') + (task.source ? ' · ' + task.source : '')));
+        tasks.appendChild(tr);
+      });
+      shell.appendChild(tasks);
+    }
+
+    out.appendChild(shell);
+    document.title = '事故回放 · ' + (incident.id || '') + ' · ' + cmp.computed.frames + ' 帧';
+  }
+
+  // 测试钩子(页面自身的拖放仍走 readFile):让离线验收能把一份包直接喂进渲染路径
+  window.__replay = { render: render, core: C };
+
+  drop.addEventListener('click', function () { input.click(); });
+  input.addEventListener('change', function () { if (input.files && input.files[0]) readFile(input.files[0]); });
+  ['dragenter', 'dragover'].forEach(function (type) {
+    drop.addEventListener(type, function (event) { event.preventDefault(); drop.classList.add('hot'); });
+  });
+  ['dragleave', 'dragend'].forEach(function (type) {
+    drop.addEventListener(type, function () { drop.classList.remove('hot'); });
+  });
+  drop.addEventListener('drop', function (event) {
+    event.preventDefault();
+    drop.classList.remove('hot');
+    if (event.dataTransfer && event.dataTransfer.files[0]) readFile(event.dataTransfer.files[0]);
+  });
+})();
+</script>
+</body>
+</html>

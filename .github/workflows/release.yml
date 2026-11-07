@@ -64,12 +64,13 @@ jobs:
           node --check client.js
           for file in tools/*.mjs; do node --check "$file"; done
 
-      - name: Offline suites (740 assertions)
+      - name: Offline suites (748 assertions)
         run: |
           node tests/attribution.mjs
           node tests/logic.mjs
           node tests/host.mjs
           node tests/compat.mjs
+          node tests/replay.mjs
 
       # 与 ci.yml 同一条:离线渲染冒烟(六个屏 + 关闭态,不需要浏览器)
       - name: Offline render smoke
@@ -85,15 +86,15 @@ jobs:
       - name: Assertion count matches the docs
         run: |
           total=0
-          for suite in attribution logic host compat; do
+          for suite in attribution logic host compat replay; do
             count=$(node "tests/$suite.mjs" | grep -c '^ok')
             echo "$suite: $count"
             total=$((total + count))
           done
           echo "total: $total"
-          test "$total" -eq 740
+          test "$total" -eq 748
           for doc in README.md README_EN.md REVIEW.md AGENTS.md CONTRIBUTING.md; do
-            grep -q "740" "$doc" || { echo "$doc 里没有 740"; exit 1; }
+            grep -q "748" "$doc" || { echo "$doc 里没有 748"; exit 1; }
           done
 
       # 发布产物核对:两个半边、patch、图标、许可证、package.json,以及 README / AGENTS 链接到的

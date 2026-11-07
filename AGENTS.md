@@ -65,7 +65,8 @@
 | `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(456 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 四套离线断言(740 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
+| `tests/` | 五套离线断言(748 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
+| `preview/` | 面板设计对比页 + **事故回放站** `replay.html`(零依赖,拖 zip 进来;读包口径在 `replay-core.js`) | 读包 / 改设计时 |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 八份参考文档(含 [pack-schema](docs/pack-schema.md))+ `images/`(9 张 README 截图)+ `plans/`(按日期归档 + 索引,含 1.0 验收档案) | 按需查,别通读(§9) |
 | `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 + `dsh.compatibility.dshReleases`(**只列真跑过的 DSH 版本**,`npm run pack:check` 核) | 改挂载、发版(§10) |
@@ -118,14 +119,15 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑四套件**(合计 **740** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑五套件**(合计 **748** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
 node tests/logic.mjs         # 676 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 node tests/compat.mjs        # 12 条:上一版 schemaVersion 的夹具包喂当前读方(契约没漂 + 缺键必红)
-node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 740)
+node tests/replay.mjs        # 8 条:回放站读包(含 zip),现算摘要 == 包里 summary
+node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 748)
 ```
 
 一条命令跑完:`npm test`。线上(先按 [环境与验证](docs/verification.md) 换 cookie):
@@ -241,7 +243,7 @@ URL 形态、分段换算、四条腿边界、宿主 API、`locale/` 的 ENOENT 
 
 1. **不凭记忆写 API**(§1)—— 每一步都来自当场读源码或实测。
 2. **改 `client.js` 的纪律** —— 带锚点的小批次、插桩可还原,两条规则见 §5;违反的代价是"整段替换吞掉相邻声明"把面板整块搞没(两次),以及"按次数替换"把自计时插进了没有那个变量的 `start()`(见 [死路](docs/dead-ends.md) 的「整段替换吞掉相邻声明」与「批量替换会改到同名调用点」)。
-3. **改渲染 / `apply()` / `start()` 必须真开一次页面** —— `node --check` 与四套件看不出模块作用域的裸标识符,也看不出只在该路径抛的错。
+3. **改渲染 / `apply()` / `start()` 必须真开一次页面** —— `node --check` 与五套件看不出模块作用域的裸标识符,也看不出只在该路径抛的错。
 4. **改 `client.js` 时不要同时跑受控实测** —— HMR 会换实例,seq 归零。
 
 完整清单(19 条:caret 上界静默禁用、buffered 重放、`blocking=0`、单帧尖刺、inspector 多会话、profile 采样密度…)见 [已知坑与已证伪的死路](docs/dead-ends.md)。
@@ -261,7 +263,7 @@ URL 形态、分段换算、四条腿边界、宿主 API、`locale/` 的 ENOENT 
 
 ## 10. npm 发版
 
-bump `package.json.version` → 打 `vX.Y.Z` tag(与 version 一致)→ GitHub Release → `release.yml` 用 OIDC 自动 publish(幂等:已发布就跳过;查询失败照实报错)。`release.yml` 与 CI 跑**同一套门禁**(两个半边的 `node --check` + 四套件 + 断言总数与五份文档一致,2026-11-07 起)—— 文档里的数字写错时,发版路径自己会红,dry-run 也照跑。首版 / staged publishing / Trusted Publisher 的坑见 [npm 发版](docs/release.md)。
+bump `package.json.version` → 打 `vX.Y.Z` tag(与 version 一致)→ GitHub Release → `release.yml` 用 OIDC 自动 publish(幂等:已发布就跳过;查询失败照实报错)。`release.yml` 与 CI 跑**同一套门禁**(两个半边的 `node --check` + 五套件 + 断言总数与五份文档一致,2026-11-07 起)—— 文档里的数字写错时,发版路径自己会红,dry-run 也照跑。首版 / staged publishing / Trusted Publisher 的坑见 [npm 发版](docs/release.md)。
 
 ---
 

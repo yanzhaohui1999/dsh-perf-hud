@@ -29,7 +29,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node tests/attribution.mjs && node tests/logic.mjs && node tests/host.mjs && node tests/compat.mjs && node tools/render-smoke.mjs",
+    "test": "node tests/attribution.mjs && node tests/logic.mjs && node tests/host.mjs && node tests/compat.mjs && node tools/render-smoke.mjs && node tests/replay.mjs",
     "docs:check": "node tools/check-docs.mjs",
     "pack:check": "node tools/check-pack.mjs",
     "prefix:gen": "node tools/gen-prefix-table.mjs",

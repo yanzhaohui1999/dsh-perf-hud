@@ -108,6 +108,7 @@ dsh plugin --profile web add dsh-perf-hud
 
 - **导出前先预览**:写着将要包含什么、脱了什么、少了什么;**给 AI** 的那条会把自由文本(你敲的备注)置空并标 `noteDropped: true`,完整导出保留。
 - **脱敏是减法,不是匿名化**:页面地址只留 origin + path(查询串整段丢);脚本 URL 去协议与主机、保留 `rev`;敏感参数的值换 `<redacted>`;`/Users/<名>` 换 `~`;UA 只留主版本 + 系统。本来就没采:聊天正文、提示词、Cookie、Token、请求头。`context.redaction` 三个数组如实交代做了什么、没做什么。
+- **本地回放(仓库内)**:`preview/replay.html` 拖进 zip / incident.json 就能看 —— 帧条、按包、可疑脚本、longtask,并**并列显示**"包内 summary"与"回放器从 frames 现算"的逐项差异(不一致直接标红)。离线断言见 `tests/replay.mjs`。
 - **人读一份事故**:`node tools/inspect-incident.mjs <file.json>`(帧条带 / 窗口内 longtask / LoAF / 按耗时排序的脚本);**交给 AI**:直接给它那份 `-ai.zip` —— 随包发货的 [诊断 Skill](skills/dsh-perf-diagnosis/SKILL.md) 会按 §2.1 的字段表与 §2.6 的前缀表读它。
 
 ## 控制台 API 与存储键位
@@ -140,16 +141,17 @@ node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
 node tests/logic.mjs         # 676 条:从 client.js 与其分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js
 node tests/compat.mjs        # 12 条:上一版 schemaVersion 的夹具包喂当前读方
+node tests/replay.mjs        # 8 条:回放站读包,现算摘要与包里 summary 逐项一致
 node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不需要浏览器)
 node tools/gen-prefix-table.mjs --check  # 诊断 Skill §2.6 的前缀表与 capabilityMissing() 一致
-# 740 条断言 + 一条冒烟,离线,无需 DSH 在跑;npm test 一条命令跑完
+# 748 条断言 + 一条冒烟,离线,无需 DSH 在跑;npm test 一条命令跑完
 ```
 
 改到面板渲染 / `apply()` / `start()` 时**再跑一次真页面验收**(要浏览器 + 本机 `dsh web`,不进 CI):`node tools/check-panel.mjs`(必跑),`check-incident` / `check-counts` / `check-storage` / `check-interaction` 视改动。规则、提交规范、状态四片与全部门禁见 [AGENTS.md](AGENTS.md);供应链与发版门槛见 [REVIEW.md](REVIEW.md)。
 
 ## 参与贡献
 
-欢迎报 bug 与提 PR。提交前跑完上面四套离线断言 + 渲染冒烟,并读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [AGENTS.md](AGENTS.md)。变更历史见 [CHANGELOG.md](CHANGELOG.md);历史决策与实测证据在 [docs/plans/](docs/plans/)(不是必读)。
+欢迎报 bug 与提 PR。提交前跑完上面五套离线断言 + 渲染冒烟,并读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [AGENTS.md](AGENTS.md)。变更历史见 [CHANGELOG.md](CHANGELOG.md);历史决策与实测证据在 [docs/plans/](docs/plans/)(不是必读)。
 
 ## License
 
