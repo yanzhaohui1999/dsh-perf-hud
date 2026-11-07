@@ -252,16 +252,16 @@ window.__ModuleLoader__.load({
 			const started = performance.now();
 			// 显式燃烧:自测要的是"确定地让这次渲染超过 50ms",好自检归因链路;
 			// 真实卡顿不需要它(自然卡顿由流式渲染/布局产生)。面板上标注"含人为燃烧"。
-			const burnUntil = performance.now() + (typeof state.stressBurn === 'number' ? state.stressBurn : 0);
+			const burnUntil = performance.now() + (typeof state.ui.stressBurn === 'number' ? state.ui.stressBurn : 0);
 			while (performance.now() < burnUntil) { /* 自测专用同步燃烧 */ }
 			const items = [];
 			for (let i = 0; i < props.count; i += 1) items.push(h('span', { key: i }, '.'));
 			// 这次提交一结束就:① 清空标记(否则面板每 0.5 秒重渲染都会再造两万个节点)
 			// ② 记下"渲染→提交"的墙钟耗时 —— 不依赖 longtask,切片提交也能给出真实数字。
 			React.useEffect(() => {
-				state.stressNodes = 0;
-				if (state.stress !== null && state.stress.commitMs === undefined) {
-					state.stress.commitMs = Math.round((performance.now() - started) * 10) / 10;
+				state.render.stressNodes = 0;
+				if (state.ui.stress !== null && state.ui.stress.commitMs === undefined) {
+					state.ui.stress.commitMs = Math.round((performance.now() - started) * 10) / 10;
 				}
 			}, []);
 			return h('div', {
@@ -295,8 +295,8 @@ window.__ModuleLoader__.load({
 			// ① 当前帧率:这一屏唯一的大数。状态词退到它下面,而且**只在不是 ok 时**出现 ——
 			//    "健康"两个字只是把绿颜色再说一遍。
 			kids.push(h('div', { style: S.heroBlock, title: health.reason === '' ? t('healthHint') : health.reason },
-				h('div', { style: { ...S.heroNum, color: levelFrame(state.fps, state.frameWorst) } },
-					state.fps.toFixed(1), h('span', { style: S.heroUnit }, 'fps')),
+				h('div', { style: { ...S.heroNum, color: levelFrame(state.render.fps, state.render.frameWorst) } },
+					state.render.fps.toFixed(1), h('span', { style: S.heroUnit }, 'fps')),
 				health.level === 'ok' ? null : h('div', { style: S.heroState },
 					`${healthIcon(health.level)} ${healthText(health.level)}${health.reason === '' ? '' : ` · ${health.reason}`}`)));
 
@@ -330,7 +330,9 @@ window.__ModuleLoader__.load({
 							String(Math.round(row.severity)), h('span', { style: S.incUnit }, 'ms')),
 						h('span', { style: { ...S.incSev, color } }, severityText(level)),
 						h('span', { style: S.incMeta }, lastStallSubText(row)),
-						h('button', {
+						// 「?」只在真的有候选时出现:没有候选时点开什么也不会多出来 —— 按钮按需出现,
+						// 不留"点了没反应"的动作(2026-10-24 主界面重排时它被无条件渲染过,这里收回)。
+						causes.length === 0 ? null : h('button', {
 							type: 'button', className: 'picon', style: S.iconBtnSmall,
 							title: t('causeWhyHint'),
 							'aria-label': props.why === true ? t('causeWhyHide') : t('causeWhy'),
@@ -418,15 +420,15 @@ window.__ModuleLoader__.load({
 				item('raw', t('devTabRaw'), t('devTabRawHint')),
 				h('button', {
 					type: 'button', style: S.deepSwitch, title: t('deepHint'),
-					'aria-pressed': state.deep === true,
-					onClick: () => setDeep(state.deep === false),
+					'aria-pressed': state.render.deep === true,
+					onClick: () => setDeep(state.render.deep === false),
 				},
-					h('span', { style: { ...S.deepDot, ...(state.deep ? S.deepDotOn : null) } }),
+					h('span', { style: { ...S.deepDot, ...(state.render.deep ? S.deepDotOn : null) } }),
 					t('deepShort')));
 		}
 		/**
 		 * 设置:记录模式 / 数据保留 / 隐私与脱敏。
-		 * 三个开关都是**已有**的(`state.deep` / `state.on` / `clearIncidents()`),这里不新增任何
+		 * 三个开关都是**已有**的(`state.render.deep` / `state.render.on` / `clearIncidents()`),这里不新增任何
 		 * 采集行为 —— 尤其是深录:**不许默认自动开**(概念图里那格"异常时自动加深"刻意没做)。
 		 */
 		function settingsView(props) {
@@ -434,7 +436,7 @@ window.__ModuleLoader__.load({
 			const kept = state.watch.incidents.length;
 			// 插件在 localStorage 里的实际占用(只读):事故 / sourcemap 缓存 / 其余,与落盘上限并排给
 			const storage = storageReport();
-			// 分段控件:两个互斥档位(守夜 / 深录)。文字变化由 state.deep 决定,不另存一份。
+			// 分段控件:两个互斥档位(守夜 / 深录)。文字变化由 state.render.deep 决定,不另存一份。
 			const segItem = (label, active, onClick, title) => h('button', {
 				type: 'button', style: { ...S.segItem, ...(active ? S.segOn : null) }, title, onClick,
 			}, label);
@@ -443,8 +445,8 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.setRow, title: t('modeHint'), 'aria-label': t('settingsMode') },
 					h('span', { style: S.setKey }, t('settingsMode')),
 					h('div', { style: { ...S.seg, marginLeft: 'auto' } },
-						segItem(t('modeWatchShort'), state.deep !== true, () => setDeep(false), `${t('modeHintShort')}\n${t('modeWatch')}`),
-						segItem(t('deepShort'), state.deep === true, () => setDeep(true), `${t('deepHint')}\n${t('modeDeep')}`))),
+						segItem(t('modeWatchShort'), state.render.deep !== true, () => setDeep(false), `${t('modeHintShort')}\n${t('modeWatch')}`),
+						segItem(t('deepShort'), state.render.deep === true, () => setDeep(true), `${t('deepHint')}\n${t('modeDeep')}`))),
 				// ② 留存:三个数(保存 / 裁掉 / 丢失)+ 占用一行小字。留住策略(retainText)进悬停。
 				h('div', { style: S.statRow, title: t('retainText'), 'aria-label': t('settingsRetain') },
 					h('div', { style: { ...S.statCell, ...S.statCellFirst }, title: t('retainKeptHint') },
@@ -999,7 +1001,7 @@ window.__ModuleLoader__.load({
 			kids.push(verdictBlock(row));
 			if (frame === null) {
 				// 老包 / 捕获失败:包里一条帧记录都没有 → 如实说,不摆空条,更不借实时帧
-				kids.push(h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } }, state.pickNote ?? t('pickNone')));
+				kids.push(h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } }, state.ui.pickNote ?? t('pickNone')));
 				kids.push(h('div', { style: S.sub, title: t('replayHint') }, t('replayScopeNote')));
 				return kids;
 			}
@@ -1045,7 +1047,7 @@ window.__ModuleLoader__.load({
 				// ⑦ 时间分解之后:帧里"JS 之外"的残差 —— 唯一能反映 CSS/绘制卡顿的数字
 				h('div', { style: S.row },
 					h('span', { style: S.label, title: t('unattrHint') }, t('unattr')),
-					h('span', { style: { ...S.num, color: state.deep === true && unexplained !== null ? 'var(--dsw-alias-state-warn-primary)' : undefined } },
+					h('span', { style: { ...S.num, color: state.render.deep === true && unexplained !== null ? 'var(--dsw-alias-state-warn-primary)' : undefined } },
 						unattrText())),
 				unexplained === null ? null : h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' } },
 					`${t('unexplained')}:${unexplained.ms}ms(${unexplained.percent}%)→ ${t('unexplainedHint')}`),
@@ -1079,7 +1081,7 @@ window.__ModuleLoader__.load({
 		}
 		function PerfHud() {
 			const [, force] = React.useState(0);
-			const [open, setOpen] = React.useState(state.collapsed === false);
+			const [open, setOpen] = React.useState(state.ui.collapsed === false);
 			const [draft, setDraft] = React.useState('');
 			// ⚠️ 三处悬停联动(环 ↔ 按来源/按包堆叠条 ↔ 交叉表)**整体停用,而且把它那套
 			// 辅助代码删掉了**(`hot` / `setHot` / `hotProps` / `hotStyle` 与各处的 `hot === …`)。
@@ -1093,29 +1095,29 @@ window.__ModuleLoader__.load({
 			// 要重新尝试:先按上面那两种走法搭一个可复现的探针(遍历 DOM 顺序 + 装 console.error 钩子,
 			// 注意钩子必须在 reload **之后**装),同时盯外壳日志里有没有 `slot entry crashed in …`;
 			// 复现出来之前不要再往渲染里加 per-element 的鼠标状态。
-			const setRoot = React.useCallback((element) => { state.root = element; }, []);
+			const setRoot = React.useCallback((element) => { state.ui.root = element; }, []);
 			React.useEffect(() => {
 				// 只在"显示值变了"时渲染(兜底至少 2 秒一次):折叠着不动时 HUD 自身开销接近零。
-				let lastKey = state.displayKey;
+				let lastKey = state.ui.displayKey;
 				let lastForced = performance.now();
 				const id = natives.setInterval(() => {
-					const changed = state.displayKey !== lastKey;
+					const changed = state.ui.displayKey !== lastKey;
 					const stale = performance.now() - lastForced >= 2000;
 					if (changed === false && stale === false) return;
-					lastKey = state.displayKey;
+					lastKey = state.ui.displayKey;
 					lastForced = performance.now();
 					force((n) => (n + 1) % 1000000);
 				}, 500);
 				// 用户动作 / 自测需要"点了立刻渲染":暴露到模块级,不等下一次 tick。
-				state.requestRender = () => {
-					lastKey = state.displayKey;
+				state.ui.requestRender = () => {
+					lastKey = state.ui.displayKey;
 					lastForced = performance.now();
 					force((n) => (n + 1) % 1000000);
 				};
 				return () => {
 					natives.clearInterval(id);
-					state.requestRender = null;
-					state.toggleHud = null;
+					state.ui.requestRender = null;
+					state.ui.toggleHud = null;
 				};
 			}, []);
 
@@ -1127,12 +1129,12 @@ window.__ModuleLoader__.load({
 			// ── 位置(拖动 / 记忆)──────────────────────────────────────────────
 			// 锚点是**左下角**(left + bottom):默认停右下角时就是底边钉住、向上长,拖动之后保持
 			// 同一个生长方向 —— 换成左上角锚,面板摆到屏幕中部点开就会向下长,底边一路掉到视口底。
-			// 拖动时只把 right 置 auto(bottom 要留着当锚),位置只活在 `state.pos` 里。
+			// 拖动时只把 right 置 auto(bottom 要留着当锚),位置只活在 `state.ui.pos` 里。
 			// 宽度只有 panelWidth 一个来源:展开态就是它,收起态由 S.root 的 maxWidth 封顶到它 ——
 			// 所以夹紧用它当上界对两种形态都成立(收起态不该拿"上次拖动时的宽度"当尺子)。
-			const isOpenPanel = open === true && state.on !== false;
-			const pos = state.pos === null ? null : hudPosClamp(
-				state.pos,
+			const isOpenPanel = open === true && state.render.on !== false;
+			const pos = state.ui.pos === null ? null : hudPosClamp(
+				state.ui.pos,
 				{ w: panelWidth },
 				{ w: W.innerWidth, h: W.innerHeight },
 				isOpenPanel ? HUD_POS_MIN_ROOM : HUD_POS_PILL_ROOM,
@@ -1166,11 +1168,11 @@ window.__ModuleLoader__.load({
 				// 展开药丸 = 回到"日常那一屏"(主界面);开发者详情 / 设置是显式入口,
 				// 不因为上次停在那就一直停在那 —— 否则普通用户点开看到的是一屏技术数据。
 				if (next === true) setView('main');
-				state.collapsed = next === false;
+				state.ui.collapsed = next === false;
 				try { localStorage.setItem(LS_UI, next ? '0' : '1'); } catch (error) { /* 折叠状态记不住无所谓 */ }
 			};
 			// 快捷键走同一个 toggle(不另写一份展开状态,否则两处会不同步)。
-			state.toggleHud = toggle;
+			state.ui.toggleHud = toggle;
 			/**
 			 * 拖动标题栏。三条要点(前两条抄自 dsh-better-sidebar 的 FloatingWindow,那边真页面验过):
 			 * ① 指针用 **window 级监听**,不在面板上做 pointer capture —— capture 会把后续 click 的
@@ -1204,7 +1206,7 @@ window.__ModuleLoader__.load({
 				if (event.pointerType === 'mouse' && event.button !== 0) return;
 				const target = event.target;
 				if (target instanceof Element && target.closest('button, input, select, textarea, a') !== null) return;
-				const root = state.root;
+				const root = state.ui.root;
 				if (root === null) return;
 				const rect = root.getBoundingClientRect();
 				// 量的是**底边距视口底**的距离:拖动只改 left / bottom,底边这个锚点全程不换。
@@ -1221,7 +1223,7 @@ window.__ModuleLoader__.load({
 					moved = true;
 					const next = hudPosClamp({ left: start.left + dx, bottom: start.bottom - dy },
 						{ w: start.w }, { w: W.innerWidth, h: W.innerHeight }, room);
-					state.pos = next;
+					state.ui.pos = next;
 					applyPosStyle(root, next, isOpenPanel);
 				};
 				const onUp = () => {
@@ -1234,7 +1236,7 @@ window.__ModuleLoader__.load({
 					const finalRect = root.getBoundingClientRect();
 					const finalPos = hudPosClamp(hudPosMake({ left: finalRect.left, right: finalRect.right, bottom: finalRect.bottom },
 						{ w: W.innerWidth, h: W.innerHeight }), { w: panelWidth }, { w: W.innerWidth, h: W.innerHeight }, room);
-					state.pos = finalPos;
+					state.ui.pos = finalPos;
 					applyPosStyle(root, finalPos, isOpenPanel);
 					saveHudPos();
 					bump();
@@ -1246,8 +1248,8 @@ window.__ModuleLoader__.load({
 			};
 			/** 双击标题栏 = 回到默认右下角(与「恢复默认布局」里那次复位是同一个动作)。 */
 			const resetPos = () => {
-				if (state.pos === null) return;
-				state.pos = null;
+				if (state.ui.pos === null) return;
+				state.ui.pos = null;
 				saveHudPos();
 				bump();
 			};
@@ -1255,15 +1257,15 @@ window.__ModuleLoader__.load({
 			React.useEffect(() => {
 				let frame = null;
 				const onResize = () => {
-					if (frame !== null || state.pos === null) return;
+					if (frame !== null || state.ui.pos === null) return;
 					frame = W.requestAnimationFrame(() => {
 						frame = null;
-						if (state.pos === null) return;
-						const next = hudPosClamp(state.pos, { w: panelWidth },
+						if (state.ui.pos === null) return;
+						const next = hudPosClamp(state.ui.pos, { w: panelWidth },
 							{ w: W.innerWidth, h: W.innerHeight }, open === true ? HUD_POS_MIN_ROOM : HUD_POS_PILL_ROOM);
-						const sameOffset = Number.isFinite(next.left) ? next.left === state.pos.left : next.right === state.pos.right;
-						if (sameOffset && next.bottom === state.pos.bottom) return;
-						state.pos = next;
+						const sameOffset = Number.isFinite(next.left) ? next.left === state.ui.pos.left : next.right === state.ui.pos.right;
+						if (sameOffset && next.bottom === state.ui.pos.bottom) return;
+						state.ui.pos = next;
 						saveHudPos();
 						bump();
 					});
@@ -1275,7 +1277,7 @@ window.__ModuleLoader__.load({
 				};
 			}, [open]);
 			// 收起/展开不抢焦点:外壳在键盘命令之后会把焦点还给输入框;与它抢只会让用户丢焦点。
-			if (state.on === false) {
+			if (state.render.on === false) {
 				return h('div', { ref: setRoot, id: ROOT_ID, style: { ...S.root(false, panelWidth), ...posStyle, ...dodgeStyle } },
 					h('div', { style: { ...S.head, ...S.drag }, title: t('dragHint'), onPointerDown: startDrag, onDoubleClick: resetPos },
 						h('span', { style: S.label }, `${t('title')} · ${t('off')}`),
@@ -1285,7 +1287,7 @@ window.__ModuleLoader__.load({
 			const worst = worstLongTask();
 			const link = linkStats();
 			const linkSuspect = suspectLink();
-			const idleBase = state.idleBaseline;
+			const idleBase = state.watch.idleBaseline;
 			const infra = infraVerdict();
 			const hostFresh = hostFreshness();
 			const rows = pluginTable();
@@ -1300,11 +1302,11 @@ window.__ModuleLoader__.load({
 			const scene = sceneChip();
 			// 落盘的是"上次在看哪个视图",而事故可能已经被挤出留存清单 —— 那时退回主界面,
 			// 不去渲染一个空的历史上下文(与 selectedIncident 的退回自动是同一条规矩)。
-			const view = state.view === 'incident' && state.watch.mode !== 'incident' ? 'main' : state.view;
+			const view = state.ui.view === 'incident' && state.watch.mode !== 'incident' ? 'main' : state.ui.view;
 			const viewTitle = view === 'dev' ? t('viewDev') : view === 'settings' ? t('viewSettings') : t('viewIncident');
 			// 返回的落点:设置页回它来的那一屏,其余子页回主界面(2026-10-24 flow 修正)。
-			const backTo = view === 'settings' && state.settingsBack !== 'settings' ? state.settingsBack
-				: view === 'incident' && state.incidentBack !== 'incident' ? state.incidentBack : 'main';
+			const backTo = view === 'settings' && state.ui.settingsBack !== 'settings' ? state.ui.settingsBack
+				: view === 'incident' && state.ui.incidentBack !== 'incident' ? state.ui.incidentBack : 'main';
 			const head = h('div', { style: { ...S.head, ...S.drag }, title: t('dragHint'), onPointerDown: startDrag, onDoubleClick: resetPos },
 				h('div', { style: S.headLeft },
 					// 返回是**图标**:它每一屏都在,却只在子页出现 —— 三个汉字换成 14px 的箭头,
@@ -1318,7 +1320,7 @@ window.__ModuleLoader__.load({
 					h('span', { style: S.brand, title: t('title') }, view === 'main' ? t('title') : viewTitle),
 					// 场景标签与标题一样是**文字**,一样可以让位(先出省略号):不变的是控件。
 					h('span', { style: { ...S.label, color: scene.color, flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }, scene.text),
-					view === 'main' ? null : h('span', { style: { ...S.num, flex: '0 0 auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(1)} fps`)),
+					view === 'main' ? null : h('span', { style: { ...S.num, flex: '0 0 auto', color: levelFrame(state.render.fps, state.render.frameWorst) } }, `${state.render.fps.toFixed(1)} fps`)),
 				h('div', { style: S.headRight },
 					h('button', { type: 'button', className: 'picon', style: S.iconBtn, title: t('settingsHint'), 'aria-label': t('viewSettings'), onClick: () => setView(view === 'settings' ? backTo : 'settings') }, panelIcon('sliders')),
 					h('button', { type: 'button', className: 'picon', style: S.iconBtn, title: open ? t('collapse') : t('expand'), 'aria-label': open ? t('collapse') : t('expand'), onClick: toggle }, panelIcon(open ? 'minus' : 'plus')),
@@ -1336,8 +1338,8 @@ window.__ModuleLoader__.load({
 					h('div', { style: { ...S.head, ...S.drag }, title: t('dragHint'), onPointerDown: startDrag, onDoubleClick: resetPos },
 						h('span', { style: S.brand }, t('title')),
 						h('span', { style: { ...S.label, color: sceneChip().color } }, sceneChip().text),
-						h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.fps, state.frameWorst) } }, `${state.fps.toFixed(0)} fps`),
-						h('span', { style: { ...S.label, fontVariantNumeric: 'tabular-nums' } }, `${t('frameWorst')} ${state.frameWorst.toFixed(0)}ms`),
+						h('span', { style: { ...S.num, flex: '0 0 auto', marginLeft: 'auto', color: levelFrame(state.render.fps, state.render.frameWorst) } }, `${state.render.fps.toFixed(0)} fps`),
+						h('span', { style: { ...S.label, fontVariantNumeric: 'tabular-nums' } }, `${t('frameWorst')} ${state.render.frameWorst.toFixed(0)}ms`),
 						worst === null ? null : h('span', { style: { ...S.label, fontVariantNumeric: 'tabular-nums' } }, `LT ${worst.ms.toFixed(0)}ms`),
 						// 窄屏只让这一格(明细本来就在悬停与设置页里):实测整条读数要 ~425px,
 						// 393px 视口把它丢掉之后其余读数才不挤成"生… 空闲 2s 12 fps…"。
@@ -1353,10 +1355,10 @@ window.__ModuleLoader__.load({
 				// 标题里带「近 60 秒」:帧 / 长任务 / 命中三个数都是这个窗口的口径,不写出来只能猜。
 				h('div', { style: S.statRow, title: overviewTitle(), 'aria-label': `${t('overview')} · ${t('scope60s')}` },
 					h('div', { style: { ...S.statCell, ...S.statCellFirst } },
-						h('b', { style: { ...S.statValue, color: levelFrame(state.fps, state.frameWorst) } }, `${state.frameWorst.toFixed(0)}ms`),
+						h('b', { style: { ...S.statValue, color: levelFrame(state.render.fps, state.render.frameWorst) } }, `${state.render.frameWorst.toFixed(0)}ms`),
 						h('span', { style: S.statLabel }, t('overviewFrame'))),
 					statCell(worst === null ? '—' : `${worst.ms.toFixed(0)}ms`, 'LT', false),
-					statCell(`${state.ltBlamed}/${state.ltTotal}`, t('hit'), false)),
+					statCell(`${state.render.ltBlamed}/${state.render.ltTotal}`, t('hit'), false)),
 				h('div', { style: S.metaLine }, overviewLine2()),
 
 				// ── 常显 2:事故诊断入口(守夜留下的事故)──
@@ -1388,7 +1390,7 @@ window.__ModuleLoader__.load({
 						`${watchSelectedText()} · ${selected.auto ? (state.watch.scope === 'latest' ? t('evAutoLatest') : t('evAutoWorst')) : t('evPinned')}`),
 					selectedRow === null ? null : h('div', { style: { ...S.metaLine, color: verdictColor(incidentVerdict(selectedRow).level) }, title: t('verdictLabel') }, eventVerdictText(selectedRow)),
 					selectedRow === null ? null : h('div', { style: S.metaLine }, eventWindowText(selectedRow)),
-					state.copyNote === null ? null : h('div', { style: S.metaLine }, state.copyNote),
+					state.ui.copyNote === null ? null : h('div', { style: S.metaLine }, state.ui.copyNote),
 					watchFlagText() === null ? null : h('div', { style: { ...S.metaLine, color: 'var(--dsw-alias-state-warn-primary)' }, title: t('watchHint') }, watchFlagText())),
 
 				// ── 常显 3:回调归因 Top3(每插件一行,hover 补 msps 与累计)──
@@ -1399,8 +1401,8 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.sep },
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('blameHint') }, t('blame')),
-						h('span', { style: S.num }, state.deep !== true ? t('needDeep') : msPerSecText(state.attributedPerSec))),
-					state.deep !== true || top.length === 0 ? null : h('div', null, top.map((row, index) => h('div', { key: row.id, style: S.row },
+						h('span', { style: S.num }, state.render.deep !== true ? t('needDeep') : msPerSecText(state.render.attributedPerSec))),
+					state.render.deep !== true || top.length === 0 ? null : h('div', null, top.map((row, index) => h('div', { key: row.id, style: S.row },
 						h('span', {
 							style: S.label,
 							title: `${row.id}\n` +
@@ -1410,7 +1412,7 @@ window.__ModuleLoader__.load({
 								t('cnScope'),
 						}, `${index + 1}. ${short(row.id)}`),
 						h('span', { style: S.num }, attrText(row))))),
-					state.deep !== true || rest.length === 0 ? null : h('div', { style: S.row },
+					state.render.deep !== true || rest.length === 0 ? null : h('div', { style: S.row },
 						h('span', { style: S.label, title: restTitleText(rest) }, `${t('rest')} (${rest.length})`),
 						h('span', { style: S.num }, restValueText(rest)))),
 
@@ -1438,22 +1440,22 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.sep, 'aria-label': t('groupDom') }, [
 					h('div', { style: S.row },
 						h('span', { style: S.label }, `${t('dom')} · ${t('rateWindow')}`),
-						h('span', { style: S.num }, `${state.dom.total} · ${rateText(state.dom.series)}`)),
+						h('span', { style: S.num }, `${state.render.dom.total} · ${rateText(state.render.dom.series)}`)),
 					TARGETS.map((target) => {
-						const entry = state.targets.get(target.id);
+						const entry = state.render.targets.get(target.id);
 						return h('div', { key: target.id, style: S.row },
 							h('span', { style: S.label }, target.label()),
 							h('span', { style: S.num }, entry === undefined || entry.nodes === null ? t('none') : `${entry.nodes} · ${rateText(entry.series)}`));
 					}),
-					state.heap === null ? null : h('div', { style: S.row },
+					state.render.heap === null ? null : h('div', { style: S.row },
 						h('span', { style: S.label }, t('heap')),
-						h('span', { style: S.num }, `${mb(state.heap)}MB · ${heapRateText()}`)),
+						h('span', { style: S.num }, `${mb(state.render.heap)}MB · ${heapRateText()}`)),
 					// DOM 写入属于「DOM 与堆」,不属于「取证明细」—— 那组回答的是"这一帧的时间去哪了"。
 					// 这两行只有插桩了才有意义(不插桩时计数恒为 0,那时它们只会被读成"没有开销")
-					state.deep !== true ? null : h('div', { style: S.row },
+					state.render.deep !== true ? null : h('div', { style: S.row },
 						h('span', { style: S.label, title: t('domWritesHint') }, t('domWrites')),
-						h('span', { style: S.num }, String(state.mutations))),
-					state.deep !== true ? null : writeRows(),
+						h('span', { style: S.num }, String(state.render.mutations))),
+					state.render.deep !== true ? null : writeRows(),
 				]),
 
 			];
@@ -1462,7 +1464,7 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.sep, 'aria-label': t('groupHost') }, [
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('stream')),
-						h('span', { style: S.num }, `${state.streaming ? t('running') : t('idle')}${state.streaming || state.idleSince === 0 ? '' : ` ${Math.round((performance.now() - state.idleSince) / 1000)}s`}${state.baselineRunning ? ` · ${t('idleBase')}…` : ''}`)),
+						h('span', { style: S.num }, `${state.watch.streaming ? t('running') : t('idle')}${state.watch.streaming || state.watch.idleSince === 0 ? '' : ` ${Math.round((performance.now() - state.watch.idleSince) / 1000)}s`}${state.watch.baselineRunning ? ` · ${t('idleBase')}…` : ''}`)),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, `${t('hostLoop')} · ${t('verdict')}`),
 						h('span', { style: { ...S.num, color: infra.color } }, infra.text)),
@@ -1487,20 +1489,20 @@ window.__ModuleLoader__.load({
 							key: seconds,
 							type: 'button',
 							style: S.btnGhost,
-							disabled: state.hostCpuProfile.phase === 'running',
+							disabled: state.host.hostCpuProfile.phase === 'running',
 							title: t('hostProfileStartHint'),
 							onClick: () => { startHostCpuProfile(seconds); },
 						}, `${t('hostProfileStart')}${seconds}${t('secondsUnit')}`)),
 						// 原始 .cpuprofile 是**本地**文件(导出件里只有汇总),所以按需出现。
-						state.hostCpuProfile.profile === null ? null : h('button', {
+						state.host.hostCpuProfile.profile === null ? null : h('button', {
 							type: 'button',
 							style: S.btnGhost,
 							title: t('hostProfileSaveHint'),
 							onClick: () => { downloadHostCpuProfile(); },
 						}, t('hostProfileSave'))),
 					// 失败时宿主的**错误原文**单独一行(原样,不加工也不吞)。
-					(state.hostCpuProfile.error ?? '') === '' ? null : h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' }, title: t('hostProfileErrorHint') },
-						`${t('hostProfileErrorLabel')}: ${state.hostCpuProfile.error}`),
+					(state.host.hostCpuProfile.error ?? '') === '' ? null : h('div', { style: { ...S.sub, color: 'var(--dsw-alias-state-warn-primary)' }, title: t('hostProfileErrorHint') },
+						`${t('hostProfileErrorLabel')}: ${state.host.hostCpuProfile.error}`),
 					hostCpuProfileTopText() === '' ? null : h('div', { style: S.sub, title: t('hostProfileTopHint') },
 						`${t('hostProfileTop')}: ${hostCpuProfileTopText()}`),
 					h('div', { style: S.row },
@@ -1520,10 +1522,10 @@ window.__ModuleLoader__.load({
 					h('div', { style: S.row },
 						h('span', { style: S.label, title: t('watchHint') }, t('watch')),
 						h('span', { style: S.num }, watchPanelText())),
-					// 自测结果:由 console 的 __perfHud.stress() 触发;state.stress 是唯一记账处,
+					// 自测结果:由 console 的 __perfHud.stress() 触发;state.ui.stress 是唯一记账处,
 					// 面板与返回值读同一份(以前记账写了但没人读,属于死代码)。
-					state.stress === null ? null
-						: h('div', { style: S.sub, title: t('stressHint') }, state.stress.text ?? t('stressRunning')),
+					state.ui.stress === null ? null
+						: h('div', { style: S.sub, title: t('stressHint') }, state.ui.stress.text ?? t('stressRunning')),
 					// 清单按**严重度**排(不是时间序):点一条就选中它 —— 首屏「最差事件」块与
 					// 「取证明细」的翻帧都跟着走。它真能导航到同一条事故,所以才做成可点的行。
 					state.watch.incidents.length === 0 ? null : h('div', { title: t('envPickHint') },
@@ -1544,12 +1546,12 @@ window.__ModuleLoader__.load({
 						}),
 						h('button', { type: 'button', style: S.btn, disabled: state.watch.on === false, title: t('watchMarkHint'), onClick: () => {
 							// 回执读的是返回值(留在清单第几条 / 有没有留下),不是"点完就当成功"。
-							state.captureReceipt = W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft);
+							state.ui.captureReceipt = W.__perfHud.capture(draft === '' ? t('watchManualNote') : draft);
 							setDraft('');
 							bump();
 						} }, t('watchMark'))),
-					state.captureReceipt === null || state.captureReceipt === undefined ? null
-						: h('div', { style: S.sub, title: t('watchMarkHint') }, captureReceiptText(state.captureReceipt, state.watch.incidents)),
+					state.ui.captureReceipt === null || state.ui.captureReceipt === undefined ? null
+						: h('div', { style: S.sub, title: t('watchMarkHint') }, captureReceiptText(state.ui.captureReceipt, state.watch.incidents)),
 					// 导出 / 清空**只在「原始数据」那一页**(见 devRaw):同四个按钮在相邻两个标签页
 					// 各摆一份,点错地方只是白点一次,读的人还要先弄清两页有什么区别。
 				]),
@@ -1573,11 +1575,11 @@ window.__ModuleLoader__.load({
 			];
 
 			// ── 一次只渲染一个视图 ──
-			const trend = trendSummary(state.trendMs);
-			const devKids = state.devTab === 'dom' ? devDom
-				: state.devTab === 'host' ? devHost
-					: state.devTab === 'tools' ? devTools
-						: state.devTab === 'raw' ? devRaw : devFrames;
+			const trend = trendSummary(state.ui.trendMs);
+			const devKids = state.ui.devTab === 'dom' ? devDom
+				: state.ui.devTab === 'host' ? devHost
+					: state.ui.devTab === 'tools' ? devTools
+						: state.ui.devTab === 'raw' ? devRaw : devFrames;
 			// ⚠️ 三个视图**只在被选中时才构造**:`incidentDetail(detailContext())` 要求"现在真的在
 			// 历史上下文里",无条件先算一遍会在实时上下文中拿不到 row 直接抛错(实测过:面板整块不渲染,
 			// 离线三套件全绿,只有 check-panel 抓得到)。这里的写法本身也是"没用到的视图不做工"。
@@ -1588,13 +1590,13 @@ window.__ModuleLoader__.load({
 				view === 'main' ? mainView({
 					health: healthVerdict(),
 					latest: latestRow,
-					trendMs: state.trendMs,
-					why: state.causeOpen,
-					preview: state.packPreview !== null && latestRow !== null && state.packPreview.incident.id === latestRow.id ? state.packPreview : null,
-					onOpen: (id) => { state.incidentBack = state.view; setView('incident'); revealIncident(id); },
+					trendMs: state.ui.trendMs,
+					why: state.ui.causeOpen,
+					preview: state.ui.packPreview !== null && latestRow !== null && state.ui.packPreview.incident.id === latestRow.id ? state.ui.packPreview : null,
+					onOpen: (id) => { state.ui.incidentBack = state.ui.view; setView('incident'); revealIncident(id); },
 					onExportPreview: (id) => { openPackPreview(id, { dropFreeText: true }); },
 					onExportGo: () => {
-						const id = state.packPreviewId;
+						const id = state.ui.packPreviewId;
 						closePackPreview();
 						exportPack(id, { dropFreeText: true });
 					},
@@ -1604,10 +1606,10 @@ window.__ModuleLoader__.load({
 					onDev: () => setView('dev'),
 				}) : null,
 				view === 'incident' ? incidentDetail(detailContext()) : null,
-				view === 'dev' ? h('div', null, devTabRow({ tab: state.devTab, onTab: setDevTab }), devKids) : null,
+				view === 'dev' ? h('div', null, devTabRow({ tab: state.ui.devTab, onTab: setDevTab }), devKids) : null,
 				view === 'settings' ? settingsView({
 					trend,
-					trendMs: state.trendMs,
+					trendMs: state.ui.trendMs,
 					onClearIncidents: () => { clearIncidentsNow(); },
 					onClearAll: () => { W.__perfHud.clear(); },
 				}) : null);
@@ -1618,22 +1620,22 @@ window.__ModuleLoader__.load({
 					// 正文是**唯一**的滚动容器:头部(返回 / 设置 / 收起 / 关闭)永远留在原地,
 					// 滚轮再长也滚不走它(以前整块一起滚,控件够不着)。
 					h('div', { style: S.scroll }, body,
-						state.stressNodes > 0 ? h(PerfHudStress, { count: Math.min(state.stressNodes, 6000) }) : null)));
+						state.render.stressNodes > 0 ? h(PerfHudStress, { count: Math.min(state.render.stressNodes, 6000) }) : null)));
 		}
 		/** 分享前预览:构建一次存进 state(别每次渲染都重新序列化整份事故包)。 */
 		function openPackPreview(id, options) {
 			if (id === null || id === undefined) return null;
 			const opts = options ?? { dropFreeText: true };
-			state.packPreview = packPreview(id, opts);
-			state.packPreviewId = id;
-			state.packPreviewOptions = opts;
+			state.ui.packPreview = packPreview(id, opts);
+			state.ui.packPreviewId = id;
+			state.ui.packPreviewOptions = opts;
 			bump();
-			return state.packPreview;
+			return state.ui.packPreview;
 		}
 		function closePackPreview() {
-			state.packPreview = null;
-			state.packPreviewId = null;
-			state.packPreviewOptions = null;
+			state.ui.packPreview = null;
+			state.ui.packPreviewId = null;
+			state.ui.packPreviewOptions = null;
 			bump();
 		}
 

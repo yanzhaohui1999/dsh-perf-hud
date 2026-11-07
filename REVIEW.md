@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ `cordis.patch.yml` 形态正确 —— 这是市场收录最常见的被拒原因 |
 | 4 | 公开仓库 + topic | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场 |
 | 5 | 产物无死链 | ✅ 0.8.0 `npm pack` **31 个文件**(0.5.0 的 23 + 6 个 `client.*.js` 分片);`release.yml` 逐份核(含 `tools/`、`locale/` 按目录核) |
-| 6 | 门禁全绿 | ✅ **731** 条离线断言(attribution 11 / logic 667 / host 41 / compat 12);CI 与 `release.yml` 都跑:两个半边的 `node --check` + 四套件 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ **735** 条离线断言(attribution 11 / logic 671 / host 41 / compat 12);CI 与 `release.yml` 都跑:两个半边的 `node --check` + 四套件 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ✅ 2026-10-18 提 PR [awesome-dsh-plugin#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814)(单文件 `data/plugins/…yml`),**2026-10-19 01:29 已合并** |
 | 8 | 兼容性声明 | ✅ `engines.dsh` 与三个客户端 inject 包统一 `>=0.2.0-rc.2 <0.3.0-0`;本机 `0.2.1-rc.1` 下五个真页面验收器全绿 |
 
@@ -33,7 +33,7 @@
 5. ~~**`captureNow()` 语义含糊**~~ → **已还(2026-11-04)**:分成 `settled` / `pending`(已起一次、后摇没到,带 `waitMs`)/ `coalesced`(并进已有 pending)/ `not-recording` / `covered`;旧 `ok/incident` 判断路径不变。
 6. ~~**手动标记的反馈**~~ → **已还(2026-11-04)**:按钮读 `capture()` 返回值并显示回执(「已记为 i42(清单第 3 条 · 最近一次)」等),未进留存也照实说。
 7. ~~**`dshVersion` 恒为 `null`**~~ → **已还(2026-11-07,`c7bc488`)**:选了**客户端别读** —— 字段整个从 `manifest.json` 删掉。宿主半没有可验证的版本来源(`profileContext` 只有 `name` / `dir` / `home` / `patchPath` / `overlays` / `startedBundles`,环境变量里没有 DSH 版本),补它只能猜 API(违背 §1);而一个恒 `null` 的字段会让读包的人去追一个不存在的采集失败。宿主运行时版本没丢:采过宿主 CPU profile 时在 `context.hostCpuProfile.meta.nodeVersion`。断言「诊断包:manifest 不宣称拿不到的 DSH 版本」钉住"别读回来"。
-8. **跨分片共享的 94 字段 `state` 仍是单一对象**:`client.js` 已从 8,595 行收到 4,315 行(1 主 + 6 片,`createModel` / `createWatch` / `createUi` 显式收依赖),但状态没有按视图归拢 —— 主文件 + 6 个分片里共 **900** 处 `state.` 引用(2026-11-07 实测:`client.js` 482 / `model` 243 / `ui` 137 / `watch` 36 / `tools` 2),测试仍抽源码文本。拆分已落地,状态切分仍按 `docs/plans/2026-10-13-code-review.md` §5(P2-10) 记着 —— 它是 [1.0 milestone](docs/plans/2026-11-07-v1-milestone.md) 的前置,**本轮明确不做**。
+8. ~~**跨分片共享的单一 `state` 是 99 字段、900 处引用的一大坨**~~ → **已还(2026-11-07,1.0 / S1)**:状态按视图切成四片 —— `state.ui`(23)/ `state.render`(53)/ `state.watch`(37,守夜层自己就是一整片)/ `state.host`(15);900 处引用全部改写成 `state.<片>.<字段>`,裸字段引用为 0。宿主快照字段 `host` 顺手改名 `snapshot`(`state.host.snapshot`,否则会出现 `state.host.host`)。四条离线断言钉住边界:片名只有这四个、四片字段数写死(挪字段要交代)、每处引用都命中真实的「片.字段」、**采集侧只读自己那片**(守夜层读不到面板状态,工具箱只读场景标签;model / ui 拿全四片)。真页面五个验收器全绿。仍留在原地的:测试仍抽源码文本(那是测试写法,不是状态问题)。
 9. ~~**Skill 的 `missing:` 前缀漂移没有守卫**~~ → **已还(2026-11-07,`80fb093`)**:`capabilityMissing()` 产出的是自由字符串,而诊断 Skill 按 §2.6 那张前缀表分类读包 —— 客户端换措辞 / 加前缀时三套件照绿,Skill 会静默落进"其它"类。补断言「缺失声明的前缀集合与诊断 Skill §2.6 的前缀表一一对应」:两边去重集合**双向**比(代码有而表里没有 / 表里有而代码已不生成),外加"每个 `missing.push` 都真的以 `前缀:` 开头"(把前缀拼进变量会绕过前两项)。新断言一上来就抓到真实漂移:`host-snapshot:` 与 `loaf-pkg:` 从没进过 Skill 的表,已补进「采集丢了 / 还没采到」。
 10. ~~**`tools/inspect-incident.mjs` 读不了自家 fixture**~~ → **已还(2026-11-07,`00b4706`)**:`tests/fixtures/incident-real.json` 是 `{incident, thresholds, redaction}` 的**切片**,工具按完整包判 `kind`,于是 `kind=undefined` 退出 1 —— 仓库自带的样本自己读不了。现在按形状自动认切片(`thresholds` / `redaction` 从顶层搬进 `context`,渲染仍只有一条路),其它形状明确报错并提示 `--allow-slice`;**切片会被说出来**(没有 `context.missing`,那三段显式写"切片里没有这一栏 —— 不是没有缺口")。用法写进工具头部注释,人读的入口在 [`docs/verification.md`](docs/verification.md) §2.2。
 

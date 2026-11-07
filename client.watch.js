@@ -76,7 +76,7 @@ window.__ModuleLoader__.load({
 					// 只要 URL 是**组合**(`plugins/??…`)就预取脚本文本 —— 单包组合
 					// (`??<一个包>/client.js`)也算:它的 charPos 同样要靠文本才能换成行号。
 					// 以前判据是 `indexOf(',') !== -1`(只看多包),单包组合于是永远停在 text-pending。
-					if (scriptUrl !== null && state.precise === true && /\/plugins\/\?\?/.test(scriptUrl)) {
+					if (scriptUrl !== null && state.render.precise === true && /\/plugins\/\?\?/.test(scriptUrl)) {
 						// 多包:后台把脚本文本与分段表准备好。这两个请求都是浏览器内存缓存命中,
 						// 但走的是异步,所以只预取、不在这里等。
 						ensureScriptLines(scriptUrl);
@@ -239,9 +239,9 @@ window.__ModuleLoader__.load({
 				loafFull: watch.loaf.length >= WATCH_LOAF_MAX,
 				loafDroppedAtTrigger: watch.loafDropped,
 				loafOldestAt: watch.loaf.length === 0 ? null : watch.loaf[0].t,
-				longTaskFull: state.longTasks.length >= 200,
-				longTaskDroppedAtTrigger: state.ltDropped,
-				longTaskOldestAt: state.longTasks.length === 0 ? null : state.longTasks[0].at,
+				longTaskFull: state.render.longTasks.length >= 200,
+				longTaskDroppedAtTrigger: state.render.ltDropped,
+				longTaskOldestAt: state.render.longTasks.length === 0 ? null : state.render.longTasks[0].at,
 			};
 			// 起一次新捕获 = 检测到一次卡顿(同一串里的后续触发会走上面的 coalesced,不重复计)
 			bumpTally('triggered', Date.now());
@@ -371,7 +371,7 @@ window.__ModuleLoader__.load({
 					pauseMs: script.pauseMs,
 				})),
 			}));
-			const longTasks = state.longTasks.filter((row) => row.at >= from && row.at <= to);
+			const longTasks = state.render.longTasks.filter((row) => row.at >= from && row.at <= to);
 			// A4:窗口内的交互延迟(端到端时长;页面内没有帧内拆分,见 watchInteraction 的说明)
 			const interactions = (state.watch.interactions ?? []).filter((row) => row.at >= from && row.at <= to);
 			// 窗口完整性:和官方 Inspector 的 sequence gap 同一条纪律 —— 缺口必须显式,不许静默。
@@ -510,7 +510,7 @@ window.__ModuleLoader__.load({
 					worstFrameJs: worstJs,                  // js = 有 longtask/LoAF 重叠;none = 没有任何 JS 解释
 					worstFrameNeighboursMs: neighboursMs,   // 最差帧前后各 5 帧的中位(健康帧 ≈ 16.7ms)
 					suspectedThrottle,                      // true = 更像 rAF 被节流/挂起,而不是页面真忙
-					streaming: state.streaming,
+					streaming: state.watch.streaming,
 					visibility: document.visibilityState,
 				},
 				urls,                          // 脚本 URL 表(scripts[].u 是它的下标)
@@ -520,19 +520,19 @@ window.__ModuleLoader__.load({
 				longTasks,
 				interactions,
 				baseline: frameRing.stats(from, to),   // 排除本窗口之后的分布:含自己就永远"比不上"
-				host: state.host === null || state.host === undefined ? null : {
-					at: state.hostAt > 0 ? new Date(state.hostAt).toISOString() : null,
+				host: state.host.snapshot === null || state.host.snapshot === undefined ? null : {
+					at: state.host.hostAt > 0 ? new Date(state.host.hostAt).toISOString() : null,
 					// 快照年龄:这份宿主数据是事故时刻之前多少毫秒采到的(正 = 更早,负 = 事故之后才采到)。
 					// 以前这里写的是"距现在多久",口径没定义,读的人只能猜。
-					snapshotAgeMs: state.hostAt > 0 ? Math.round(perfOrigin() + pending.at - state.hostAt) : null,
-					eventLoop: state.host.eventLoop ?? null,
+					snapshotAgeMs: state.host.hostAt > 0 ? Math.round(perfOrigin() + pending.at - state.host.hostAt) : null,
+					eventLoop: state.host.snapshot.eventLoop ?? null,
 				},
 				env: {
-					domNodes: state.dom.total,
-					heapUsedBytes: state.heap,
-					instrumented: state.on && state.deep === true,
-					deep: state.deep === true,
-					precise: state.precise,
+					domNodes: state.render.dom.total,
+					heapUsedBytes: state.render.heap,
+					instrumented: state.render.on && state.render.deep === true,
+					deep: state.render.deep === true,
+					precise: state.render.precise,
 					// 跨会话(落盘后重开页面)读这份事故时,perf 毫秒要靠它才能对齐墙上时间
 					perfOrigin: new Date(perfOrigin()).toISOString(),
 					// 渲染环境:判断"这段是坏还是这台机器一直这样"的另一个前提

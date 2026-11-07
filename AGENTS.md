@@ -19,10 +19,10 @@
 | 模式 | 什么时候 | 做什么 | 成本 |
 |---|---|---|---|
 | **守夜**(默认常开) | 一直 | 帧级环形缓冲 + LoAF 观察器;自动留存**最差 10 次 + 每天最差 1 条**(最多 7 天)+ **最近 3 次**(不看严重度)并落盘 | 零插桩:只挂本来就在跑的 rAF 与两个 `PerformanceObserver`(LoAF + 交互计时) |
-| **现场**(展开面板) | 想看一眼 | **主界面**只回答五个问题(当前状态 / 最近一次卡顿 / 可能原因 / 最近趋势 / 下一步);技术数据进**开发者详情**的五个标签页(帧与归因 / DOM 与堆 / 宿主与链路 / 工具箱 / 原始数据,内层仍是 `state.groups` = `detail` / `cross` / `dom` / `host` / `tools` / `tech`)。**卡顿详情**是"普通用户也会走到"的技术屏,所以它分两层:结论层常显(上下文标题 / 这条事故的两个动作 / 回放范围 / 归因状态 / 历史帧时间轴),技术读数全在默认收起的 `tech`(「技术细节」)里 —— 与开发者详情**共用同一份渲染**(`techGroup`) | 可忽略 |
+| **现场**(展开面板) | 想看一眼 | **主界面**只回答五个问题(当前状态 / 最近一次卡顿 / 可能原因 / 最近趋势 / 下一步);技术数据进**开发者详情**的五个标签页(帧与归因 / DOM 与堆 / 宿主与链路 / 工具箱 / 原始数据,内层仍是 `state.ui.groups` = `detail` / `cross` / `dom` / `host` / `tools` / `tech`)。**卡顿详情**是"普通用户也会走到"的技术屏,所以它分两层:结论层常显(上下文标题 / 这条事故的两个动作 / 回放范围 / 归因状态 / 历史帧时间轴),技术读数全在默认收起的 `tech`(「技术细节」)里 —— 与开发者详情**共用同一份渲染**(`techGroup`) | 可忽略 |
 | **深录**(显式) | 要抓全 | 才打开原型插桩(DOM 写入 1/10 采样 + 调度点抓栈)与「精确归因」 | 有代价,必须显式开 |
 
-> ✅ **这张表现在是真的了(2026-10-08,D1)**:在那之前插桩没有独立开关 —— `start()` 一跑就把 `setTimeout/setInterval/rAF` 与 `appendChild/insertBefore/setAttribute` 全包上,「守夜 = 零插桩」只是文档上的话。现在插桩被拆进 `applyProbeState()`,只在 `state.deep` 打开时装(开关在**开发者详情的标签页行**与设置页 —— 它是开发者开关,不该占标题栏那一行),深录同时管精确归因(两者是「要抓全」的同一件事)。实测:默认 `instrumented: false`,点开 → `true`,点回去 → `false`,面板 `errors` 全程 0。
+> ✅ **这张表现在是真的了(2026-10-08,D1)**:在那之前插桩没有独立开关 —— `start()` 一跑就把 `setTimeout/setInterval/rAF` 与 `appendChild/insertBefore/setAttribute` 全包上,「守夜 = 零插桩」只是文档上的话。现在插桩被拆进 `applyProbeState()`,只在 `state.render.deep` 打开时装(开关在**开发者详情的标签页行**与设置页 —— 它是开发者开关,不该占标题栏那一行),深录同时管精确归因(两者是「要抓全」的同一件事)。实测:默认 `instrumented: false`,点开 → `true`,点回去 → `false`,面板 `errors` 全程 0。
 
 **明确不做**(生态里已经有人做了;重复做比谁都不做更糟,详见 [竞争与位置](docs/landscape.md)):
 
@@ -65,7 +65,7 @@
 | `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(456 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 四套离线断言(731 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
+| `tests/` | 四套离线断言(735 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 七份参考文档 + `images/`(9 张 README 截图)+ `plans/`(三份档案 + 索引) | 按需查,别通读(§9) |
 | `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 | 改挂载、发版(§10) |
@@ -94,6 +94,17 @@
 
 分片用 `__ModuleLoader__.load({ id, chunk, factory })` 注册,主文件用 `require.async('./client.<name>.js')`;依赖一律**显式传入**(`createModel(deps)` / `createWatch(deps)` / `createUi(deps)` / `createToolsApi(deps)`),不做反向 import。主文件保留同名同步包装,分片没到位时抛明确错误。改分片后主文件的 `client.js` 要一起被 touch/改到,否则 rev 不变。
 
+**状态四片(1.0 / S1)**:`client.js` 里的 `state` 按视图归成四片,引用一律写 `state.<片>.<字段>`:
+
+| 片 | 字段数 | 管什么 | 谁读 |
+|---|---|---|---|
+| `state.ui` | 23 | 面板自己的视图 / 位置 / 折叠 / 导出预览 / 一次性回执 | 主文件 + model + ui |
+| `state.render` | 53 | 渲染器侧采集:帧 / longtask / 回调 / DOM / 堆 / 自身开销 / 档位 / 取数代际 | 主文件 + model + ui + watch |
+| `state.watch` | 37 | 守夜层(环形缓冲 / 留存 / 落盘)+ 场景标签 + 捕获计数 | 主文件 + model + ui + watch + tools |
+| `state.host` | 15 | 宿主快照(`state.host.snapshot`)/ 事件回执 / CPU 采样 / 链路 | 主文件 + model + ui + watch |
+
+四条离线断言钉住它:① 字面量只有这四片且每片非空;② 四片的字段数写死(挪字段要改同一行并说明);③ 每处引用都命中真实的「片.字段」,裸引用(少一层)与错片都是红;④ 每个文件只读白名单里的片 —— `client.watch.js` 只有 `watch/render/host`,工具箱只有 `watch`,pack / i18n 一个都不许读;model 与 ui 拿全四片(它们本来就是"把四侧算成一句话"的那一层)。新增一位状态前先想清**它属于哪一层**,写到对应片里。
+
 ⚠️ **装载顺序有依赖**:`apply()` 里 `Promise.all([loadI18n(), loadModel(), loadWatch()])` 之后才 `restore()` 与 `start()` —— 守夜捕获会调模型层的 `scriptEvidence` / `packageOfScript`,`restore()` 会调 `pruneMapCache`。加新的采集期调用前先确认它所在的层已经到位。
 
 ⚠️ **重启会杀死当前会话的 bash 进程**(它在 `dsh web` 里):把重启排在报告之后,或交给用户。worktree 里的 `client.js` 浏览器看不到(profile 指向主检出)。真页面验收器要浏览器 + 本机 `dsh web`,不进 CI;改面板 / `apply()` / `start()` 后至少跑 `node tools/check-panel.mjs`。
@@ -104,11 +115,11 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑四套件**(合计 **731** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑四套件**(合计 **735** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 667 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
+node tests/logic.mjs         # 671 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 node tests/compat.mjs        # 12 条:上一版 schemaVersion 的夹具包喂当前读方(契约没漂 + 缺键必红)
 ```

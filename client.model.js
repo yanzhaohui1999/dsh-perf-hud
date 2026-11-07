@@ -145,14 +145,14 @@ window.__ModuleLoader__.load({
 		 * ⚠️ 读 body 也包在 deadline 里 —— 只把 `fetch()` resolve 当完成会让慢 body 永远 pending。
 		 */
 		async function fetchTextWithin(url, options, ms) {
-			const epoch = state.epoch;
+			const epoch = state.render.epoch;
 			const controller = new AbortController();
 			let timedOut = false;
 			const timer = natives.setTimeout(() => {
 				timedOut = true;
 				controller.abort();
 			}, ms);
-			const outer = state.abort === null || state.abort === undefined ? null : state.abort.signal;
+			const outer = state.render.abort === null || state.render.abort === undefined ? null : state.render.abort.signal;
 			const onAbort = () => controller.abort();
 			if (outer !== null) {
 				if (outer.aborted) controller.abort();
@@ -161,12 +161,12 @@ window.__ModuleLoader__.load({
 			try {
 				const response = await fetch(url, { ...options, signal: controller.signal });
 				const text = await response.text();
-				if (state.epoch !== epoch) throw cancelledError();
+				if (state.render.epoch !== epoch) throw cancelledError();
 				return { response, text };
 			} catch (error) {
 				if (timedOut) throw timeoutError(ms);
 				if (outer !== null && outer.aborted) throw cancelledError();
-				if (state.epoch !== epoch) throw cancelledError();
+				if (state.render.epoch !== epoch) throw cancelledError();
 				throw error;
 			} finally {
 				natives.clearTimeout(timer);
@@ -193,8 +193,8 @@ window.__ModuleLoader__.load({
 				if (ids.length === 1) return ids[0];
 				// 多包同 URL:包名只能由 section 分段表还原,不再拼成一串包名糊弄面板。
 				const key = BUNDLE_PREFIX + url;
-				state.bundleKeys.add(key);
-				if (state.bundleKeys.size > 50) state.bundleKeys.delete(state.bundleKeys.values().next().value);
+				state.render.bundleKeys.add(key);
+				if (state.render.bundleKeys.size > 50) state.render.bundleKeys.delete(state.render.bundleKeys.values().next().value);
 				return BUNDLE_PREFIX + url;
 			}
 			return m[2] ?? null;
@@ -248,7 +248,7 @@ window.__ModuleLoader__.load({
 		/** 面板/归因表里显示的一行:批次名 + 包数(+状态),绝不展开成 58 个名字。 */
 		function bundleLabel(key) {
 			const meta = bundleMetaOf(key);
-			if (state.precise === false) return `${meta.phase === '' ? '合并' : meta.phase}批次(${meta.count} 包)`;
+			if (state.render.precise === false) return `${meta.phase === '' ? '合并' : meta.phase}批次(${meta.count} 包)`;
 			const entry = bundleMaps.get(key);
 			const status = entry === undefined || entry.state === 'pending'
 				? '·解析中'
@@ -331,7 +331,7 @@ window.__ModuleLoader__.load({
 				try { localStorage.removeItem(row.key); } catch (error) { /* 删不掉就交给配额错误 */ }
 			}
 			writeMapIndex(pruned.keep);
-			state.mapCache.evicted += pruned.evicted.length;
+			state.render.mapCache.evicted += pruned.evicted.length;
 			return pruned.evicted.length;
 		}
 		function touchMapCache(storageKey) {
@@ -342,7 +342,7 @@ window.__ModuleLoader__.load({
 				try { localStorage.removeItem(row.key); } catch (error) { /* 同上 */ }
 			}
 			writeMapIndex(pruned.keep);
-			state.mapCache.evicted += pruned.evicted.length;
+			state.render.mapCache.evicted += pruned.evicted.length;
 		}
 		/** 写一份 map 缓存;配额失败时先淘汰最旧的 map(它们可重建),仍失败则只留内存。 */
 		function saveMapCache(storageKey, payload) {
@@ -359,7 +359,7 @@ window.__ModuleLoader__.load({
 						return true;
 					} catch (retryError) { /* 落到下面记失败 */ }
 				}
-				state.mapCache.failed += 1;
+				state.render.mapCache.failed += 1;
 				return false;
 			}
 		}
@@ -377,7 +377,7 @@ window.__ModuleLoader__.load({
 					const extra = keys.length - MAP_CACHE_MAX;
 					if (extra > 0) {
 						for (const key of keys.slice(0, extra)) localStorage.removeItem(key);
-						state.mapCache.evicted += extra;
+						state.render.mapCache.evicted += extra;
 					}
 				} catch (error) { /* 扫不了就算了,不影响功能 */ }
 				return;
@@ -387,7 +387,7 @@ window.__ModuleLoader__.load({
 				try { localStorage.removeItem(row.key); } catch (error) { /* 同上 */ }
 			}
 			writeMapIndex(pruned.keep);
-			state.mapCache.evicted += pruned.evicted.length;
+			state.render.mapCache.evicted += pruned.evicted.length;
 		}
 		async function loadBundleMap(entry, scriptUrl) {
 			const url = mapUrlOf(scriptUrl);
@@ -548,7 +548,7 @@ window.__ModuleLoader__.load({
 		/** 把 ownerOfUrl 的结果落成"具体包名";多包 URL 未解析完成时给一行批次标签。 */
 		function resolveOwner(owner, line) {
 			if (owner.startsWith(BUNDLE_PREFIX) === false) return owner;
-			if (state.precise === false) return bundleLabel(owner);
+			if (state.render.precise === false) return bundleLabel(owner);
 			const entry = bundleMap(owner);
 			if (entry.state !== 'ready') return bundleLabel(owner);
 			const name = sectionOwner(entry, line);
@@ -556,7 +556,7 @@ window.__ModuleLoader__.load({
 		}
 		/** 打开精确归因时,把已经见过的多包 URL 一次性登记解析。 */
 		function primeBundleMaps() {
-			for (const key of state.bundleKeys) bundleMap(key);
+			for (const key of state.render.bundleKeys) bundleMap(key);
 		}
 		/** 取一段脚本文本的「每行起始偏移」,用于 charPos → 1-based 行号。 */
 		async function loadScriptLines(url) {
@@ -616,7 +616,7 @@ window.__ModuleLoader__.load({
 			const owner = ownerOfUrl(url);
 			if (owner === null) return { pkg: null, via: 'not-plugin' };
 			if (owner.startsWith(BUNDLE_PREFIX) === false) return { pkg: owner, via: 'url' };
-			if (state.precise === false) return { pkg: null, via: 'precise-off' };
+			if (state.render.precise === false) return { pkg: null, via: 'precise-off' };
 			const lines = scriptLines.get(url);
 			if (lines === undefined) { ensureScriptLines(url); return { pkg: null, via: 'text-pending' }; }
 			if (lines.state === 'failed') return { pkg: null, via: `text-failed(${lines.reason})` };
@@ -817,7 +817,7 @@ window.__ModuleLoader__.load({
 			let file = null;
 			if (inBundle === true) {
 				// 合并批:文件名只能从 sourcemap 的 section 拿(probe 兜底过就只剩包名 → null)
-				if (state.precise === true && position.line !== null) {
+				if (state.render.precise === true && position.line !== null) {
 					const entry = bundleMap(owner);
 					if (entry.state === 'ready') file = sectionPath(entry, position.line);
 				}
@@ -989,7 +989,7 @@ window.__ModuleLoader__.load({
 		/**
 		 * 事故里的一条证据:**优先用捕获时存下来的定位结果**,只有包里确实没有的字段才回退到现算。
 		 *
-		 * 为什么不能一律现算:`scriptEvidence()` 依赖**当前**会话的 `state.precise` 与内存里的
+		 * 为什么不能一律现算:`scriptEvidence()` 依赖**当前**会话的 `state.render.precise` 与内存里的
 		 * `scriptLines` / `bundleMaps` 缓存 —— 刷新之后那两个缓存都是空的,现算会把捕获时已经定下来的
 		 * pkg / file / line 变成 `null` / `text-not-fetched`,**历史事故的定位信息就这样丢了**
 		 * (事故包落盘本来就为了活过刷新)。老包(加 file/line/lineVia/invoker 之前抓的)没有这些
@@ -1292,7 +1292,7 @@ window.__ModuleLoader__.load({
 
 		/** 面板那一行的状态文字。失败只说"失败",宿主的错误原文由面板单独一行显示(要能读全)。 */
 		function hostCpuProfileText() {
-			const cur = state.hostCpuProfile;
+			const cur = state.host.hostCpuProfile;
 			if (cur === null || cur === undefined) return translate('hostProfileIdle');
 			if (cur.phase === 'running') {
 				const elapsed = cur.requestedAt > 0 ? Math.max((Date.now() - cur.requestedAt) / 1000, 0) : 0;
@@ -1313,7 +1313,7 @@ window.__ModuleLoader__.load({
 
 		/** 面板那行下面的"自热 top3"(采样是抽样的,三条足够看出宿主在忙什么)。 */
 		function hostCpuProfileTopText() {
-			const cur = state.hostCpuProfile;
+			const cur = state.host.hostCpuProfile;
 			const summary = cur === null || cur === undefined ? null : cpuProfileSummary(cur.profile === null || cur.profile === undefined ? null : cur.profile);
 			if (summary === null) return '';
 			return summary.topSelf.slice(0, 3)
@@ -1342,44 +1342,44 @@ window.__ModuleLoader__.load({
 			const watch = state.watch;
 			const maps = { pending: 0, ready: 0, failed: 0 };
 			for (const entry of bundleMaps.values()) maps[entry.state] = (maps[entry.state] ?? 0) + 1;
-			const host = state.host;
+			const host = state.host.snapshot;
 			const loop = host === null || host === undefined ? null : host.eventLoop ?? null;
 			const io = state.watch.interactions.length;
 			// 读数一律**防御性取值**:能力矩阵的职责是"照实说现在有什么",不是"假设字段一定在"
-			const taskRows = Array.isArray(state.longTasks) ? state.longTasks.length : 0;
-			const taskTotal = typeof state.ltTotal === 'number' ? state.ltTotal : taskRows;
-			const linkCount = Array.isArray(state.link) ? state.link.length : 0;
-			const loadState = state.loadState ?? 'pending';
+			const taskRows = Array.isArray(state.render.longTasks) ? state.render.longTasks.length : 0;
+			const taskTotal = typeof state.render.ltTotal === 'number' ? state.render.ltTotal : taskRows;
+			const linkCount = Array.isArray(state.host.link) ? state.host.link.length : 0;
+			const loadState = state.host.loadState ?? 'pending';
 			const frameCount = frameRing !== undefined && frameRing !== null && typeof frameRing.size === 'number' ? frameRing.size : 0;
 			const leaf = (capState, provenance, reason) => ({ state: capState, provenance: provenanceOf(provenance), reason: reason ?? '' });
 			return {
 				schema: 1,
 				renderer: {
-					frames: leaf(state.on === true ? 'on' : 'off', 'measured',
-						state.on === true ? `帧环 ${frameCount} 帧` : 'HUD 已关闭,帧环没有在采'),
+					frames: leaf(state.render.on === true ? 'on' : 'off', 'measured',
+						state.render.on === true ? `帧环 ${frameCount} 帧` : 'HUD 已关闭,帧环没有在采'),
 					loaf: leaf(watch.loafState === 'on' ? 'on' : (watch.loafState === 'unsupported' || String(watch.loafState).startsWith('unsupported') ? 'unsupported' : 'off'),
 						'measured', `LoAF 观察器:${watch.loafState}`),
-					longTasks: leaf(state.on === true ? 'on' : 'off', 'measured', `longtask 明细 ${taskRows} 条 / 累计 ${taskTotal} 条`),
+					longTasks: leaf(state.render.on === true ? 'on' : 'off', 'measured', `longtask 明细 ${taskRows} 条 / 累计 ${taskTotal} 条`),
 					// 脚本这一层是**混合**的:函数名与毫秒是 LoAF 直接给的,包名 / 文件 / 行号是推断出来的
-					scriptAttribution: leaf(state.precise === true ? (maps.pending > 0 ? 'degraded' : 'on') : 'degraded', 'inferred',
-						state.precise === true
+					scriptAttribution: leaf(state.render.precise === true ? (maps.pending > 0 ? 'degraded' : 'on') : 'degraded', 'inferred',
+						state.render.precise === true
 							? `精确归因已开;分段表 pending ${maps.pending} / ready ${maps.ready} / failed ${maps.failed}`
 							: '精确归因没开:合并批次只能给整批,拿不到单包名'),
-					domWrites: leaf(state.deep === true ? 'degraded' : 'off', 'inferred',
-						state.deep === true ? `插桩已开(DOM 写入按 1/${MUT_SAMPLE} 采样,估算是折算的)` : '深录没开:DOM 写入者没有记账'),
+					domWrites: leaf(state.render.deep === true ? 'degraded' : 'off', 'inferred',
+						state.render.deep === true ? `插桩已开(DOM 写入按 1/${MUT_SAMPLE} 采样,估算是折算的)` : '深录没开:DOM 写入者没有记账'),
 					interactions: leaf(watch.eventState === 'on' ? 'on' : (String(watch.eventState).startsWith('unsupported') ? 'unsupported' : 'off'),
 						'measured', `交互计时:${watch.eventState}(窗口内保留 ${io} 条)`),
 					elementTiming: leaf('unsupported', 'unknown', 'DSH 的 DOM 上没有 elementtiming 属性,这一路恒为 0'),
 				},
 				host: {
 					eventLoop: leaf(loop === null ? 'off' : 'on', 'measured',
-						loop === null ? (state.hostError === null || state.hostError === undefined ? '还没拿到宿主快照' : `宿主路由不可达:${state.hostError}`) : `p50/p99/max 已采(${host.at ?? '—'})`),
-					events: leaf(state.hostEvents === null || state.hostEvents === undefined ? 'off' : (state.hostEvents.installed === true ? 'on' : 'degraded'), 'measured',
-						state.hostEvents === null || state.hostEvents === undefined ? '还没请求宿主事件监听' : `session/event 到达延迟:${state.hostEvents.installed === true ? '已装' : state.hostEvents.reason ?? '没装上'}`),
+						loop === null ? (state.host.hostError === null || state.host.hostError === undefined ? '还没拿到宿主快照' : `宿主路由不可达:${state.host.hostError}`) : `p50/p99/max 已采(${host.at ?? '—'})`),
+					events: leaf(state.host.hostEvents === null || state.host.hostEvents === undefined ? 'off' : (state.host.hostEvents.installed === true ? 'on' : 'degraded'), 'measured',
+						state.host.hostEvents === null || state.host.hostEvents === undefined ? '还没请求宿主事件监听' : `session/event 到达延迟:${state.host.hostEvents.installed === true ? '已装' : state.host.hostEvents.reason ?? '没装上'}`),
 					// 宿主进程 CPU 采样:按需、单飞。接线之后这里只说**实际状态**(采到 / 正在采 / 上次失败 /
 					// 还没采),不再有"未接线"那种说法 —— 那条债还掉之后它就是假话。
 					cpuProfile: (() => {
-						const record = state.hostCpuProfile === null || state.hostCpuProfile === undefined ? {} : state.hostCpuProfile;
+						const record = state.host.hostCpuProfile === null || state.host.hostCpuProfile === undefined ? {} : state.host.hostCpuProfile;
 						const summary = cpuProfileSummary(record.profile === undefined ? null : record.profile);
 						if (summary !== null) {
 							const samples = record.meta !== null && record.meta !== undefined && typeof record.meta.samples === 'number' ? record.meta.samples : summary.samples;
@@ -1427,7 +1427,7 @@ window.__ModuleLoader__.load({
 				const unresolved = Object.entries(all).filter(([key]) => key !== 'url' && key !== 'section');
 				missing.push(`loaf-pkg:${summary.pkgCoverage.total - summary.pkgCoverage.resolved}/${summary.pkgCoverage.total} 条脚本没定到包名(${unresolved.map(([k, v]) => `${k}×${v}`).join(' · ') || '原因见 summary.pkgVia'})`);
 			}
-			if (state.on === false) {
+			if (state.render.on === false) {
 				missing.push('instrumentation:四条腿的归因(没插桩就没有 DOM 写入与调度点包名)');
 				howToAdd.push('打开 HUD(面板「开启」或 __perfHud.enable())');
 			}
@@ -1464,7 +1464,7 @@ window.__ModuleLoader__.load({
 			// 宿主 CPU 采样:入口接线之后,缺的只可能是"这一段还没采"(采样按需、不自动跑)。
 			// 采到了就不再往 missing 里塞条目 —— 证据已经在 context.hostCpuProfile 里,
 			// 再写一条"没采到"就是假话(旧口径「未接线」已经还债,别再回来)。
-			const profileRecord = state.hostCpuProfile === null || state.hostCpuProfile === undefined ? {} : state.hostCpuProfile;
+			const profileRecord = state.host.hostCpuProfile === null || state.host.hostCpuProfile === undefined ? {} : state.host.hostCpuProfile;
 			const profileSummary = cpuProfileSummary(profileRecord.profile === undefined ? null : profileRecord.profile);
 			if (profileSummary === null) {
 				const why = profileRecord.phase === 'running'
@@ -1649,9 +1649,9 @@ window.__ModuleLoader__.load({
 				schemaVersion: PACK_SCHEMA_VERSION,
 				kind: 'dsh-perf-hud-diagnostic-pack',
 				plugin: PKG,
-				pluginVersion: state.host === null || state.host === undefined ? null : state.host.pluginVersion ?? null,
+				pluginVersion: state.host.snapshot === null || state.host.snapshot === undefined ? null : state.host.snapshot.pluginVersion ?? null,
 				// ⚠️ 这里**没有** `dshVersion`,是刻意的(REVIEW §2 第 7 条):宿主半拿不到 DSH 的版本,
-				// 而客户端读 `state.host.dshVersion` 只会恒为 null —— 一个恒 null 的字段在导出件里比
+				// 而客户端读 `state.host.snapshot.dshVersion` 只会恒为 null —— 一个恒 null 的字段在导出件里比
 				// 没有这个字段更糟(读包的人会以为"采集失败了")。宿主侧的运行时版本仍在包内可查:
 				// 采过宿主 CPU profile 时 `context.hostCpuProfile.meta.nodeVersion` 就是它。
 				// 补这个字段的前提是上游给插件一个**可验证**的版本接口(现在 profileContext 只有
@@ -1664,8 +1664,8 @@ window.__ModuleLoader__.load({
 					hardwareConcurrency: navigator.hardwareConcurrency ?? null,
 					utcOffsetMin: -new Date().getTimezoneOffset(),
 				},
-				captureTier: state.deep === true ? 'deep' : 'watch',
-				instrumented: state.on === true && state.deep === true,
+				captureTier: state.render.deep === true ? 'deep' : 'watch',
+				instrumented: state.render.on === true && state.render.deep === true,
 				language: docLang(),
 				exportedAt: new Date().toISOString(),
 				range: win === null ? null : { from: win.from ?? null, to: win.to ?? null, preMs: win.preMs ?? null, postMs: win.postMs ?? null },
@@ -1742,8 +1742,8 @@ window.__ModuleLoader__.load({
 			for (const line of gaps.howToAdd) lines.push(`- ${line}`);
 			lines.push('');
 			lines.push(t('packSecMeta'));
-			lines.push(`- plugin:${PKG}${state.host === null || state.host === undefined || state.host.pluginVersion === undefined ? '' : ` v${state.host.pluginVersion}`}`);
-			lines.push(`- ${t('packTier')}:${state.deep === true ? t('deepShort') : t('watch')}`);
+			lines.push(`- plugin:${PKG}${state.host.snapshot === null || state.host.snapshot === undefined || state.host.snapshot.pluginVersion === undefined ? '' : ` v${state.host.snapshot.pluginVersion}`}`);
+			lines.push(`- ${t('packTier')}:${state.render.deep === true ? t('deepShort') : t('watch')}`);
 			lines.push(`- exportedAt:${new Date().toISOString()}`);
 			lines.push(`- schemaVersion:${PACK_SCHEMA_VERSION}`);
 			if (owner !== null) lines.push(`- ${t('evOwner')}:${owner.name} · ${Math.round(owner.ms)}ms`);
@@ -1794,7 +1794,7 @@ window.__ModuleLoader__.load({
 			const gaps = capabilityMissing(row);
 			return {
 				incident: { id: row.id, at: row.at, severity: row.severity },
-				tier: state.deep === true ? 'deep' : 'watch',
+				tier: state.render.deep === true ? 'deep' : 'watch',
 				files: list.map((file) => ({
 					name: file.name,
 					bytes: file.text.length,
@@ -1943,25 +1943,25 @@ window.__ModuleLoader__.load({
 				exportedAt: new Date().toISOString(),
 				// 自描述头:文件离开现场后仍能自证口径
 				context: {
-					scenario: state.streaming ? 'streaming' : 'idle',
-					idleSeconds: state.idleSince === 0 ? 0 : Math.round((performance.now() - state.idleSince) / 1000),
-					instrumented: state.on && state.deep === true,
-					deep: state.deep === true,
+					scenario: state.watch.streaming ? 'streaming' : 'idle',
+					idleSeconds: state.watch.idleSince === 0 ? 0 : Math.round((performance.now() - state.watch.idleSince) / 1000),
+					instrumented: state.render.on && state.render.deep === true,
+					deep: state.render.deep === true,
 					precise: {
-						enabled: state.precise,
+						enabled: state.render.precise,
 						bundles: [...bundleMaps.entries()].map(([key, entry]) => ({
 							label: bundleLabel(key), state: entry.state, source: entry.source, sections: entry.count,
 						})),
 					},
 					// sourcemap 缓存是可重建的:淘汰 / 写失败都计数,别让它静默吃满 localStorage
-					mapCache: { max: MAP_CACHE_MAX, evicted: state.mapCache.evicted, failed: state.mapCache.failed },
+					mapCache: { max: MAP_CACHE_MAX, evicted: state.render.mapCache.evicted, failed: state.render.mapCache.failed },
 					host: {
 						route: HOST_ROUTE,
-						reachable: state.hostError === null,
-						error: state.hostError,
-						profile: state.host === null || state.host === undefined ? null : state.host.profile ?? null,
-						nodeVersion: state.host === null || state.host === undefined ? null : state.host.nodeVersion ?? null,
-						pluginVersion: state.host === null || state.host === undefined ? null : state.host.pluginVersion ?? null,
+						reachable: state.host.hostError === null,
+						error: state.host.hostError,
+						profile: state.host.snapshot === null || state.host.snapshot === undefined ? null : state.host.snapshot.profile ?? null,
+						nodeVersion: state.host.snapshot === null || state.host.snapshot === undefined ? null : state.host.snapshot.nodeVersion ?? null,
+						pluginVersion: state.host.snapshot === null || state.host.snapshot === undefined ? null : state.host.snapshot.pluginVersion ?? null,
 					},
 					isolation: { candidates: experiment.candidates, method: experiment.method, loadBurnMs: EXPERIMENT_LOAD_BURN_MS, loadPeriodMs: EXPERIMENT_LOAD_PERIOD_MS },
 					// 判色阈值也写进文件:别人拿到 JSON 能按同一套口径重新解读
@@ -1983,7 +1983,7 @@ window.__ModuleLoader__.load({
 					sessionBaselines: sessionBaselines(),
 					// 宿主进程的 CPU 采样(按需采到的最近一段)。**不是页面开销** —— 段里自带 scope 说明,
 					// 完整读取口径在事故包的 howToRead;它与帧数据是两层,别相加。
-					hostCpuProfile: hostCpuProfileContext(state.hostCpuProfile),
+					hostCpuProfile: hostCpuProfileContext(state.host.hostCpuProfile),
 					thresholds: {
 						fps: { warnBelow: 50, errorBelow: 30 },
 						frameMs: { warnAbove: 120, errorAbove: 200 },
@@ -1994,33 +1994,33 @@ window.__ModuleLoader__.load({
 				},
 				page: location.href,
 				userAgent: navigator.userAgent,
-				instrumented: state.on && state.deep === true,
-				deep: state.deep === true,
-				since: new Date(state.since > 0 ? state.since : Date.now()).toISOString(),
+				instrumented: state.render.on && state.render.deep === true,
+				deep: state.render.deep === true,
+				since: new Date(state.render.since > 0 ? state.render.since : Date.now()).toISOString(),
 				summary: {
-					fps: round1(state.fps),
-					worstFrameMs: round1(state.frameWorst),
-					attributedMsPerSec: round1(state.attributedPerSec),
-					unattributedMsPerFrame: { avg: round1(state.unattrAvg), peak: round1(state.unattrPeak) },
+					fps: round1(state.render.fps),
+					worstFrameMs: round1(state.render.frameWorst),
+					attributedMsPerSec: round1(state.render.attributedPerSec),
+					unattributedMsPerFrame: { avg: round1(state.render.unattrAvg), peak: round1(state.render.unattrPeak) },
 					worstLongTask60s: worst === null ? null : {
 						at: new Date(worst.t).toISOString(),
 						ms: round1(worst.ms),
 						owner: worst.owner,
 						startTime: round1(worst.at),
 					},
-					domNodes: state.dom.total,
-					domGrowthPerMin: round1(rate(state.dom.series)),
-					heapUsedBytes: state.heap,
-					heapGrowthPerMin: state.heap === null ? null : Math.round(rate(state.heapSeries)),
+					domNodes: state.render.dom.total,
+					domGrowthPerMin: round1(rate(state.render.dom.series)),
+					heapUsedBytes: state.render.heap,
+					heapGrowthPerMin: state.render.heap === null ? null : Math.round(rate(state.render.heapSeries)),
 					domMutations: {
-						total: state.mutations,
+						total: state.render.mutations,
 						sampledEvery: MUT_SAMPLE,
 						perPlugin: domWriteTable(),
 					},
-					longTaskStats: { total: state.ltTotal, attributed: state.ltBlamed },
+					longTaskStats: { total: state.render.ltTotal, attributed: state.render.ltBlamed },
 					worstSecondLast60s: worstSecond(),
 					containers: TARGETS.map((target) => {
-						const entry = state.targets.get(target.id);
+						const entry = state.render.targets.get(target.id);
 						return {
 							id: target.id,
 							nodes: entry === undefined ? null : entry.nodes,
@@ -2034,15 +2034,15 @@ window.__ModuleLoader__.load({
 				timeline: {
 					note: '每秒一条(t 是 epoch ms):fps / 最差帧 / longtask 条数 / 节点 / 堆 / 归因 Top3;marks 是场景标记',
 					samples: ring,
-					marks: state.marks,
-					idleBaseline: state.idleBaseline,
+					marks: state.ui.marks,
+					idleBaseline: state.watch.idleBaseline,
 				},
 				// 2) longtask 明细:owner = 调度方包名,component = 渲染方组件名
 				longTasks: {
 					note: 'owner 来自调度点插桩,component 来自 fiber 上溯;source 标明这条靠哪边定的',
-					total: state.ltTotal,
-					attributed: state.ltBlamed,
-					records: state.longTasks,
+					total: state.render.ltTotal,
+					attributed: state.render.ltBlamed,
+					records: state.render.longTasks,
 				},
 				// 3) 隔离实验:逐插件关/开的因果对照与恢复核验
 				isolation: {
@@ -2062,12 +2062,12 @@ window.__ModuleLoader__.load({
 					restored: experiment.restored,
 				},
 				host: {
-					at: state.hostAt > 0 ? new Date(state.hostAt).toISOString() : null,
-					error: state.hostError,
-					last: state.host,
-					eventWatch: state.hostEvents,
+					at: state.host.hostAt > 0 ? new Date(state.host.hostAt).toISOString() : null,
+					error: state.host.hostError,
+					last: state.host.snapshot,
+					eventWatch: state.host.hostEvents,
 				},
-				link: { stats60s: linkStats(), throughput: state.linkText, suspect: suspectLink(), samples: state.link.slice(-120) },
+				link: { stats60s: linkStats(), throughput: state.host.linkText, suspect: suspectLink(), samples: state.host.link.slice(-120) },
 				// A4:交互延迟(event / element timing)。只进导出件,面板不显示
 				interactions: {
 					state: state.watch.eventState,
@@ -2080,7 +2080,7 @@ window.__ModuleLoader__.load({
 					records: state.watch.interactions,
 				},
 				verification: verification(),
-				errors: state.errors,
+				errors: state.ui.errors,
 			};
 			// 唯一的出口:先脱敏,再把"减了什么"贴上去(报告本身不过脱敏,否则它会把自己的说明改掉)
 			const safe = redactExport(payload, options);
@@ -2135,7 +2135,7 @@ window.__ModuleLoader__.load({
 				context: {
 					page: location.href,
 					userAgent: navigator.userAgent,
-					scenario: state.streaming ? 'streaming' : 'idle',
+					scenario: state.watch.streaming ? 'streaming' : 'idle',
 					watch: watchStatus(),
 					// 导出时刻的滚动 24h 计数(跨刷新)。它**不属于事故窗口** —— 用途是回答
 					// "最近是偶发还是变频繁了";scope / sessionCounters 里写明别当这一条的统计口径
@@ -2144,7 +2144,7 @@ window.__ModuleLoader__.load({
 					sessionBaselines: sessionBaselines(),
 					// 宿主进程的 CPU 采样(按需采到的最近一段)。**不是页面开销**,不能与帧时间相加;
 					// 字段含义 / 抽样口径见下面的 howToRead。
-					hostCpuProfile: hostCpuProfileContext(state.hostCpuProfile),
+					hostCpuProfile: hostCpuProfileContext(state.host.hostCpuProfile),
 					// 记录器自身开销:与整机导出件 `context.recorder` **同一个结构**(selfStats 给的
 					// p99 / max / samples),不另创一套。它是**导出时刻**的读数(与整机件同一时间基准);
 					// 事故那一刻的帧数据在 incident.frames / incident.summary 里,两者别混读。
@@ -2581,9 +2581,9 @@ window.__ModuleLoader__.load({
 		 * 误判正是这么来的。所以它必须常显在标题栏。
 		 */
 		function sceneChip() {
-			if (state.streaming) return { text: translate('running'), color: 'var(--dsw-alias-state-warn-primary)' };
-			if (state.idleSince === 0) return { text: translate('idle'), color: 'var(--dsw-alias-label-secondary)' };
-			return { text: `${translate('idle')} ${Math.round((performance.now() - state.idleSince) / 1000)}s`, color: 'var(--dsw-alias-label-secondary)' };
+			if (state.watch.streaming) return { text: translate('running'), color: 'var(--dsw-alias-state-warn-primary)' };
+			if (state.watch.idleSince === 0) return { text: translate('idle'), color: 'var(--dsw-alias-label-secondary)' };
+			return { text: `${translate('idle')} ${Math.round((performance.now() - state.watch.idleSince) / 1000)}s`, color: 'var(--dsw-alias-label-secondary)' };
 		}
 		/**
 		 * 未解释帧的自动结论。
@@ -2593,10 +2593,10 @@ window.__ModuleLoader__.load({
 		function unexplainedFrame() {
 			// 没插桩时 `unattr` 就等于帧间隔(见 unattrText),这个判据会在**每一条**长帧上
 			// 得出"几乎无 JS 解释"—— 那是假的:我们根本没测有没有 JS。所以先要求插桩。
-			if (state.deep !== true) return null;
-			const worst = state.frameWorst;
+			if (state.render.deep !== true) return null;
+			const worst = state.render.frameWorst;
 			if (!(worst >= 100) || worst <= 0) return null;
-			const share = state.unattrPeak / worst;
+			const share = state.render.unattrPeak / worst;
 			if (share < 0.95) return null;
 			return { ms: round1(worst), percent: Math.round(share * 100) };
 		}
@@ -2632,7 +2632,7 @@ window.__ModuleLoader__.load({
 		 */
 		function overviewLine1() {
 			const worst = worstLongTask();
-			return `${translate('overviewFrame')} ${state.frameWorst.toFixed(0)}ms · LT ${worst === null ? translate('none') : `${worst.ms.toFixed(0)}ms`} · ${translate('hit')} ${state.ltBlamed}/${state.ltTotal}`;
+			return `${translate('overviewFrame')} ${state.render.frameWorst.toFixed(0)}ms · LT ${worst === null ? translate('none') : `${worst.ms.toFixed(0)}ms`} · ${translate('hit')} ${state.render.ltBlamed}/${state.render.ltTotal}`;
 		}
 		/**
 		 * 概览第二/三行:归属,以及(**只有提供信息时**才出现的)最多。
@@ -3553,8 +3553,8 @@ window.__ModuleLoader__.load({
 		 * 那正好是 60fps 的帧间隔)。所以未插桩时不给数,直说需要深录。
 		 */
 		function unattrText() {
-			if (state.deep !== true) return translate('needDeep');
-			return `${state.unattrAvg.toFixed(1)}ms · ${translate('peak')} ${state.unattrPeak.toFixed(0)}ms`;
+			if (state.render.deep !== true) return translate('needDeep');
+			return `${state.render.unattrAvg.toFixed(1)}ms · ${translate('peak')} ${state.render.unattrPeak.toFixed(0)}ms`;
 		}
 		/**
 		 * 「命中」那一行:四条腿**只列非零的** —— 没插桩时子树 / DOM写入 / 包名恒为 0,
@@ -3565,7 +3565,7 @@ window.__ModuleLoader__.load({
 				[translate('legFiber'), tally.fiber], [translate('legSubtree'), tally.subtree],
 				[translate('legDom'), tally.dom], [translate('legOwner'), tally.owner],
 			].filter(([, count]) => count > 0).map(([name, count]) => `${name} ${count}`);
-			return `${translate('hit')} ${state.ltBlamed}/${state.ltTotal}`
+			return `${translate('hit')} ${state.render.ltBlamed}/${state.render.ltTotal}`
 				+ (legs.length === 0 ? '' : ` · ${legs.join('/')}`)
 				+ (tally.none === 0 ? '' : ` · ${translate('unblamed')} ${tally.none}`);
 		}
@@ -3585,11 +3585,11 @@ window.__ModuleLoader__.load({
 			// 里挤成两行(实测截图),而 DOM 写入展开就能看到,不必占摘要。
 			// 摘要里只留平均(带峰值会撑到两行 —— 预算断言钉着 ≤26 字);
 			// 没插桩时那个数没意义(见 unattrText),摘要里直说要深录
-			const unattr = state.deep === true ? `${state.unattrAvg.toFixed(0)}ms` : translate('needDeep');
+			const unattr = state.render.deep === true ? `${state.render.unattrAvg.toFixed(0)}ms` : translate('needDeep');
 			return `${translate('worstSecondShort')} ${second === null ? translate('none') : `${second.frameMs.toFixed(0)}ms`} · ${translate('unattrShort')} ${unattr}`;
 		}
 		function domSummary() {
-			return `${state.dom.total}${translate('nodesSuffix')} ${rateText(state.dom.series)} · ${translate('messages')} ${containerNodes('messages')}`;
+			return `${state.render.dom.total}${translate('nodesSuffix')} ${rateText(state.render.dom.series)} · ${translate('messages')} ${containerNodes('messages')}`;
 		}
 		function hostSummary() {
 			const fresh = hostFreshness();
@@ -3711,7 +3711,7 @@ window.__ModuleLoader__.load({
 		}
 		/** 折叠摘要里的一句话节点数:取不到就如实说未采集。 */
 		function containerNodes(id) {
-			const entry = state.targets.get(id);
+			const entry = state.render.targets.get(id);
 			return entry === undefined || entry.nodes === null ? translate('notYet') : String(entry.nodes);
 		}
 		/**
@@ -3723,33 +3723,33 @@ window.__ModuleLoader__.load({
 			const tally = longTaskTally();
 			const rows = pluginTable();
 			return [
-				state.on ? 1 : 0, state.precise ? 1 : 0, state.collapsed ? 1 : 0,
-				state.fps.toFixed(1), state.frameWorst.toFixed(0), state.unattrAvg.toFixed(1), state.unattrPeak.toFixed(0),
-				state.ltTotal, state.ltBlamed, state.longTasks.length,
-				state.dom.total, state.mutations, state.heap ?? 'x',
-				state.streaming ? 1 : 0, state.idleSince === 0 ? 0 : Math.round((performance.now() - state.idleSince) / 1000),
+				state.render.on ? 1 : 0, state.render.precise ? 1 : 0, state.ui.collapsed ? 1 : 0,
+				state.render.fps.toFixed(1), state.render.frameWorst.toFixed(0), state.render.unattrAvg.toFixed(1), state.render.unattrPeak.toFixed(0),
+				state.render.ltTotal, state.render.ltBlamed, state.render.longTasks.length,
+				state.render.dom.total, state.render.mutations, state.render.heap ?? 'x',
+				state.watch.streaming ? 1 : 0, state.watch.idleSince === 0 ? 0 : Math.round((performance.now() - state.watch.idleSince) / 1000),
 				rows.slice(0, TOP_N).map((row) => `${row.id}:${row.cps}:${row.cpsPeak}`).join(','),
 				`${tally.fiber}/${tally.subtree}/${tally.dom}/${tally.owner}/${tally.none}`,
 				tally.topNames.map((row) => `${row[0]}:${row[1]}`).join(','), tally.selfTotal,
-				state.host === null || state.host === undefined ? 'x' : `${state.host.eventLoop?.p50}/${state.host.eventLoop?.p99}/${state.hostError}`,
-				linkRowText(), state.loadState, state.linkText,
+				state.host.snapshot === null || state.host.snapshot === undefined ? 'x' : `${state.host.snapshot.eventLoop?.p50}/${state.host.snapshot.eventLoop?.p99}/${state.host.hostError}`,
+				linkRowText(), state.host.loadState, state.host.linkText,
 				experiment.phase, experiment.message, experiment.results.length, experiment.restored === null ? 0 : 1,
-				state.marks.length, state.errors.length, state.stressNodes > 0 ? 1 : 0, state.baselineRunning ? 1 : 0,
+				state.ui.marks.length, state.ui.errors.length, state.render.stressNodes > 0 ? 1 : 0, state.watch.baselineRunning ? 1 : 0,
 				// 事故选中上下文:选中的那条被更差的新事故挤出留存清单时会**自动退回**,指纹不带它
 				// 面板就会一直显示旧的「已选中」(而 selectedIncident 已经换了一条)
-				state.watch.incidents.length, state.watch.selId ?? 'x', state.copyNote ?? 'x', state.pickNote ?? 'x',
-				state.causeOpen ? 1 : 0, state.packPreviewId ?? 'x',
+				state.watch.incidents.length, state.watch.selId ?? 'x', state.ui.copyNote ?? 'x', state.ui.pickNote ?? 'x',
+				state.ui.causeOpen ? 1 : 0, state.ui.packPreviewId ?? 'x',
 				// 宿主 CPU 采样:状态与"采集中已经过了几秒"都进指纹 —— 否则那一行会冻在 0.0 秒,
 				// 直到别的数字恰好变化(采样只跑 1~10 秒,面板 500ms 的 tick 够它跳)。
-				state.hostCpuProfile === null || state.hostCpuProfile === undefined ? 'x' : state.hostCpuProfile.phase,
-				state.hostCpuProfile !== null && state.hostCpuProfile !== undefined && state.hostCpuProfile.phase === 'running'
-					? Math.round((Date.now() - state.hostCpuProfile.requestedAt) / 1000)
+				state.host.hostCpuProfile === null || state.host.hostCpuProfile === undefined ? 'x' : state.host.hostCpuProfile.phase,
+				state.host.hostCpuProfile !== null && state.host.hostCpuProfile !== undefined && state.host.hostCpuProfile.phase === 'running'
+					? Math.round((Date.now() - state.host.hostCpuProfile.requestedAt) / 1000)
 					: 0,
 				// 诊断上下文(实时 / 历史事故 / 事故里的哪一帧):切上下文是用户动作,必须立刻重绘,
 				// 所以它也在指纹里(否则切了模式面板可能停在旧的那一支,直到别的数字变化)
 				state.watch.mode, state.watch.frameT ?? 'x', state.watch.scope,
 				unexplainedFrame() === null ? 0 : 1, infraVerdict().text,
-				Object.values(state.groups).map((value) => (value ? 1 : 0)).join(''),
+				Object.values(state.ui.groups).map((value) => (value ? 1 : 0)).join(''),
 				// 60 秒帧条:它每秒都在滚(老格子出窗口、新格子进来),而其它数字可能几百秒不动 ——
 				// 不放进指纹的话,展开着也会冻在打开那一刻。用 5 秒刻度而不是每帧算一遍条子,
 				// 是为了不让"面板自己的开销"变成每 tick 遍历 3600 帧。
@@ -3758,12 +3758,12 @@ window.__ModuleLoader__.load({
 		}
 		/** 用户动作 → 立刻重渲染并刷新指纹(动作必须即时反馈,不能等 0.5 秒)。 */
 		function bump() {
-			state.displayKey = displayKey();
-			if (typeof state.requestRender === 'function') state.requestRender();
+			state.ui.displayKey = displayKey();
+			if (typeof state.ui.requestRender === 'function') state.ui.requestRender();
 		}
 		/** 还有组开着吗(没有的话「全部折叠」就是个点了没反应的按钮)。 */
 		function anyGroupOpen() {
-			for (const key of Object.keys(state.groups)) if (state.groups[key] === true) return true;
+			for (const key of Object.keys(state.ui.groups)) if (state.ui.groups[key] === true) return true;
 			return false;
 		}
 		/**
@@ -3773,14 +3773,14 @@ window.__ModuleLoader__.load({
 		function layoutDirty() {
 			if (anyGroupOpen()) return true;
 			// 位置也算布局:拖过之后「恢复默认布局」才有意义(它会把面板拉回右下角)
-			if (state.pos !== null) return true;
+			if (state.ui.pos !== null) return true;
 			if (state.watch.mode === 'incident') return true;
 			if (state.watch.onlyBad === true) return true;
 			if (state.watch.frameT !== null) return true;
 			if (state.watch.pickT !== null) return true;
 			if (state.watch.selId !== null) return true;
 			if (state.watch.scope !== 'worst') return true;
-			if (state.copyNote !== null || state.pickNote !== null) return true;
+			if (state.ui.copyNote !== null || state.ui.pickNote !== null) return true;
 			return false;
 		}
 

@@ -67,6 +67,27 @@ const clickText = (evaluate, text) => evaluate(`(() => {
 	return 'clicked';
 })()`);
 
+/**
+ * 按 aria-label 点一个按钮。⚠️ 2026-10-24 起主界面的「导出诊断报告」与「为什么这样判断?」
+ * 是**图标按钮**:正文只剩图标,名字在 aria-label / title 上 —— 按 textContent 永远点不到
+ * (旧的 3 条断言从那天起就一直红,而其它视图的断言都绿,所以没人发现)。
+ */
+const clickAria = (evaluate, label) => evaluate(`(() => {
+	const nodes = [...document.querySelectorAll('#dsh-perf-hud-root button')].filter((node) => (node.getAttribute('aria-label') ?? '') === ${JSON.stringify(label)});
+	if (nodes.length === 0) return 'missing';
+	if (nodes[0].disabled === true) return 'disabled';
+	nodes[0].click();
+	return 'clicked';
+})()`);
+const clickBack = (evaluate) => evaluate(`(() => {
+	// 返回键是图标按钮:正文为空,名字在 aria-label 上(2026-10-24 起)
+	const nodes = [...document.querySelectorAll('#dsh-perf-hud-root button')].filter((node) => node.textContent.trim() === '←' || node.getAttribute('aria-label') === '←');
+	if (nodes.length === 0) return 'missing';
+	nodes[0].click();
+	return 'clicked';
+})()`);
+const hasAria = (evaluate, label) => evaluate(`[...document.querySelectorAll('#dsh-perf-hud-root button')].some((node) => (node.getAttribute('aria-label') ?? '') === ${JSON.stringify(label)})`);
+
 await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	await waitForHud();
 	// 其它验收器 / 用户可能把 HUD 留在折叠态或非主界面;这里先归一,再重载。
@@ -267,14 +288,17 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	// 以前这里假定"一定有候选",于是同一份代码在忙页面上绿、空闲页面上红(实测三轮两色)。
 	const causeHuman = /某个脚本模块的耗时偏高|这一段时间里有较重的渲染任务|宿主进程那侧偏忙|缺少能解释这次停顿的 JS 证据/.test(mainText);
 	const causeNone = mainText.includes('没有足够证据给出候选原因');
-	check('主界面:原因块只有两种形态(人话线索 / 明确说没有候选),两种都不印包名',
-		[/可能原因/.test(mainText), causeHuman !== causeNone, /@deepseek-ai\/|dsh-/.test(mainText)],
+	// 原因块 2026-10-24 起没有「可能原因」眉标(从属关系由位置表达),所以改钉两件更有牙的事:
+	// ① 两种形态互斥;② 「?」展开入口**按需出现** —— 有候选才有,没候选就没有。
+	const whyShown = await hasAria(evaluate, '为什么这样判断?');
+	check('主界面:原因块两种形态互斥,线索档与「?」展开入口同在,且不印包名',
+		[causeHuman !== causeNone, whyShown === causeHuman, /@deepseek-ai\/|dsh-/.test(mainText)],
 		[true, true, false]);
 
 	if (causeHuman) {
 		check('主界面:默认不铺展开区(支持 / 限制要先点开)',
-			[mainText.includes('以下是原始证据'), mainText.includes('为什么这样判断?')], [false, true]);
-		const why = await clickText(evaluate, '为什么这样判断?');
+			[mainText.includes('以下是原始证据'), whyShown], [false, true]);
+		const why = await clickAria(evaluate, '为什么这样判断?');
 		const expanded = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
 		// 限制那一句**按候选类型不同**:脚本 / 长任务 / 宿主三类都带"不等于已定位根因",
 		// 而「缺少 JS 证据」那条的限制是"没有 JS 证据",两者都算如实 —— 只钉住"限制存在且非空"。
@@ -285,11 +309,11 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 		console.log(`     展开后片段 = ${JSON.stringify(expanded.slice(expanded.indexOf('以下是原始证据'), expanded.indexOf('以下是原始证据') + 120).replace(/\s+/g, ' '))}`);
 	} else {
 		check('没有候选原因时不渲染「为什么这样判断?」(按钮按需出现,不留点了没反应的动作)',
-			[causeNone, mainText.includes('以下是原始证据'), mainText.includes('为什么这样判断?')], [true, false, false]);
+			[causeNone, mainText.includes('以下是原始证据'), whyShown], [true, false, false]);
 	}
 
-	// 分享前预览:点「导出诊断报告」不许直接下载,先摊清单
-	const previewOpen = await clickText(evaluate, '导出诊断报告');
+	// 分享前预览:点「导出诊断报告」不许直接下载,先摊清单(它是图标按钮,按 aria-label 点)
+	const previewOpen = await clickAria(evaluate, '导出诊断报告');
 	const previewText = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
 	check('主界面导出先出预览:写明文件 / 备注已置空 / 本包不含,并给"生成并导出"与"取消"',
 		[previewOpen, /导出预览/.test(previewText), /备注:已置空/.test(previewText), /manifest\.json/.test(previewText),
@@ -312,12 +336,19 @@ await withPage({}, async ({ evaluate, reload, waitForHud }) => {
 	const devLeaks = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
 	check('开发者详情 / 原始数据这一屏没有漏成 key 的文案(引用的键都在词典里)',
 		leakedKeys(devLeaks), []);
-	await clickText(evaluate, '←');
-	await clickText(evaluate, '查看这次卡顿').catch(() => 'missing');
+	await clickBack(evaluate);
+	// 2026-10-24 起主界面没有「查看这次卡顿」按钮:整块事故行可点(`data-incident-open`)。
+	const incidentOpen = await evaluate(`(() => {
+		const node = document.querySelector('#dsh-perf-hud-root [data-incident-open]');
+		if (node === null) return 'missing';
+		node.click();
+		return 'clicked';
+	})()`);
 	const incidentLeaks = await evaluate(`document.getElementById('dsh-perf-hud-root').innerText`);
+	check('卡顿详情能从主界面的整块事故行进去(2026-10-24 起不再有「查看这次卡顿」按钮)', incidentOpen, 'clicked');
 	check('卡顿详情这一屏也没有漏成 key 的文案',
 		leakedKeys(incidentLeaks), []);
-	await clickText(evaluate, '卡顿详情 ←').catch(() => 'missing');
+	await clickBack(evaluate);
 
 
 	// ── 活过刷新:以**落盘的那份**为基准(活页面读数会继续涨) ──

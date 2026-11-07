@@ -49,10 +49,10 @@ window.__ModuleLoader__.load({
 		 */
 		async function waitForIdle(waitMs) {
 			const started = performance.now();
-			let calmSince = state.streaming ? 0 : performance.now();
+			let calmSince = state.watch.streaming ? 0 : performance.now();
 			while (performance.now() - started < waitMs) {
 				if (experiment.aborted === true) return false;
-				if (state.streaming) {
+				if (state.watch.streaming) {
 					calmSince = 0;
 				} else if (calmSince === 0) {
 					calmSince = performance.now();

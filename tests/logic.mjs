@@ -20,6 +20,8 @@ const i18nSource = readFileSync(new URL('../client.i18n.js', import.meta.url), '
 const watchChunkSource = readFileSync(new URL('../client.watch.js', import.meta.url), 'utf8');
 // 渲染层在包内分片 client.ui.js 里;静态检查与渲染区断言要扫两份源码。
 const uiSource = readFileSync(new URL('../client.ui.js', import.meta.url), 'utf8');
+// 工具箱分片:状态四片的白名单断言要扫它的引用(它只该读场景标签那一片)
+const toolsChunkSource = readFileSync(new URL('../client.tools.js', import.meta.url), 'utf8');
 const renderSource = source + '\n' + uiSource;
 // 主文件 + 分片:静态检查要能看见搬家之后的实现
 const allSource = source + '\n' + uiSource + '\n' + modelSource + '\n' + i18nSource + '\n' + watchChunkSource;
@@ -146,10 +148,10 @@ check('rate(正在涨)', api.rate([{ t: 0, n: 0 }, { t: 2000, n: 100 }, { t: 400
 check('rate(点太少) = 0', api.rate([{ t: 0, n: 5 }]), 0);
 
 // ── updateRates:每秒活桩 + EMA + 峰值 ────────────────────────────────
-api.state.plugins.set('p', { count: 0, ms: 0 });
+api.state.render.plugins.set('p', { count: 0, ms: 0 });
 api.updateRates(1000);
-api.state.plugins.get('p').count += 6;   // 1 秒里 6 次
-api.state.plugins.get('p').ms += 12;
+api.state.render.plugins.get('p').count += 6;   // 1 秒里 6 次
+api.state.render.plugins.get('p').ms += 12;
 api.updateRates(2000);
 const first = api.pluginTable()[0];
 check('第一次活桩 cps = 6/s', first.cps, 6);
@@ -162,13 +164,13 @@ check('峰值保留', api.pluginTable()[0].cpsPeak, 6);
 // ── blame:执行中的回调优先,其次看时间重叠 ───────────────────────────
 // 时间基准取真实 performance.now():longtask 的 startTime 与它是同一个时钟。
 const base = performance.now();
-api.state.stack.push({ owner: 'inflight-plugin', from: base - 10, to: base - 10 });
-api.state.recent.push({ owner: 'earlier-plugin', from: base - 900, to: base - 800 });
+api.state.render.stack.push({ owner: 'inflight-plugin', from: base - 10, to: base - 10 });
+api.state.render.recent.push({ owner: 'earlier-plugin', from: base - 900, to: base - 800 });
 check('blame(仍在执行的那次)', api.blame(base - 5, 60), 'inflight-plugin');
-api.state.stack.length = 0;
-api.state.recent.length = 0;
-api.state.recent.push({ owner: 'a', from: base + 1000, to: base + 1010 });
-api.state.recent.push({ owner: 'b', from: base + 1020, to: base + 1080 });
+api.state.render.stack.length = 0;
+api.state.render.recent.length = 0;
+api.state.render.recent.push({ owner: 'a', from: base + 1000, to: base + 1010 });
+api.state.render.recent.push({ owner: 'b', from: base + 1020, to: base + 1080 });
 check('blame(重叠最多的那次)', api.blame(base + 1015, 50), 'b');
 check('blame(无人重叠) = null', api.blame(base + 5000, 50), null);
 
@@ -258,7 +260,7 @@ check('A5:发起请求只用那一个 body 构造器,取回走 profileGet',
 check('A5:代码里不再有"客户端还没接线"这种说法(那条债已还)',
 	/客户端还没接线/.test(allSource), false);
 check('A5:面板「宿主与链路」有入口(状态 + 时长按钮 + 错误原文 + 下载原始采样)',
-	['hostCpuProfileText()', 'HOST_PROFILE_CHOICES.map', 'state.hostCpuProfile.error', 'downloadHostCpuProfile()', 'startHostCpuProfile(seconds)']
+	['hostCpuProfileText()', 'HOST_PROFILE_CHOICES.map', 'state.host.hostCpuProfile.error', 'downloadHostCpuProfile()', 'startHostCpuProfile(seconds)']
 		.map((needle) => uiSource.includes(needle)), [true, true, true, true, true]);
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
@@ -322,7 +324,7 @@ process.exitCode = failed === 0 ? 0 : 1;
 	check('DOM 写入插桩排除本 HUD 自身', /if \(owner === PKG\)/.test(source), true);
 
 	// 导出里必须有错误账本(下次再抛错,导出件能带出原文)
-	check('client.js 带 errors 导出段', /errors:\s*state\.errors/.test(allSource), true);
+	check('client.js 带 errors 导出段', /errors:\s*state\.ui\.errors/.test(allSource), true);
 
 	// 导出件的审计属性:文件离开现场后,读的人要能判断"这份证据被裁过没有"
 	const storeBlock = /store:\s*\{([\s\S]{0,500}?)\n\t{5}\}/.exec(allSource);
@@ -341,10 +343,10 @@ process.exitCode = failed === 0 ? 0 : 1;
 		(allSource.match(/sessionBaselines: sessionBaselines\(\)/g) ?? []).length, 2);
 	// README 承诺过 `__perfHud.marks()`(撤面板入口时给标记清单留的出口);没有它那句文档就是假的
 	check('控制台 API 暴露 marks 只读 getter(与 README「控制台 API」那一行对齐)',
-		/marks: \(\) => state\.marks/.test(source), true);
+		/marks: \(\) => state\.ui\.marks/.test(source), true);
 	// 快捷键:可选注入(服务不在也不影响加载);Linux Web 不支持这个组合,不硬塞默认绑定
 	check('快捷键走 ctx.shortcuts 可选注入,只声明 macOS / Windows 的默认绑定',
-		/ctx\.inject\(\['shortcuts'\]/.test(source) && /state\.toggleHud = toggle/.test(renderSource)
+		/ctx\.inject\(\['shortcuts'\]/.test(source) && /state\.ui\.toggleHud = toggle/.test(renderSource)
 		&& /'web:macos': \{ code: 'KeyU'/.test(source) && /'web:linux'/.test(source) === false, true);
 
 	// P0-1:任何 fetch 都必须带 signal(或经 fetchTextWithin / fetchJsonWithin)。
@@ -444,6 +446,84 @@ process.exitCode = failed === 0 ? 0 : 1;
 	check('A4:交互延迟不进面板渲染区(只进导出件)',
 		renderSource.slice(renderSource.indexOf('function PerfHud(')).includes('interactions'), false);
 }
+
+// ═══════════════ S1:状态四片(1.0 交付 3)═══════════════
+// 以前只有一个 94 字段的 state:谁都能读写任何一位,900 处引用里"这一位到底属于哪一层"无从判断。
+// 现在按视图归成四片(state.ui / state.watch / state.host / state.render),边界靠下面四条断言钉住。
+// ⚠️ 白名单里 model / ui 拿全四片是**对的**:视图模型要把采集、守夜、宿主三侧算成一句话,
+// 渲染层要把四片都画出来。真正被约束的是**采集侧**:守夜层读不到面板状态,工具箱读不到宿主。
+const STATE_FILES = {
+	'client.js': source,
+	'client.model.js': modelSource,
+	'client.ui.js': uiSource,
+	'client.watch.js': watchChunkSource,
+	'client.tools.js': toolsChunkSource,
+	'client.pack.js': packSource,
+	'client.i18n.js': i18nSource,
+};
+const STATE_WHITELIST = {
+	'client.js': ['ui', 'watch', 'host', 'render'],
+	'client.model.js': ['ui', 'watch', 'host', 'render'],
+	'client.ui.js': ['ui', 'watch', 'host', 'render'],
+	// 守夜层要 longTasks / precise / deep(事故切片)与宿主快照(assembleIncident),但**不读**面板状态
+	'client.watch.js': ['watch', 'render', 'host'],
+	// 工具箱只读场景标签(streaming 决定自测能不能跑)
+	'client.tools.js': ['watch'],
+	'client.pack.js': [],
+	'client.i18n.js': [],
+};
+// 状态字面量就是这一片的"清单":片名 → 字段集合。片后面的右括号与片的键同缩进(3 个 tab),
+// 所以按缩进切块是可靠的;字段键在 4 个 tab 上,嵌套对象的键更深,不会误收。
+const stateSlices = (() => {
+	const literal = extract(source, 'const state = {');
+	const out = {};
+	for (const name of ['ui', 'watch', 'host', 'render']) {
+		const head = literal.indexOf(`\t\t\t${name}: {`);
+		if (head === -1) continue;
+		const tail = literal.indexOf('\n\t\t\t},', head);
+		if (tail === -1) continue;
+		out[name] = [...literal.slice(head, tail).matchAll(/\n\t{4}([A-Za-z_$][\w$]*):/g)].map((match) => match[1]);
+	}
+	return out;
+})();
+check('状态四片:state 就是 ui / watch / host / render 四片,每片都有字段',
+	[Object.keys(stateSlices).sort(), Object.values(stateSlices).every((fields) => fields.length > 0)],
+	[['host', 'render', 'ui', 'watch'], true]);
+// 字段数写死是故意的:挪字段(把一页读数搬到另一片)是结构变更,要连同这一行一起交代。
+// 它同时挡住一类静默错误 —— 字段被复制进两片后,谁写谁读就说不清了。
+check('状态四片:四片的字段数 == 23 / 53 / 37 / 15(挪字段要改这一行并说明理由)',
+	// watch 片的 37 = 守夜对象自己的 30 个键 + tally + 场景/空闲基线 6 个(它本来就是一整层)
+	[stateSlices.ui.length, stateSlices.render.length, stateSlices.watch.length, stateSlices.host.length],
+	[23, 53, 37, 15]);
+// ① 引用必须写成 state.<片>.<字段>:裸引用(少一层)与错片(字段不在那片)都是红。
+// 只需要"文件里有没有这种形状",所以扫源码文本就够 —— 不执行,也就不会被 sandbox 的桩掩盖。
+check('状态四片:每处引用都是 state.<片>.<字段>,字段真的在那一片里(裸引用 / 未知片 / 错片 = 0)', (() => {
+	const bare = [];
+	const unknown = [];
+	const misplaced = [];
+	for (const [file, text] of Object.entries(STATE_FILES)) {
+		const lineOf = (index) => text.slice(0, index).split('\n').length;
+		for (const match of text.matchAll(/(?<![\w$.])state\.(\w+)(?:\.([A-Za-z_$][\w$]*))?/g)) {
+			const [, slice, field] = match;
+			const at = `${file}:${lineOf(match.index)}`;
+			// 整片取用只允许 state.watch:守夜层与视图模型都按`const watch = state.watch`取那一个对象
+			if (field === undefined) { if (slice !== 'watch') bare.push(`${at} state.${slice}`); continue }
+			if (stateSlices[slice] === undefined) { unknown.push(`${at} state.${slice}.${field}`); continue }
+			if (stateSlices[slice].includes(field) === false) misplaced.push(`${at} state.${slice}.${field}`)
+		}
+	}
+	return { bare, unknown, misplaced };
+})(), { bare: [], unknown: [], misplaced: [] });
+check('状态四片:每个文件只读白名单里的片(越界 = 红;采集侧读不到面板状态)', (() => {
+	const violations = [];
+	for (const [file, text] of Object.entries(STATE_FILES)) {
+		const allowed = STATE_WHITELIST[file];
+		for (const match of text.matchAll(/(?<![\w$.])state\.(\w+)/g)) {
+			if (allowed.includes(match[1]) === false) violations.push(`${file} → state.${match[1]}`);
+		}
+	}
+	return [...new Set(violations)];
+})(), []);
 
 // ═══════════════ A/B/C/D/E 新增逻辑的离线验证 ═══════════════
 // 第二个沙箱:把新函数连同它们依赖的最小环境一起装进去。
@@ -1067,9 +1147,9 @@ check('map 缓存 LRU:只留最近 8 个 rev,淘汰最旧的',
 check('packageOfScript:非插件脚本 → not-plugin', EX.packageOfScript('http://h/assets/index.js', 10), { pkg: null, via: 'not-plugin' });
 check('packageOfScript:单包 URL 直接读出包名', EX.packageOfScript('http://h/plugins/??dsh-x/client.js&rev=1', 10), { pkg: 'dsh-x', via: 'url' });
 check('packageOfScript:没有 URL → no-url', EX.packageOfScript('', 10), { pkg: null, via: 'no-url' });
-box.state.precise = false;
+box.state.render.precise = false;
 check('packageOfScript:精确归因关着 → 说清楚', EX.packageOfScript(comboUrl, 10), { pkg: null, via: 'precise-off' });
-box.state.precise = true;
+box.state.render.precise = true;
 check('packageOfScript:脚本文本没备好 → text-pending', EX.packageOfScript('http://h/plugins/??p,q/client.js&rev=2', 10), { pkg: null, via: 'text-pending' });
 const comboKey = `bundle:${comboUrl}`;
 box.bundleMaps.set(comboKey, { state: 'pending' });
@@ -1078,7 +1158,7 @@ box.bundleMaps.set(comboKey, { state: 'ready', offsets: [[0, 'dsh-a'], [2, 'dsh-
 check('packageOfScript:charPos 落在第二段 → dsh-b', EX.packageOfScript(comboUrl, 9), { pkg: 'dsh-b', via: 'section' });
 check('packageOfScript:字符位置越界 → out-of-range', EX.packageOfScript(comboUrl, 999), { pkg: null, via: 'out-of-range' });
 check('packageOfScript:没有字符位置 → no-charpos', EX.packageOfScript(comboUrl, null), { pkg: null, via: 'no-charpos' });
-box.state.precise = false;   // 还原:后面的用例假设它是关着的
+box.state.render.precise = false;   // 还原:后面的用例假设它是关着的
 check('sectionOwner(表为空) = null', EX.sectionOwner({ offsets: [] }, 5), null);
 
 // ── A:批次标签 —— 绝不展开成多个名字 ───────────────────────────────
@@ -1086,7 +1166,7 @@ const longUrl = `http://127.0.0.1:3080/plugins/??${Array.from({ length: 58 }, (_
 const bundleKey = `bundle:${longUrl}`;
 // 关着的时候只给一行批次标签(不写"解析中",因为根本还没去解析)
 check('精确归因关着:批次标签不带状态后缀', EX.bundleLabel(bundleKey), '合并批次(58 包)');
-box.state.precise = true;
+box.state.render.precise = true;
 box.bundleMaps.set(bundleKey, { state: 'pending' });
 check('精确归因打开 + 未就绪:标成解析中', EX.bundleLabel(bundleKey), '合并批次(58 包)·解析中');
 box.bundleMaps.set(bundleKey, { state: 'ready' });
@@ -1165,17 +1245,17 @@ check('fiberOwner 只用 2 秒窗口内的节点', EX.fiberOwner(), 'NewComponen
 check('窗口外的引用被释放', box.changedNodes.length, 1);
 
 // ── 空闲基线要能指名"谁在加节点":必须是窗口增量,不是累计表 ──────
-box.state.domWrites = new Map([
+box.state.render.domWrites = new Map([
 	['early', { count: 100, ops: 10, components: new Map([['EarlyComp', 100]]) }],
 ]);
 const writeSnap = EX.domWriteSnapshot();
-box.state.domWrites.get('early').count += 30;
-box.state.domWrites.get('early').components.set('EarlyComp', 130);
-box.state.domWrites.set('late', { count: 50, ops: 5, components: new Map([['LateComp', 50]]) });
+box.state.render.domWrites.get('early').count += 30;
+box.state.render.domWrites.get('early').components.set('EarlyComp', 130);
+box.state.render.domWrites.set('late', { count: 50, ops: 5, components: new Map([['LateComp', 50]]) });
 const writeDelta = EX.domWriteDelta(writeSnap);
 check('增量只列窗口内真的写过的 owner', writeDelta.map((row) => [row.id, row.estimatedCount]), [['late', 50], ['early', 30]]);
 check('组件名也取增量', writeDelta.map((row) => row.component), ['LateComp', 'EarlyComp']);
-box.state.domWrites.set('idleOne', { count: 999, ops: 9, components: new Map([['IdleComp', 999]]) });
+box.state.render.domWrites.set('idleOne', { count: 999, ops: 9, components: new Map([['IdleComp', 999]]) });
 // 真实空闲窗口的样子:累计表里全是历史数字,窗口内一个都没写 → 增量必须为空
 check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWriteSnapshot()).length, 0);
 
@@ -1185,53 +1265,53 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 	check('looksLikeInfrastructure 认外壳:CenterColumn(布局列)', EX.looksLikeInfrastructure('CenterColumn'), true);
 	check('合计耗时:极小值不写成 0', [EX.msPerSecText(0), EX.msPerSecText(0.02), EX.msPerSecText(1.25)], ['0ms/s', '<0.1ms/s', '1.3ms/s']);
 	// 渲染预算:显示值没变就不重渲染(折叠不动时 HUD 自身开销应接近零)
-	box.state.idleSince = 0;
-	box.state.errors = [];
-	box.state.stressNodes = 0;
+	box.state.watch.idleSince = 0;
+	box.state.ui.errors = [];
+	box.state.render.stressNodes = 0;
 	const stableKey = EX.displayKey();
 	check('指纹:同一状态两次一致', EX.displayKey() === stableKey, true);
-	box.state.fps += 5;
+	box.state.render.fps += 5;
 	check('指纹:显示的数值变了就变', EX.displayKey() !== stableKey, true);
-	box.state.groups.detail = true;
+	box.state.ui.groups.detail = true;
 	check('指纹:折叠状态变化也算变', EX.displayKey() !== stableKey, true);
-	box.state.groups.detail = false;
+	box.state.ui.groups.detail = false;
 
 	// 判定而不是只摆数字:两者都正常时必须给出结论(快照要新鲜、有样本,才是 live)
-	box.state.hostError = null;
-	box.state.host = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, nodeVersion: 'v24', eventLoopLive: true };
-	box.state.hostAt = Date.now();
-	box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 13 }];
+	box.state.host.hostError = null;
+	box.state.host.snapshot = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, nodeVersion: 'v24', eventLoopLive: true };
+	box.state.host.hostAt = Date.now();
+	box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 13 }];
 	check('宿主与链路都正常 → 直接说链路已排除', EX.infraVerdict().text, '链路已排除(宿主与隧道均正常)');
-	box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 400 }, { t: Date.now(), kind: 'rtt', rtt: 400 }];
+	box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 400 }, { t: Date.now(), kind: 'rtt', rtt: 400 }];
 	check('RTT p99 超阈值 → 判为链路存疑', EX.infraVerdict().bad, true);
-	box.state.host = { eventLoop: { p50: 1.2, p99: 120, seconds: 30 }, eventLoopLive: true };
-	box.state.link = [];
+	box.state.host.snapshot = { eventLoop: { p50: 1.2, p99: 120, seconds: 30 }, eventLoopLive: true };
+	box.state.host.link = [];
 	check('宿主 p99 超阈值 → 判为宿主存疑', EX.infraVerdict().bad, true);
 	// 零样本 / 过期 / 未采到:不许给「链路已排除」
-	box.state.host = { eventLoop: { p50: null, p99: null, max: 0, seconds: 0 }, eventLoopLive: true };
-	box.state.hostAt = Date.now();
+	box.state.host.snapshot = { eventLoop: { p50: null, p99: null, max: 0, seconds: 0 }, eventLoopLive: true };
+	box.state.host.hostAt = Date.now();
 	check('宿主还没有样本 → 不能说链路已排除', EX.infraVerdict().text, '宿主数据不足');
 	check('宿主还没有样本 → 四态是 warming', EX.hostFreshness().state, 'warming');
-	box.state.host = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, eventLoopLive: true };
-	box.state.hostAt = Date.now() - 60000;
+	box.state.host.snapshot = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, eventLoopLive: true };
+	box.state.host.hostAt = Date.now() - 60000;
 	check('宿主快照过期 → 四态是 stale', EX.hostFreshness().state, 'stale');
 	check('宿主快照过期 → 判定不能说正常', EX.infraVerdict().bad, true);
-	box.state.host = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, eventLoopLive: false };
-	box.state.hostAt = Date.now();
+	box.state.host.snapshot = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, eventLoopLive: false };
+	box.state.host.hostAt = Date.now();
 	check('宿主探针没跑起来 → 四态是 unsupported', EX.hostFreshness().state, 'unsupported');
 	check('宿主探针没跑起来 → 文案是"宿主未采到"', EX.hostLoopStateText(), '宿主未采到');
-	box.state.host = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, eventLoopLive: true };
-	box.state.hostAt = Date.now();
+	box.state.host.snapshot = { eventLoop: { p50: 1.2, p99: 4.3, seconds: 30 }, eventLoopLive: true };
+	box.state.host.hostAt = Date.now();
 	// 未解释帧:最差帧 130ms 而帧内未归因峰值也是 130ms → 那一帧完全没有 JS 解释
 	// (这一条只在插桩下成立:没插桩时 unattr 恒等于帧间隔,那会得出"每条长帧都无 JS 解释")
-	box.state.deep = true;
-	box.state.frameWorst = 130;
-	box.state.unattrPeak = 130;
+	box.state.render.deep = true;
+	box.state.render.frameWorst = 130;
+	box.state.render.unattrPeak = 130;
 	check('未解释帧自动触发(峰值≈最差帧)', EX.unexplainedFrame().percent, 100);
-	box.state.unattrPeak = 30;
+	box.state.render.unattrPeak = 30;
 	check('有 JS 解释时不该触发', EX.unexplainedFrame(), null);
-	box.state.unattrPeak = 130;
-	box.state.deep = false;
+	box.state.render.unattrPeak = 130;
+	box.state.render.deep = false;
 	check('没插桩时不报"无 JS 解释"(那时它一定成立,等于恒报)', EX.unexplainedFrame(), null);
 	// 合并判色:FPS 绿不能掩盖最差帧
 	check('FPS 好但最差帧 130ms → 至少黄', EX.levelFrame(54.2, 130).includes('warn'), true);
@@ -1280,8 +1360,8 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 		['ChatView', 'PerfHud']);
 	check('B1:归属汇总把记录器自己从 Top 里分出来单列',
 		(() => {
-			box.state.ltNames.clear();
-			box.state.ltTotal = 3;
+			box.state.render.ltNames.clear();
+			box.state.render.ltTotal = 3;
 			for (const row of [
 				{ t: 1, component: 'ChatView', subtreeComponent: null, domComponent: null, owner: null },
 				{ t: 2, component: 'PerfHud', subtreeComponent: null, domComponent: null, owner: null },
@@ -1348,9 +1428,9 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 
 	// 命中率说明不了问题(DOM 腿在流式时几乎必然命中)——要看名字分布。
 	// 并且钉住"命中"与"分布"是同一套判定(旧版 ltBlamed 漏了 dom 腿,两者对不上)。
-	box.state.ltNames.clear();
-	box.state.ltLegs = { fiber: 0, subtree: 0, dom: 0, owner: 0, none: 0 };
-	box.state.ltTotal = 5;
+	box.state.render.ltNames.clear();
+	box.state.render.ltLegs = { fiber: 0, subtree: 0, dom: 0, owner: 0, none: 0 };
+	box.state.render.ltTotal = 5;
 	const longRows = [
 		{ t: 1, component: 'ChatView', domComponent: 'X', owner: null },
 		{ t: 2, component: 'SlotOutlet', domComponent: 'StartedBashRow', owner: null },
@@ -1370,31 +1450,31 @@ check('空闲窗口:累计表再高,增量也是空', EX.domWriteDelta(EX.domWri
 	// HUD 自己的 DOM 写入必须不记账(实测摘要里出现过 (PerfHud) 顶在第一名)
 
 // ── 排版预算:概览与折叠摘要必须一行放得下(实测被吐槽过参差换行) ──
-box.state.frameWorst = 17;
-box.state.ltTotal = 16;
-box.state.ltBlamed = 15;
-box.state.dom = { total: 5408, series: [{ t: 0, n: 5600 }, { t: 12000, n: 5408 }] };
-box.state.mutations = 98121;
-box.state.targets = new Map([['messages', { nodes: 3285, series: [] }]]);
-box.state.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: 'FileTree', subtreeComponent: 'ConfirmDialog', domComponent: null }];
-box.state.ltNames.clear();
-box.state.ltLegs = { fiber: 0, subtree: 0, dom: 0, owner: 0, none: 0 };
-EX.applyLongTaskStats(box.state.longTasks[0]);
-box.state.ltNames.set('ChatView', 5);
+box.state.render.frameWorst = 17;
+box.state.render.ltTotal = 16;
+box.state.render.ltBlamed = 15;
+box.state.render.dom = { total: 5408, series: [{ t: 0, n: 5600 }, { t: 12000, n: 5408 }] };
+box.state.render.mutations = 98121;
+box.state.render.targets = new Map([['messages', { nodes: 3285, series: [] }]]);
+box.state.render.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: 'FileTree', subtreeComponent: 'ConfirmDialog', domComponent: null }];
+box.state.render.ltNames.clear();
+box.state.render.ltLegs = { fiber: 0, subtree: 0, dom: 0, owner: 0, none: 0 };
+EX.applyLongTaskStats(box.state.render.longTasks[0]);
+box.state.render.ltNames.set('ChatView', 5);
 check('概览第一行的长度预算', EX.overviewLine1().length <= 36, true);
 // 相邻两行不许说同一句话:第一行不重复"最差那条:未归因",那件事由第二行自己的标签承担
 // (两者的触发条件完全相同 —— primaryBlame(worst) === null,所以第一行挂后缀必然是重复)
 check('概览第一行不重复第二行要说的话(能不说就不说)',
 	(() => {
-		box.state.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: null, subtreeComponent: null, domComponent: null }];
-		box.state.ltTotal = 1;
-		box.state.ltBlamed = 0;
+		box.state.render.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: null, subtreeComponent: null, domComponent: null }];
+		box.state.render.ltTotal = 1;
+		box.state.render.ltBlamed = 0;
 		const first = EX.overviewLine1();
 		const second = EX.overviewLine2();
-		box.state.frameWorst = 17;
-		box.state.ltTotal = 16;
-		box.state.ltBlamed = 15;
-		box.state.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: 'FileTree', subtreeComponent: 'ConfirmDialog', domComponent: null }];
+		box.state.render.frameWorst = 17;
+		box.state.render.ltTotal = 16;
+		box.state.render.ltBlamed = 15;
+		box.state.render.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: 'FileTree', subtreeComponent: 'ConfirmDialog', domComponent: null }];
 		return [first.split('\n').length, first.includes('未归因'), second.includes('未归因')];
 	})(), [1, false, true]);
 check('概览第二行的长度预算(允许左对齐换行一次)', EX.overviewLine2().length <= 60, true);
@@ -1402,23 +1482,23 @@ check('概览第二行给出归属(含子树那条腿)',
 	EX.overviewLine2().includes('ConfirmDialog') && EX.overviewLine2().includes('子树'), true);
 check('最多与主名字相同时不重复显示(避免为一行废话再换一行)',
 	(() => {
-		box.state.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: 'ChatView', subtreeComponent: null, domComponent: null }];
-		box.state.ltNames.clear();
-		box.state.ltNames.set('ChatView', 22);
+		box.state.render.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: 'ChatView', subtreeComponent: null, domComponent: null }];
+		box.state.render.ltNames.clear();
+		box.state.render.ltNames.set('ChatView', 22);
 		return EX.overviewLine2().includes('最差');
 	})(), false);
 check('最多与主名字不同时才追加一行(主动断行,不靠宽度)',
 	(() => {
-		box.state.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: 'ConfirmDialog', subtreeComponent: null, domComponent: null }];
-		box.state.ltNames.clear();
-		box.state.ltNames.set('ChatView', 22);
-		box.state.ltNames.set('ConfirmDialog', 1);
+		box.state.render.longTasks = [{ t: Date.now(), at: performance.now() - 100, ms: 285, owner: null, component: 'ConfirmDialog', subtreeComponent: null, domComponent: null }];
+		box.state.render.ltNames.clear();
+		box.state.render.ltNames.set('ChatView', 22);
+		box.state.render.ltNames.set('ConfirmDialog', 1);
 		const text = EX.overviewLine2();
 		return text.split('\n').length === 2 && text.split('\n')[1].includes('ChatView 22×');
 	})(), true);
 // 真实量级(五位数)也要能一行放下 —— 桩里的小数字曾经把这条断言喂成了"通过"
-box.state.mutations = 36250;
-box.state.unattrAvg = 17.3;
+box.state.render.mutations = 36250;
+box.state.render.unattrAvg = 17.3;
 check('四个折叠组摘要的长度预算(按真实量级:五位数 + 小数)', [EX.detailSummary().length <= 26, EX.domSummary().length <= 30, EX.hostSummary().length <= 34, EX.toolsSummary().length <= 24],
 	[true, true, true, true]);
 // 「技术细节」是卡顿详情那一屏唯一的技术读数入口(普通用户也会经过它),摘要不收缩就会把那行折成两行:
@@ -1432,34 +1512,34 @@ check('「技术细节」摘要的长度预算(真实量级:四位数 + 小数 +
 // ⚠️ 上面那条用的是桩里的小数字,**挡不住真实量级** —— 实测过一次:折叠摘要按 p99 标的长度
 // 是紧的(桩喂 120ms / `未采集` 时 30 字符,真实数据 1234.5ms 时能顶到 34)。这里专门喂真实量级。
 check('宿主摘要的长度预算(真实量级:四位数 + 小数;判定不进摘要,它是展开后的第一行)', (() => {
-	const host0 = box.state.host;
-	const hostAt0 = box.state.hostAt;
-	const link0 = box.state.link;
-	box.state.host = { eventLoop: { p50: 12.3, p99: 1234.5, max: 2000, seconds: 30 }, eventLoopLive: true };
-	box.state.hostAt = Date.now();
-	box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 1234.5 }, { t: Date.now(), kind: 'rtt', rtt: 1200 }];
+	const host0 = box.state.host.snapshot;
+	const hostAt0 = box.state.host.hostAt;
+	const link0 = box.state.host.link;
+	box.state.host.snapshot = { eventLoop: { p50: 12.3, p99: 1234.5, max: 2000, seconds: 30 }, eventLoopLive: true };
+	box.state.host.hostAt = Date.now();
+	box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 1234.5 }, { t: Date.now(), kind: 'rtt', rtt: 1200 }];
 	const text = EX.hostSummary();
-	box.state.host = host0;
-	box.state.hostAt = hostAt0;
-	box.state.link = link0;
+	box.state.host.snapshot = host0;
+	box.state.host.hostAt = hostAt0;
+	box.state.host.link = link0;
 	return [text.length <= 34, text.includes('p99'), text.includes('1234.5ms'), text.includes('判定' ) === false];
 })(), [true, true, true, true]);
-box.state.mutations = 0;
-box.state.unattrAvg = 0;
+box.state.render.mutations = 0;
+box.state.render.unattrAvg = 0;
 
 // ── 面板分层:折叠状态与摘要 ───────────────────────────────────────
 check('默认全部收起(过程/取证/工具不占常显篇幅)',
-	JSON.stringify(box.state.groups), JSON.stringify({ detail: false, cross: false, dom: false, host: false, tools: false, tech: false }));
+	JSON.stringify(box.state.ui.groups), JSON.stringify({ detail: false, cross: false, dom: false, host: false, tools: false, tech: false }));
 EX.toggleGroup('dom');
-check('toggle 展开', box.state.groups.dom, true);
+check('toggle 展开', box.state.ui.groups.dom, true);
 check('折叠选择被记住', JSON.parse(box.storage.getItem('dsh-perf-hud:groups')).dom, true);
 EX.toggleGroup('dom');
-check('再 toggle 收起', box.state.groups.dom, false);
+check('再 toggle 收起', box.state.ui.groups.dom, false);
 EX.toggleGroup('不存在的分组');
-check('未知分组名不产生新键', Object.hasOwn(box.state.groups, '不存在的分组'), false);
-box.state.targets = new Map();
+check('未知分组名不产生新键', Object.hasOwn(box.state.ui.groups, '不存在的分组'), false);
+box.state.render.targets = new Map();
 check('摘要取不到容器:如实写未采集', EX.containerNodes('messages'), '未采集');
-box.state.targets.set('messages', { nodes: 3571, series: [] });
+box.state.render.targets.set('messages', { nodes: 3571, series: [] });
 check('摘要给出一句话节点数', EX.containerNodes('messages'), '3571');
 
 // ── P0/P1:事故选中上下文 + 「最差事件」入口 ────────────────────────────
@@ -1585,7 +1665,7 @@ check('复制摘要:一次交互都没有时那一行整段不出现(不摆 0)',
 // 「行号」是**脚本文本自己的行号**,不是原始源码行 —— 这几条断言把这个口径钉死。
 check('scriptPosition:没预取 / 没字符位置 → null 且写明原因(不猜行号)',
 	(() => {
-		box.state.precise = false;
+		box.state.render.precise = false;
 		return [EX.scriptPosition('', 10), EX.scriptPosition('http://h/plugins/x/client.js', -1), EX.scriptPosition('http://h/plugins/x/client.js', 10)];
 	})(),
 	[{ line: null, via: 'no-url' }, { line: null, via: 'no-charpos' }, { line: null, via: 'text-not-fetched' }]);
@@ -1613,7 +1693,7 @@ check('scriptEvidence:单包 URL → 包直接读出来、文件就是 URL 的�
 	(() => {
 		const url = 'http://127.0.0.1:3080/plugins/dsh-x/client.js';
 		box.scriptLines.set(url, { state: 'ready', starts: [0, 4, 8], length: 12 });
-		box.state.precise = true;
+		box.state.render.precise = true;
 		const ev = EX.scriptEvidence({ url, fn: 'render', invoker: 'TimerHandler:setTimeout', charPos: 4, ms: 12.3 }, url);
 		box.scriptLines.delete(url);
 		return [ev.pkg, ev.pkgVia, ev.file, ev.line, ev.lineVia, ev.lineScope, ev.fn, ev.ms, ev.invoker];
@@ -1626,7 +1706,7 @@ check('scriptEvidence:合并批 → 包名靠分段表推出来,文件也在同�
 		for (let i = 0; i < 20; i += 1) starts.push(i * 4);   // 每行 4 字符:第 12 行从字符 44 起
 		box.scriptLines.set(url, { state: 'ready', starts, length: 200 });
 		box.bundleMaps.set(`bundle:${url}`, { state: 'ready', offsets: [[0, 'a'], [10, 'b']], paths: ['/plugins/a/client.js', '/plugins/b/client.js'], count: 2 });
-		box.state.precise = true;
+		box.state.render.precise = true;
 		const ev = EX.scriptEvidence({ url, fn: 'run', charPos: 44, ms: 5 }, url);
 		box.scriptLines.delete(url);
 		box.bundleMaps.delete(`bundle:${url}`);
@@ -1640,7 +1720,7 @@ check('scriptEvidence:合并批 + 老缓存(没有 paths)→ 包名有、文件�
 		for (let i = 0; i < 20; i += 1) starts.push(i * 4);
 		box.scriptLines.set(url, { state: 'ready', starts, length: 200 });
 		box.bundleMaps.set(`bundle:${url}`, { state: 'ready', offsets: [[0, 'a'], [10, 'b']], paths: null, count: 2 });
-		box.state.precise = true;
+		box.state.render.precise = true;
 		const ev = EX.scriptEvidence({ url, fn: 'run', charPos: 44, ms: 5 }, url);
 		box.scriptLines.delete(url);
 		box.bundleMaps.delete(`bundle:${url}`);
@@ -1651,7 +1731,7 @@ check('scriptEvidence:合并批 + 老缓存(没有 paths)→ 包名有、文件�
 // 查询串开始,pathname 只剩 `/plugins/` —— 于是"文件路径"会显示成 `/plugins/`(实测踩到)。
 check('scriptEvidence:单包组合 URL → 文件由正则自己拼(不能交给 new URL().pathname)',
 	(() => {
-		box.state.precise = true;
+		box.state.render.precise = true;
 		const url = 'http://127.0.0.1:3080/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=03c3';
 		const ev = EX.scriptEvidence({ url, fn: 'run', charPos: 0, ms: 7 }, url);
 		return [ev.pkg, ev.pkgVia, ev.file, new URL(url).pathname];
@@ -1659,7 +1739,7 @@ check('scriptEvidence:单包组合 URL → 文件由正则自己拼(不能交给
 	['@deepseek-ai/dsh-client-modules', 'url', '/plugins/@deepseek-ai/dsh-client-modules/client.js', '/plugins/']);
 check('scriptEvidence:非插件脚本(应用自己的外壳 bundle)→ 包名 null + 「不是插件脚本」,文件仍是它自己',
 	(() => {
-		box.state.precise = true;
+		box.state.render.precise = true;
 		const url = 'http://127.0.0.1:3080/assets/index-abc.js';
 		const ev = EX.scriptEvidence({ url, ms: 3 }, url);
 		return [ev.pkg, ev.pkgVia, ev.file, EX.viaText(ev.pkgVia)];
@@ -1717,34 +1797,34 @@ check('复制摘要:不在留存清单里的 id → 选不中,返回 false(不�
 	(() => { box.state.watch.incidents.length = 0; const ok = EX.selectIncident('i84'); return ok; })(), false);
 check('复制失败要如实说:环境没有剪贴板 API 时 copyNote 写的是失败原文(不是"已复制")',
 	(() => {
-		box.state.copyNote = null;
+		box.state.ui.copyNote = null;
 		EX.copyText('x', '复制摘要');
-		const note = box.state.copyNote;
-		box.state.copyNote = null;
+		const note = box.state.ui.copyNote;
+		box.state.ui.copyNote = null;
 		return [typeof note, note.includes('复制失败'), note.includes('已复制')];
 	})(), ['string', true, false]);
 
 // 布局动作:两条都要有真实行为,而且「恢复默认布局」比「全部折叠」多清两个上下文选择
 check('全部折叠:组全收起并落盘,但**不动**翻帧与事故选中',
 	(() => {
-		for (const key of Object.keys(box.state.groups)) box.state.groups[key] = true;
+		for (const key of Object.keys(box.state.ui.groups)) box.state.ui.groups[key] = true;
 		box.state.watch.pickT = 123;
 		box.state.watch.selId = 'i84';
 		EX.collapseAll();
-		const result = [JSON.stringify(box.state.groups), box.state.watch.pickT, box.state.watch.selId, JSON.parse(box.storage.getItem('dsh-perf-hud:groups')).detail];
+		const result = [JSON.stringify(box.state.ui.groups), box.state.watch.pickT, box.state.watch.selId, JSON.parse(box.storage.getItem('dsh-perf-hud:groups')).detail];
 		box.state.watch.pickT = null;
 		box.state.watch.selId = null;
 		return result;
 	})(), ['{"detail":false,"cross":false,"dom":false,"host":false,"tools":false,"tech":false}', 123, 'i84', false]);
 check('恢复默认布局:再清掉翻帧钉住与事故选中(真正回到干净首屏)',
 	(() => {
-		for (const key of Object.keys(box.state.groups)) box.state.groups[key] = true;
+		for (const key of Object.keys(box.state.ui.groups)) box.state.ui.groups[key] = true;
 		box.state.watch.pickT = 123;
 		box.state.watch.selId = 'i84';
-		box.state.copyNote = '已复制 · 名称';
-		box.state.pickNote = '帧环里没有这条事故附近的帧';
+		box.state.ui.copyNote = '已复制 · 名称';
+		box.state.ui.pickNote = '帧环里没有这条事故附近的帧';
 		EX.resetLayout();
-		return [JSON.stringify(box.state.groups), box.state.watch.pickT, box.state.watch.selId, box.state.copyNote, box.state.pickNote];
+		return [JSON.stringify(box.state.ui.groups), box.state.watch.pickT, box.state.watch.selId, box.state.ui.copyNote, box.state.ui.pickNote];
 	})(), ['{"detail":false,"cross":false,"dom":false,"host":false,"tools":false,"tech":false}', null, null, null, null]);
 
 // ── 事故 ⇒ 历史帧:切到历史事故上下文,选中这条事故里最差的那一帧 ──────────────
@@ -1770,41 +1850,41 @@ check('「看这一帧」:切到历史事故上下文 + 展开取证明细 + 选
 		box.state.watch.frameT = null;
 		box.state.watch.pickT = 999;
 		box.state.watch.selId = null;
-		box.state.groups.detail = false;
-		box.state.pickNote = 'stale';
+		box.state.ui.groups.detail = false;
+		box.state.ui.pickNote = 'stale';
 		const ok = EX.revealIncident('i84');
-		const result = [ok, box.state.watch.mode, box.state.watch.selId, box.state.groups.detail,
-			box.state.watch.frameT, box.state.watch.pickT, EX.selectedIncidentFrame(box.state.watch.incidents[0]).t, box.state.pickNote];
+		const result = [ok, box.state.watch.mode, box.state.watch.selId, box.state.ui.groups.detail,
+			box.state.watch.frameT, box.state.watch.pickT, EX.selectedIncidentFrame(box.state.watch.incidents[0]).t, box.state.ui.pickNote];
 		box.state.watch.incidents.length = 0;
-		box.state.groups.detail = false;
+		box.state.ui.groups.detail = false;
 		box.state.watch.mode = 'live';
 		box.state.watch.pickT = null;
 		box.state.watch.selId = null;
-		box.state.pickNote = null;
+		box.state.ui.pickNote = null;
 		return result;
 	})(), [true, 'incident', 'i84', true, null, 999, 1100, null]);
 check('「看这一帧」:包里一条帧记录都没有(老包)时留一句**如实说明**,不假装有帧可看',
 	(() => {
 		box.state.watch.incidents.length = 0;
 		box.state.watch.incidents.push({ ...incidentRow, frames: [], loaf: [] });
-		box.state.pickNote = null;
-		box.state.groups.detail = false;
+		box.state.ui.pickNote = null;
+		box.state.ui.groups.detail = false;
 		const ok = EX.revealIncident('i84');
-		const note = box.state.pickNote;
+		const note = box.state.ui.pickNote;
 		const result = [ok, typeof note, note.includes('没有帧记录'), EX.selectedIncidentFrame({ ...incidentRow, frames: [] })];
 		box.state.watch.incidents.length = 0;
-		box.state.pickNote = null;
-		box.state.groups.detail = false;
+		box.state.ui.pickNote = null;
+		box.state.ui.groups.detail = false;
 		return result;
 	})(), [true, 'string', true, null]);
 check('回到实时:只切模式,实时采集与历史那一侧的选中都不动',
 	(() => {
 		box.state.watch.mode = 'incident';
 		box.state.watch.frameT = 1100;
-		box.state.copyNote = '已复制';
-		box.state.pickNote = 'x';
+		box.state.ui.copyNote = '已复制';
+		box.state.ui.pickNote = 'x';
 		EX.showLiveMode();
-		const result = [box.state.watch.mode, box.state.watch.frameT, box.state.copyNote, box.state.pickNote];
+		const result = [box.state.watch.mode, box.state.watch.frameT, box.state.ui.copyNote, box.state.ui.pickNote];
 		box.state.watch.frameT = null;
 		return result;
 	})(), ['live', 1100, null, null]);
@@ -1812,10 +1892,10 @@ check('「看这一帧」:事故不在留存清单里时什么都不改,返回 f
 	(() => {
 		box.state.watch.selId = null;
 		box.state.watch.mode = 'live';
-		box.state.groups.detail = false;
+		box.state.ui.groups.detail = false;
 		const ok = EX.revealIncident('nope');
-		const result = [ok, box.state.watch.selId, box.state.groups.detail, box.state.watch.mode];
-		box.state.groups.detail = false;
+		const result = [ok, box.state.watch.selId, box.state.ui.groups.detail, box.state.watch.mode];
+		box.state.ui.groups.detail = false;
 		return result;
 	})(), [false, null, false, 'live']);
 check('详情区的上下文标题:历史事故与实时两种模式**各自写明自己是哪一个**(不许有歧义)',
@@ -1861,7 +1941,7 @@ check('折叠组标题:历史事故模式下带上事故 id(折叠着也能看�
 	})(), '取证明细 · i84');
 
 // ── D:链路分位与"疑似链路"判定 ─────────────────────────────────────
-box.state.link = [
+box.state.host.link = [
 	{ t: Date.now() - 5000, kind: 'rtt', rtt: 10 },
 	{ t: Date.now() - 4000, kind: 'rtt', rtt: 20 },
 	{ t: Date.now() - 3000, kind: 'rtt', rtt: 30 },
@@ -1872,43 +1952,43 @@ box.state.link = [
 check('linkStats 只算 60s 内的 rtt', EX.linkStats().count, 4);
 check('linkStats p50 是 20(nearest-rank,不是第 3 个)', EX.linkStats().p50, 20);
 check('linkStats p99 = 最大值', EX.linkStats().p99, 400);
-box.state.fps = 60;
+box.state.render.fps = 60;
 check('RTT 尖峰 + FPS 正常 → 疑似链路', EX.suspectLink(), true);
-box.state.fps = 12;
+box.state.render.fps = 12;
 check('FPS 也崩了就不甩锅给链路', EX.suspectLink(), false);
-box.state.link = [];
+box.state.host.link = [];
 check('没有样本时不误报', EX.suspectLink(), false);
 
 // 仪器自检:节点数凑不稳 >50ms,所以明着烧一段,并且必须把"人为燃烧"写在面板上
 box.setFlushSync(null);
 
 // 链路那一行必须自证完整:n= 露出来,吞吐三态都说清楚
-box.state.fps = 60;
-box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 10 }, { t: Date.now(), kind: 'rtt', rtt: 20 }];
-box.state.loadState = 'pending';
+box.state.render.fps = 60;
+box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 10 }, { t: Date.now(), kind: 'rtt', rtt: 20 }];
+box.state.host.loadState = 'pending';
 check('吞吐还没跑:写"吞吐采样中"而不是留空', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 吞吐采样中');
-box.state.loadState = 'ok';
-box.state.linkText = '1200.8KB/s';
-box.state.loadKbps = 1200.8;
+box.state.host.loadState = 'ok';
+box.state.host.linkText = '1200.8KB/s';
+box.state.host.loadKbps = 1200.8;
 check('吞吐就绪:>=1024KB/s 折成 MB/s', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 1.2MB/s');
-box.state.loadKbps = 880;
+box.state.host.loadKbps = 880;
 check('低于 1024 仍用 KB/s', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 880KB/s');
-box.state.loadKbps = 1344.5;
+box.state.host.loadKbps = 1344.5;
 check('吞吐 >=1024KB/s 折成 MB/s(省一行宽度)', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 1.3MB/s');
-box.state.loadState = 'failed';
+box.state.host.loadState = 'failed';
 check('吞吐失败:如实写失败', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 吞吐失败');
-box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 400 }];
-box.state.loadState = 'ok';
-box.state.loadKbps = 1344.5;
+box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 400 }];
+box.state.host.loadState = 'ok';
+box.state.host.loadKbps = 1344.5;
 check('只有 1 个样本时不下结论(n=1 分不清抖动与常态)',
 	EX.linkRowText(), 'p50 400ms · p99 400ms (n=1) · 1.3MB/s');
-box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 12 }, { t: Date.now(), kind: 'rtt', rtt: 400 }];
+box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 12 }, { t: Date.now(), kind: 'rtt', rtt: 400 }];
 check('n>=2 且 RTT 尖峰 + FPS 正常:追加疑似链路',
 	EX.linkRowText(), 'p50 12ms · p99 400ms (n=2) · 1.3MB/s · 疑似链路');
 
 // 单样本:分位退化成它自己(顺带把这一组放在最后,避免污染上面的样本)
-check('linkStats 单样本 p50 = p99 = 自身', (() => { box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 7 }]; return [EX.linkStats().p50, EX.linkStats().p99]; })(), [7, 7]);
-box.state.link = [];
+check('linkStats 单样本 p50 = p99 = 自身', (() => { box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 7 }]; return [EX.linkStats().p50, EX.linkStats().p99]; })(), [7, 7]);
+box.state.host.link = [];
 
 // ── C:Δ 对照"紧邻基线" + 噪声底(第一版把漂移当成了结论,这条是那次事故的回归) ──
 // 候选必须来自宿主真实列表,不能写死插件名 —— 否则换台机器/换个 profile,实验默认测
@@ -1946,61 +2026,61 @@ check('significance 逐指标判断是否超出噪声',
 	{ fps: false, longTasks: true, domPerMin: true, unattrAvg: true });
 
 // ── E:空闲基线门控(含一次真的窗口采集) ─────────────────────────
-box.state.baselineMs = 100;    // 只跑一轮,省时间
-box.state.baselineAt = 0;
-box.state.idleSince = 0;
-box.state.fps = 59;
-box.state.ltTotal = 0;
-box.state.ltPerSec = 0;
-box.state.dom = { total: 100, series: [] };
-box.state.plugins = new Map();
-box.state.targets = new Map();
-box.state.domWrites = new Map();
+box.state.watch.baselineMs = 100;    // 只跑一轮,省时间
+box.state.watch.baselineAt = 0;
+box.state.watch.idleSince = 0;
+box.state.render.fps = 59;
+box.state.render.ltTotal = 0;
+box.state.render.ltPerSec = 0;
+box.state.render.dom = { total: 100, series: [] };
+box.state.render.plugins = new Map();
+box.state.render.targets = new Map();
+box.state.render.domWrites = new Map();
 box.setStreaming(false);
 EX.idleTick(now);
-check('刚进入空闲:先起计时,还不打基线', box.state.idleSince === now && box.state.baselineRunning === false, true);
+check('刚进入空闲:先起计时,还不打基线', box.state.watch.idleSince === now && box.state.watch.baselineRunning === false, true);
 EX.idleTick(now + 1000);
-check('空闲不满 IDLE_GAP_MS:仍不打基线', box.state.baselineRunning, false);
+check('空闲不满 IDLE_GAP_MS:仍不打基线', box.state.watch.baselineRunning, false);
 EX.idleTick(now + 4000);
-check('空闲够了:开始打基线窗口', box.state.baselineRunning, true);
+check('空闲够了:开始打基线窗口', box.state.watch.baselineRunning, true);
 await new Promise((resolve) => setTimeout(resolve, 1300));
-check('基线窗口落地(label=idle)', box.state.idleBaseline !== null && box.state.idleBaseline.label === 'idle', true);
-check('刚打过基线:5 分钟内不重复', (() => { box.state.baselineAt = now; box.state.baselineRunning = false; box.state.idleSince = 0; EX.idleTick(now + 5000); return box.state.baselineRunning; })(), false);
+check('基线窗口落地(label=idle)', box.state.watch.idleBaseline !== null && box.state.watch.idleBaseline.label === 'idle', true);
+check('刚打过基线:5 分钟内不重复', (() => { box.state.watch.baselineAt = now; box.state.watch.baselineRunning = false; box.state.watch.idleSince = 0; EX.idleTick(now + 5000); return box.state.watch.baselineRunning; })(), false);
 box.setStreaming(true);
-box.state.baselineAt = 0;
-box.state.baselineRunning = false;
-box.state.idleSince = 0;
+box.state.watch.baselineAt = 0;
+box.state.watch.baselineRunning = false;
+box.state.watch.idleSince = 0;
 EX.idleTick(now + 9000);
-check('流式时不打基线,空闲计时清零', box.state.idleSince, 0);
+check('流式时不打基线,空闲计时清零', box.state.watch.idleSince, 0);
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;
 
 // ── 验收 4:导出的三段结构 ─────────────────────────────────────────
-box.state.ltTotal = 7;
-box.state.ltBlamed = 5;
-box.state.longTasks = [{ t: Date.now(), at: 1, ms: 120, owner: 'dsh-x', component: 'ChatRow', source: 'scheduler+render' }];
-box.state.since = Date.now() - 60000;
-box.state.attributedPerSec = 12;
-box.state.unattrAvg = 3.4;
-box.state.unattrPeak = 22;
-box.state.frameWorst = 118;
-box.state.dom = { total: 4321, series: [{ t: 0, n: 4000 }, { t: 12000, n: 4321 }] };
-box.state.heapSeries = [{ t: 0, n: 1000 }, { t: 12000, n: 2000 }];
-box.state.heap = 104857600;
-box.state.mutations = 999;
-box.state.marks = [{ t: Date.now(), note: '测试标记', fps: 58 }];
-box.state.idleBaseline = { label: 'idle', fps: 60, longTasks: 0, domPerMin: 0, domDelta: 0, domTop: [] };
-box.state.link = [{ t: Date.now(), kind: 'rtt', rtt: 12 }];
-box.state.host = { eventLoop: { p50: 1.2, p99: 9.9, max: 60, seconds: 30 } };
-box.state.hostAt = Date.now();
-box.state.hostError = null;
-box.state.precise = true;
+box.state.render.ltTotal = 7;
+box.state.render.ltBlamed = 5;
+box.state.render.longTasks = [{ t: Date.now(), at: 1, ms: 120, owner: 'dsh-x', component: 'ChatRow', source: 'scheduler+render' }];
+box.state.render.since = Date.now() - 60000;
+box.state.render.attributedPerSec = 12;
+box.state.render.unattrAvg = 3.4;
+box.state.render.unattrPeak = 22;
+box.state.render.frameWorst = 118;
+box.state.render.dom = { total: 4321, series: [{ t: 0, n: 4000 }, { t: 12000, n: 4321 }] };
+box.state.render.heapSeries = [{ t: 0, n: 1000 }, { t: 12000, n: 2000 }];
+box.state.render.heap = 104857600;
+box.state.render.mutations = 999;
+box.state.ui.marks = [{ t: Date.now(), note: '测试标记', fps: 58 }];
+box.state.watch.idleBaseline = { label: 'idle', fps: 60, longTasks: 0, domPerMin: 0, domDelta: 0, domTop: [] };
+box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 12 }];
+box.state.host.snapshot = { eventLoop: { p50: 1.2, p99: 9.9, max: 60, seconds: 30 } };
+box.state.host.hostAt = Date.now();
+box.state.host.hostError = null;
+box.state.render.precise = true;
 box.bundleMaps.clear();
-box.state.hostEvents = { installed: true, reason: '', stats: { 'session/event': { count: 3, ms: 1.2, max: 0.9 } } };
+box.state.host.hostEvents = { installed: true, reason: '', stats: { 'session/event': { count: 3, ms: 1.2, max: 0.9 } } };
 // 独立包名 vs 合并包 key:精确归因要能给出前者。两种键都塞进去,断言只看前者。
-box.state.plugins.set('dsh-x', { count: 3, ms: 1.5 });
-box.state.plugins.set('bundle:http://h/plugins/??a/client.js,b/client.js', { count: 5, ms: 2 });
+box.state.render.plugins.set('dsh-x', { count: 3, ms: 1.5 });
+box.state.render.plugins.set('bundle:http://h/plugins/??a/client.js,b/client.js', { count: 5, ms: 2 });
 const exported = box.EX.snapshot();
 
 
@@ -2052,8 +2132,8 @@ check('A5:cpuProfileSummary 对空 / 坏结构返回 null(不编数字)',
 	[box.EX.cpuProfileSummary(null), box.EX.cpuProfileSummary({}), box.EX.cpuProfileSummary({ nodes: [], samples: null })],
 	[null, null, null]);
 check('A5:采到之后整机导出件也带汇总(与事故包同一个构造器)', (() => {
-	const saved = box.state.hostCpuProfile;
-	box.state.hostCpuProfile = {
+	const saved = box.state.host.hostCpuProfile;
+	box.state.host.hostCpuProfile = {
 		phase: 'done', seconds: 1, requestedAt: 0, finishedAt: 1000, error: '', collections: 1,
 		meta: { seconds: 1, nodes: 2, samples: 2, bytes: 90, pid: 7, nodeVersion: 'v24', startedAt: 0, endedAt: 1000 },
 		profile: {
@@ -2066,7 +2146,7 @@ check('A5:采到之后整机导出件也带汇总(与事故包同一个构造器
 		},
 	};
 	const full = box.EX.snapshot().context.hostCpuProfile;
-	box.state.hostCpuProfile = saved;
+	box.state.host.hostCpuProfile = saved;
 	return [full.state, full.meta.pid, full.summary.topSelf[0].fn, full.summary.sampledMs];
 })(), ['collected', 7, 'hotHost', 1]);
 check('导出带 mapCache 上限与淘汰计数(不让缓存无声膨胀)',
@@ -2112,7 +2192,7 @@ check('脱敏:数组里的脚本 URL 走脚本规则(不是页面规则)',
 
 // 端到端:把"带凭据的页面地址 + 用户目录 + 敏感参数"塞进真实状态,断言导出件里一个都不剩
 box.location.href = 'http://127.0.0.1:3080/?token=SECRET_TOKEN_VALUE';
-box.state.errors.push({ t: 1, iso: 'x', name: 'Error', message: 'boom at /Users/tester/app.js?api_key=SECRET_KEY_VALUE', stack: 'at /Users/tester/app.js:1:1', where: '' });
+box.state.ui.errors.push({ t: 1, iso: 'x', name: 'Error', message: 'boom at /Users/tester/app.js?api_key=SECRET_KEY_VALUE', stack: 'at /Users/tester/app.js:1:1', where: '' });
 const leaky = JSON.stringify(box.EX.snapshot());
 check('端到端:整机导出件里没有 token / 用户目录 / 敏感参数值',
 	[/SECRET_TOKEN_VALUE/, /SECRET_KEY_VALUE/, /tester/].filter((re) => re.test(leaky)), []);
@@ -2131,27 +2211,27 @@ check('端到端:不许把"做减法"说成"已匿名化"(口径要照实)',
 //   ① 监测不可用时**不许**说"运行流畅"(必须给"监测受限" + 原因);
 //   ② 主界面文案有长度预算(它是最挤的一屏,而且看不到浏览器渲染);
 //   ③ 趋势那一行的三个数各有各的口径(次数不是留存数,重复线索只数留存下来的)。
-box.state.on = false;
+box.state.render.on = false;
 check('主界面:关掉 HUD 时说"监测受限"并给出原因,不许报"运行流畅"',
 	(() => { const v = EX.healthVerdict(); return [v.level, EX.healthText(v.level), /关闭/.test(v.reason)]; })(),
 	['limited', '监测受限', true]);
-box.state.on = true;
+box.state.render.on = true;
 box.state.watch.loafState = 'unsupported:no-loaf';
 check('主界面:LoAF 装不上时也是"监测受限",理由带上原始状态',
 	(() => { const v = EX.healthVerdict(); return [v.level, /未装上/.test(v.reason), /unsupported/.test(v.reason)]; })(),
 	['limited', true, true]);
 box.state.watch.loafState = 'on';
-box.state.fps = 59;
-box.state.frameWorst = 17;
+box.state.render.fps = 59;
+box.state.render.frameWorst = 17;
 check('主界面:采到了而且没到线 = 运行流畅', [EX.healthVerdict().level, EX.healthText('ok')], ['ok', '运行流畅']);
-box.state.fps = 20;
+box.state.render.fps = 20;
 check('主界面:帧档位与判色同源(fps 20 就是不流畅)',
 	[EX.healthVerdict().level, EX.frameLevel(20, 17), EX.levelFrame(20, 17).includes('error')], ['stall', 'bad', true]);
-box.state.fps = 59;
-box.state.frameWorst = 130;
+box.state.render.fps = 59;
+box.state.render.frameWorst = 130;
 check('主界面:最差帧越过 120ms 也算"刚才有卡顿"(只看 fps 会漏)',
 	[EX.healthVerdict().level, EX.frameLevel(59, 130)], ['stall', 'warn']);
-box.state.frameWorst = 17;
+box.state.render.frameWorst = 17;
 
 check('主界面:三个档位的图标不一样(不能只靠颜色)',
 	[EX.healthIcon('ok'), EX.healthIcon('stall'), EX.healthIcon('limited')], ['✓', '!', '—']);
@@ -2548,11 +2628,11 @@ check('外壳脚本可定位到源码:证据带 charPos,界面读 shellSourceOf(
 check('flow:设置与卡顿详情的返回落在来源,不是永远回主界面(静态)', (() => {
 	// 2026-10-24:进设置记下来源、← 用 backTo;卡顿详情同理(开发者详情进来就回开发者详情)。
 	const setViewSrc = extract(source, 'function setView(');
-	const recordsSource = /next === 'settings' && state\.view !== 'settings'[\s\S]{0,60}state\.settingsBack = state\.view/.test(setViewSrc);
+	const recordsSource = /next === 'settings' && state\.ui\.view !== 'settings'[\s\S]{0,60}state\.ui\.settingsBack = state\.ui\.view/.test(setViewSrc);
 	const usesBackTo = /onClick: \(\) => setView\(backTo\)/.test(renderSource)
-		&& /view === 'settings' && state\.settingsBack !== 'settings' \? state\.settingsBack/.test(renderSource)
-		&& /view === 'incident' && state\.incidentBack !== 'incident' \? state\.incidentBack : 'main'/.test(renderSource)
-		&& /state\.incidentBack = state\.view; setView\('incident'\)/.test(renderSource);
+		&& /view === 'settings' && state\.ui\.settingsBack !== 'settings' \? state\.ui\.settingsBack/.test(renderSource)
+		&& /view === 'incident' && state\.ui\.incidentBack !== 'incident' \? state\.ui\.incidentBack : 'main'/.test(renderSource)
+		&& /state\.ui\.incidentBack = state\.ui\.view; setView\('incident'\)/.test(renderSource);
 	return [recordsSource, usesBackTo];
 })(), [true, true]);
 
@@ -2573,24 +2653,24 @@ check('未知那一支说的是"缺少 JS 证据",不是"浏览器节流"(不越
 // stressSelfTest 的观察窗口(async)在测试里用"立即执行"的定时器代替:断言要验的是
 // 结果结构,不是 1.2 秒的墙钟等待。
 {
-	const originalRender = box.state.requestRender;
-	const originalLongTasks = box.state.longTasks;
-	const originalWrites = new Map(box.state.domWrites);
-	const originalStress = box.state.stress;
+	const originalRender = box.state.ui.requestRender;
+	const originalLongTasks = box.state.render.longTasks;
+	const originalWrites = new Map(box.state.render.domWrites);
+	const originalStress = box.state.ui.stress;
 	const realTimeout = box.setNativesTimeout((fn) => { fn(); return 1; });
 	const makeRender = (extra, commitMs) => () => {
 		extra();
-		if (box.state.stress !== null) box.state.stress.commitMs = commitMs;
+		if (box.state.ui.stress !== null) box.state.ui.stress.commitMs = commitMs;
 	};
 
 	// ① 三条腿全中:longtask(fiber 归属)、DOM 写入(夹具组件)、同步提交 + 人为燃烧
 	box.setFlushSync((fn) => fn());
-	box.state.longTasks = [];
-	box.state.domWrites = new Map();
-	box.state.domWrites.set('(PerfHudStress)', { count: 0, ops: 0, components: new Map() });
-	box.state.requestRender = makeRender(() => {
-		box.state.longTasks.push({ t: Date.now(), at: 1000, ms: 128.4, owner: 'dsh-x', component: 'PerfHudStress', subtreeComponent: null, domComponent: null });
-		box.state.domWrites.set('(PerfHudStress)', { count: 1200, ops: 120, components: new Map([['PerfHudStress', 1200]]) });
+	box.state.render.longTasks = [];
+	box.state.render.domWrites = new Map();
+	box.state.render.domWrites.set('(PerfHudStress)', { count: 0, ops: 0, components: new Map() });
+	box.state.ui.requestRender = makeRender(() => {
+		box.state.render.longTasks.push({ t: Date.now(), at: 1000, ms: 128.4, owner: 'dsh-x', component: 'PerfHudStress', subtreeComponent: null, domComponent: null });
+		box.state.render.domWrites.set('(PerfHudStress)', { count: 1200, ops: 120, components: new Map([['PerfHudStress', 1200]]) });
 	}, 300);
 	const hot = await box.stressSelfTest(1200, 80);
 	check('自测:返回结构带三条腿,都测到时各自 hit',
@@ -2609,18 +2689,18 @@ check('未知那一支说的是"缺少 JS 证据",不是"浏览器节流"(不越
 		})(), [true, false, 'Other']);
 	check('自测:一句人话把三条腿都写出来(面板/控制台同一份)',
 		hot.text, '自测结果: 长任务 128.4ms · fiber PerfHudStress · DOM 写入 ≈1200(PerfHudStress) · 提交 300ms(同步 · 人为燃烧 80ms)');
-	check('自测:结果落回 state.stress(面板读者读的不是另一份)',
-		[box.state.stress.result === hot, box.state.stress.text === hot.text, box.state.stress.nodes], [true, true, 1200]);
+	check('自测:结果落回 state.ui.stress(面板读者读的不是另一份)',
+		[box.state.ui.stress.result === hot, box.state.ui.stress.text === hot.text, box.state.ui.stress.nodes], [true, true, 1200]);
 
 	// ② 没有 longtask / fiber:两条腿照实说未命中,DOM 写入腿仍给结果;切片 + flushSync 不可用
 	box.setFlushSync(null);
-	box.state.longTasks = [];
-	box.state.domWrites = new Map();
-	box.state.domWrites.set('(PerfHudStress)', { count: 0, ops: 0, components: new Map() });
+	box.state.render.longTasks = [];
+	box.state.render.domWrites = new Map();
+	box.state.render.domWrites.set('(PerfHudStress)', { count: 0, ops: 0, components: new Map() });
 	const coldRender = makeRender(() => {
-		box.state.domWrites.set('(PerfHudStress)', { count: 500, ops: 50, components: new Map([['PerfHudStress', 500]]) });
+		box.state.render.domWrites.set('(PerfHudStress)', { count: 500, ops: 50, components: new Map([['PerfHudStress', 500]]) });
 	}, 22.2);
-	box.state.requestRender = coldRender;
+	box.state.ui.requestRender = coldRender;
 	const cold = await box.stressSelfTest(100, 0);
 	check('自测:没有 longtask 时 longtask / fiber 照实说未命中',
 		[cold.legs.longtask.hit, cold.legs.fiber.hit, cold.legs.dom.writes], [false, false, 500]);
@@ -2629,15 +2709,15 @@ check('未知那一支说的是"缺少 JS 证据",不是"浏览器节流"(不越
 
 	// ③ 面板没挂载:不假装测到了
 	box.setFlushSync(null);
-	box.state.requestRender = null;
+	box.state.ui.requestRender = null;
 	const off = await box.stressSelfTest(10, 0);
 	check('自测:面板没挂载时如实说没测到', [off.ok, off.state, off.text], [false, 'no-render', '自测结果: 面板没挂载,没有可测的渲染']);
 
 	// 还原:后面的 snapshot / 导出断言读的是原来的状态
-	box.state.requestRender = originalRender;
-	box.state.longTasks = originalLongTasks;
-	box.state.domWrites = originalWrites;
-	box.state.stress = originalStress;
+	box.state.ui.requestRender = originalRender;
+	box.state.render.longTasks = originalLongTasks;
+	box.state.render.domWrites = originalWrites;
+	box.state.ui.stress = originalStress;
 	box.setNativesTimeout(realTimeout);
 	box.setFlushSync(null);
 }
@@ -2659,10 +2739,10 @@ check('回执:未开录 / 已覆盖窗口各有各的话',
 	[box.captureReceiptText({ ok: false, state: 'not-recording' }, []), box.captureReceiptText({ ok: false, state: 'covered' }, [])],
 	['HUD 关着,这次没有记录', '落在已覆盖窗口里,没有单独留下']);
 check('回执:按钮把 capture() 的返回值存进 state,面板渲染同一份(静态)',
-	[/state\.captureReceipt = W\.__perfHud\.capture\(/.test(renderSource), /captureReceiptText\(state\.captureReceipt, state\.watch\.incidents\)/.test(uiSource)],
+	[/state\.ui\.captureReceipt = W\.__perfHud\.capture\(/.test(renderSource), /captureReceiptText\(state\.ui\.captureReceipt, state\.watch\.incidents\)/.test(uiSource)],
 	[true, true]);
-check('自测结果有真实读者:面板读 state.stress.text(记账不再没人读)',
-	/state\.stress === null \? null[\s\S]{0,120}state\.stress\.text/.test(uiSource), true);
+check('自测结果有真实读者:面板读 state.ui.stress.text(记账不再没人读)',
+	/state\.ui\.stress === null \? null[\s\S]{0,120}state\.ui\.stress\.text/.test(uiSource), true);
 
 // ── G:守夜层(帧环 / 触发 / 留存 / 时间对齐 / 窗口切片)──────────────────
 
@@ -3011,22 +3091,36 @@ const watchBox = new Function(`
 		removeItem: (key) => store.delete(key),
 	};
 	const state = {
+		// 测试专用(不属于四片):只在断言里读
 		samplesLength: 1,
-		on: true, precise: false, streaming: true, heap: 1048576, host: null, hostAt: 0,
-		// A5 宿主进程 CPU 采样(与 client.js 的 state 同形;手写桩,加字段要同步)
-		hostCpuProfile: { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 },
-		dom: { total: 1234 },
-		// A1 记录器自身开销的环形缓冲(与 client.js 的 state 同形;手写桩,加字段要同步)
-		selfRing: [], selfAt: 0, selfCount: 0, selfMax: 0,
-		bundleKeys: new Set(),
-		longTasks: [],
-		ltSeq: 0, ltDropped: 0,
-		// 捕获计数的时间桶(与 client.js 的 state.tally 同形;手写桩,加字段要同步)
-		tally: { minute: new Map(), day: new Map(), expiredBuckets: 0, expiredDays: 0, prunedMinute: -1, loadError: null, savedAt: 0, dirty: false, timer: 0 },
-		view: 'main', devTab: 'frames', trendMs: TALLY_TREND_SHORT_MS,
-		watch: { on: true, loaf: [], loafSeq: 0, loafDropped: 0, loafObserver: null, loafState: 'on', pickT: null, selId: null, mode: 'live', frameT: null, scope: 'worst', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
+		// 四片与 client.js 的 state 同形;手写桩,加字段要同步(漏一个会在断言里炸,不会静默)
+		ui: {
+			view: 'main', devTab: 'frames', trendMs: TALLY_TREND_SHORT_MS,
+		},
+		render: {
+			on: true, precise: false, heap: 1048576,
+			dom: { total: 1234 },
+			// A1 记录器自身开销的环形缓冲
+			selfRing: [], selfAt: 0, selfCount: 0, selfMax: 0,
+			bundleKeys: new Set(),
+			longTasks: [],
+			ltSeq: 0, ltDropped: 0,
+		},
+		watch: {
+			on: true, loaf: [], loafSeq: 0, loafDropped: 0, loafObserver: null, loafState: 'on', pickT: null, selId: null, mode: 'live', frameT: null, scope: 'worst', incidents: [], pending: null, pendingTimer: 0, seq: 0, captured: 0, coalesced: 0, dropped: 0, restored: 0, trimmedByBytes: 0, deduped: 0, coveredUntil: 0, persistError: null,
+			// 场景标签:流式 / 空闲(基线在 client.js 的守夜层里算)
+			streaming: true,
 			// A4:交互计时的状态位(eventObserver 由 startInteractions 自己写)
-			eventObserver: null, eventState: 'not-started', eventSupported: [], interactions: [], eventCount: 0, elementCount: 0 },
+			eventObserver: null, eventState: 'not-started', eventSupported: [], interactions: [], eventCount: 0, elementCount: 0,
+			// 捕获计数的时间桶(与 client.js 的 state.watch.tally 同形;手写桩,加字段要同步)
+			tally: { minute: new Map(), day: new Map(), expiredBuckets: 0, expiredDays: 0, prunedMinute: -1, loadError: null, savedAt: 0, dirty: false, timer: 0 },
+		},
+		host: {
+			// 字段 host 在 1.0 的切分里改名叫 snapshot(避开 state.host.host)
+			snapshot: null, hostAt: 0,
+			// A5 宿主进程 CPU 采样
+			hostCpuProfile: { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 },
+		},
 	};
 	return {
 		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
@@ -3122,7 +3216,7 @@ watch.frameRing.push(9900, 150, false);
 watch.frameRing.push(10000, 20, false);
 watch.frameRing.push(10020, 8000, true);
 watch.frameRing.push(20000, 17, false);
-watch.state.longTasks.push({ t: Date.now(), at: 9900, ms: 150, owner: 'dsh-x', component: 'ChatRow', source: 'scheduler+render' });
+watch.state.render.longTasks.push({ t: Date.now(), at: 9900, ms: 150, owner: 'dsh-x', component: 'ChatRow', source: 'scheduler+render' });
 watch.setNow(100000);            // 远在 until 之后:立即结算
 const firstIncident = watch.triggerCapture('frame', 10000, 150);
 check('超线的一帧自动抓成一次事故', watch.state.watch.incidents.length, 1);
@@ -3135,7 +3229,7 @@ check('窗口带上了同时段的 longtask 明细', [firstIncident.summary.long
 check('事故带环境读数与墙上时间', [firstIncident.env.domNodes, firstIncident.at], [1234, new Date(1700000000000 + 10000).toISOString()]);
 check('事故带会话基线,而且**排除了本窗口**(含自己就永远"比不上")', [firstIncident.baseline.frames, firstIncident.baseline.p50, firstIncident.baseline.worstMs], [1, 17, 17]);
 watch.state.watch.coveredUntil = 0;
-watch.state.longTasks.length = 0;
+watch.state.render.longTasks.length = 0;
 watch.state.watch.loaf.length = 0;
 watch.frameRing.reset();
 for (let i = 0; i < 8; i += 1) watch.frameRing.push(70000 + i * 16.7, 16.7, false);
@@ -3150,7 +3244,7 @@ check('有 JS 重叠时不算节流', (() => {
 	watch.frameRing.reset();
 	for (let i = 0; i < 8; i += 1) watch.frameRing.push(90000 + i * 16.7, 16.7, false);
 	watch.frameRing.push(90200, 983.7, false);
-	watch.state.longTasks.push({ t: Date.now(), at: 89400, ms: 800, owner: 'dsh-x', component: 'ChatView', source: 'render' });
+	watch.state.render.longTasks.push({ t: Date.now(), at: 89400, ms: 800, owner: 'dsh-x', component: 'ChatView', source: 'render' });
 	watch.state.watch.coveredUntil = 0;
 	watch.setNow(95000);
 	const withJs = watch.triggerCapture('frame', 90200, 983.7);
@@ -3515,7 +3609,7 @@ check('历史帧的脚本聚合:按来源 / 按包都覆盖这一帧自己的脚
 check('刷新(当前会话的 sourcemap 解析缓存全空)之后:历史事故的包名仍然是捕获时存下来的那个',
 	withIncident(() => {
 		watch.pkgByUrl.clear();
-		watch.state.precise = false;
+		watch.state.render.precise = false;
 		const window = watch.incidentWindowTally(frameRow);
 		const scope = watch.evidenceScope();
 		return [window.top.map(([name]) => name), scope.rows[0].pkg, scope.rows[0].file, scope.rows[0].line];
@@ -3650,10 +3744,10 @@ check('历史事故:live 缓存全空(模拟刷新)时,仍然用捕获时存下�
 	(() => {
 		const savedIncidents = watch.state.watch.incidents.slice();
 		const savedLoaf = watch.state.watch.loaf.slice();
-		const savedPrecise = watch.state.precise;
+		const savedPrecise = watch.state.render.precise;
 		watch.state.watch.incidents.length = 0;
 		watch.state.watch.loaf.length = 0;      // 刷新后 live 帧环是空的
-		watch.state.precise = false;            // 刷新后精确归因没开
+		watch.state.render.precise = false;            // 刷新后精确归因没开
 		watch.pkgByUrl.clear();                 // 解析缓存也空了
 		watch.state.watch.mode = 'incident';    // 这条断言说的是**历史事故上下文**那一支
 		watch.state.watch.selId = 'i77';
@@ -3679,7 +3773,7 @@ check('历史事故:live 缓存全空(模拟刷新)时,仍然用捕获时存下�
 		for (const r of savedIncidents) watch.state.watch.incidents.push(r);
 		watch.state.watch.loaf.length = 0;
 		for (const r of savedLoaf) watch.state.watch.loaf.push(r);
-		watch.state.precise = savedPrecise;
+		watch.state.render.precise = savedPrecise;
 		watch.state.watch.mode = 'live';
 		watch.state.watch.selId = null;
 		return result;
@@ -3819,24 +3913,24 @@ check('windowIntegrity:序号连续 = 没丢;断档 = 精确算出差了几条',
 check('事故切片:环挤掉记录时 integrity.captureComplete=false,并把原因与条数写进包', (() => {
 	const saved = watch.state.watch.incidents.slice();
 	const savedLoaf = watch.state.watch.loaf.slice();
-	const savedTasks = watch.state.longTasks.slice();
+	const savedTasks = watch.state.render.longTasks.slice();
 	watch.state.watch.incidents.length = 0;
 	watch.state.watch.loaf.length = 0;
-	watch.state.longTasks.length = 0;
+	watch.state.render.longTasks.length = 0;
 	for (const row of [
 		{ seq: 1, t: 100, dur: 200, blocking: 10, renderStart: 0, styleAndLayoutStart: 0, scripts: [] },
 		{ seq: 2, t: 200, dur: 200, blocking: 10, renderStart: 0, styleAndLayoutStart: 0, scripts: [] },
 		{ seq: 4, t: 400, dur: 200, blocking: 10, renderStart: 0, styleAndLayoutStart: 0, scripts: [] },
 	]) watch.state.watch.loaf.push(row);
-	watch.state.longTasks.push({ seq: 1, at: 100, ms: 60, owner: null, component: null });
-	watch.state.longTasks.push({ seq: 3, at: 300, ms: 60, owner: null, component: null });
+	watch.state.render.longTasks.push({ seq: 1, at: 100, ms: 60, owner: null, component: null });
+	watch.state.render.longTasks.push({ seq: 3, at: 300, ms: 60, owner: null, component: null });
 	const incident = watch.assembleIncident({ at: 1000, until: 2000, cause: 'manual', note: null, severity: 200, loafFull: false, loafOldestAt: 100, longTaskFull: false, longTaskOldestAt: 100 });
 	watch.state.watch.incidents.length = 0;
 	for (const row of saved) watch.state.watch.incidents.push(row);
 	watch.state.watch.loaf.length = 0;
 	for (const row of savedLoaf) watch.state.watch.loaf.push(row);
-	watch.state.longTasks.length = 0;
-	for (const row of savedTasks) watch.state.longTasks.push(row);
+	watch.state.render.longTasks.length = 0;
+	for (const row of savedTasks) watch.state.render.longTasks.push(row);
 	return [incident.integrity.captureComplete, incident.integrity.loafDropped, incident.integrity.longTaskDropped, incident.integrity.reasons];
 })(), [false, 1, 1, ['loaf-ring-overflow', 'longtask-ring-overflow']]);
 // 「自动」跟哪一条:最差(默认)还是最近 —— 两个都要够得着,又不许多一张清单
@@ -4193,22 +4287,22 @@ check('位置落盘宽容解析:数字才认,left / right 二选一,旧版本一
 ]);
 check('位置也是布局:拖过之后 layoutDirty 才为真', (() => {
 	const watchSaved = { ...box.state.watch };
-	const groupsSaved = { ...box.state.groups };
-	const notesSaved = { copyNote: box.state.copyNote, pickNote: box.state.pickNote };
-	const posSaved = box.state.pos;
-	for (const key of Object.keys(box.state.groups)) box.state.groups[key] = false;
+	const groupsSaved = { ...box.state.ui.groups };
+	const notesSaved = { copyNote: box.state.ui.copyNote, pickNote: box.state.ui.pickNote };
+	const posSaved = box.state.ui.pos;
+	for (const key of Object.keys(box.state.ui.groups)) box.state.ui.groups[key] = false;
 	Object.assign(box.state.watch, { mode: 'live', onlyBad: false, frameT: null, pickT: null, selId: null, scope: 'worst' });
-	box.state.copyNote = null;
-	box.state.pickNote = null;
-	box.state.pos = null;
+	box.state.ui.copyNote = null;
+	box.state.ui.pickNote = null;
+	box.state.ui.pos = null;
 	const clean = EX.layoutDirty();
-	box.state.pos = { left: 40, top: 40, w: 168 };
+	box.state.ui.pos = { left: 40, top: 40, w: 168 };
 	const moved = EX.layoutDirty();
-	box.state.pos = posSaved;
-	box.state.copyNote = notesSaved.copyNote;
-	box.state.pickNote = notesSaved.pickNote;
+	box.state.ui.pos = posSaved;
+	box.state.ui.copyNote = notesSaved.copyNote;
+	box.state.ui.pickNote = notesSaved.pickNote;
 	Object.assign(box.state.watch, watchSaved);
-	Object.assign(box.state.groups, groupsSaved);
+	Object.assign(box.state.ui.groups, groupsSaved);
 	return [clean, moved];
 })(), [false, true]);
 
@@ -4293,18 +4387,18 @@ check('导出文件名:本地时间、可排序、无冒号(Windows 合法)', ((
 	return [/^perf-hud-\d{8}-\d{6}-i84\.json$/.test(name), name.includes(':'), name.includes('T'), name.includes('Z')];
 })(), [true, false, false, false]);
 check('A1 记录器自身开销:环形缓冲 + p99/峰/样本数', (() => {
-	box.state.selfRing.length = 0;
-	box.state.selfCount = 0;
-	box.state.selfMax = 0;
+	box.state.render.selfRing.length = 0;
+	box.state.render.selfCount = 0;
+	box.state.render.selfMax = 0;
 	for (let i = 1; i <= 100; i += 1) box.recordSelf(i / 100);
 	const stats = box.selfStats();
 	return [stats.samples, stats.max, stats.p99 > 0 && stats.p99 <= 1];
 })(), [100, 1, true]);
 check('A1 自身开销:环形缓冲有上限(不会无限长)', (() => {
-	box.state.selfRing.length = 0;
+	box.state.render.selfRing.length = 0;
 	for (let i = 0; i < box.SELF_RING + 50; i += 1) box.recordSelf(0.1);
-	const length = box.state.selfRing.length;
-	box.state.selfRing.length = 0;
+	const length = box.state.render.selfRing.length;
+	box.state.render.selfRing.length = 0;
 	return length;
 })(), 600);
 check('取件:下标 0 是最差,latest 是时刻最新 —— 面板那个按钮以前导的是最差', (() => {
@@ -4343,8 +4437,8 @@ check('事故包:如实列出没拿到的东西',
 	[true, true]);
 check('事故包:宿主只有陈旧快照时说清楚"别当宿主没问题的证据"', (() => {
 	// 快照年龄 = perfOrigin + at - hostAt,所以把 hostAt 反推成"事故前 6224ms"
-	watch.state.host = { eventLoop: { p99: 1.28 } };
-	watch.state.hostAt = 1700000000000 + 110000 - 6224;
+	watch.state.host.snapshot = { eventLoop: { p99: 1.28 } };
+	watch.state.host.hostAt = 1700000000000 + 110000 - 6224;
 	watch.state.watch.coveredUntil = 0;
 	watch.setNow(120000);
 	const probe = watch.triggerCapture('frame', 110000, 200);
@@ -4354,13 +4448,13 @@ check('事故包:宿主只有陈旧快照时说清楚"别当宿主没问题的�
 	if (index !== -1) watch.state.watch.incidents.splice(index, 1);
 	watch.state.watch.captured -= 1;
 	watch.state.watch.coveredUntil = 0;
-	watch.state.host = null;
-	watch.state.hostAt = 0;
+	watch.state.host.snapshot = null;
+	watch.state.host.hostAt = 0;
 	return line !== undefined && line.includes('事故前 6224ms') && line.includes('未必覆盖');
 })(), true);
 check('事故包:宿主快照比事故更晚(负年龄)时说"事故后",不冒充"事故前"', (() => {
-	watch.state.host = { eventLoop: { p99: 1 } };
-	watch.state.hostAt = 1700000000000 + 110000 + 362;   // 事故之后 362ms 才采的快照
+	watch.state.host.snapshot = { eventLoop: { p99: 1 } };
+	watch.state.host.hostAt = 1700000000000 + 110000 + 362;   // 事故之后 362ms 才采的快照
 	watch.state.watch.coveredUntil = 0;
 	watch.setNow(120000);
 	const probe = watch.triggerCapture('frame', 110000, 200);
@@ -4369,15 +4463,15 @@ check('事故包:宿主快照比事故更晚(负年龄)时说"事故后",不冒�
 	if (index !== -1) watch.state.watch.incidents.splice(index, 1);
 	watch.state.watch.captured -= 1;
 	watch.state.watch.coveredUntil = 0;
-	watch.state.host = null;
-	watch.state.hostAt = 0;
+	watch.state.host.snapshot = null;
+	watch.state.host.hostAt = 0;
 	return line.includes('事故**后** 362ms');
 })(), true);
 check('事故包:LoAF 装着但这帧没有脚本时,点明 scripts 为空', report.context.missing.some((line) => line.startsWith('loaf-scripts:')), true);
 watch.state.watch.loafState = 'unsupported:no-long-animation-frame';
 check('事故包:LoAF 没装时改成报 loaf 本身', watch.incidentReport(0).context.missing.some((line) => line.startsWith('loaf:')), true);
 watch.state.watch.loafState = 'on';
-watch.state.on = false;
+watch.state.render.on = false;
 check('事故包:没插桩时点明四条腿归因缺失', watch.incidentReport(0).context.missing.some((line) => line.startsWith('instrumentation:')), true);
 check('事故包:缺失项都给了补齐办法', watch.incidentReport(0).context.howToAdd.length >= 2, true);
 check('事故包:独立读者点出的缺口也列进 missing',
@@ -4386,36 +4480,36 @@ check('事故包:独立读者点出的缺口也列进 missing',
 // A1:记录器自身开销随事故包下发(REVIEW §2 那条债的回归测试)。结构必须与整机导出件的
 // `context.recorder` 一致(p99 / 峰 / 样本数),不另创一套。
 check('A1:事故包带 context.recorder,结构与整机导出件一致(p99 / 峰 / 样本数)', (() => {
-	const saved = watch.state.selfRing.slice();
-	const savedCount = watch.state.selfCount;
-	const savedMax = watch.state.selfMax;
-	watch.state.selfRing.length = 0;
-	for (const ms of [0.1, 0.2, 0.3]) watch.state.selfRing.push(ms);
-	watch.state.selfCount = 3;
-	watch.state.selfMax = 0.3;
+	const saved = watch.state.render.selfRing.slice();
+	const savedCount = watch.state.render.selfCount;
+	const savedMax = watch.state.render.selfMax;
+	watch.state.render.selfRing.length = 0;
+	for (const ms of [0.1, 0.2, 0.3]) watch.state.render.selfRing.push(ms);
+	watch.state.render.selfCount = 3;
+	watch.state.render.selfMax = 0.3;
 	const recorder = watch.incidentReport(0).context.recorder;
 	const full = box.EX.snapshot().context.recorder;
 	const keys = Object.keys(recorder).sort();
 	const out = [keys.join(','), keys.join(',') === Object.keys(full).sort().join(','), recorder.p99, recorder.max, recorder.samples];
-	watch.state.selfRing.length = 0;
-	for (const ms of saved) watch.state.selfRing.push(ms);
-	watch.state.selfCount = savedCount;
-	watch.state.selfMax = savedMax;
+	watch.state.render.selfRing.length = 0;
+	for (const ms of saved) watch.state.render.selfRing.push(ms);
+	watch.state.render.selfCount = savedCount;
+	watch.state.render.selfMax = savedMax;
 	return out;
 })(), ['max,p99,samples', true, 0.3, 0.3, 3]);
 check('A1:有样本之后 missing 不再含 recorder-cost(旧口径"没带在这份包里"已删)', (() => {
-	const saved = watch.state.selfRing.slice();
-	const savedCount = watch.state.selfCount;
-	const savedMax = watch.state.selfMax;
-	watch.state.selfRing.length = 0;
-	watch.state.selfRing.push(0.4);
-	watch.state.selfCount = 1;
-	watch.state.selfMax = 0.4;
+	const saved = watch.state.render.selfRing.slice();
+	const savedCount = watch.state.render.selfCount;
+	const savedMax = watch.state.render.selfMax;
+	watch.state.render.selfRing.length = 0;
+	watch.state.render.selfRing.push(0.4);
+	watch.state.render.selfCount = 1;
+	watch.state.render.selfMax = 0.4;
 	const present = watch.incidentReport(0).context.missing.some((line) => line.startsWith('recorder-cost:'));
-	watch.state.selfRing.length = 0;
-	for (const ms of saved) watch.state.selfRing.push(ms);
-	watch.state.selfCount = savedCount;
-	watch.state.selfMax = savedMax;
+	watch.state.render.selfRing.length = 0;
+	for (const ms of saved) watch.state.render.selfRing.push(ms);
+	watch.state.render.selfCount = savedCount;
+	watch.state.render.selfMax = savedMax;
 	return present;
 })(), false);
 check('A1:一个样本都没有时 missing 照实说"这一格是空的"(不假装有)', (() => {
@@ -4433,8 +4527,8 @@ const CPU_PROFILE = {
 	samples: [1, 1, 2, 3], timeDeltas: [0, 2000, 3000, 5000], startTime: 100000, endTime: 110000,
 };
 const withCpuProfile = (fn) => {
-	const saved = watch.state.hostCpuProfile;
-	watch.state.hostCpuProfile = {
+	const saved = watch.state.host.hostCpuProfile;
+	watch.state.host.hostCpuProfile = {
 		phase: 'done', seconds: 1, requestedAt: 0, finishedAt: 110000, error: '', collections: 1,
 		meta: { seconds: 1, nodes: 3, samples: 4, bytes: 300, pid: 4242, nodeVersion: 'v24.0.0', startedAt: 100000, endedAt: 110000 },
 		profile: CPU_PROFILE,
@@ -4442,7 +4536,7 @@ const withCpuProfile = (fn) => {
 	try {
 		return fn();
 	} finally {
-		watch.state.hostCpuProfile = saved;
+		watch.state.host.hostCpuProfile = saved;
 	}
 };
 check('A5:采到的宿主 CPU 采样进事故包(context.hostCpuProfile:state / meta / 汇总)',
@@ -4470,7 +4564,7 @@ check('A5:导出件里不出现 /Users/<用户名>(summary.file 与 raw 的 url 
 	[false, true]);
 check('A5:超过随包上限的原始采样只带汇总,并写清去哪拿(rawOmitted)',
 	withCpuProfile(() => {
-		watch.state.hostCpuProfile.profile = {
+		watch.state.host.hostCpuProfile.profile = {
 			nodes: [{ id: 1, callFrame: { functionName: 'x'.repeat(600000), url: '' } }],
 			samples: [1], timeDeltas: [1000], startTime: 0, endTime: 1000,
 		};
@@ -4481,19 +4575,19 @@ check('A5:超过随包上限的原始采样只带汇总,并写清去哪拿(rawOm
 check('A5:采到之后 missing 不再出现 host-cpuprofile 条目(旧口径"客户端还没接线"已还债)',
 	withCpuProfile(() => watch.incidentReport(0).context.missing.some((line) => line.startsWith('host-cpuprofile:'))), false);
 check('A5:没采到时 missing 照实说"还没采",并给出面板 / 控制台入口(不是"没接线")', (() => {
-	const saved = watch.state.hostCpuProfile;
-	watch.state.hostCpuProfile = { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 };
+	const saved = watch.state.host.hostCpuProfile;
+	watch.state.host.hostCpuProfile = { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 };
 	const line = watch.incidentReport(0).context.missing.find((text) => text.startsWith('host-cpuprofile:'));
 	const out = [line !== undefined, line === undefined ? true : line.includes('客户端还没接线'), line === undefined ? false : line.includes('宿主 CPU 采样'), line === undefined ? false : line.includes('__perfHud.cpuProfile')];
-	watch.state.hostCpuProfile = saved;
+	watch.state.host.hostCpuProfile = saved;
 	return out;
 })(), [true, false, true, true]);
 check('A5:失败时 missing 把宿主的错误原文带出来(不吞)', (() => {
-	const saved = watch.state.hostCpuProfile;
-	watch.state.hostCpuProfile = { phase: 'failed', seconds: 1, requestedAt: 0, finishedAt: 1, meta: null, profile: null, error: 'Profiler.start: 会话已被占用', collections: 0 };
+	const saved = watch.state.host.hostCpuProfile;
+	watch.state.host.hostCpuProfile = { phase: 'failed', seconds: 1, requestedAt: 0, finishedAt: 1, meta: null, profile: null, error: 'Profiler.start: 会话已被占用', collections: 0 };
 	const line = watch.incidentReport(0).context.missing.find((text) => text.startsWith('host-cpuprofile:'));
 	const out = [line !== undefined, line === undefined ? false : line.includes('Profiler.start: 会话已被占用')];
-	watch.state.hostCpuProfile = saved;
+	watch.state.host.hostCpuProfile = saved;
 	return out;
 })(), [true, true]);
 check('A5:howToRead 写清 hostCpuProfile 的字段与口径(宿主进程 / 不是页面开销 / 抽样)',
@@ -4511,11 +4605,11 @@ check('A5:能力矩阵的宿主 CPU 采样按实际状态报(采到 = on / measu
 	}),
 	['on', 'measured', false]);
 check('A5:没采时能力矩阵照实报 off,并说明"按需、不常开"', (() => {
-	const saved = watch.state.hostCpuProfile;
-	watch.state.hostCpuProfile = { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 };
+	const saved = watch.state.host.hostCpuProfile;
+	watch.state.host.hostCpuProfile = { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 };
 	const cap = watch.capabilities().host.cpuProfile;
 	const out = [cap.state, cap.reason.includes('不常开')];
-	watch.state.hostCpuProfile = saved;
+	watch.state.host.hostCpuProfile = saved;
 	return out;
 })(), ['off', true]);
 check('事故包:A2 落地后那条"没有对照基线"改成"跨机器 / 跨浏览器"',
@@ -4526,7 +4620,7 @@ check('事故包:带上渲染环境(视口 / DPR / 核数)',
 check('事故包:宿主快照用一个有定义的口径(年龄,正数=更早)',
 	typeof watch.incidentReport(0).incident.host === 'object', true);
 check('会话基线:帧环为空时是 null,不编数字', watch.frameRing.reset() === undefined && watch.frameRing.stats(), null);
-watch.state.on = true;
+watch.state.render.on = true;
 
 // 落盘:事故要活过刷新
 check('落盘:写入后 localStorage 里有那份事故', [watch.saveIncidents(), watch.store.has('test:incidents')], [true, true]);
@@ -4606,7 +4700,7 @@ check('D2:整格 rAF 间隙 → gap(矮柱,不是卡顿),那一秒没采到 → 
 // ── A2:跨会话基线(每个会话一条,只进导出件)────────────────────────
 // 前面的用例里,事故包的 context 已经往这份落盘写了若干条(那是真实现的行为),先清干净
 watch.store.set('dsh-perf-hud:sessions:v1', JSON.stringify({ v: 1, sessions: [] }));
-watch.state.since = 1700000000000;
+watch.state.render.since = 1700000000000;
 check('A2:一帧都没采到时不编数字', (() => {
 	watch.frameRing.reset();
 	return [watch.sessionRecord(), watch.saveSessionBaseline()];
@@ -4630,11 +4724,11 @@ check('A2:sessionBaselines() 是纯读 —— 不写 localStorage(snapshot() 是
 check('A2:最多留最近 20 个会话,更早的被挤出去', (() => {
 	watch.store.set('dsh-perf-hud:sessions:v1', JSON.stringify({ v: 1, sessions: [] }));
 	for (let i = 0; i < 25; i += 1) {
-		watch.state.since = 1700000000000 + i * 1000;
+		watch.state.render.since = 1700000000000 + i * 1000;
 		watch.saveSessionBaseline();
 	}
 	const list = JSON.parse(watch.store.get('dsh-perf-hud:sessions:v1')).sessions;
-	watch.state.since = 0;
+	watch.state.render.since = 0;
 	return [list.length, list[0].since, list[list.length - 1].since];
 })(), [20, new Date(1700000000000 + 5000).toISOString(), new Date(1700000000000 + 24000).toISOString()]);
 
@@ -4726,8 +4820,8 @@ check('定不到插件包名的脚本按原因给名字(而不是笼统的"未�
 	['无 URL(内联脚本)', '插件批次(未按 sourcemap 拆)', 'index-5SrrfWpU.js', 'y'.repeat(27) + '…']);
 check('"命中"只列非零的腿(没插桩时子树 / DOM写入 / 包名恒为 0,列出来只是噪声)',
 	(() => {
-		watch.state.ltBlamed = 245;
-		watch.state.ltTotal = 348;
+		watch.state.render.ltBlamed = 245;
+		watch.state.render.ltTotal = 348;
 		return [
 			watch.hitText({ fiber: 245, subtree: 0, dom: 0, owner: 0, none: 103 }),
 			watch.hitText({ fiber: 0, subtree: 0, dom: 0, owner: 0, none: 348 }),
@@ -4737,25 +4831,25 @@ check('"命中"只列非零的腿(没插桩时子树 / DOM写入 / 包名恒为 
 	['命中 245/348 · fiber 245 · 未归因 103', '命中 245/348 · 未归因 348', '命中 245/348 · fiber 10/子树 5/包名 2 · 未归因 1']);
 check('未插桩时不报「该帧几乎无 JS 解释」(没插桩就没测有没有 JS)',
 	(() => {
-		watch.state.deep = false;
-		watch.state.frameWorst = 342.4;
-		watch.state.unattrPeak = 342.4;
+		watch.state.render.deep = false;
+		watch.state.render.frameWorst = 342.4;
+		watch.state.render.unattrPeak = 342.4;
 		const off = watch.unexplainedFrame();
-		watch.state.deep = true;
+		watch.state.render.deep = true;
 		const on = watch.unexplainedFrame();
-		watch.state.deep = false;
+		watch.state.render.deep = false;
 		return [off, on];
 	})(),
 	[null, { ms: 342.4, percent: 100 }]);
 check('未插桩时「帧内未归因」不给数(那时它退化成平均帧间隔,给数就是误导)',
 	(() => {
-		watch.state.unattrAvg = 16.7;
-		watch.state.unattrPeak = 21;
-		watch.state.deep = false;
+		watch.state.render.unattrAvg = 16.7;
+		watch.state.render.unattrPeak = 21;
+		watch.state.render.deep = false;
 		const off = watch.unattrText();
-		watch.state.deep = true;
+		watch.state.render.deep = true;
 		const on = watch.unattrText();
-		watch.state.deep = false;
+		watch.state.render.deep = false;
 		return [off, on];
 	})(),
 	['要深录', '16.7ms · 峰 21ms']);
@@ -4902,10 +4996,10 @@ check('golden fixture:完整现场 → manifest.complete=true,摘要五段齐全
 // 一个恒 null 的字段会让读包的人以为"采集失败了"。这条钉住两件事:字段真的没了、拿得到的那半还在。
 check('诊断包:manifest 不宣称拿不到的 DSH 版本(恒 null 的 dshVersion 已删),pluginVersion 照旧',
 	(() => {
-		const previous = box.state.host;
-		box.state.host = { ...(previous ?? {}), pluginVersion: '0.9.0' };
+		const previous = box.state.host.snapshot;
+		box.state.host.snapshot = { ...(previous ?? {}), pluginVersion: '0.9.0' };
 		const manifest = EX.manifestFor(realFixture.incident);
-		box.state.host = previous;
+		box.state.host.snapshot = previous;
 		return [Object.prototype.hasOwnProperty.call(manifest, 'dshVersion'), manifest.pluginVersion,
 			Object.keys(manifest).filter((key) => /Version/i.test(key)).sort()];
 	})(),
@@ -4981,11 +5075,11 @@ check('两条导出路径在代码里就是分开的(主界面/AI = dropFreeText
 		.map((re) => re.test(renderSource));
 })(), [true, true, true, true]);
 check('分享前预览是"先看再生成":预览态不落盘,生成之后自动收起', (() => {
-	return [/function openPackPreview\(/, /state\.packPreview = packPreview\(id, opts\);/, /onExportGo: \(\) => \{[\s\S]{0,160}?closePackPreview\(\);[\s\S]{0,80}?exportPack/]
+	return [/function openPackPreview\(/, /state\.ui\.packPreview = packPreview\(id, opts\);/, /onExportGo: \(\) => \{[\s\S]{0,160}?closePackPreview\(\);[\s\S]{0,80}?exportPack/]
 		.map((re) => re.test(renderSource));
 })(), [true, true, true]);
 check('本地预览态不进 localStorage(它不是读数,也没有新键位)',
-	/state\.packPreviewId = id;[\s\S]{0,80}?bump\(\);/.test(renderSource) && /LS_VIEW/.test(source), true);
+	/state\.ui\.packPreviewId = id;[\s\S]{0,80}?bump\(\);/.test(renderSource) && /LS_VIEW/.test(source), true);
 
 // ═══════════ 捕获计数:与"留存了几份详细现场"彻底分开 ═══════════
 // 挡的是这一类事故:留存清单受容量限制(最差 10 + 每天 1),却拿它的条数回答"发生了多少次卡顿"
@@ -5015,9 +5109,9 @@ check('计数:最长一次取 max 不是求和(累计和 656.5 不许出现在�
 check('计数:抓到了但没留存下来是另一个数(丢失 ▸ dropped),不混进检测到',
 	[tallyA.dropped, tallyA.lost, tallyA.detected], [1, 1, 1]);
 check('计数:留存份数单独给出来,而且这里就该是 0(证据数与发生数不是一个东西)',
-	[tallyA.kept, watch.state.tally.minute.size], [0, 1]);
+	[tallyA.kept, watch.state.watch.tally.minute.size], [0, 1]);
 check('计数:一次 coalesce 连加 N 次只落在一个分钟桶里(不是 N 个桶)',
-	watch.tallySum(watch.state.tally.minute.get(Math.floor(tallyBase / 60000))).coalesced, 5);
+	watch.tallySum(watch.state.watch.tally.minute.get(Math.floor(tallyBase / 60000))).coalesced, 5);
 check('计数:起过捕获却没切成现场的那部分单列(unsettled),并计入丢失', (() => {
 	watch.clearTally();
 	watch.bumpTally('triggered', tallyBase);
@@ -5050,8 +5144,8 @@ const tallyDay = watch.tallyOfDay(watch.tallyDayKey(tallyBase - 60000));
 check('计数:日汇总与分钟桶同一口径(2 次检测到 + 1 次同串归并)',
 	[tallyDay.triggered, tallyDay.coalesced, tallyDay.detected, tallyDay.exists], [2, 1, 2, true]);
 check('计数:24 小时之外的分钟桶被丢掉,而且被丢掉这件事有计数(不静默)',
-	[watch.state.tally.expiredBuckets >= 1,
-		watch.state.tally.minute.has(Math.floor((tallyBase - 25 * 3600000) / 60000))],
+	[watch.state.watch.tally.expiredBuckets >= 1,
+		watch.state.watch.tally.minute.has(Math.floor((tallyBase - 25 * 3600000) / 60000))],
 	[true, false]);
 check('计数:不存在的日期如实说 exists:false 且全 0,不补造数字',
 	(() => { const row = watch.tallyOfDay('1999-01-01'); return [row.exists, row.detected, row.captured, row.worstMs]; })(),
@@ -5075,28 +5169,28 @@ check('计数:落盘成功,而且体积很小(稀疏桶 —— 空转近乎 0 �
 	return [ok, String(watch.store.get(watch.LS_TALLY)).length < 512];
 })(), [true, true]);
 // 模拟"刷新":只清内存,不动落盘那份
-watch.state.tally.minute.clear();
-watch.state.tally.day.clear();
-watch.state.tally.prunedMinute = -1;
-watch.state.tally.loadError = null;
+watch.state.watch.tally.minute.clear();
+watch.state.watch.tally.day.clear();
+watch.state.watch.tally.prunedMinute = -1;
+watch.state.watch.tally.loadError = null;
 watch.restoreTally();
 const tallyAfter = watch.tallyWindow(24 * 3600000, tallyBase);
 check('计数:读回之后窗口读数与落盘前一致(刷新后"最近一小时几次"还答得出来)',
 	[tallyAfter.detected, tallyAfter.captured, tallyAfter.coalesced, tallyAfter.worstMs],
 	[tallyBefore.detected, tallyBefore.captured, tallyBefore.coalesced, tallyBefore.worstMs]);
 watch.store.set(watch.LS_TALLY, '{not json');
-watch.state.tally.minute.clear();
+watch.state.watch.tally.minute.clear();
 check('计数:落盘坏了照实记原因,不伪装成"读回 0 条"',
-	(() => { watch.restoreTally(); return [/^parse:/.test(watch.state.tally.loadError ?? ''), watch.state.tally.minute.size]; })(),
+	(() => { watch.restoreTally(); return [/^parse:/.test(watch.state.watch.tally.loadError ?? ''), watch.state.watch.tally.minute.size]; })(),
 	[true, 0]);
 check('计数:形状不对的桶整桶丢掉并记原因,好桶照常读回(不静默变 0,也不静默吞掉)',
 	(() => {
 		// 合法桶是 7 元(triggered/captured/coalesced/dropped/failed/worstMs/trimmed);第 2 条少了一个字段
 		watch.store.set(watch.LS_TALLY, JSON.stringify({ v: 1, savedAt: 5, minute: { 100: [1, 1, 0, 0, 0, 50, 0], 101: [1, 2] }, day: {} }));
-		watch.state.tally.minute.clear();
-		watch.state.tally.loadError = null;
+		watch.state.watch.tally.minute.clear();
+		watch.state.watch.tally.loadError = null;
 		watch.restoreTally();
-		return [watch.state.tally.minute.size, watch.state.tally.loadError, watch.state.tally.savedAt];
+		return [watch.state.watch.tally.minute.size, watch.state.watch.tally.loadError, watch.state.watch.tally.savedAt];
 	})(), [1, 'shape:1', 5]);
 check('计数:认不出的 kind 不静默记到别的地方去', watch.bumpTally('nope', tallyBase), null);
 check('计数:清频次是单独一条路(要清得明说)', typeof watch.clearTally, 'function');

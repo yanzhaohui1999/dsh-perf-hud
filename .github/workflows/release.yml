@@ -64,7 +64,7 @@ jobs:
           node --check client.js
           for file in tools/*.mjs; do node --check "$file"; done
 
-      - name: Offline suites (731 assertions)
+      - name: Offline suites (735 assertions)
         run: |
           node tests/attribution.mjs
           node tests/logic.mjs
@@ -83,9 +83,9 @@ jobs:
             total=$((total + count))
           done
           echo "total: $total"
-          test "$total" -eq 731
+          test "$total" -eq 735
           for doc in README.md README_EN.md REVIEW.md AGENTS.md CONTRIBUTING.md; do
-            grep -q "731" "$doc" || { echo "$doc 里没有 731"; exit 1; }
+            grep -q "735" "$doc" || { echo "$doc 里没有 735"; exit 1; }
           done
 
       # 发布产物核对:两个半边、patch、图标、许可证、package.json,以及 README / AGENTS 链接到的
