@@ -555,20 +555,56 @@ for (const [file, text] of Object.entries(STATE_FILES)) {
 			aliasProblems.push(`${file}:${lineOf(match.index)} 别名 ${name} 被重新赋值 —— 它指向哪片就不再是静态可判的了`)
 		}
 	}
+	// (b) 解构一条片:`const { a, b: c } = state.<片>;` —— 解构出来的名字**也是读点**,要按该片校验。
+	// (以前只看见裸的 state.watch:`const { collapsed } = state.watch` 这种"错位字段"全绿)
+	for (const match of text.matchAll(/\b(?:const|let|var)\s+\{([^}]*)\}\s*=\s*state\.([A-Za-z_$][\w$]*)\s*;/g)) {
+		const [, body, slice] = match;
+		const at = `${file}:${lineOf(match.index)}`;
+		if (stateSlices[slice] === undefined) { aliasProblems.push(`${at} 解构了不存在的片 state.${slice}`); continue }
+		for (const part of body.split(',')) {
+			const item = part.trim();
+			if (item === '' || item.startsWith('...')) continue;
+			const field = item.split(':')[0].trim();
+			if (/^[A-Za-z_$][\w$]*$/.test(field)) stateRefs.push({ file, at, slice, field, via: null, how: 'destructure' });
+		}
+	}
+	// (c) 方括号取片:字面量键(`state['ui']`)静态可解析,按普通引用记账;动态键直接红 ——
+	// 不许用表达式选片,那等于把"读哪一片"藏进运行时。
+	for (const match of text.matchAll(/(?<![\w$.])state\s*\[\s*(?:'([A-Za-z_$][\w$]*)'|"([A-Za-z_$][\w$]*)")\s*\]\s*(?:\.\s*([A-Za-z_$][\w$]*))?/g)) {
+		stateRefs.push({ file, at: `${file}:${lineOf(match.index)}`, slice: match[1] ?? match[2], field: match[3], via: null, how: 'bracket' });
+	}
+	for (const match of text.matchAll(/(?<![\w$.])state\s*\[/g)) {
+		const after = text.slice(match.index, match.index + 120);
+		if (/^state\s*\[\s*['"]/.test(after)) continue;
+		aliasProblems.push(`${file}:${lineOf(match.index)} 用表达式选 state 的片(state[…]) —— 读哪一片必须是静态可判的`);
+	}
+	// (d) 赋值式别名:`w = state.<片>;`(不是 const 声明)一样绕开解析 —— 一律不许,改用 const 声明。
+	for (const match of text.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)\s*=\s*state\.([A-Za-z_$][\w$]*)\s*;/g)) {
+		const before = text.slice(Math.max(0, match.index - 24), match.index);
+		if (/(?:const|let|var)\s+$/.test(before)) continue;
+		aliasProblems.push(`${file}:${lineOf(match.index)} 赋值式别名 ${match[1]} = state.${match[2]} —— 别名只能用 const 声明,否则它的生命周期静态判不了`);
+	}
 	// ④ 直接引用:state.<片>.<字段>(以及唯一的整片取用 state.watch)
 	for (const match of text.matchAll(/(?<![\w$.])state\.(\w+)(?:\.([A-Za-z_$][\w$]*))?/g)) {
-		stateRefs.push({ file, at: `${file}:${lineOf(match.index)}`, slice: match[1], field: match[2], via: null });
+		stateRefs.push({ file, at: `${file}:${lineOf(match.index)}`, slice: match[1], field: match[2], via: null, how: 'dot' });
 	}
 	// ⑤ 经别名的引用:别名.<字段> 按别名指向的片记账
 	for (const [name, slice] of stateAliases[file]) {
 		for (const match of text.matchAll(new RegExp(`(?<![\\w$.])${name}\\.([A-Za-z_$][\\w$]*)`, 'g'))) {
-			stateRefs.push({ file, at: `${file}:${lineOf(match.index)}`, slice, field: match[1], via: name });
+			stateRefs.push({ file, at: `${file}:${lineOf(match.index)}`, slice, field: match[1], via: name, how: 'alias' });
 		}
 	}
 }
-check('状态四片:别名只指向一片、指向白名单内的片、不被重新赋值、也没有整个 state 的别名/解构',
+// 引用在人话里怎么写(报错要能一眼定位到写法)
+const refLabel = (ref) => {
+	if (ref.how === 'alias') return `别名 ${ref.via}(→${ref.slice})`;
+	if (ref.how === 'bracket') return `state['${ref.slice}']`;
+	if (ref.how === 'destructure') return `解构 state.${ref.slice}`;
+	return `state.${ref.slice}`;
+};
+check('状态四片:别名与等价写法都可静态解析(只指向一片 / 在白名单内 / 不重新赋值 / 无整个 state 别名或解构 / 无方括号动态取片 / 无赋值式别名)',
 	aliasProblems, []);
-check('状态四片:每处引用都是 state.<片>.<字段>(含经别名的),字段真的在那一片里(裸引用 / 未知片 / 错片 = 0)', (() => {
+check('状态四片:每处引用都是 state.<片>.<字段>(含别名 / 方括号 / 解构的),字段真的在那一片里(裸引用 / 未知片 / 错片 = 0)', (() => {
 	const bare = [];
 	const unknown = [];
 	const misplaced = [];
@@ -580,16 +616,16 @@ check('状态四片:每处引用都是 state.<片>.<字段>(含经别名的),字
 		}
 		if (stateSlices[ref.slice] === undefined) { unknown.push(`${ref.at} state.${ref.slice}.${ref.field}`); continue }
 		if (stateSlices[ref.slice].includes(ref.field) === false) {
-			misplaced.push(`${ref.at} ${ref.via === null ? `state.${ref.slice}` : `别名 ${ref.via}(→${ref.slice})`}.${ref.field}`)
+			misplaced.push(`${ref.at} ${refLabel(ref)}.${ref.field}`)
 		}
 	}
 	return { bare, unknown, misplaced };
 })(), { bare: [], unknown: [], misplaced: [] });
-check('状态四片:每个文件只读白名单里的片(含经别名的;越界 = 红,采集侧读不到面板状态)', (() => {
+check('状态四片:每个文件只读白名单里的片(含别名 / 方括号 / 解构的;越界 = 红,采集侧读不到面板状态)', (() => {
 	const violations = [];
 	for (const ref of stateRefs) {
 		if (STATE_WHITELIST[ref.file].includes(ref.slice) === false) {
-			violations.push(`${ref.file} → ${ref.via === null ? `state.${ref.slice}` : `别名 ${ref.via}(→${ref.slice})`}`);
+			violations.push(`${ref.file} → ${refLabel(ref)}`);
 		}
 	}
 	return [...new Set(violations)];
@@ -599,7 +635,7 @@ check('状态四片:四片全开的文件里,client.model.js 对 state.ui 的读
 	for (const ref of stateRefs) {
 		const allow = STATE_FIELD_ALLOW[ref.file]?.[ref.slice];
 		if (allow === undefined || ref.field === undefined) continue;
-		if (allow.includes(ref.field) === false) violations.push(`${ref.at} ${ref.via === null ? `state.${ref.slice}` : `别名 ${ref.via}`}.${ref.field}`);
+		if (allow.includes(ref.field) === false) violations.push(`${ref.at} ${refLabel(ref)}.${ref.field}`);
 	}
 	return violations;
 })(), []);

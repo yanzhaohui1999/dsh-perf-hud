@@ -105,6 +105,9 @@
 
 六条离线断言钉住它:① 字面量只有这四片且每片非空;② 四片的字段数写死(挪字段要改同一行并说明);③ **别名解析**:`const watch = state.watch` 这类别名只许指向一片、不许指向整个 state / 解构 state、不许再赋值,且同名变量不能另有来源(否则"它指向哪片"只有运行时才知道);④ 每处引用(**含经别名的**)都命中真实的「片.字段」,裸引用(少一层)与错片都是红;⑤ 每个文件只读白名单里的片(含经别名的)—— `client.watch.js` 只有 `watch/render/host`,工具箱只有 `watch`,pack / i18n 一个都不许读,主文件是四片的所有者;⑥ `client.model.js` 虽拿全四片,但对 `state.ui` 的读点按**字段白名单**收(见 `tests/logic.mjs` 的 `STATE_FIELD_ALLOW`,新增一个要说明模型层为什么需要它)。新增一位状态前先想清**它属于哪一层**,写到对应片里。
 
+⚠️ **这条边界能静态挡住的写法**(都有断言):直接 `state.<片>.<字段>`、`const watch = state.watch` 简单别名、`const { 字段 } = state.<片>` 解构(解构出来的名字按该片校验)、`state["ui"]` 方括号字面量、`state[表达式]` 与 `w = state.watch` 这类动态/赋值式写法(直接红)。
+⚠️ **挡不住的(靠评审,不靠断言)**:**函数参数 / 对象属性携带整片** —— 例如 `const probe = (slice) => slice.collapsed` 再把 `state.watch` 传进去;静态分析看到的是一个普通参数,判不出它运行时是哪一片。这类改动在 review 时要点名问"这个参数装的是哪一片",不要指望 `npm test`。
+
 ⚠️ **装载顺序有依赖**:`apply()` 里 `Promise.all([loadI18n(), loadModel(), loadWatch()])` 之后才 `restore()` 与 `start()` —— 守夜捕获会调模型层的 `scriptEvidence` / `packageOfScript`,`restore()` 会调 `pruneMapCache`。加新的采集期调用前先确认它所在的层已经到位。
 
 ⚠️ **重启会杀死当前会话的 bash 进程**(它在 `dsh web` 里):把重启排在报告之后,或交给用户。worktree 里的 `client.js` 浏览器看不到(profile 指向主检出)。真页面验收器要浏览器 + 本机 `dsh web`,不进 CI;改面板 / `apply()` / `start()` 后至少跑 `node tools/check-panel.mjs`。
