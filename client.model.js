@@ -1650,7 +1650,12 @@ window.__ModuleLoader__.load({
 				kind: 'dsh-perf-hud-diagnostic-pack',
 				plugin: PKG,
 				pluginVersion: state.host === null || state.host === undefined ? null : state.host.pluginVersion ?? null,
-				dshVersion: state.host === null || state.host === undefined ? null : state.host.dshVersion ?? null,
+				// ⚠️ 这里**没有** `dshVersion`,是刻意的(REVIEW §2 第 7 条):宿主半拿不到 DSH 的版本,
+				// 而客户端读 `state.host.dshVersion` 只会恒为 null —— 一个恒 null 的字段在导出件里比
+				// 没有这个字段更糟(读包的人会以为"采集失败了")。宿主侧的运行时版本仍在包内可查:
+				// 采过宿主 CPU profile 时 `context.hostCpuProfile.meta.nodeVersion` 就是它。
+				// 补这个字段的前提是上游给插件一个**可验证**的版本接口(现在 profileContext 只有
+				// name/dir/home,没有版本);按 AGENTS §1「不凭记忆写 API」不猜。有断言钉住"别加回来"。
 				platform: {
 					page: location.href,
 					userAgent: navigator.userAgent,
@@ -3298,7 +3303,9 @@ window.__ModuleLoader__.load({
 		 *   ③ 按 invoker 汇总:同一份脚本耗时的**另一种切法**(谁调起来的)。
 		 * ②③ 与 ① 的关系:按包那份只覆盖"定得到包名"的脚本,按来源那份覆盖全部 ——
 		 * 所以「按来源」的合计 = `js`,「按包」的合计 ≤ `js`,两者不是同一件事(有断言钉住)。
-		 * 计量单位统一为"脚本毫秒",但 unresolved 计的是**条数**(不是毫秒)。
+		 * 定不到包名的那部分**不进 `top`**,只按原因进 `byOther`(名字 + 毫秒):面板那条堆叠条
+		 * 读的就是它(`whoRows` → 每行"名字 + ms"都印在正文里),导出件也是。所以这里**不再**另算
+		 * 一份「未定名的条数 / 毫秒合计」—— 同一个量两份表达只会漂(有断言钉住 top + byOther = js)。
 		 */
 		function tallyScripts(rows) {
 			const byPkg = new Map();
@@ -3308,8 +3315,6 @@ window.__ModuleLoader__.load({
 			let js = 0;
 			let forced = 0;
 			let pause = 0;
-			let unresolved = 0;
-			let unresolvedMs = 0;
 			let shellMs = 0;
 			let shellName = null;
 			for (const row of rows) {
@@ -3330,8 +3335,6 @@ window.__ModuleLoader__.load({
 					// (外壳文件名 / 无 URL / 插件批次)—— 交叉表的行与两处汇总共用同一条口径。
 					let who = resolved.pkg;
 					if (resolved.pkg === null) {
-						unresolved += 1;
-						unresolvedMs += script.ms ?? 0;
 						who = unresolvedLabel(script);
 						byOther.set(who, (byOther.get(who) ?? 0) + (script.ms ?? 0));
 						// 外壳 bundle(应用自己那一层,不是插件):单独累计一份,让「按包」第一名
@@ -3349,7 +3352,7 @@ window.__ModuleLoader__.load({
 				}
 			}
 			return {
-				js: round1(js), exec: round1(Math.max(0, js - forced - pause)), forced: round1(forced), pause: round1(pause), unresolved, unresolvedMs: round1(unresolvedMs),
+				js: round1(js), exec: round1(Math.max(0, js - forced - pause)), forced: round1(forced), pause: round1(pause),
 				// 外壳 bundle 的合计与名字(按包第一名是它时,面板要就地说明"这不是插件")
 				shellMs: round1(shellMs), shellName,
 				// 窗口那几行是**累计**,必须带回它的分母:条数与跨度。没有它,`纯执行 21623.8ms`

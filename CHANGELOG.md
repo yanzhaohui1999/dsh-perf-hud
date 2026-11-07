@@ -4,7 +4,22 @@
 
 ## [Unreleased]
 
-（待发版）
+### 修复
+
+- **诊断包不再输出恒为 `null` 的 `dshVersion`**(REVIEW §2 第 7 条):宿主半从不下发这个字段,`manifest.json` 里那一格永远是 `null` —— 在给上游看的包里,恒 `null` 比没有这个键更糟(读包的人会去找一个不存在的"采集失败")。宿主半也没有可验证的版本来源(`profileContext` 只有 name / dir / home 等),按「不凭记忆写 API」不补;宿主运行时版本仍在 `context.hostCpuProfile.meta.nodeVersion`。断言「诊断包:manifest 不宣称拿不到的 DSH 版本」钉住"别读回来",`pluginVersion` 照旧透传。
+- **`tools/inspect-incident.mjs` 能读事故切片**了(REVIEW §2 第 10 条):`tests/fixtures/incident-real.json` 是 `{incident, thresholds, redaction}` 的切片,以前按完整包判 `kind` 直接退出 1 —— 仓库自带的样本自己读不了。现在按形状自动识别(`thresholds` / `redaction` 从顶层搬进 `context`,渲染只有一条路),并且**先声明这是切片**:没有 `context.missing`,那三段显式写「切片里没有这一栏 —— 不是"没有缺口"」。其它形状明确报错并提示 `--allow-slice`。用法写进工具头部注释与 `docs/verification.md` §2.2。
+- **`missing:` 前缀与诊断 Skill 的表不再能悄悄漂开**(REVIEW §2 第 9 条):`capabilityMissing()` 产出自由字符串,Skill 按 §2.6 前缀表分类读包,两边原本没有任何机械联系 —— 客户端换措辞时三套件照绿,Skill 会按错的类别读。新断言双向比两个集合(代码有而表里没有 / 表里有而代码已不生成),并核"每个 `missing.push` 都真的以 `前缀:` 开头"。第一次跑就抓到真实漂移:`host-snapshot:` 与 `loaf-pkg:` 从进代码起就没进过 Skill 的表,已补进「采集丢了 / 还没采到」。
+
+### 变更
+
+- **`tallyScripts()` 删掉两个没有读者的字段**(REVIEW §2 第 4 条):`unresolvedMs`(毫秒)与 `unresolved`(条数)。未定名那部分早就有带名字的表达 —— `byOther` 按原因 / 文件名给毫秒,渲染层 `whoRows()` 每一行都印"名字 + ms";同一个量两份表达只会漂。断言改成读 `byOther`(10ms 归到 `u-x`,原来只钉一个计数 1)+ 新不变式「`top` 合计 + `byOther` 合计 = `js`」。
+- **测试 714 → 717**(logic 662 → 665):删 1 条旧断言、新增 3 条(未定名毫秒改从 `byOther` 读;不变式 `top + byOther = js`;manifest 的版本字段边界)+ 1 条 Skill 前缀表断言。CI 的断言总数与五份文档里的数字跟着走。
+
+### 文档
+
+- `REVIEW.md` §2:三条内部债标记**已还**并给出提交号与断言名(`296ca33` / `c7bc488` / `80fb093` / `00b4706`);新增两条原本没入账的(前缀漂移、fixture 切片)。
+- 新增 `docs/plans/2026-11-07-v1-milestone.md`:下一个 milestone(1.0)—— 为什么是 1.0、8 条可验收交付(契约冻结 / 状态切分 / 离线渲染冒烟 / 只读 MCP / README 重写 / 前缀表生成器 / 兼容矩阵)、明确不做清单、按依赖排的顺序与发布门,以及"1.0 最不该包含的一件事"(只读 MCP,推迟到 1.1)。
+
 
 ## [0.9.0] - 2026-11-04
 

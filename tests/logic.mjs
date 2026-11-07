@@ -22,6 +22,10 @@ const uiSource = readFileSync(new URL('../client.ui.js', import.meta.url), 'utf8
 const renderSource = source + '\n' + uiSource;
 // 主文件 + 分片:静态检查要能看见搬家之后的实现
 const allSource = source + '\n' + uiSource + '\n' + modelSource + '\n' + i18nSource + '\n' + watchChunkSource;
+// 诊断 Skill 按 `missing:` 前缀分类读包 —— 它和 `capabilityMissing()` 是**跨仓**的一对口径:
+// 客户端改措辞(换前缀 / 加新前缀)时三套件原本不会红,Skill 会静默落到"其它"类里读错。
+// 所以读它进断言:代码里的前缀集合与 §2.6 那张表必须一一对应(下面有一条断言钉住)。
+const skillSource = readFileSync(new URL('../skills/dsh-perf-diagnosis/SKILL.md', import.meta.url), 'utf8');
 // 包内分片:zip 在 client.pack.js 里。测试也读线上那份源码,不另写一份实现。
 const packSource = readFileSync(new URL('../client.pack.js', import.meta.url), 'utf8');
 function loadPackChunk() {
@@ -2299,6 +2303,26 @@ check('能力矩阵:缺失声明由它推,而且保留了线上断言认的前�
 	return [prefixes.every((p) => gaps.missing.some((line) => line.startsWith(p))), gaps.howToAdd.length >= 3,
 		gaps.capabilities.schema === 1];
 })(), [true, true, true]);
+// 前缀漂移是**静默**故障:客户端把 `loaf:` 改成 `loaf-attribution:`,三套件照绿(断言只钉内容),
+// 而诊断 Skill 按 §2.6 的前缀表分类,读不到就落进"其它",结论会照着错的类别走。
+// 这条把两边的集合钉在一起:代码里每个 missing 行都能抽到前缀、代码的前缀都能在 Skill 表里查到、
+// Skill 表里也不许出现代码已经不再生成的前缀(反向 —— 否则 Skill 会教人去找不存在的行)。
+check('缺失声明的前缀集合与诊断 Skill §2.6 的前缀表一一对应', (() => {
+	const pushRe = /missing\.push\(\s*[`'"]([a-z][a-z0-9-]*):/g;
+	const prefixed = [...modelSource.matchAll(pushRe)].map((match) => match[1]);
+	const code = [...new Set(prefixed)].sort();
+	// Skill 那一段只在 2.6 里比:同一篇文档其它小节也在举例,放宽到全文会漏掉"表里少一行"这件事
+	const head = skillSource.indexOf('### 2.6');
+	const end = head === -1 ? -1 : skillSource.indexOf('\n## ', head);
+	const section = head === -1 || end === -1 ? '' : skillSource.slice(head, end);
+	const skill = [...new Set([...section.matchAll(/`([a-z][a-z0-9-]+):/g)].map((match) => match[1]))].sort();
+	return {
+		// 每个 missing.push 都必须以 `前缀:` 开头(写进变量的那一行会让两边都抽不到,等于绕过这条)
+		unprefixed: (modelSource.match(/missing\.push\(/g) ?? []).length - prefixed.length,
+		codeNotInSkill: code.filter((prefix) => skill.includes(prefix) === false),
+		skillNotInCode: skill.filter((prefix) => code.includes(prefix) === false),
+	};
+})(), { unprefixed: 0, codeNotInSkill: [], skillNotInCode: [] });
 
 // ── 可能原因:候选假设 ──
 const causes = EX.causeCandidates(causeRow);
@@ -4623,12 +4647,21 @@ watch.state.watch.loaf = [
 ];
 watch.pkgByUrl.set('u-a', { pkg: 'dsh-a', via: 'url' });
 watch.pkgByUrl.set('u-b', { pkg: 'dsh-b', via: 'url' });
-check('D5:窗口聚合:按包降序;纯执行 / 强制样式布局 / 暂停三分;定不到包的单独计数',
+check('D5:窗口聚合:按包降序;纯执行 / 强制样式布局 / 暂停三分;定不到包的按原因进 byOther(带毫秒)',
 	(() => {
 		const tally = watch.scriptPkgTally();
-		return [tally.top, tally.js, tally.exec, tally.forced, tally.pause, tally.unresolved, tally.unresolvedMs];
+		return [tally.top, tally.js, tally.exec, tally.forced, tally.pause, tally.byOther];
 	})(),
-	[[['dsh-b', 70], ['dsh-a', 60]], 140, 122, 8, 10, 1, 10]);
+	[[['dsh-b', 70], ['dsh-a', 60]], 140, 122, 8, 10, [['u-x', 10]]]);
+// REVIEW §2「unresolvedMs 没有运行时读者」还债时钉的不变式:定不到的毫秒**只**在 byOther 里,
+// 所以「按包 + 其余来源」必须正好拼回脚本总耗时 —— 删掉那个冗余汇总字段之后,这条守住同一条口径。
+check('D5:按包合计 + 其余来源合计 = 脚本总耗时(未定名的毫秒只在 byOther 里算一次)',
+	(() => {
+		const tally = watch.scriptPkgTally();
+		const sum = (rows) => Math.round(rows.reduce((acc, [, ms]) => acc + ms, 0) * 10) / 10;
+		return [sum(tally.top) + sum(tally.byOther), tally.js];
+	})(),
+	[140, 140]);
 check('D5:LoAF 窗口没变就复用上一次的结果(不让面板每 tick 重算 200×12 条脚本)',
 	watch.scriptPkgTally() === watch.scriptPkgTally(), true);
 check('D5:窗口变了才重算',
@@ -4656,7 +4689,7 @@ check('D5:本帧没有脚本时给 0(而不是 null);"没有这一帧"才给 nul
 // 现在死分支已删,断言改成**实际渲染的那份数据**:面板喂给按包那条堆叠条的就是 whoRows(tally)。
 check('一个包名都没定到时:按包那一条渲染的是「其余来源」段(带名字与毫秒),不是一行"0 条定到名"',
 	(() => {
-		const tally = { top: [], byOther: [['index-abc.js', 266], ['无 URL(内联脚本)', 12]], unresolved: 2, unresolvedMs: 278, byInvoker: [], byPair: {} };
+		const tally = { top: [], byOther: [['index-abc.js', 266], ['无 URL(内联脚本)', 12]], byInvoker: [], byPair: {} };
 		const rows = watch.whoRows(tally);            // ← 渲染层 bar('win-pkg', …, whoRows(window), …) 吃的就是它
 		const segs = watch.barSegments(rows).segs;    // ← 条上的段由它算
 		return [rows.length, segs.map((seg) => [seg.name, Math.round(seg.ms)])];
@@ -4833,6 +4866,18 @@ check('golden fixture:完整现场 → manifest.complete=true,摘要五段齐全
 			summary.includes('现场不完整')];
 	})(),
 	[true, true, true, false]);
+// REVIEW §2 第 7 条:`dshVersion` 恒为 null(宿主半从不下发)。处置是**客户端别读、字段删掉** ——
+// 一个恒 null 的字段会让读包的人以为"采集失败了"。这条钉住两件事:字段真的没了、拿得到的那半还在。
+check('诊断包:manifest 不宣称拿不到的 DSH 版本(恒 null 的 dshVersion 已删),pluginVersion 照旧',
+	(() => {
+		const previous = box.state.host;
+		box.state.host = { ...(previous ?? {}), pluginVersion: '0.9.0' };
+		const manifest = EX.manifestFor(realFixture.incident);
+		box.state.host = previous;
+		return [Object.prototype.hasOwnProperty.call(manifest, 'dshVersion'), manifest.pluginVersion,
+			Object.keys(manifest).filter((key) => /Version/i.test(key)).sort()];
+	})(),
+	[false, '0.9.0', ['pluginVersion', 'schemaVersion']]);
 check('不完整现场:manifest.complete=false,摘要与 missing 都点名,不把缺口藏起来',
 	(() => {
 		const row = {
