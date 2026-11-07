@@ -18,10 +18,11 @@ live-verification.txt
 # 编辑器/系统
 .DS_Store
 
-# npm 的缓存目录。`npm pack` 在受限环境(沙箱)里默认缓存 `~/.npm/_cacache` 不可写,
-# 会以 `EPERM ... _cacache` 失败;把 `npm_config_cache` 指到这里就能跑,
-# 代价是仓库里多出一个本来会被 add 进去的缓存目录 —— 见
-# docs/plans/2026-11-05-release-audit.md §2。
-# 只挡这一个子目录:`.tmp/` 下的其它东西(如 `.tmp/chrome/` 那个给 tools/shots.mjs
-# 用的浏览器 profile)是**有意跟踪**的,整目录忽略会把它们从 git status 里藏起来。
+# `.tmp/` 下的本地缓存,一律不进版本库:
+# - `npm-cache/`:`npm pack` 在受限环境里默认缓存 `~/.npm/_cacache` 不可写,
+#   把 `npm_config_cache` 指到这里就能跑(见 docs/plans/2026-11-05-release-audit.md §2);
+# - `chrome/`:浏览器 profile(tools/ 下的验收器会写),含 172 个文件、2.9MB。
+#   它曾经被**跟踪**进仓库(2026-11-07 的独立复核发现,实测无凭据);1.0 收口时摘出索引。
+#   它是缓存,不是源码:新克隆跑验收器时自动重建,不需要提交。
 .tmp/npm-cache/
+.tmp/chrome/
