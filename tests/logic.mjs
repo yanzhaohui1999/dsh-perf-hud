@@ -5089,6 +5089,77 @@ check('契约冻结:manifestFor() 的键集合与 docs/pack-schema.md 的清单�
 		incidentRequiredMissing: packSchema.required('manifest.incident').filter((key) => has(manifest.incident, key) === false).sort(),
 	};
 })(), { keysNotInDoc: [], requiredMissing: [], incidentKeysNotInDoc: [], incidentRequiredMissing: [] });
+// ── 文档 optional 段也要有出产方(2026-11-07 复核 X1:以前只对 required 成立)──
+// 反例:往 `manifest.json optional` 加一个代码永不产出的键 → 735 条全绿。
+// 现在按**样本并集**核:标签 → 样本路径;每个块的 required ∪ optional 必须 == 样本里实际出现的键集。
+// 样本覆盖三条出产路径:默认包 / 给 AI 的包(带 noteDropped)/ 恢复读回的事故(restored / tier / day),
+// 外加真事故 fixture 的 manifest(complete=true、incident.integrity 齐全)。
+// `capabilities` / `capabilities.unobserved` / `pack.files` 不在这条里(前两者由 compat 的叶子清单核、
+// 后者由上面「四份文件顺序」那条核)。
+const contractBlocks = (() => {
+	const readPack = (built) => ({
+		manifest: JSON.parse(built.files[0].text),
+		report: JSON.parse(built.files.find((file) => file.name === 'incident.json').text),
+	});
+	const aiPack = watch.buildPack('i9', { dropFreeText: true });
+	const samples = [readPack(pack), readPack(aiPack)];
+	// 第三个样本:从落盘读回的事故 —— `restored` / `tier` / `day` 只在这条路径上出现
+	watch.state.watch.incidents.push({ ...causeRow, id: 'i10', restored: true, tier: 'daily', day: '2026-11-07' });
+	samples.push(readPack(watch.buildPack('i10')));
+	watch.state.watch.incidents.pop();
+	// 第四个样本:真事故 fixture 的 manifest(complete=true、manifest.incident.integrity 齐全)
+	samples.push({ manifest: EX.manifestFor(realFixture.incident), report: null });
+	// 第五个样本:真事故 fixture **整条**走一遍 incident.json(atPerfMs / baseline / integrity /
+	// env 的完整键只有在真采集行上才齐 —— 手写桩行没有这些)
+	watch.state.watch.incidents.push({ ...realFixture.incident, id: 'i11' });
+	samples.push(readPack(watch.buildPack('i11')));
+	watch.state.watch.incidents.pop();
+	return samples;
+})();
+const CONTRACT_PATHS = {
+	'manifest.json': ['manifest'],
+	'manifest.incident': ['manifest', 'incident'],
+	'manifest.platform': ['manifest', 'platform'],
+	'manifest.range': ['manifest', 'range'],
+	'manifest.redaction': ['manifest', 'redaction'],
+	'incident.json': ['report'],
+	context: ['report', 'context'],
+	incident: ['report', 'incident'],
+	window: ['report', 'incident', 'window'],
+	integrity: ['report', 'incident', 'integrity'],
+	env: ['report', 'incident', 'env'],
+	host: ['report', 'incident', 'host'],
+	summary: ['report', 'incident', 'summary'],
+};
+const CONTRACT_SKIP = new Set(['capabilities', 'capabilities.unobserved', 'pack.files']);
+check('契约冻结:文档 optional 键也有出产方(样本并集 == required ∪ optional,双向;X1 那种"文档多写一个键"必须红)', (() => {
+	const observedFor = (path) => {
+		const keys = new Set();
+		for (const sample of contractBlocks) {
+			let value = sample;
+			for (const step of path) value = value === null || value === undefined ? undefined : value[step];
+			if (value === null || typeof value !== 'object') continue;
+			for (const key of Object.keys(value)) keys.add(key);
+		}
+		return keys;
+	};
+	const problems = {};
+	for (const name of packSchema.names()) {
+		if (CONTRACT_SKIP.has(name)) continue;
+		const path = CONTRACT_PATHS[name];
+		if (path === undefined) { problems[name] = ['文档有这个块,但断言里没有它的样本路径']; continue }
+		const observed = observedFor(path);
+		const doc = new Set(packSchema.keys(name));
+		const requiredMissing = packSchema.required(name).filter((key) => observed.has(key) === false);
+		// 这一条是这次补的方向:文档说"可选",代码就得**至少有一条路径**会产出它
+		const optionalMissing = packSchema.optional(name).filter((key) => observed.has(key) === false);
+		const undescribed = [...observed].filter((key) => doc.has(key) === false);
+		if (requiredMissing.length > 0 || optionalMissing.length > 0 || undescribed.length > 0) {
+			problems[name] = { requiredMissing, optionalMissing, undescribed };
+		}
+	}
+	return problems;
+})(), {});
 // PACK_SCHEMA_VERSION 变了而清单没动 → 红。期望值写死是**故意**的:升版本 = 同时改三处
 // (代码常量 / 文档清单块 / 这一行),少一处就红 —— 只比"代码 == 文档"的话,两边一起忘就绿了。
 check('契约冻结:包内三个版本号与清单同步(升版本必须同时改文档清单,改动这一行要单独交代)', (() => {

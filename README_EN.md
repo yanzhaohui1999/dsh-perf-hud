@@ -161,12 +161,12 @@ the version policy; `tests/compat.mjs` proves packs from the previous schema ver
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 675 assertions: real functions extracted from client.js + static checks + coverage of the frozen contract
+node tests/logic.mjs         # 676 assertions: real functions extracted from client.js + static checks + coverage of the frozen contract
 node tests/host.mjs          # 41 assertions: real index.js driven by a fake ctx
 node tests/compat.mjs        # 12 assertions: a previous-schemaVersion pack fed to the current readers
 node tools/render-smoke.mjs  # offline render smoke: six screens + "HUD off", no browser needed
 node tools/gen-prefix-table.mjs --check  # diagnosis Skill §2.6 prefix table in sync with capabilityMissing()
-# 739 assertions + one smoke run, no running DSH required; `npm test` runs them all
+# 740 assertions + one smoke run, no running DSH required; `npm test` runs them all
 ```
 
 Any change to rendering / `apply()` / `start()` also needs a **real-page** pass (`node tools/check-panel.mjs` at
