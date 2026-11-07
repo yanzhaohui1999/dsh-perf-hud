@@ -42,6 +42,9 @@ const packChunk = loadPackChunk();
 // 一份**真的**事故切片(真页面手动 capture → report() → 脱敏后落盘),不是合成的形状;
 // 用来钉住"文件格式与真实数据对得上",而不是只测我们想象出来的字段。
 const realFixture = JSON.parse(readFileSync(new URL('./fixtures/incident-real.json', import.meta.url), 'utf8'));
+// A4:真 V8 CPU profile + 同一进程里按 ~60fps 记的帧(frames[].busyMs 是地面真值)。
+// 生成器是 tools/make-timeline-fixture.mjs;夹具随仓库走,npm test 不现场采样。
+const timelineFixture = JSON.parse(readFileSync(new URL('./fixtures/timeline-host.json', import.meta.url), 'utf8'));
 // 导出包契约(1.0 冻结):键清单写在 docs/pack-schema.md 的 ```schema 块里,这里是它的产方那一侧。
 // 改 client.*.js 里的导出形状而不同步那份清单 → 下面「契约冻结」那两条会红(读方与产方共用一份清单)。
 const packSchema = loadPackSchema();
@@ -1083,6 +1086,14 @@ const newPieces = [
 	'function cpuProfileSummary(',
 	'function sanitizeCpuProfile(',
 	'function hostCpuProfileContext(',
+	// A4:同一时间轴(宿主 profile ↔ 客户端帧环);incidentReport 会直接调用
+	'const TIMELINE_SAMPLE_MAX = ',
+	'const TIMELINE_MIN_COVERAGE = ',
+	'function timelineHostAnchor(',
+	'function timelineAnchorWallAt(',
+	'function timelineHostSamples(',
+	'function timelineOverlap(',
+	'function incidentTimeline(',
 	'function hostCpuProfileText(',
 	'function hostCpuProfileTopText(',
 	'function capabilities(',
@@ -1130,6 +1141,8 @@ const box = new Function(`${sandbox}
 		capabilities, capabilityMissing, provenanceOf, provenanceText, strengthText, causeCandidates,
 		// A5:宿主进程 CPU 采样(汇总 / 导出段 / 面板文字)
 		cpuProfileSummary, hostCpuProfileContext, hostCpuProfileText, hostCpuProfileTopText,
+		// A4:同一时间轴(纯函数,便于拿真 profile + 真帧序列直接测对齐)
+		timelineHostAnchor, timelineAnchorWallAt, timelineHostSamples, timelineOverlap, incidentTimeline,
 		healthIcon, healthText, healthVerdict, repeatedLead, trendSummary, trendText, secondsText, lastStallSubText, trendRawText,
 		latestIncident, causePlainLead,
 		zipStore,
@@ -3141,9 +3154,16 @@ const watchPieces = [
 	// 缺一个不会立刻响,而是等守夜盒跑到 incidentReport 才 ReferenceError(AGENTS §3 的老坑)
 	line('const HOST_PROFILE_RAW_MAX'),
 	line('const HOST_PROFILE_TOP'),
+	line('const TIMELINE_SAMPLE_MAX'),
+	line('const TIMELINE_MIN_COVERAGE'),
 	extract(source, 'function cpuProfileSummary('),
 	extract(source, 'function sanitizeCpuProfile('),
 	extract(source, 'function hostCpuProfileContext('),
+	extract(source, 'function timelineHostAnchor('),
+	extract(source, 'function timelineAnchorWallAt('),
+	extract(source, 'function timelineHostSamples('),
+	extract(source, 'function timelineOverlap('),
+	extract(source, 'function incidentTimeline('),
 	extract(source, 'function provenanceOf('),
 	extract(source, 'function capabilities('),
 	extract(source, 'function capabilityMissing('),
@@ -3336,6 +3356,8 @@ const watchBox = new Function(`
 		capabilities, capabilityMissing, causeCandidates,
 		// A5:宿主进程 CPU 采样(事故包与整机导出件的 context.hostCpuProfile)
 		cpuProfileSummary, hostCpuProfileContext,
+		// A4:同一时间轴(assembleIncident 不读它;incidentReport 出包时才接)
+		timelineHostAnchor, timelineAnchorWallAt, timelineHostSamples, timelineOverlap, incidentTimeline,
 		zipStore,
 		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview,
 		setPackApi: (api) => { packApi = api; },
@@ -4798,6 +4820,122 @@ check('A5:没采时能力矩阵照实报 off,并说明"按需、不常开"', (()
 	watch.state.host.hostCpuProfile = saved;
 	return out;
 })(), ['off', true]);
+
+// ── A4:宿主 CPU profile ↔ 客户端帧环(同一时间轴)──
+// 夹具来自 tools/make-timeline-fixture.mjs:同一进程里真采的 V8 profile + 按 ~60fps 记的帧,
+// frames[].busyMs 是烧 CPU 起止点当场记下的地面真值 —— 对齐准不准拿它判,不靠"看着差不多"。
+const TL_PERF_ORIGIN = Date.parse(timelineFixture.perfOrigin);
+const TL_FRAMES = timelineFixture.frames.map((row) => ({ t: row.t, ms: row.ms, gap: false }));
+const TL_ROW = {
+	id: 'tl-fixture', cause: 'frame', severity: Math.max(...TL_FRAMES.map((row) => row.ms)),
+	window: { fromMs: TL_FRAMES[0].t - 100, toMs: TL_FRAMES[TL_FRAMES.length - 1].t + 100, preMs: 10000, postMs: 3000 },
+	summary: { worstFrameMs: Math.max(...TL_FRAMES.map((row) => row.ms)) },
+	frames: TL_FRAMES,
+	env: { perfOrigin: new Date(TL_PERF_ORIGIN).toISOString() },
+};
+const TL_RECORD = { phase: 'done', seconds: timelineFixture.meta.seconds, profile: timelineFixture.profile, meta: timelineFixture.meta };
+
+check('A4:宿主 profile 的时间基准是两端锚点(profile.startTime/endTime ↔ meta.startedAt/endedAt)', (() => {
+	const anchor = EX.timelineHostAnchor(TL_RECORD);
+	return [anchor !== null, EX.timelineAnchorWallAt(anchor, anchor.startTime), EX.timelineAnchorWallAt(anchor, anchor.endTime), anchor.errorMs < 20];
+})(), [true, timelineFixture.meta.startedAt, timelineFixture.meta.endedAt, true]);
+check('A4:缺 profile / 缺 meta 时不编时间轴(返回 null,不是零值锚点)', [
+	EX.timelineHostAnchor({ profile: timelineFixture.profile, meta: null }),
+	EX.timelineHostAnchor({ profile: null, meta: timelineFixture.meta }),
+	EX.timelineHostAnchor(null),
+], [null, null, null]);
+check('A4:profile 与事故窗口不重叠时不出 timeline(可选字段不该凭空出现)',
+	[EX.incidentTimeline({ ...TL_ROW, window: { fromMs: 900000, toMs: 901000 } }, TL_RECORD),
+		EX.incidentTimeline({ ...TL_ROW, env: {} }, TL_RECORD)],
+	[null, null]);
+
+const tlSegments = EX.incidentTimeline(TL_ROW, TL_RECORD);
+const tl = Array.isArray(tlSegments) ? tlSegments[0] : null;
+check('A4:重叠时产出恰好一段,带两段原始序列(宿主采样 + 帧),不是只给一个数',
+	(() => {
+		if (tl === null) return null;
+		// 第一帧可能早于 profile 覆盖起点(宿主开始采样晚几毫秒),少一帧是正常的;
+		// 关键是两段序列都在、而且帧序列不是空的。
+		return [tlSegments.length, tl.host.samples.length > 0, tl.frames.length >= TL_FRAMES.length - 1, typeof tl.share?.hostPct];
+	})(),
+	[1, true, true, 'number']);
+check('A4:两段原始序列都按时间升序,宿主样本带三档 kind 与区间(可自己重算)',
+	(() => {
+		if (tl === null) return null;
+		const events = tl.host.samples;
+		const sortedSamples = events.every((row, i) => i === 0 || row.t >= events[i - 1].t);
+		const sortedFrames = tl.frames.every((row, i) => i === 0 || row.t >= tl.frames[i - 1].t);
+		const kinds = new Set(events.map((row) => row.kind));
+		return [sortedSamples, sortedFrames, events.every((row) => typeof row.ms === 'number' && row.ms > 0 && typeof row.fn === 'string'),
+			[...kinds].every((kind) => ['js', 'native', 'idle'].includes(kind)), kinds.has('js'), kinds.has('idle')];
+	})(),
+	[true, true, true, true, true, true]);
+// 对齐误差:把"真烧了 CPU 的帧"与"对齐后 js 采样占比 ≥50% 的帧"各自切成连续段,
+// 比每段的起止下标。夹具里两段忙期 = 两个 idle↔busy 转换,误差 ≤1 帧。
+check('A4:夹具上两端对齐误差 ≤1 帧(真烧 CPU 的帧段 vs 对齐后的宿主忙帧段)',
+	(() => {
+		if (tl === null) return null;
+		const byT = new Map(tl.frames.map((row) => [row.t, row]));
+		const paired = timelineFixture.frames.filter((row) => byT.has(row.t));
+		if (paired.length < timelineFixture.frames.length - 1) return null;
+		const runs = (flags) => {
+			const out = [];
+			let start = -1;
+			for (let i = 0; i <= flags.length; i += 1) {
+				const on = i < flags.length && flags[i] === true;
+				if (on && start === -1) start = i;
+				if (on === false && start !== -1) { out.push([start, i - 1]); start = -1; }
+			}
+			return out;
+		};
+		const truth = runs(paired.map((row) => row.busyMs > 0));
+		const aligned = runs(paired.map((row) => byT.get(row.t).ms > 0 && byT.get(row.t).jsMs / byT.get(row.t).ms >= 0.5));
+		// 按"重叠最多"配对,而不是按下标:空闲段里调度下一帧的 processTimers 可能让某一帧
+		// 短暂过线(那也是宿主真的在跑,不是时间轴错位),它不该把后面两段真忙期挤到别的下标上。
+		const overlap = (a, b) => Math.max(0, Math.min(a[1], b[1]) - Math.max(a[0], b[0]) + 1);
+		const offsets = truth.map((run) => {
+			const best = aligned.reduce((top, cur) => (overlap(cur, run) > overlap(top, run) ? cur : top), aligned[0] ?? [99, 99]);
+			return Math.max(Math.abs(best[0] - run[0]), Math.abs(best[1] - run[1]));
+		});
+		return [truth.length, aligned.length <= truth.length + 1, Math.max(...offsets) <= 1];
+	})(),
+	[2, true, true]);
+check('A4:宿主占比 = 非 idle 采样 / 最差帧间隔,且原始序列能逐毫秒重算回同一个数',
+	(() => {
+		if (tl === null || tl.share === undefined) return null;
+		const from = Math.max(tl.stall.fromMs, tl.fromMs);
+		const to = Math.min(tl.stall.toMs, tl.toMs);
+		const raw = tl.host.samples.map((row) => ({ from: row.t - row.ms, to: row.t, ms: row.ms, idle: row.kind === 'idle', native: row.kind === 'native' }));
+		const again = EX.timelineOverlap(raw, from, to);
+		return [Math.abs(again.busy + again.native - tl.share.hostMs) <= 0.2,
+			Math.abs(tl.share.hostMs + tl.share.pageMs - tl.stall.ms) <= 0.2,
+			tl.share.coveragePct >= 99, tl.share.hostPct >= 0 && tl.share.hostPct <= 100];
+	})(),
+	[true, true, true, true]);
+check('A4:事故包在重叠时带上 incident.timeline;换回 idle 状态时键不存在(可选字段)',
+	(() => {
+		const saved = watch.state.host.hostCpuProfile;
+		const savedIncidents = watch.state.watch.incidents.slice();
+		watch.state.watch.incidents.length = 0;
+		watch.state.watch.incidents.push({ ...causeRow, id: 'i-tl', window: { ...causeRow.window, fromMs: 900, toMs: 2400 }, frames: [{ t: 1200, ms: 326.5, gap: false }] });
+		// 把夹具的宿主 profile 平移到这条事故的时间轴上:profile 覆盖 perf 900..2400。
+		const shiftedStart = Date.parse(causeRow.env.perfOrigin) + 900;
+		watch.state.host.hostCpuProfile = {
+			phase: 'done', seconds: timelineFixture.meta.seconds, requestedAt: 0, finishedAt: shiftedStart, error: '', collections: 1,
+			profile: timelineFixture.profile,
+			meta: { ...timelineFixture.meta, startedAt: shiftedStart, endedAt: shiftedStart + (timelineFixture.meta.endedAt - timelineFixture.meta.startedAt) },
+		};
+		const withTimeline = watch.incidentReport('i-tl');
+		watch.state.host.hostCpuProfile = { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 };
+		const without = watch.incidentReport('i-tl');
+		watch.state.watch.incidents.length = 0;
+		for (const row of savedIncidents) watch.state.watch.incidents.push(row);
+		watch.state.host.hostCpuProfile = saved;
+		return [Array.isArray(withTimeline.incident.timeline), withTimeline.incident.timeline?.[0]?.share !== undefined,
+			Object.prototype.hasOwnProperty.call(without.incident, 'timeline')];
+	})(),
+	[true, true, false]);
+
 check('事故包:A2 落地后那条"没有对照基线"改成"跨机器 / 跨浏览器"',
 	watch.incidentReport(0).context.missing.some((line) => line.startsWith('baseline:') && line.includes('跨机器')), true);
 check('事故包:带上渲染环境(视口 / DPR / 核数)',
@@ -5167,6 +5305,22 @@ const contractBlocks = (() => {
 	watch.state.watch.incidents.push({ ...realFixture.incident, id: 'i11' });
 	samples.push(readPack(watch.buildPack('i11')));
 	watch.state.watch.incidents.pop();
+	// 第六个样本:带 `incident.timeline` 的包 —— 可选键也必须**有出产方**(X1 那条双向断言)。
+	// 宿主 profile 用真采样夹具(平移它的开始时刻,让它压住真事故的最差帧);时间轴由
+	// production 的 incidentTimeline() 算,不是手写一个形状塞进去。
+	const savedProfile = watch.state.host.hostCpuProfile;
+	const worstFrame = realFixture.incident.frames.filter((row) => row.gap !== true).reduce((top, row) => (row.ms > top.ms ? row : top));
+	const perfOriginMs = Date.parse(realFixture.incident.env.perfOrigin);
+	const shiftedStart = perfOriginMs + worstFrame.t - 1000;
+	watch.state.host.hostCpuProfile = {
+		phase: 'done', seconds: timelineFixture.meta.seconds, requestedAt: 0, finishedAt: shiftedStart, error: '', collections: 1,
+		profile: timelineFixture.profile,
+		meta: { ...timelineFixture.meta, startedAt: shiftedStart, endedAt: shiftedStart + (timelineFixture.meta.endedAt - timelineFixture.meta.startedAt) },
+	};
+	watch.state.watch.incidents.push({ ...realFixture.incident, id: 'i12' });
+	samples.push(readPack(watch.buildPack('i12')));
+	watch.state.watch.incidents.pop();
+	watch.state.host.hostCpuProfile = savedProfile;
 	return samples;
 })();
 const CONTRACT_PATHS = {
