@@ -122,6 +122,7 @@ node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bu
 node tests/logic.mjs         # 671 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 node tests/compat.mjs        # 12 条:上一版 schemaVersion 的夹具包喂当前读方(契约没漂 + 缺键必红)
+node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 735)
 ```
 
 一条命令跑完:`npm test`。线上(先按 [环境与验证](docs/verification.md) 换 cookie):
@@ -140,6 +141,7 @@ DSH_COOKIE=… node tests/live-host.mjs        # 真实路由;退出码 3 = 宿�
 - **静态检查必须有牙齿**:`logic.mjs` 顶部两条(① `h(Uppercase…)` 引用的组件必须声明过;② 面板渲染区里的裸函数调用必须声明过)是"整段替换吞掉相邻声明"事故的回归测试([死路](docs/dead-ends.md) 第 7 条);验证它的办法是把声明删掉看它是否报出名字。
 - **宿主半可离线真跑**:`tests/host.mjs` 用假 `ctx`(含 `connection.fetch.register` / `pluginManager` / `ctx.on`)驱动真实 `index.js`,断言路由、事件循环升温、confirm 安全线。
 - **契约冻结两侧都要测**:`tests/logic.mjs` 是**产方**(`manifestFor()` 的键集合 == `docs/pack-schema.md` 的清单,双向),`tests/compat.mjs` 是**读方**(上一版 `schemaVersion` 的夹具包仍能读出摘要与能力矩阵;缺一个必需键必须红)。夹具是**真事故切片**按上一版契约降级出来的(`manifest` v1 / `incident` v2),不是另写一份"像老包"的数据 —— 改夹具上的数值就等于改被测对象,先问"这是不是真采集里的东西"。
+- **离线渲染冒烟是"没浏览器时的那一眼"**:`tools/render-smoke.mjs` 用假 React(元素树 + hooks 桩)、**真词典**与 `client.js` 里抽出来的真 `state` 字面量,把主界面 / 卡顿详情 / 开发者详情五页签 / 设置 / 收起态 / 关闭态各跑一遍,断言"0 抛错 + 关键文案在场 + 没有漏成 key 的文案"。它执行的正是 `PerfHud()` 的函数体 —— 所以**模块作用域的裸标识符、拼错的 dep、只在某个分支里用的变量**都会在这里红(实测:往 `mainView` 里塞一句 `void smokeBareIdentifier` → `smokeBareIdentifier is not defined`)。⚠️ 数据类 dep 是**通用假值**,它不验读数对不对(那是三套件与真页面验收器的事),只回答"这条渲染路径还跑得下去吗"。
 - 断言总数写进 [README.md](README.md) 与 [REVIEW.md](REVIEW.md),**改数字要同步改文档**;CI 里有一条门禁专门核这个。
 
 ---

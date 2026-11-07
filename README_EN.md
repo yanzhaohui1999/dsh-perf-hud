@@ -337,7 +337,8 @@ node tests/attribution.mjs   # 11 assertions: script URL shapes → package name
 node tests/logic.mjs         # 671 assertions: real functions extracted from client.js + static checks + length budgets + frozen contract
 node tests/host.mjs          # 41 assertions: real index.js driven by a fake ctx
 node tests/compat.mjs        # 12 assertions: a previous-schemaVersion pack fed to the current readers
-# 735 offline assertions total, no running DSH required
+node tools/render-smoke.mjs  # offline render smoke: six screens + the "HUD off" state, no browser needed
+# 735 offline assertions + one smoke run, no running DSH required
 ```
 
 The i18n dictionary now has **402 keys per language** (the two dictionaries must have identical key sets, and every key must be referenced — keys left behind when a UI element is removed are reported by an assertion).

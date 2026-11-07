@@ -34,7 +34,7 @@ English summary follows the Chinese text below.
 
 - **`npm test`** —— **735** 条(11 / 671 / 41 / 12)。四套件、三个沙箱与门禁细节见 [AGENTS.md](AGENTS.md) §3。
 - 改了面板文案或读数口径:长度预算 / 单位一致性 / 静态检查由 `npm test` 一起跑,规则见 [AGENTS.md](AGENTS.md) §5(来历与逐项清单见 [docs/panel-rules.md](docs/panel-rules.md));**改断言前先确认不是在删证据**。
-- 改到面板渲染 / `apply()` / `start()`:按 [docs/verification.md](docs/verification.md) 跑真页面验收器(`check-panel` 必跑,`check-incident` / `check-counts` 视改动)。它们**不是离线门禁**(要真浏览器 + 本机 `dsh web`),PR 里附输出即可。
+- 改到面板渲染 / `apply()` / `start()`:`npm test` 末尾的 `tools/render-smoke.mjs` 会先把六个屏离线渲染一遍(**它挡的是"套件全绿、浏览器里一展开就 ReferenceError"**);再按 [docs/verification.md](docs/verification.md) 跑真页面验收器(`check-panel` 必跑,`check-incident` / `check-counts` 视改动)。真页面验收器**不是离线门禁**(要真浏览器 + 本机 `dsh web`),PR 里附输出即可。
 
 ### 硬规则不在这里重复
 

@@ -71,6 +71,10 @@ jobs:
           node tests/host.mjs
           node tests/compat.mjs
 
+      # 与 ci.yml 同一条:离线渲染冒烟(六个屏 + 关闭态,不需要浏览器)
+      - name: Offline render smoke
+        run: node tools/render-smoke.mjs
+
       # 与 ci.yml 同一条:断言总数与文档声称的一致。以前只有 ci.yml 核这个,
       # 而发版是**从 release 事件**进来的 —— 文档里的数字写错了,发版路径照样绿着走到 publish。
       # 五份文档逐个核(不只是总数):CONTRIBUTING 曾经停在 325 / 39 / 358。

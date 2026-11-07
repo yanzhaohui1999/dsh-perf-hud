@@ -48,6 +48,13 @@ jobs:
           node tests/host.mjs
           node tests/compat.mjs
 
+      # 离线渲染冒烟(1.0 / S2):用最小桩把主界面 / 卡顿详情 / 开发者详情五页签 / 设置 /
+      # 收起态 / 关闭态各渲染一遍,断言 0 抛错 + 关键文案在场 + 没有漏成 key 的文案。
+      # 它挡的正是 check-panel 当年挡的那一类("套件全绿、浏览器里一展开就 ReferenceError");
+      # 真页面验收器要浏览器 + 本机 dsh web,进不了 CI,这条是它的离线替身。
+      - name: Offline render smoke
+        run: node tools/render-smoke.mjs
+
       # 面板文案的长度预算与单位一致性断言在 logic.mjs 里;这里再核一次
       # 「断言总数」与文档声称的一致(改数字忘了同步文档时,这条会红)。
       - name: Assertion count matches the docs
