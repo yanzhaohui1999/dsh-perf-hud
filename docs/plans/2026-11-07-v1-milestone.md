@@ -1,6 +1,6 @@
 # 1.0 里程碑:把数据契约冻结下来
 
-> **状态:计划**(尚未落地)。当前行为与未还的债看 [REVIEW.md](../../REVIEW.md);开发规则看 [AGENTS.md](../../AGENTS.md);本条的来历是 [2026-10-13 代码审计](2026-10-13-code-review.md) §5 P2 的两项(状态切分 / 只读 MCP)与 0.9.0 之后的三条内部债清理(`chore/hud-debt-cleanup` 分支)。
+> **状态:计划**(尚未落地)。当前行为与未还的债看 [REVIEW.md](../../REVIEW.md);开发规则看 [AGENTS.md](../../AGENTS.md);本条的来历是 [2026-10-13 代码审计](2026-10-13-code-review.md) §5 P2 的两项(状态切分 / 只读 MCP)与 0.9.0 之后的四条内部债清理(`chore/hud-debt-cleanup` 分支)。
 > 数字均为 **2026-11-07 在本分支实测**,命令写在每条后面 —— 别把这里的数抄进别处当口径。
 
 ---
@@ -53,7 +53,7 @@
 |---|---|---|---|
 | 1 | **契约冻结:字段清单 + 版本策略** 新增 `docs/pack-schema.md`(上面 §1.2 那张表的展开版:逐键、逐层、逐前缀),`manifest.json` / `incident.json` / `capabilities()` 三份键清单各一节 | `logic.mjs` 三条断言:① `manifestFor()` 的实际键集合 == 文档清单;② `buildPack()` 四份文件的顺序与 `manifest.files` 一致(已有,扩展成核键集合);③ `PACK_SCHEMA_VERSION` 变了而清单没动 → 红 | — |
 | 2 | **兼容策略变成检查,不是文字** 加 `tests/compat.mjs`(或并入 logic 的一个盒子):用**上一版** `schemaVersion` 的夹具包喂当前读方,断言仍能读出摘要与能力矩阵 | 新套件 1 条命令全绿;故意删一个顶层键跑一遍 → 必须红(把"红"写进提交正文) | 1 |
-| 3 | **状态切分(P2-10)** 把 94 字段的单一 `state` 按视图归拢成 `state.ui` / `state.watch` / `state.host` / `state.render` 四片,7 个文件里 898 处 `state.` 引用各自只读自己那片 | `npm test` 全绿;**新静态断言**:每个分片只允许引用自己那片(白名单式,漏一个就红);五个真页面验收器全绿(`state` 是 `logic.mjs` 三个沙箱的手写桩,漏字段会在最后一个盒子炸) | — |
+| 3 | **状态切分(P2-10)** 把 94 字段的单一 `state` 按视图归拢成 `state.ui` / `state.watch` / `state.host` / `state.render` 四片,主文件 + 6 个分片里 900 处 `state.` 引用各自只读自己那片 | `npm test` 全绿;**新静态断言**:每个分片只允许引用自己那片(白名单式,漏一个就红);五个真页面验收器全绿(`state` 是 `logic.mjs` 三个沙箱的手写桩,漏字段会在最后一个盒子炸) | — |
 | 4 | **离线渲染冒烟进 CI**(真页面验收的替代) `tools/render-smoke.mjs`:用最小 DOM 桩把主界面 / 卡顿详情 / 开发者详情五个页签 / 设置 / 收起态各渲染一遍,断言 0 抛错、关键文案在场、正文里没有漏成 key 的词典键 | CI 加一条步骤(`node tools/render-smoke.mjs`)并进 `npm test`;它挡的正是 `check-panel` 当年挡的那一类("三套件全绿、真页面一展开就 ReferenceError") | 3 |
 | 5 | **只读 MCP(P2,条件性 —— 见 §5)** `tools/hud-mcp.mjs`,stdio、零依赖、手写 JSON-RPC:三个只读工具 `list_incidents` / `get_pack` / `get_capabilities`,只吃**导出的包文件**,不连宿主、不写盘、不提供任何写操作 | 手写一个 JSON-RPC 客户端脚本跑 `initialize` → `tools/list` → `tools/call` ×3,三次返回与 `__perfHud` / `manifest.json` **同源**(对同一份 fixture 逐字节比);工具对缺字段 / 高版本 `schemaVersion` 说差异而不猜 | 1 |
 | 6 | **README 面向外部用户重写** 现在 377 行 / 63.5KB(中文)+ 355 行(英文摘要),混了开发史、已证伪的路、内部债。按三类读者重排:① 第一次装(安装 / 三个开关 / 看到什么);② 读包的人(四个文件 / `missing` / 诊断 Skill 指路);③ 贡献者(指到 AGENTS) | `wc -lc README.md` ≤ 一半;三类读者各有入口且**第一屏**能看到;`npm run docs:check` 0 断链 0 孤儿;搬走的历史进 CHANGELOG / `docs/plans/` | 4(命令名要先定) |
@@ -114,6 +114,6 @@
 
 ## 6. 与当前债的关系
 
-- 本里程碑的前置债已在 `chore/hud-debt-cleanup` 还掉三条:`tallyScripts` 的两个冗余字段(删)、`dshVersion`(删字段)、`inspect-incident` 的切片支持;并给 `missing:` 前缀加了跨文件断言 —— **那条断言是第 7 项生成器的雏形**(先钉住,再生成)。
+- 本里程碑的前置债已在 `chore/hud-debt-cleanup` 还掉四条:`tallyScripts` 的两个冗余字段(删)、`dshVersion`(删字段)、`inspect-incident` 的切片支持、`missing:` 前缀与诊断 Skill 的跨文件断言 —— **最后那条是第 7 项生成器的雏形**(先钉住,再生成)。
 - **仍未还、且 1.0 必须解决**:状态切分(REVIEW §2 第 8 条 = §2 #3)。
 - **不属于 1.0、继续挂着的**:REVIEW §3 的两条上游证据(要上游改)、REVIEW §4 的能力边界(结构上做不到)。
