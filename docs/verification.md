@@ -85,6 +85,12 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
    ⚠️ **验收器被强杀会留下 headless Chrome 占着 `--user-data-dir` 与调试端口,后续跑会"挂死"**(2026-10-13 踩过):症状是 `waitForHud` 之后的第一次 `evaluate` 永不返回(不是超时报错,是**一直等**),因为新实例连上的是那个残留实例。处置:`pkill -f 'remote-debugging-port=93' && rm -rf /tmp/dsh-perf-hud-chrome-*` 再跑。别花时间怀疑被测代码 —— 先看 `pgrep -fl 'remote-debugging-port=93'`。
    ⚠️ **它们不是离线门禁**:要真浏览器 + 本机跑着 `dsh web`,所以 `npm test` 与 CI 里**没有**它们(CI 只对 `tools/*.mjs` 做 `node --check`)。`check-panel.mjs` 挡的就是"三套件全绿、浏览器里插件激活或渲染失败"那类事故,所以它跑不过就别提交。
 
+7. **读一份事故包(离线,不碰页面)**:`node tools/inspect-incident.mjs <file.json> [--width 96] [--allow-slice]`。两种输入都吃:
+   - **完整事故包**(`kind: "perf-hud-incident"`,带 `context`):四块输出都满,「缺失声明」那三段有内容;
+   - **事故切片** —— `tests/fixtures/incident-real.json` 就是 `{incident, thresholds, redaction}` 三个键(真页面 `capture` → `report` 后脱敏的切片)。工具**按形状自动识别**,但会先打一行"这是切片":切片里没有 `context.missing` / `howToAdd` / `howToRead`,那三段空着**不等于这份证据没有缺口**。形状对不上、但确认它是切片时加 `--allow-slice`。
+   
+   它的 ASCII 帧条阈值与面板 `sparkLevel()` 由 `logic.mjs` 的一条静态断言互钉(≥100 / ≥50),改一处忘另一处会红。
+
 ### 2.4 外壳 sourcemap(可选,让"应用外壳"定位到源文件)
 
 发行包里的 `/assets/index-*.js` **没有 `.map`**(打包时剔掉),所以面板对壳内脚本只能说到

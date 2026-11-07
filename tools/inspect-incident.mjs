@@ -2,7 +2,16 @@
 /**
  * 把一份事故包(`perf-hud-incident-*.json`)渲染成人能读的样子。
  *
- *   node tools/inspect-incident.mjs <file.json> [--width 96]
+ *   node tools/inspect-incident.mjs <file.json> [--width 96] [--allow-slice]
+ *
+ * 两种输入都吃:
+ *   ① **完整事故包**(`perf-hud-incident-*.json`,`kind: "perf-hud-incident"`):
+ *      `incident` + `context`(阈值 / 缺失声明 / 补齐办法 / 读取说明)全在,四块输出都满;
+ *   ② **事故切片**:只有 `{ incident, thresholds, redaction }` 三个键 —— 仓库自带的
+ *      `tests/fixtures/incident-real.json` 就是这个形状(真页面 capture → report → 脱敏的切片)。
+ *      工具**按形状自动识别**并照常渲染,但会先打一行"这是切片":切片里没有
+ *      `context.missing` / `howToAdd` / `howToRead`,那几段空着**不代表这份证据没有缺口**。
+ *      形状不在上面两种之内时按错误退出;确认它确实是切片(比如多带了备注键)再加 `--allow-slice`。
  *
  * 只读文件、不联网、不依赖任何包。输出四块:
  *   1. 头部与口径(触发原因、严重度、阈值、缺失声明、守夜层状态)
@@ -18,9 +27,10 @@ const args = process.argv.slice(2);
 const file = args.find((a) => a.startsWith('-') === false);
 const widthFlag = args.indexOf('--width');
 const WIDTH = widthFlag === -1 ? 96 : Math.max(40, Number(args[widthFlag + 1]) || 96);
+const ALLOW_SLICE = args.includes('--allow-slice');
 
 if (file === undefined) {
-	console.error('用法:node tools/inspect-incident.mjs <perf-hud-incident-*.json> [--width 96]');
+	console.error('用法:node tools/inspect-incident.mjs <perf-hud-incident-*.json | 事故切片.json> [--width 96] [--allow-slice]');
 	process.exit(2);
 }
 
@@ -31,13 +41,34 @@ try {
 	console.error(`读不了这份文件:${error instanceof Error ? error.message : String(error)}`);
 	process.exit(1);
 }
-if (report === null || typeof report !== 'object' || report.kind !== 'perf-hud-incident') {
-	console.error(`这不是事故包(kind=${report === null ? 'null' : JSON.stringify(report.kind)})。`);
+const isObject = (value) => value !== null && typeof value === 'object' && Array.isArray(value) === false;
+// 两种合法输入:完整包(kind 自描述)与切片({incident, thresholds, redaction})。切片要**明确标出来** ——
+// 它没有 context.missing,静默当完整包渲染会让人把"切片没带这一栏"读成"这份证据没有缺口"。
+const SLICE_KEYS = ['incident', 'thresholds', 'redaction'];
+const isPack = isObject(report) && report.kind === 'perf-hud-incident';
+const hasIncident = isObject(report) && isObject(report.incident);
+const sliceShaped = hasIncident && Object.keys(report).every((key) => SLICE_KEYS.includes(key));
+const slice = isPack === false && hasIncident && (sliceShaped || ALLOW_SLICE);
+if (isPack === false && slice === false) {
+	const kind = isObject(report) ? JSON.stringify(report.kind) : String(report);
+	const keys = isObject(report) ? JSON.stringify(Object.keys(report)) : '—';
+	console.error(`这不是事故包,也不是事故切片(kind=${kind},顶层键=${keys})。`);
+	console.error('完整包要有 kind="perf-hud-incident" 与 incident 对象;');
+	console.error(`切片是 {${SLICE_KEYS.join(', ')}} 三个键(仓库自带的 tests/fixtures/incident-real.json 就是它)。`);
+	console.error('形状对不上、但确认它就是切片时,加 --allow-slice 强制按切片读。');
+	process.exit(1);
+}
+if (isPack === true && hasIncident === false) {
+	console.error('kind 写着 perf-hud-incident,但里面没有 incident 对象 —— 这份包不完整,先别按它下结论。');
 	process.exit(1);
 }
 
 const incident = report.incident ?? {};
-const context = report.context ?? {};
+// 切片把 thresholds / redaction 放在**顶层**(它本来是 context 的两段);按同一形状喂给下面,
+// 渲染代码只有一条路。切片没有 missing / howToAdd / howToRead —— 那三段后面会显式写"切片里没有"。
+const context = slice === true
+	? { thresholds: isObject(report.thresholds) ? report.thresholds : {}, redaction: report.redaction }
+	: report.context ?? {};
 const summary = incident.summary ?? {};
 const frames = Array.isArray(incident.frames) ? incident.frames : [];
 const loaf = Array.isArray(incident.loaf) ? incident.loaf : [];
@@ -115,6 +146,10 @@ const window0 = incident.window ?? {};
 console.log(`\n事故 ${incident.id ?? '?'}${incident.restored === true ? '(读回)' : ''}  ·  ${localTime(incident.at) ?? incident.at ?? '?'}${tzLabel}${report.schema === undefined ? '' : `  ·  schema ${report.schema}`}`);
 if (localTime(incident.at) !== null) console.log(`(机器可读的同一个时刻:${incident.at}  ·  导出于 ${report.exportedAt ?? '?'})`);
 console.log(`${file}`);
+if (slice === true) {
+	console.log('⚠️ 这是**事故切片**(incident + thresholds + redaction),不是完整事故包:没有 manifest / context.missing / howToAdd / howToRead。');
+	console.log('   下面「口径与缺失声明」那三段是**空的,不等于这份证据没有缺口** —— 要判读缺口请用完整包(面板「导出诊断包」或「导出诊断报告」)。');
+}
 console.log(rule('发生了什么'));
 console.log(`触发原因   ${incident.cause ?? '?'}${incident.cause === 'loaf' ? '(长动画帧的 blockingDuration 超线)' : incident.cause === 'frame' ? '(帧间隔超线)' : incident.cause === 'manual' ? '(手动标记)' : ''}`);
 console.log(`触发时刻   ${localTime(incident.at) ?? incident.at ?? '?'}${tzLabel}  ·  perf ${num(incident.atPerfMs)}ms`);
@@ -282,10 +317,20 @@ console.log(`阈值       触发 ${num(thresholds.triggerMs, 0)}ms  ·  间隙 $
 const watch = context.watch ?? {};
 console.log(`守夜层     录制 ${watch.recording === true ? '中' : '停'}  ·  LoAF ${watch.loaf ?? '?'}  ·  帧样本 ${num(watch.frameSamples, 0)}/${num(watch.frameBudget, 0)}(覆盖 ${num((watch.coveredMs ?? 0) / 1000)}s)  ·  捕获 ${num(watch.captured, 0)} 次(归并 ${num(watch.coalesced, 0)} · 丢弃 ${num(watch.dropped, 0)} · 读回 ${num(watch.restored, 0)})`);
 console.log(`宿主       ${incident.host === null || incident.host === undefined ? '(没有宿主数据)' : `p99 ${num((incident.host.eventLoop ?? {}).p99)}ms  ·  快照年龄 ${num(incident.host.snapshotAgeMs, 0)}ms(正数=比事故更早采到)  ·  ${incident.host.at ?? '?'}`}`);
+// 三段"包里带了什么"的清单:空数组与"根本没有这一栏"要分开说 —— 切片切掉了 context,
+// 静默跳过会让人把"没带"读成"没有缺口"(这正是切片最容易造成的误读)。
+const listOf = (value) => (Array.isArray(value) ? value : []);
+const noneText = slice === true ? '(切片里没有这一栏 —— 不是"没有缺口")' : '(这份包没有给出这一栏)';
+const missingLines = listOf(context.missing);
+const addLines = listOf(context.howToAdd);
+const readLines = listOf(context.howToRead);
 console.log('这次**没有**拿到:');
-for (const line of context.missing ?? []) console.log(`  · ${line}`);
+for (const line of missingLines) console.log(`  · ${line}`);
+if (missingLines.length === 0) console.log(`  ${noneText}`);
 console.log('要补的话:');
-for (const line of context.howToAdd ?? []) console.log(`  · ${line}`);
+for (const line of addLines) console.log(`  · ${line}`);
+if (addLines.length === 0) console.log(`  ${noneText}`);
 console.log('读取说明:');
-for (const line of context.howToRead ?? []) console.log(`  · ${line}`);
+for (const line of readLines) console.log(`  · ${line}`);
+if (readLines.length === 0) console.log(`  ${noneText}`);
 console.log('');
