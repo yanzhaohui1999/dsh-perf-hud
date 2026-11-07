@@ -1650,7 +1650,12 @@ window.__ModuleLoader__.load({
 				kind: 'dsh-perf-hud-diagnostic-pack',
 				plugin: PKG,
 				pluginVersion: state.host === null || state.host === undefined ? null : state.host.pluginVersion ?? null,
-				dshVersion: state.host === null || state.host === undefined ? null : state.host.dshVersion ?? null,
+				// ⚠️ 这里**没有** `dshVersion`,是刻意的(REVIEW §2 第 7 条):宿主半拿不到 DSH 的版本,
+				// 而客户端读 `state.host.dshVersion` 只会恒为 null —— 一个恒 null 的字段在导出件里比
+				// 没有这个字段更糟(读包的人会以为"采集失败了")。宿主侧的运行时版本仍在包内可查:
+				// 采过宿主 CPU profile 时 `context.hostCpuProfile.meta.nodeVersion` 就是它。
+				// 补这个字段的前提是上游给插件一个**可验证**的版本接口(现在 profileContext 只有
+				// name/dir/home,没有版本);按 AGENTS §1「不凭记忆写 API」不猜。有断言钉住"别加回来"。
 				platform: {
 					page: location.href,
 					userAgent: navigator.userAgent,

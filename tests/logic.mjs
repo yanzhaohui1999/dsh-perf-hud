@@ -4842,6 +4842,18 @@ check('golden fixture:完整现场 → manifest.complete=true,摘要五段齐全
 			summary.includes('现场不完整')];
 	})(),
 	[true, true, true, false]);
+// REVIEW §2 第 7 条:`dshVersion` 恒为 null(宿主半从不下发)。处置是**客户端别读、字段删掉** ——
+// 一个恒 null 的字段会让读包的人以为"采集失败了"。这条钉住两件事:字段真的没了、拿得到的那半还在。
+check('诊断包:manifest 不宣称拿不到的 DSH 版本(恒 null 的 dshVersion 已删),pluginVersion 照旧',
+	(() => {
+		const previous = box.state.host;
+		box.state.host = { ...(previous ?? {}), pluginVersion: '0.9.0' };
+		const manifest = EX.manifestFor(realFixture.incident);
+		box.state.host = previous;
+		return [Object.prototype.hasOwnProperty.call(manifest, 'dshVersion'), manifest.pluginVersion,
+			Object.keys(manifest).filter((key) => /Version/i.test(key)).sort()];
+	})(),
+	[false, '0.9.0', ['pluginVersion', 'schemaVersion']]);
 check('不完整现场:manifest.complete=false,摘要与 missing 都点名,不把缺口藏起来',
 	(() => {
 		const row = {
