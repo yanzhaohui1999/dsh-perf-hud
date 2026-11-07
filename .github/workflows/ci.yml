@@ -55,6 +55,11 @@ jobs:
       - name: Offline render smoke
         run: node tools/render-smoke.mjs
 
+      # 诊断 Skill §2.6 的前缀表是**生成**出来的(1.0 / S5):改了 capabilityMissing() 里的前缀
+      # 却没重跑生成器,这里红。等价于「生成器跑一遍 → 工作区无 diff」。
+      - name: Missing-prefix table has no drift
+        run: node tools/gen-prefix-table.mjs --check
+
       # 面板文案的长度预算与单位一致性断言在 logic.mjs 里;这里再核一次
       # 「断言总数」与文档声称的一致(改数字忘了同步文档时,这条会红)。
       - name: Assertion count matches the docs

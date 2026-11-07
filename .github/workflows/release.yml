@@ -75,6 +75,10 @@ jobs:
       - name: Offline render smoke
         run: node tools/render-smoke.mjs
 
+      # 与 ci.yml 同一条:诊断 Skill §2.6 的前缀表是生成出来的,改了代码没重跑生成器 → 红
+      - name: Missing-prefix table has no drift
+        run: node tools/gen-prefix-table.mjs --check
+
       # 与 ci.yml 同一条:断言总数与文档声称的一致。以前只有 ci.yml 核这个,
       # 而发版是**从 release 事件**进来的 —— 文档里的数字写错了,发版路径照样绿着走到 publish。
       # 五份文档逐个核(不只是总数):CONTRIBUTING 曾经停在 325 / 39 / 358。

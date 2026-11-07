@@ -142,6 +142,7 @@ DSH_COOKIE=… node tests/live-host.mjs        # 真实路由;退出码 3 = 宿�
 - **宿主半可离线真跑**:`tests/host.mjs` 用假 `ctx`(含 `connection.fetch.register` / `pluginManager` / `ctx.on`)驱动真实 `index.js`,断言路由、事件循环升温、confirm 安全线。
 - **契约冻结两侧都要测**:`tests/logic.mjs` 是**产方**(`manifestFor()` 的键集合 == `docs/pack-schema.md` 的清单,双向),`tests/compat.mjs` 是**读方**(上一版 `schemaVersion` 的夹具包仍能读出摘要与能力矩阵;缺一个必需键必须红)。夹具是**真事故切片**按上一版契约降级出来的(`manifest` v1 / `incident` v2),不是另写一份"像老包"的数据 —— 改夹具上的数值就等于改被测对象,先问"这是不是真采集里的东西"。
 - **离线渲染冒烟是"没浏览器时的那一眼"**:`tools/render-smoke.mjs` 用假 React(元素树 + hooks 桩)、**真词典**与 `client.js` 里抽出来的真 `state` 字面量,把主界面 / 卡顿详情 / 开发者详情五页签 / 设置 / 收起态 / 关闭态各跑一遍,断言"0 抛错 + 关键文案在场 + 没有漏成 key 的文案"。它执行的正是 `PerfHud()` 的函数体 —— 所以**模块作用域的裸标识符、拼错的 dep、只在某个分支里用的变量**都会在这里红(实测:往 `mainView` 里塞一句 `void smokeBareIdentifier` → `smokeBareIdentifier is not defined`)。⚠️ 数据类 dep 是**通用假值**,它不验读数对不对(那是三套件与真页面验收器的事),只回答"这条渲染路径还跑得下去吗"。
+- **`missing:` 前缀表是生成出来的**:`node tools/gen-prefix-table.mjs` 从 `capabilityMissing()` 的 `missing.push('前缀:…')` 重写诊断 Skill §2.6 —— **别手改那张表**。分类与读法是人写的判断(在生成器的 `CATEGORIES` 里),前缀集合由代码决定并双向核对(代码有而表里没有 / 表里有而代码已不生成,都直接失败)。CI 与 `release.yml` 跑 `--check`(等价于"生成器跑一遍 → 工作区无 diff");加了前缀不重跑 → 红。`npm test` 里另有一条 logic 断言做第二道网。
 - 断言总数写进 [README.md](README.md) 与 [REVIEW.md](REVIEW.md),**改数字要同步改文档**;CI 里有一条门禁专门核这个。
 
 ---

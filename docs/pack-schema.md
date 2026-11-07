@@ -340,7 +340,7 @@ devtools-trace
 
 ## 5. `missing:` 前缀
 
-前缀表**只有一个来源**:[诊断 Skill §2.6](../skills/dsh-perf-diagnosis/SKILL.md) 那张表,由 `tests/logic.mjs` 的双向断言钉住(代码里有而表里没有 / 表里有而代码不再生成,都会红)。
+前缀表**只有一个来源**:[诊断 Skill §2.6](../skills/dsh-perf-diagnosis/SKILL.md) 那张表 —— 它由 `tools/gen-prefix-table.mjs` 从 `capabilityMissing()` 生成(`--check` 进 CI,手改 / 没重跑生成器都会红);分类与读法是人写的判断,前缀集合由代码决定。第二道网是 `tests/logic.mjs` 的双向断言。
 
 本文不复述那张表 —— 复述过一份就必然会漂。读方要遵守的只有三条:
 

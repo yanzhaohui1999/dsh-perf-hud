@@ -341,6 +341,7 @@ node tests/logic.mjs         # 671 条:从 client.js 与其分片抽真函数进
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js
 node tests/compat.mjs        # 12 条:上一版 schemaVersion 的夹具包喂当前读方(契约没漂)
 node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不需要浏览器)
+node tools/gen-prefix-table.mjs --check  # 诊断 Skill §2.6 的前缀表与 capabilityMissing() 一致
 # 合计 735 条断言 + 一条冒烟,离线,无需 DSH 在跑
 ```
 

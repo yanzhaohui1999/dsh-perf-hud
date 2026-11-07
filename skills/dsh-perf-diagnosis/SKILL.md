@@ -228,18 +228,23 @@ unobserved: [ { id, reason } ]
 
 `context.missing` 是**字符串数组**，大多数行形如 `前缀:说明`。前缀是类别，不是错误码。它回答的是"这份包缺什么"，可能是下面五类之一：
 
+<!-- prefix-table:start(由 tools/gen-prefix-table.mjs 生成,别手改) -->
 | 类别 | 例子 | 读法 |
 |---|---|---|
-| 平台 / 浏览器不支持 | `loaf:`、`interaction-timing:`（unsupported） | 这一层本来就没有，换数据源（longtask / DevTools） |
-| 没开 | `precise:`、`instrumentation:`、`interaction-timing:`（off） | 下一次按 `howToAdd` 开对应档位再抓；**这一条补不了** |
-| 这个窗口没发生 / 没到阈值 | `loaf-scripts:`（这一帧没有脚本）、`interaction-timing:`（窗口内 0 条） | 不是故障，也不等于"没有 JS / 用户没操作" |
-| 结构上不采 | `devtools-trace:`、`compositor:`、`interaction-breakdown:`、`element-timing:`（DSH DOM 上没有 elementtiming，恒 0）、`baseline:`（跨机器 / 跨浏览器基线） | 要这些只能走 DevTools / Chrome trace / 别的机器；别假装包里有 |
-| 采集丢了 / 还没采到 | `window-integrity:`、`recorder-cost:`（`samples = 0`）、`host:`（没有宿主快照）、`host-snapshot:`（有快照，但采在事故之前 / 之后，未必覆盖卡顿瞬间）、`loaf-pkg:`（这几条脚本没定到包名，冒号后是没定到的原因分布）、`host-cpuprofile:`（没自动采） | 这一条的证据不完整；`recorder-cost` 的 0 是"空"，不是"零成本" |
+| 平台 / 浏览器不支持 | `loaf:`(unsupported)、`interaction-timing:`(unsupported) | 这一层本来就没有,换数据源(longtask / DevTools) |
+| 没开 | `precise:`、`instrumentation:`、`interaction-timing:`(off) | 下一次按 `howToAdd` 开对应档位再抓;**这一条补不了** |
+| 这个窗口没发生 / 没到阈值 | `loaf-scripts:`(这一帧没有脚本)、`interaction-timing:`(窗口内 0 条) | 不是故障,也不等于"没有 JS / 用户没操作" |
+| 结构上不采 | `devtools-trace:`、`compositor:`、`interaction-breakdown:`、`element-timing:`(DSH DOM 上没有 elementtiming,恒 0)、`baseline:`(跨机器 / 跨浏览器基线) | 要这些只能走 DevTools / Chrome trace / 别的机器;别假装包里有 |
+| 采集丢了 / 还没采到 | `window-integrity:`、`recorder-cost:`(`samples = 0`)、`host:`(没有宿主快照)、`host-snapshot:`(有快照,但采在事故之前 / 之后,未必覆盖卡顿瞬间)、`loaf-pkg:`(这几条脚本没定到包名,冒号后是没定到的原因分布)、`host-cpuprofile:`(没自动采) | 这一条的证据不完整;`recorder-cost` 的 0 是"空",不是"零成本" |
+<!-- prefix-table:end -->
 
-> ⚠️ 这张表与客户端 `capabilityMissing()` 生成的前缀**由一条离线断言钉住**（`tests/logic.mjs`
-> 的「缺失声明的前缀集合与诊断 Skill §2.6 的前缀表一一对应」）：客户端改措辞 / 换前缀 / 加新前缀时，
-> 这里没跟着改，`npm test` 会红。反过来说，读包时看到的每一个前缀都该在这张表里找得到 ——
-> 找不到的那个是**新版本**的前缀，按冒号后的说明读，别硬套旧类别。
+> ⚠️ **这张表是生成出来的,别手改**：`node tools/gen-prefix-table.mjs` 从 `capabilityMissing()` 的
+> `missing.push('前缀:…)` 重写它；`--check` 只核不写，CI 跑的就是这一条 —— 改了代码里的前缀却没重跑
+> 生成器，发版路径会红。分类与读法是人写的判断（在生成器的 `CATEGORIES` 里），前缀集合是代码给的：
+> 双向核对，代码有而表里没有 / 表里有而代码已不生成，都直接失败。第二道网是 `tests/logic.mjs`
+> 的「缺失声明的前缀集合与诊断 Skill §2.6 的前缀表一一对应」。
+> 读包时看到的每一个前缀都该在这张表里找得到 —— 找不到的那个是**新版本**的前缀，按冒号后的说明读，
+> 别硬套旧类别。
 
 同一个前缀可能落在不同类别：`interaction-timing:` 可能是浏览器不支持、观察器没开，或只是这个窗口里没有达到阈值的事件。**必须读冒号后的说明**，不能只看前缀。
 

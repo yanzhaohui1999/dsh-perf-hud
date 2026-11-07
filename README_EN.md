@@ -338,6 +338,7 @@ node tests/logic.mjs         # 671 assertions: real functions extracted from cli
 node tests/host.mjs          # 41 assertions: real index.js driven by a fake ctx
 node tests/compat.mjs        # 12 assertions: a previous-schemaVersion pack fed to the current readers
 node tools/render-smoke.mjs  # offline render smoke: six screens + the "HUD off" state, no browser needed
+node tools/gen-prefix-table.mjs --check  # diagnosis Skill §2.6 prefix table is in sync with capabilityMissing()
 # 735 offline assertions + one smoke run, no running DSH required
 ```
 
