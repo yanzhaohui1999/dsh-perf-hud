@@ -2583,21 +2583,75 @@ check('modelDeps() 覆盖 createModel 解构的每一个键(漏传 = 常量 unde
 	(() => {
 		const at = modelSource.indexOf('exports.createModel = (deps) => {');
 		const destructure = modelSource.slice(at, modelSource.indexOf('} = deps;', at));
-		const needed = [...destructure.matchAll(/^\t{4}([A-Za-z_$][\w$]*),$/gm)].map((match) => match[1]);
+		const needed = [...destructure.matchAll(/^\t{4,}([A-Za-z_$][\w$]*)\s*(?=[,:]|$)/gm)].map((match) => match[1]);
 		const depsAt = source.indexOf('function modelDeps() {');
 		const depsBody = source.slice(depsAt, source.indexOf('\n\t\t}', depsAt));
-		// `name,` 与 `name: …` 都算提供了(resolveStamp / translate 是包一层传进去的)
-		const missing = needed.filter((name) => new RegExp(`^\\t{4}${name}[,:]`, 'm').test(depsBody) === false);
+		// `name,` 与 `name: …` 都算提供了(resolveStamp / translate 是包一层传进去的);
+		// 缩进不钉死 4 个 tab(改版时出现过 6 tab,固定缩进会把那几项静默漏掉)
+		const missing = needed.filter((name) => new RegExp(`^\\t{4,}${name}\\s*(?=[,:]|$)`, 'm').test(depsBody) === false);
 		return [needed.length > 50, missing];
 	})(), [true, []]);
 check('主文件里每个传给 createModel 的依赖都有声明(少一个 = 分片拿到 undefined)', (() => {
 	const at = source.indexOf('function modelDeps() {');
 	const seg = source.slice(at, source.indexOf('\n\t\t}', at));
 	// 只认裸名字:`resolveStamp: () => resolveSeq` 这种是映射键,源里本来就没有同名变量
-	const names = [...seg.matchAll(/^\t{4}([A-Za-z_$][\w$]*),$/gm)].map((match) => match[1]);
+	// 只认裸名字(逗号或行尾):`resolveStamp: () => resolveSeq` 这种是映射键,源里本来就没有同名变量
+	const names = [...seg.matchAll(/^\t{4,}([A-Za-z_$][\w$]*)\s*(?=,|$)/gm)].map((match) => match[1]);
 	const missing = names.filter((name) => new RegExp(`(function ${name}\\(|class ${name} |const ${name} =|let ${name} =|var ${name} =)`).test(source) === false);
 	return [names.length > 50, missing];
 })(), [true, []]);
+
+// ── createUi 的依赖守卫(1.0 S0/S1 收口补丁)──
+// 为什么必须有:render-smoke 的 deps 是 Proxy,**缺依赖会被兜成可调用假值** —— 于是"漏传 / 拼错"
+// 在离线永远静默:735 条全绿、node --check 全绿,只有真页面渲染时才 TypeError(HUD 直接不出现)。
+// 与 createModel 那条同款:只做纯文本核对,两侧名字一对就过。
+// ⚠️ 解析不能按固定 4 个 tab:`createUi({` 的前三项是 6 个 tab(改版时留下的缩进),
+// 解构块最后一项也没有逗号(写成 `writeRows` 就接 `} = deps;`)—— 这两处都曾让统计漏项。
+const uiDepNames = (() => {
+	const at = uiSource.indexOf('exports.createUi = (deps) => {');
+	if (at === -1) return [];
+	const block = uiSource.slice(at, uiSource.indexOf('} = deps;', at));
+	return [...block.matchAll(/^\t{4,}([A-Za-z_$][\w$]*)\s*(?=[,:]|$)/gm)].map((match) => match[1]);
+})();
+const uiDepKeys = (() => {
+	const at = source.indexOf('uiApi = ui.createUi({');
+	if (at === -1) return [];
+	// 用括号配平找对象结尾(跳过字符串与行注释);这段里没有嵌套对象,但不赌这一点
+	const open = source.indexOf('{', at);
+	let depth = 0;
+	let quote = null;
+	let end = -1;
+	for (let i = open; i < source.length; i += 1) {
+		const ch = source[i];
+		if (quote !== null) {
+			if (ch === '\\') i += 1;
+			else if (ch === quote) quote = null;
+			continue;
+		}
+		if (ch === "'" || ch === '"' || ch === '`') { quote = ch; continue; }
+		if (ch === '/' && source[i + 1] === '/') { i = source.indexOf('\n', i); if (i === -1) break; continue; }
+		if (ch === '{') depth += 1;
+		else if (ch === '}') { depth -= 1; if (depth === 0) { end = i; break } }
+	}
+	if (end === -1) return [];
+	return [...source.slice(open + 1, end).matchAll(/^\t{4,}([A-Za-z_$][\w$]*)\s*(?=[,:]|$)/gm)].map((match) => match[1]);
+})();
+// 守卫本体是纯函数:两个方向都要能报(解构有而没传 / 传了而没解构)
+const depGuard = (needed, provided) => ({
+	missing: needed.filter((name) => provided.includes(name) === false),
+	unused: provided.filter((name) => needed.includes(name) === false),
+});
+check('createUi 依赖守卫:解构的每个键主文件都真传了,也没有白传的(漏传 = 渲染时 undefined)',
+	[uiDepNames.length > 150, depGuard(uiDepNames, uiDepKeys)],
+	[true, { missing: [], unused: [] }]);
+// 负向自证:守卫本身有牙齿 —— 逐个把 provided 里的键拿掉,每一个都必须被点名;
+// 再造一个"解构里多出来的键",同样必须被点名。这条不依赖真把代码改坏,但改坏时一定红。
+check('createUi 依赖守卫有牙齿:拿掉任意一个键都会被点名,解构里多一个假键也会', (() => {
+	const uncaught = uiDepNames.filter((name) => depGuard(uiDepNames, uiDepKeys.filter((key) => key !== name)).missing.includes(name) === false);
+	const bogus = depGuard([...uiDepNames, 'bogusNewDep'], uiDepKeys).missing;
+	const unusedBonus = depGuard(uiDepNames, [...uiDepKeys, 'unusedBonus']).unused;
+	return { names: uiDepNames.length, uncaught, bogus, unusedBonus };
+})(), { names: 183, uncaught: [], bogus: ['bogusNewDep'], unusedBonus: ['unusedBonus'] });
 check('主界面只吃时间语义(结构上不碰 selectedIncident / 手选那套)', (() => {
 	const seg = extract(renderSource, 'function mainView(');
 	return [seg.includes('selectedIncident') === false, seg.includes('props.latest'), /const latestRow = latestIncident\(\);/.test(renderSource)];

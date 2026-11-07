@@ -65,7 +65,7 @@
 | `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(456 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 四套离线断言(735 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
+| `tests/` | 四套离线断言(737 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 八份参考文档(含 [pack-schema](docs/pack-schema.md))+ `images/`(9 张 README 截图)+ `plans/`(按日期归档 + 索引,含 1.0 验收档案) | 按需查,别通读(§9) |
 | `package.json` | `dsh.client` / `dsh.bundle` 两个挂载点 + `files` 发货清单 + `dsh.compatibility.dshReleases`(**只列真跑过的 DSH 版本**,`npm run pack:check` 核) | 改挂载、发版(§10) |
@@ -115,14 +115,14 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑四套件**(合计 **735** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑四套件**(合计 **737** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 671 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
+node tests/logic.mjs         # 673 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 node tests/compat.mjs        # 12 条:上一版 schemaVersion 的夹具包喂当前读方(契约没漂 + 缺键必红)
-node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 735)
+node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 737)
 ```
 
 一条命令跑完:`npm test`。线上(先按 [环境与验证](docs/verification.md) 换 cookie):
@@ -141,7 +141,7 @@ DSH_COOKIE=… node tests/live-host.mjs        # 真实路由;退出码 3 = 宿�
 - **静态检查必须有牙齿**:`logic.mjs` 顶部两条(① `h(Uppercase…)` 引用的组件必须声明过;② 面板渲染区里的裸函数调用必须声明过)是"整段替换吞掉相邻声明"事故的回归测试([死路](docs/dead-ends.md) 第 7 条);验证它的办法是把声明删掉看它是否报出名字。
 - **宿主半可离线真跑**:`tests/host.mjs` 用假 `ctx`(含 `connection.fetch.register` / `pluginManager` / `ctx.on`)驱动真实 `index.js`,断言路由、事件循环升温、confirm 安全线。
 - **契约冻结两侧都要测**:`tests/logic.mjs` 是**产方**(`manifestFor()` 的键集合 == `docs/pack-schema.md` 的清单,双向),`tests/compat.mjs` 是**读方**(上一版 `schemaVersion` 的夹具包仍能读出摘要与能力矩阵;缺一个必需键必须红)。夹具是**真事故切片**按上一版契约降级出来的(`manifest` v1 / `incident` v2),不是另写一份"像老包"的数据 —— 改夹具上的数值就等于改被测对象,先问"这是不是真采集里的东西"。
-- **离线渲染冒烟是"没浏览器时的那一眼"**:`tools/render-smoke.mjs` 用假 React(元素树 + hooks 桩)、**真词典**与 `client.js` 里抽出来的真 `state` 字面量,把主界面 / 卡顿详情 / 开发者详情五页签 / 设置 / 收起态 / 关闭态各跑一遍,断言"0 抛错 + 关键文案在场 + 没有漏成 key 的文案"。它执行的正是 `PerfHud()` 的函数体 —— 所以**模块作用域的裸标识符、拼错的 dep、只在某个分支里用的变量**都会在这里红(实测:往 `mainView` 里塞一句 `void smokeBareIdentifier` → `smokeBareIdentifier is not defined`)。⚠️ 数据类 dep 是**通用假值**,它不验读数对不对(那是三套件与真页面验收器的事),只回答"这条渲染路径还跑得下去吗"。
+- **离线渲染冒烟是"没浏览器时的那一眼"**:`tools/render-smoke.mjs` 用假 React(元素树 + hooks 桩)、**真词典**与 `client.js` 里抽出来的真 `state` 字面量,把主界面 / 卡顿详情 / 开发者详情五页签 / 设置 / 收起态 / 关闭态各跑一遍,断言"0 抛错 + 关键文案在场 + 没有漏成 key 的文案"。它执行的正是 `PerfHud()` 的函数体 —— 所以**模块作用域的裸标识符、只在某个分支里用的变量**都会在这里红(实测:往 `mainView` 里塞一句 `void smokeBareIdentifier` → `smokeBareIdentifier is not defined`)。⚠️ 数据类 dep 是**通用假值**,它不验读数对不对(那是三套件与真页面验收器的事),只回答"这条渲染路径还跑得下去吗"。**拼错 / 漏传的 dep 不归它管**(Proxy 会把缺的键兜成可调用假值)—— 那一条由 `tests/logic.mjs` 的「createUi 依赖守卫」纯静态核(解构键 ↔ 调用点键,双向)。
 - **`missing:` 前缀表是生成出来的**:`node tools/gen-prefix-table.mjs` 从 `capabilityMissing()` 的 `missing.push('前缀:…')` 重写诊断 Skill §2.6 —— **别手改那张表**。分类与读法是人写的判断(在生成器的 `CATEGORIES` 里),前缀集合由代码决定并双向核对(代码有而表里没有 / 表里有而代码已不生成,都直接失败)。CI 与 `release.yml` 跑 `--check`(等价于"生成器跑一遍 → 工作区无 diff");加了前缀不重跑 → 红。`npm test` 里另有一条 logic 断言做第二道网。
 - 断言总数写进 [README.md](README.md) 与 [REVIEW.md](REVIEW.md),**改数字要同步改文档**;CI 里有一条门禁专门核这个。
 
