@@ -22,6 +22,10 @@ const uiSource = readFileSync(new URL('../client.ui.js', import.meta.url), 'utf8
 const renderSource = source + '\n' + uiSource;
 // 主文件 + 分片:静态检查要能看见搬家之后的实现
 const allSource = source + '\n' + uiSource + '\n' + modelSource + '\n' + i18nSource + '\n' + watchChunkSource;
+// 诊断 Skill 按 `missing:` 前缀分类读包 —— 它和 `capabilityMissing()` 是**跨仓**的一对口径:
+// 客户端改措辞(换前缀 / 加新前缀)时三套件原本不会红,Skill 会静默落到"其它"类里读错。
+// 所以读它进断言:代码里的前缀集合与 §2.6 那张表必须一一对应(下面有一条断言钉住)。
+const skillSource = readFileSync(new URL('../skills/dsh-perf-diagnosis/SKILL.md', import.meta.url), 'utf8');
 // 包内分片:zip 在 client.pack.js 里。测试也读线上那份源码,不另写一份实现。
 const packSource = readFileSync(new URL('../client.pack.js', import.meta.url), 'utf8');
 function loadPackChunk() {
@@ -2299,6 +2303,26 @@ check('能力矩阵:缺失声明由它推,而且保留了线上断言认的前�
 	return [prefixes.every((p) => gaps.missing.some((line) => line.startsWith(p))), gaps.howToAdd.length >= 3,
 		gaps.capabilities.schema === 1];
 })(), [true, true, true]);
+// 前缀漂移是**静默**故障:客户端把 `loaf:` 改成 `loaf-attribution:`,三套件照绿(断言只钉内容),
+// 而诊断 Skill 按 §2.6 的前缀表分类,读不到就落进"其它",结论会照着错的类别走。
+// 这条把两边的集合钉在一起:代码里每个 missing 行都能抽到前缀、代码的前缀都能在 Skill 表里查到、
+// Skill 表里也不许出现代码已经不再生成的前缀(反向 —— 否则 Skill 会教人去找不存在的行)。
+check('缺失声明的前缀集合与诊断 Skill §2.6 的前缀表一一对应', (() => {
+	const pushRe = /missing\.push\(\s*[`'"]([a-z][a-z0-9-]*):/g;
+	const prefixed = [...modelSource.matchAll(pushRe)].map((match) => match[1]);
+	const code = [...new Set(prefixed)].sort();
+	// Skill 那一段只在 2.6 里比:同一篇文档其它小节也在举例,放宽到全文会漏掉"表里少一行"这件事
+	const head = skillSource.indexOf('### 2.6');
+	const end = head === -1 ? -1 : skillSource.indexOf('\n## ', head);
+	const section = head === -1 || end === -1 ? '' : skillSource.slice(head, end);
+	const skill = [...new Set([...section.matchAll(/`([a-z][a-z0-9-]+):/g)].map((match) => match[1]))].sort();
+	return {
+		// 每个 missing.push 都必须以 `前缀:` 开头(写进变量的那一行会让两边都抽不到,等于绕过这条)
+		unprefixed: (modelSource.match(/missing\.push\(/g) ?? []).length - prefixed.length,
+		codeNotInSkill: code.filter((prefix) => skill.includes(prefix) === false),
+		skillNotInCode: skill.filter((prefix) => code.includes(prefix) === false),
+	};
+})(), { unprefixed: 0, codeNotInSkill: [], skillNotInCode: [] });
 
 // ── 可能原因:候选假设 ──
 const causes = EX.causeCandidates(causeRow);
