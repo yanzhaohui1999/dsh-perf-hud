@@ -168,7 +168,7 @@ node tests/compat.mjs        # 12 assertions: a previous-schemaVersion pack fed 
 node tests/replay.mjs        # 8 assertions: the replay site re-derives the summary from frames and matches the pack
 node tools/render-smoke.mjs  # offline render smoke: six screens + "HUD off", no browser needed
 node tools/gen-prefix-table.mjs --check  # diagnosis Skill §2.6 prefix table in sync with capabilityMissing()
-# 756 assertions + one smoke run, no running DSH required; `npm test` runs them all
+# 757 assertions + one smoke run, no running DSH required; `npm test` runs them all
 ```
 
 Any change to rendering / `apply()` / `start()` also needs a **real-page** pass (`node tools/check-panel.mjs` at

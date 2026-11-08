@@ -73,7 +73,8 @@
 			const equal = typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) <= 0.05 : a === b;
 			if (equal === false) diffs.push({ key, pack: a, computed: b });
 		}
-		return { computed, pack, diffs, compared, matches: diffs.length === 0 };
+		// 一个键都没比 = **没比对过**,不是"一致":空 summary 的包不该拿到绿勾。
+		return { computed, pack, diffs, compared, comparable: compared.length > 0, matches: compared.length > 0 && diffs.length === 0 };
 	}
 
 	/** 归因:直接摊包里已有的三份(面板与导出件同源),不另算。 */

@@ -21,6 +21,7 @@
   .verdict { margin-top: 10px; font-size: 12px }
   .verdict.ok { color: var(--ok) }
   .verdict.bad { color: var(--bad) }
+  .verdict.warn { color: var(--warn) }
   .hint { color: var(--dim); font-size: 11px; margin-top: 10px }
 </style>
 </head>
@@ -106,10 +107,12 @@
     shell.appendChild(row('长动画帧', cmp.computed.loafEntries + ' 条 · 累计 blocking ' + cmp.computed.blockingMs + 'ms'));
     shell.appendChild(row('窗口内 longtask', cmp.computed.longTasksInWindow + ' 条'));
 
-    var verdict = el('div', 'verdict ' + (cmp.matches ? 'ok' : 'bad'));
-    verdict.textContent = cmp.matches
-      ? '✓ 与包内 summary 逐项一致(' + cmp.compared.length + ' 项)'
-      : '✗ 与包内 summary 不一致:' + cmp.diffs.map(function (diff) { return diff.key + ' 包内 ' + JSON.stringify(diff.pack) + ' / 现算 ' + JSON.stringify(diff.computed); }).join(' · ');
+    var verdict = el('div', 'verdict ' + (cmp.comparable === false ? 'warn' : cmp.matches ? 'ok' : 'bad'));
+    verdict.textContent = cmp.compared.length === 0
+      ? '— 未比对(包内没有 summary)'
+      : cmp.matches
+        ? '✓ 与包内 summary 逐项一致(' + cmp.compared.length + ' 项)'
+        : '✗ 与包内 summary 不一致:' + cmp.diffs.map(function (diff) { return diff.key + ' 包内 ' + JSON.stringify(diff.pack) + ' / 现算 ' + JSON.stringify(diff.computed); }).join(' · ');
     shell.appendChild(verdict);
 
     if (pack.manifest) {

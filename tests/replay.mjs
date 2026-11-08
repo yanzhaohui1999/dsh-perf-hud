@@ -87,5 +87,11 @@ check('归因:按包 / 可疑脚本 / longtask 三份都来自包内容,排序�
 		attribution.packages[0].ms >= attribution.packages[attribution.packages.length - 1].ms],
 	[true, true, true])
 
+// ⑦ 空 summary:一个键都没比 == 没比对,不能绿勾(复核发现的"0 项一致"真空通过)
+const emptySummary = core.compareSummary({ frames: [{ t: 1000, ms: 16.7 }], summary: {} })
+check('summary 缺失 / 为空时明确"未比对",不冒充通过',
+	[emptySummary.comparable, emptySummary.matches, emptySummary.compared.length, emptySummary.diffs],
+	[false, false, 0, []])
+
 console.log(failed === 0 ? 'ALL PASS(回放站)' : `FAILURES=${failed}`)
 process.exitCode = failed === 0 ? 0 : 1
