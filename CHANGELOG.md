@@ -14,6 +14,8 @@
 
 - **现场「打开/切换会话」耗时(1.1 / 方向 3)**:`document` capture 阶段点击会话行(`data-row-key^="session:"`、且当前未选中)→ 终点 = 目标会话正文节点出现 + 正文 ≥1200 字符 + 该行 `aria-selected=true`(三事实同时成立才结算);观察器只扫新增子树,字符数最多 120ms 读一次(不每帧读整棵树),30s 超时 / 再点 / 关 HUD 三条取消路径共用同一个释放函数。`state.render.openCost.ring` 保留最近 20 次 `{ms,chars,warm,at}`,算 p50/p95;事故包可选带 `context.openCost = {note,n,p50,p95,last}`(**不带标题 / ID / 哈希**,只读字符数);主界面「最近趋势」下加一行 `打开 4.2s`(纯文字,title 写口径);`__perfHud.openCost()` 暴露 ring / 聚合 / pending。redaction 口径改成"只读正文字符数、不读内容"。真页面实测:点击一个 12.8K 字符的会话 → ring 记 `ms 1393.2 / chars 12853`、errors 0。断言 821 → **850**(logic 728 → 757,新增 29 条;含 6 条 DOM 桩的 click/observer/rAF/超时/关 HUD 状态机)。**未验证**:36.7MB 会话的终点稳定性与观察开销(合并后真页面待复跑)、7 天 dogfooding。
 
+- **后台宿主采样(1.1 / 方向 2)**:设置页加「后台宿主采样」开关,**默认关**;开启后宿主低占空比滚动采 CPU profile(每 5 分钟 1 秒、内存里留最近 3 段,常量只在 `index.js`),与手动 / 武装共用同一台 profiler(单飞,优先级 **手动 > 武装 > 后台**;后台在跑时被前两者顶掉并记 `yielded`)。客户端每 10s 的 GET 续租约,`interval×4`(夹 2s–120s)没续上宿主自己停(`lease-expired`),页面关掉 / 插件卸载不会留下常开采样。事故捕获时取与窗口重叠的段填 `incident.timeline[]`(可选 `timeline[].mode:'ambient'`;无重叠不填、不猜);`context.hostSampling` 可选说明开关 / 段数 / 跳过 / 让路 / 停止原因。**没有新增 `missing:` 前缀**。断言 850 → **882**(logic 774 / host 71,新增 32 条:状态机 / 单飞 / 优先级 / 租约 / 段环 / 重叠选择 / 开关默认关)。**未验证**:真宿主重启后的实际开销与覆盖率、真页面设置页排版(worktree 的 client.js 浏览器看不到)、单段实测 27,195B 与 3 段的现场命中率。
+
 ## [1.0.0] - 2026-11-08
 
 **1.0 的承诺:导出包契约冻结。** `manifest.json` / `incident.json` / `capabilities()` / `missing:` 前缀 / `window.__perfHud` 读接口的形状从这里起冻结 —— [`docs/pack-schema.md`](docs/pack-schema.md) 是唯一权威。加可选字段不升版本;删 / 改名 / 改语义要等 2.0。0.9.0 真导出的一份包由 `tests/compat.mjs` 保证仍读得出来。
