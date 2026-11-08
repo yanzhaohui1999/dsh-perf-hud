@@ -269,9 +269,33 @@ p99
 worstFrameJs
 worstFrameNeighboursMs
 suspectedThrottle
+visibleFreezeMs
+visibleFreezeFrames
+refreshHz
+budgetMisses
 ```
 
 可选那六个是"读方可以自己算"的:老包没有 `p50/p90/p99` 时从 `frames` 现算,没有 `worstFrameJs` / `suspectedThrottle` 时按 longtask / LoAF 与最差帧是否重叠现判 —— [`tools/inspect-incident.mjs`](../tools/inspect-incident.mjs) 就是这么做的,它同时兼容旧包。
+
+后四个是 1.0 之后的**可选补丁字段**(加可选字段不升版本),老包没有就按"不知道"读,不要当 0:
+
+- `visibleFreezeMs` / `visibleFreezeFrames`:窗口里 `gapReason === 'visible-freeze'` 的累计时长与条数。可见冻结**仍然计入 `hiddenGaps`**(旧字段的值没变);这两个字段只回答"其中多少是页面可见时冻住的"。
+- `refreshHz`:从窗口内非 gap 帧的帧间隔中位估出的 **effective** 刷新率;样本不足、中位异常或结果不在 20–360Hz 时退回 **60**(不猜)。页面被浏览器压到 60fps 时,120Hz 屏也会报 60。
+- `budgetMisses`:非 gap 帧里帧时长 > `1.5 × (1000 / refreshHz)` 的条数。它是"有没有掉过刷新预算"的计数,不是严重度;别拿它替代 `framesOver50Ms` / `framesOver100Ms`。
+
+`hiddenGaps` 仍是**长间隙帧数**(含 `visible-freeze`;值没有变)。字段名是历史包袱,不要读成"页面隐藏次数";细分看 `visibleFreezeFrames`。
+
+### 3.5.1 `frames[].gapReason`(可选元素键,1.0 之后)
+
+只在 `gap: true` 的帧上出现;加它不升版本,老包没有这个键 = **不知道原因**,不要当 `hidden`。
+
+| 值 | 判据 | 是不是页面冻结 |
+|---|---|---|
+| `hidden` | 这段时间页面不可见(`visibilitychange` / `visibilityState` 证据) | 否(只是没在测) |
+| `visible-freeze` | 页面可见,且时间源没有跳变,或有 longtask / LoAF 与这段重叠 | 是;守夜层会因此起一次捕获 |
+| `time-jump` | 页面可见,但 `Date.now()` 与 `performance.now()` 的跳变对不上(更像系统睡眠 / 时钟被改) | 否(不猜成冻结) |
+
+`gap: true` 的既有语义不变:它仍表示"rAF 被挂起了,不是普通卡顿";`worstFrameMs` / `hiddenGaps` 的算法也没有改,可见冻结仍然**不**进 `worstFrameMs` —— 要看它请读 `visibleFreezeMs` / `visibleFreezeFrames`。
 
 ### 3.6 数组元素(元素级清单)
 
@@ -279,7 +303,7 @@ suspectedThrottle
 
 | 数组 | 必需键 | 备注 |
 |---|---|---|
-| `frames[]` | `t` `ms` | `gap: true` 表示 rAF 被挂起,不是卡顿;`gap` 键只在挂起帧上有 |
+| `frames[]` | `t` `ms` | `gap: true` 表示 rAF 被挂起,不是卡顿;`gap` 键只在挂起帧上有。`gapReason`(可选,只在 gap 帧上)见下方 |
 | `loaf[]` | `t` `dur` `blocking` `scripts` | `renderStart` / `styleAndLayoutStart` 只在浏览器给的时候有 |
 | `loaf[].scripts[]` | `ms` `fn` `invoker` `invokerType` `charPos` `u` | `u` 是 `urls[]` 的下标,`-1` = 没有 URL;`pkg` / `pkgVia` / `file` / `line` / `lineVia` / `lineScope` 是**归因推断**的结果(fn / ms 是直接测量) |
 | `longTasks[]` | `seq` `t` `at` `ms` `owner` `source` | `owner` 是包名或 `(unknown)`;`component` / `subtreeComponent` / `domComponent` 按插桩可用性出现 |
@@ -412,7 +436,7 @@ README.md
 | incident `schema: 1` → `2` | 脚本 URL 从每条脚本里抽成 `incident.urls` + `scripts[].u` |
 | incident `schema: 2` → `3` | 加 `incident.integrity`(窗口完整性:到底采全没有) |
 | manifest `schemaVersion: 1` → `2` | 加 `manifest.complete` 与 `manifest.incident.integrity`(都来自上面那条) |
-| 不升版本的加字段 | `context.hostCpuProfile` / `context.recorder`(0.9.x)、`summary.worstFrameJs` 一类的派生读数、`incident.timeline`(1.0 / A4)—— 都是**可选**,老包里没有照样读 |
+| 不升版本的加字段 | `context.hostCpuProfile` / `context.recorder`(0.9.x)、`summary.worstFrameJs` 一类的派生读数、`incident.timeline`(1.0 / A4)、`frames[].gapReason` + `summary.visibleFreezeMs/visibleFreezeFrames/refreshHz/budgetMisses`(1.0 之后)—— 都是**可选**,老包里没有照样读 |
 | 不升版本的删字段 | `manifest.dshVersion`(0.9.0)—— **违反本节规则的那一条**,已记进 [REVIEW](../REVIEW.md) §2;以后不许再这样 |
 
 ---

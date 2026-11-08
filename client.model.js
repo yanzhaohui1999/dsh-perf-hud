@@ -2446,7 +2446,9 @@ window.__ModuleLoader__.load({
 						'incident.interactions 是窗口内 ≥100ms 的交互(event timing):ms 是**端到端**时长(到下一次渲染更新),waitMs / handlerMs 是推导出来的两段;**它不拆帧内**(输入延迟/处理/呈现要 DevTools Interactions 轨道)',
 						'incident.packages 是按包汇总的脚本耗时(降序),summary.pkgCoverage 是有名字的脚本占比 —— 覆盖率不到 100% 时别把第一行当成全部',
 						'脚本侧再往下拆一层:scripts[].forcedMs(forcedStyleAndLayoutDuration)是脚本耗时里"强制样式布局"那部分 —— **它已经算在 ms 里**,别再相加;它是"来源是样式而不是业务逻辑"的同步布局。面板「取证明细」里那两行(脚本按包 / 纯 JS 与强制布局)就是这两件事',
-						'incident.integrity.captureComplete 为 false 时,这份现场**采集本身丢过记录**(loafDropped / longTaskDropped 是窗口内的条数;reasons 写明是环形缓冲溢出还是前摇已经滚出环)—— 它仍是一份真实切片,但不能当成"完整的那 13 秒";hiddenGaps 是另一回事(rAF 被挂起,不是我们丢数据)',
+						'incident.integrity.captureComplete 为 false 时,这份现场**采集本身丢过记录**(loafDropped / longTaskDropped 是窗口内的条数;reasons 写明是环形缓冲溢出还是前摇已经滚出环)—— 它仍是一份真实切片,但不能当成"完整的那 13 秒";hiddenGaps 是另一回事(rAF 被挂起,含可见冻结,不是我们丢数据)',
+						'incident.frames[].gapReason 只出现在 gap:true 的帧上:hidden(页面当时不可见)/ visible-freeze(页面可见且时间源一致,或有 longtask / LoAF 重叠)/ time-jump(可见但 Date.now 与 performance.now 跳变对不上,更像睡眠 / 时钟被改)。老包没有这个键 = 不知道原因,不要当 hidden',
+						'incident.summary.visibleFreezeMs / visibleFreezeFrames 是窗口里 gapReason=visible-freeze 的累计时长 / 条数:可见冻结**仍计入 hiddenGaps**,也**仍不进 worstFrameMs**(gap:true 的语义没变),所以可能出现"最差帧 16.7ms、可见冻结 2000ms"这种组合。summary.refreshHz 是从非 gap 帧间隔中位估的 effective 刷新率(样本不足 / 估不准退回 60);budgetMisses 是帧时长 > 1.5× 刷新预算的条数,不是严重度',
 						'incident.summary 是上面几块的汇总(含窗口自己的 p50/p90/p99),方便直接和 incident.baseline 比;这一层不做推断,结论请自己下',
 						'context.watch.kept 按**严重度降序**,不是时间序;带 restored 的条目来自上一次会话(时间靠 env.perfOrigin 对齐),所以 id 与时间看起来会跳',
 						'context.watch.kept[].tier 说明这条是靠哪一档留下来的:worst = 全局最差那一档(前 10 条)、daily = 它那一天最差的一条(最多留最近 7 天)、recent = 最近 3 次(不看严重度)、both = 最差与当天最差两档都占。留存是**三档并集**,所以条数上限是 10 + 7 + 3 = 20 而不是 10 —— 单靠全局最差档时,"昨天下午那次卡"会被同一小时里的 10 次挤掉,而"刚才那一下"永远进不了榜',
@@ -2775,12 +2777,15 @@ window.__ModuleLoader__.load({
 			const owner = incidentOwner(row);
 			const cov = summary.pkgCoverage ?? { resolved: 0, total: 0 };
 			const verdict = incidentVerdict(row);
+			// 可见冻结不进 worstFrameMs,复制摘要时也得说一句;没有就整段不写(不摆 0)。
+			const freezeText = typeof summary.visibleFreezeMs === 'number' && summary.visibleFreezeMs > 0
+				? ` · ${translate('visibleFreeze')} ${Math.round(summary.visibleFreezeMs)}ms` : '';
 			const lines = [
 				`${PKG} ${row.id} · ${row.cause} · ${severityBasisText(row)} ${Math.round(row.severity)}ms · ${row.at}`,
 				`${translate('sevLabel')} ${severityText(severityLevel(row.severity))} · ${translate('jsEvidence')} ${summary.worstFrameJs === 'js' ? translate('jsYes') : translate('jsNo')}`,
 				`${translate('verdictLabel')} ${verdict.label} · ${verdict.detail}`,
 				`${translate('evOwner')} ${owner === null ? translate('unblamed') : `${owner.name} ${Math.round(owner.ms)}ms`}`,
-				`${translate('evWindow')} ${summary.frames ?? 0}${translate('framesUnit')} · LoAF ${summary.loafEntries ?? 0} · ${translate('byPkg')} ${cov.resolved}/${cov.total}`,
+				`${translate('evWindow')} ${summary.frames ?? 0}${translate('framesUnit')} · LoAF ${summary.loafEntries ?? 0} · ${translate('byPkg')} ${cov.resolved}/${cov.total}${freezeText}`,
 			];
 			if (row.integrity?.captureComplete === false) {
 				lines.push(`${translate('integrityIncomplete')} · LoAF ${row.integrity.loafDropped} · longtask ${row.integrity.longTaskDropped}(${row.integrity.reasons.join(' · ')})`);
@@ -3330,6 +3335,11 @@ window.__ModuleLoader__.load({
 			if (typeof summary.p50 === 'number') parts.push(`p50 ${summary.p50}ms`);
 			if (typeof summary.p99 === 'number') parts.push(`p99 ${summary.p99}ms`);
 			if (scope.worst !== null) parts.push(`${translate('watchWorst')} ${Math.round(scope.worst.ms)}ms`);
+			// 可见冻结不在 worstFrameMs 里(它仍是 gap):不在这里单独说一句,读的人只会看到
+			// "最差 16.7ms" 而不知道这一窗里冻了 2 秒。
+			if (typeof summary.visibleFreezeMs === 'number' && summary.visibleFreezeMs > 0) {
+				parts.push(`${translate('visibleFreeze')} ${Math.round(summary.visibleFreezeMs)}ms`);
+			}
 			if (scope.gaps > 0) parts.push(`${translate('replayGaps')} ${scope.gaps}`);
 			return parts.join(' · ');
 		}

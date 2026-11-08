@@ -723,7 +723,7 @@ const sandbox = `
 		verdictNeighbours: '前后帧中位', verdictGap: '这一帧', verdictGapJs: '与它重叠的 JS 观测为 0ms',
 		verdictUnattributedText: '未观察到足以解释该帧的 JS 阻塞证据;请结合前后帧和时间间隙检查 rAF 挂起或浏览器节流',
 		handoffFrameNoEvidence: '这一帧在事故包里没有脚本记录(只有帧间隔)',
-		evOwner: '主要归属', evWindow: '窗口', framesUnit: ' 帧', byPkg: '按包',
+		evOwner: '主要归属', evWindow: '窗口', framesUnit: ' 帧', byPkg: '按包', visibleFreeze: '可见冻结',
 		copied: '已复制', copyFailed: '复制失败', copyNoApi: '这个环境没有剪贴板 API',
 		// 证据 → 代码(面板与交接件共用):这几个词条要给人看,不能只回 key
 		evidenceLabel: '可疑脚本', evidenceInvoker: '来源', fnUnknown: '函数名未记录',
@@ -1775,6 +1775,12 @@ check('复制摘要:带结论与口径(严重度文字 / JS 证据 / 归属 / �
 		const text = EX.incidentSummaryText(incidentRow);
 		return [text.split('\n').length, text.includes('dsh-status-rotator 210ms'), text.includes('严重'), text.includes('按包 4/6'), text.includes('口径:'), text.includes('缺:'), text.includes('归因状态 已确认')];
 	})(), [7, true, true, true, true, true, true]);
+check('复制摘要:可见冻结追加在窗口行(不新增一行,也不摆 0)',
+	(() => {
+		const withFreeze = EX.incidentSummaryText({ ...incidentRow, summary: { ...incidentRow.summary, visibleFreezeMs: 2000 } });
+		const without = EX.incidentSummaryText(incidentRow);
+		return [withFreeze.split('\n').length, withFreeze.includes('可见冻结 2000ms'), without.includes('可见冻结')];
+	})(), [7, true, false]);
 check('复制摘要:事故里有脚本时带上「可疑脚本」证据行(交给别的 AI 能接着查,而不只是一句结论)',
 	(() => {
 		const row = {
@@ -2995,6 +3001,10 @@ const watchPieces = [
 	extract(source, 'function spanText('),
 	extract(source, 'function windowScopeText('),
 	extract(source, 'function watchTrigger('),
+	extract(source, 'function gapReasonFor('),
+	extract(source, 'function estimateRefreshHz('),
+	extract(source, 'function budgetMisses('),
+	extract(source, 'function visibleFreezeStats('),
 	extract(source, 'function loafScripts('),
 	extract(source, 'function wallClock('),
 	extract(source, 'function watchFrame('),
@@ -3260,7 +3270,7 @@ const watchBox = new Function(`
 		otherSources: '其余来源', srcNoUrl: '无 URL(内联脚本)', srcBatch: '插件批次(未按 sourcemap 拆)',
 		crossNone: '没有可交叉的脚本', crossNoOverlap: 'Top3 之间没有交集', crossFailed: '交叉表算不出来', splitFailed: '这一帧的脚本拆解算不出来', rest: '其余',
 		hourUnit: '小时', minUnit: '分', secUnit: '秒', framesUnit: ' 帧',
-		replayGaps: 'rAF 挂起', replayNoLoaf: '这一帧附近没有长动画帧记录(窗口里没有 LoAF)',
+		replayGaps: 'rAF 挂起', visibleFreeze: '可见冻结', replayNoLoaf: '这一帧附近没有长动画帧记录(窗口里没有 LoAF)',
 		// 诊断包那一段用到的词条(缺了会退回 key,断言就看不到真词)
 		packSummaryTitle: '# 性能事故诊断摘要', packSecSummary: '## 1. 摘要', integrityIncomplete: '现场不完整',
 		packSecCandidates: '## 2. 最可能的假设(最多 3 条,每条都带支持与限制)', packSecMissing: '## 3. 缺失的证据',
@@ -3329,7 +3339,7 @@ const watchBox = new Function(`
 		},
 	};
 	return {
-		state, frameRing, watchTrigger, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
+		state, frameRing, watchTrigger, gapReasonFor, estimateRefreshHz, budgetMisses, visibleFreezeStats, loafScripts, wallClock, watchFrame, triggerCapture, settleCapture,
 		location,
 		keepIncident, windowIntegrity, assembleIncident, captureNow, captureOutcome, watchStatus, incidentReport, pickIncident, incidentFileName, frameSplit, worstLoaf, timers, store,
 		performance,
@@ -5270,6 +5280,94 @@ check('A4:环形上限到了丢最早的(留最近 200 条)', (() => {
 	return [rows.length, rows[0].at, rows[rows.length - 1].at];
 })(), [200, 505, 704]);
 
+// ── 读数可信度补丁:≥1s 可见冻结 / 隐藏 / 120Hz 预算 ───────────────────
+check('长间隙分类:可见 + 时间源一致 = 可见冻结;短于间隙线 = null', [
+	watch.gapReasonFor(2000, 'visible', false, 2000, false),
+	watch.gapReasonFor(999, 'visible', false, 999, false),
+], ['visible-freeze', null]);
+check('长间隙分类:隐藏 / 时间源跳变不记冻结', [
+	watch.gapReasonFor(2000, 'hidden', false, 2000, false),
+	watch.gapReasonFor(2000, 'visible', true, 2000, false),
+	watch.gapReasonFor(2000, 'visible', false, 5200, false),
+], ['hidden', 'hidden', 'time-jump']);
+check('长间隙分类:有 longtask / LoAF 重叠时直接证据优先(即使时间源不一致)',
+	watch.gapReasonFor(2000, 'visible', false, 5200, true), 'visible-freeze');
+check('帧环:gapReason 只在 gap 帧上、按字符串存取', (() => {
+	watch.frameRing.reset();
+	watch.frameRing.push(1000, 16.7, false);
+	watch.frameRing.push(3000, 2000, true, 'visible-freeze');
+	watch.frameRing.push(3500, 500, true, 'hidden');
+	const rows = watch.frameRing.slice(900, 4000);
+	return [rows[0].gapReason === undefined, rows[1].gapReason, rows[2].gapReason];
+})(), [true, 'visible-freeze', 'hidden']);
+
+// 2s 可见冻结真走一遍 watchFrame → 进 summary 且触发(不靠 LoAF)
+const freezeIncident = (() => {
+	watch.state.watch.incidents.length = 0;
+	watch.state.watch.loaf.length = 0;
+	watch.state.render.longTasks.length = 0;
+	watch.state.watch.pending = null;
+	watch.state.watch.pendingTimer = 0;
+	watch.state.watch.coveredUntil = 0;
+	watch.state.watch.on = true;
+	watch.frameRing.reset();
+	for (let i = 0; i < 40; i += 1) watch.frameRing.push(5000 + i * 16.7, 16.7, false);
+	watch.setNow(15050);
+	watch.watchFrame(12000, 2000, true, 'visible-freeze');
+	return watch.state.watch.incidents[0];
+})();
+check('2s 可见冻结:自己起一次事故,visibleFreezeMs ≈ 2000 / 条数 1',
+	[freezeIncident !== undefined, freezeIncident.summary.visibleFreezeMs, freezeIncident.summary.visibleFreezeFrames],
+	[true, 2000, 1]);
+check('2s 可见冻结:gap / hiddenGaps / worstFrameMs 的旧语义不变(冻结仍不进最差帧)',
+	[freezeIncident.summary.hiddenGaps, freezeIncident.summary.worstFrameMs,
+		freezeIncident.frames.filter((row) => row.gap).map((row) => row.gapReason)],
+	[1, 16.7, ['visible-freeze']]);
+check('2s 可见冻结:严重度取冻结时长(以前没有 LoAF 时连事故都没有)', freezeIncident.severity, 2000);
+
+// 隐藏标签页的同一段:不触发;即使被手动切进窗口,也不算可见冻结
+const hiddenOutcome = (() => {
+	watch.state.watch.incidents.length = 0;
+	watch.state.watch.pending = null;
+	watch.state.watch.pendingTimer = 0;
+	watch.state.watch.coveredUntil = 0;
+	watch.frameRing.reset();
+	for (let i = 0; i < 40; i += 1) watch.frameRing.push(5000 + i * 16.7, 16.7, false);
+	watch.setNow(15050);
+	watch.watchFrame(12000, 2000, true, 'hidden');
+	const noTrigger = watch.state.watch.pending === null && watch.state.watch.incidents.length === 0;
+	const manual = watch.triggerCapture('manual', 12000, 200);
+	return [noTrigger, manual.summary.visibleFreezeMs, manual.summary.visibleFreezeFrames, manual.summary.hiddenGaps];
+})();
+check('隐藏标签页同一段:不触发自由捕获;切进窗口也不计可见冻结', hiddenOutcome, [true, 0, 0, 1]);
+
+// 120Hz:中位帧间隔 8.3ms;5 帧 16.7ms 是掉预算的那一半帧
+const hzIncident = (() => {
+	watch.state.watch.incidents.length = 0;
+	watch.state.watch.pending = null;
+	watch.state.watch.pendingTimer = 0;
+	watch.state.watch.coveredUntil = 0;
+	watch.frameRing.reset();
+	let t = 1000;
+	for (let i = 0; i < 30; i += 1) { t += 8.3; watch.frameRing.push(t, 8.3, false); }
+	for (let i = 0; i < 5; i += 1) { t += 16.7; watch.frameRing.push(t, 16.7, false); }
+	watch.setNow(t + 5000);
+	return watch.triggerCapture('manual', t, 200);
+})();
+check('120Hz 模拟:中位帧间隔 8.3ms → refreshHz 120,budgetMisses > 0',
+	[hzIncident.summary.refreshHz, hzIncident.summary.budgetMisses > 0], [120, true]);
+check('刷新率估不准退回 60Hz(不猜);60Hz 帧不计 budget miss', [
+	watch.estimateRefreshHz(new Array(10).fill(8.3)),
+	watch.estimateRefreshHz(new Array(40).fill(16.7)),
+	watch.budgetMisses(new Array(40).fill(16.7), 60),
+], [60, 60, 0]);
+check('面板事故详情:可见冻结与最差帧并列显示(冻结不进 worstFrameMs,但读者看得到)',
+	watch.replaySummaryText({
+		summary: { p50: 8.3, p99: 16.7, visibleFreezeMs: 2000 },
+		frames: [{}, {}], span: 13000, worst: { ms: 16.7 }, gaps: 1,
+	}),
+	'窗口 13秒 · 2 帧 · p50 8.3ms · p99 16.7ms · 最差 17ms · 可见冻结 2000ms · rAF 挂起 1');
+
 // ── 诊断包 ──
 watch.state.watch.incidents.length = 0;
 watch.state.watch.incidents.push(causeRow);
@@ -5347,6 +5445,23 @@ const contractBlocks = (() => {
 	samples.push(readPack(watch.buildPack('i12')));
 	watch.state.watch.incidents.pop();
 	watch.state.host.hostCpuProfile = savedProfile;
+	// 第七个样本:可见冻结 / 120Hz 可选字段的**真产方** —— 用 assembleIncident 走一遍,
+	// 不是手写 summary 键(手写样本会让"文档键有出产方"这条变成自证)。
+	watch.frameRing.reset();
+	watch.state.watch.loaf.length = 0;
+	watch.state.render.longTasks.length = 0;
+	const freezeAt = 20000;
+	for (let i = 0; i < 30; i += 1) watch.frameRing.push(freezeAt - 3000 + i * 8.3, 8.3, false);
+	watch.frameRing.push(freezeAt, 1500, true, 'visible-freeze');
+	for (let i = 0; i < 5; i += 1) watch.frameRing.push(freezeAt + 16.7 + i * 16.7, 16.7, false);
+	const freezeSample = watch.assembleIncident({
+		at: freezeAt, until: freezeAt + 3000, cause: 'frame', note: null, severity: 1500,
+		loafFull: false, loafOldestAt: null, longTaskFull: false, longTaskOldestAt: null,
+	});
+	watch.state.watch.incidents.push({ ...freezeSample, id: 'i13' });
+	samples.push(readPack(watch.buildPack('i13')));
+	watch.state.watch.incidents.pop();
+	watch.frameRing.reset();
 	return samples;
 })();
 const CONTRACT_PATHS = {
