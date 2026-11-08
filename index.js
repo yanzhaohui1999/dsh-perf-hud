@@ -1,7 +1,7 @@
 /**
  * dsh-perf-hud 的 Host 半边。
  *
- * 只做五件事,全部经 `connection.fetch.register` 挂在 `/api/dsh-perf-hud/host`:
+ * 只做六件事,全部经 `connection.fetch.register` 挂在 `/api/dsh-perf-hud/host`:
  *   1. GET  —— 事件循环延迟(perf_hooks.monitorEventLoopDelay 的每秒 p50/p99/max);
  *              同时兼作客户端的 RTT 探测端点(?pad=1KB 禁缓存)与吞吐探测(?bytes=N)。
  *   2. POST {op:'watchEvents'}  —— 可选:包住 session/event 的同步派发,累计每条事件的
@@ -16,6 +16,13 @@
  *              客户端在卡顿发生时取回与事故窗口重叠的段,填进已有的 `incident.timeline[]`。
  *              窗口由客户端在 armedStart 里给定,到点自己停(即使页面被关掉也不会留在宿主里
  *              常开);仍然共用上面那台 profiler 的单飞,手动 profileStart 在武装期间会被拒。
+ *   6. POST {op:'ambientStart'|'ambientGet'|'ambientStop'} —— 「后台低占空比滚动采样」:客户端
+ *              显式打开后,每 `AMBIENT_INTERVAL_SECONDS` 采 `AMBIENT_SEGMENT_SECONDS` 一段,
+ *              内存里只留最近 `AMBIENT_SEGMENTS_MAX` 段(默认 5 分钟 / 1 秒 / 3 段)。**默认关**
+ *              (采样本身有开销,只有打开之后才会有数据);与手动 / 武装共用同一台 profiler 的
+ *              单飞,优先级 手动 / 武装 > 后台 —— 后台那一段会被前两者顶掉、丢弃,不会反过来
+ *              拖慢或打断它们。客户端每 10 秒一次的 GET 顺带续租约(`?ambient=1`):租约
+ *              (`AMBIENT_LEASE_*`)过期就自己停,所以页面关掉 / 插件卸载之后不会留下常开的采样。
  *
  * 不注册服务、不监听事件(除非显式开启 watchEvents)、不写任何插件自己的持久化状态。
  * 特别注意:本文件不碰 cordis.patch.yml,也不碰 profile 的持久化配置行。
@@ -192,6 +199,53 @@ const ARMED_SEGMENTS_MAX = 12;       // 窗口内最多留几段(60s / 10s = 6;�
 const ARMED_TICK_MS = 250;           // 段收尾的轮询间隔(只是问一次状态,不采样)
 const ARMED_BUSY = '已有一个武装窗口在进行中';
 
+// 后台低占空比滚动采样(方向 2 的常开版):默认关,打开后由客户端续租约。
+// 四个数只写在这一处:客户端不复制一份(它读回执里的 intervalSeconds / segmentSeconds / keep),
+// 面板 / 文档 / 事故包都从宿主回执取 —— 两边各写一份迟早会漂成"文档说 5 分钟、宿主采 5 秒"。
+const AMBIENT_INTERVAL_SECONDS = 300;   // 每 5 分钟一段
+const AMBIENT_SEGMENT_SECONDS = 1;      // 每段 1 秒(≈200 个样本、~2–3KB)
+const AMBIENT_SEGMENTS_MAX = 3;         // 内存里留最近 3 段(覆盖最近 ~15 分钟)
+const AMBIENT_MIN_INTERVAL = 0.5;       // 下限只为离线套件能在毫秒级复跑状态机(与武装同一条理由)
+const AMBIENT_MAX_INTERVAL = 3600;
+const AMBIENT_MIN_SEGMENT = 0.1;
+const AMBIENT_MAX_SEGMENT = 10;
+const AMBIENT_KEEP_MAX = 12;            // 段数上限:与 kill 判据②同一条(>12 段就没法证明重叠选择)
+const AMBIENT_TICK_MS = 250;            // 段收尾的轮询间隔(只是问一次状态,不采样)
+const AMBIENT_BUSY_RETRY_MS = 1000;     // 手动 / 武装在跑时,后台让路后隔多久再看一眼
+// 租约:客户端每次 GET 带 `?ambient=1` 续期(那条 GET 本来就有,不额外加心跳)。租约到期
+// 就自己停 —— 页面关掉 / 插件卸载之后不会有"留在宿主里常开"的采样。上限 2 分钟(≈12 次续期),
+// 生产间隔是 5 分钟,所以最多白采一次;下限只为离线套件能在 2 秒内复跑"到点自己停"。
+const AMBIENT_LEASE_INTERVALS = 4;
+const AMBIENT_LEASE_MIN_MS = 2000;
+const AMBIENT_LEASE_MAX_MS = 120000;
+
+/** 后台采样的间隔(秒):非数字/非正数回默认 300,再夹到 [0.5, 3600]。 */
+function clampAmbientInterval(raw) {
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value <= 0) return AMBIENT_INTERVAL_SECONDS;
+	return Math.round(Math.min(Math.max(value, AMBIENT_MIN_INTERVAL), AMBIENT_MAX_INTERVAL) * 10) / 10;
+}
+
+/** 后台采样每段多长(秒):非数字/非正数回默认 1,再夹到 [0.1, 10]。 */
+function clampAmbientSegment(raw) {
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value <= 0) return AMBIENT_SEGMENT_SECONDS;
+	return Math.round(Math.min(Math.max(value, AMBIENT_MIN_SEGMENT), AMBIENT_MAX_SEGMENT) * 10) / 10;
+}
+
+/** 后台采样留几段:非数字/非正数回默认 3,再夹到 [1, 12]。 */
+function clampAmbientKeep(raw) {
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value <= 0) return AMBIENT_SEGMENTS_MAX;
+	return Math.min(Math.max(Math.round(value), 1), AMBIENT_KEEP_MAX);
+}
+
+/** 租约时长(毫秒):按间隔的 4 倍给,夹到 [2s, 120s](见上面那条说明)。 */
+function ambientLeaseMs(intervalSeconds) {
+	const computed = Math.round(intervalSeconds * 1000 * AMBIENT_LEASE_INTERVALS);
+	return Math.min(Math.max(computed, AMBIENT_LEASE_MIN_MS), AMBIENT_LEASE_MAX_MS);
+}
+
 /** 武装窗口时长(秒):非数字/非正数回默认 60,再夹到 [0.5, 120]。 */
 function clampArmedWindow(raw) {
 	const value = Number(raw);
@@ -329,7 +383,8 @@ function createArmedProfiler(profiler) {
 			const seconds = Math.round(Math.min(segmentSeconds, remainMs / 1000) * 10) / 10;
 			collectionsAtStart = profiler.state().collections;
 			const startedAtBefore = Date.now();
-			const started = await profiler.start(seconds);
+			// 'armed' 是来源标签:后台采样比它低,后台那一段会被它顶掉;手动在窗口里仍被拒(W2 规则)。
+			const started = await profiler.start(seconds, 'armed');
 			if (started.ok !== true) {
 				noteError(started.error === undefined || started.error === '' ? '宿主没能开始这一段采样' : started.error);
 				schedule(ARMED_TICK_MS);
@@ -374,7 +429,7 @@ function createArmedProfiler(profiler) {
 			// 第一段不能比窗口本身还长:否则窗口结束之后采样还在跑(与"到点自己停"矛盾)。
 			const firstSeconds = Math.round(Math.min(segmentSeconds, windowSeconds) * 10) / 10;
 			collectionsAtStart = profiler.state().collections;
-			const started = await profiler.start(firstSeconds);
+			const started = await profiler.start(firstSeconds, 'armed');
 			if (started.ok !== true) {
 				// 开不起来不算"成功开了个空窗口":active 仍然为真,下一拍会重试;
 				// 但错误原文要立刻记下来,客户端照着显示。
@@ -413,6 +468,285 @@ function createArmedProfiler(profiler) {
 }
 
 /**
+ * 后台低占空比滚动采样器(方向 2 的常开版,默认关)。
+ *
+ * 与武装窗口的区别只有一条:**它不等用户开窗口**,而是按固定节奏一直采(默认每 5 分钟 1 秒),
+ * 内存里只留最近几段。这样"偶发卡顿发生时,宿主那段 profile 已经存在"—— 用户不用先点
+ * 「采 5 秒」再复现。
+ *
+ * 四条刻意的取舍:
+ *   ① **默认关 + 租约**:采样本身有开销(见 createCpuProfiler 的说明),所以只有客户端显式
+ *      ambientStart 之后才采;客户端每次 GET 带 `?ambient=1` 续租,`leaseMs` 内没续上就自己停
+ *      —— 页面关掉 / 插件卸载之后不会留下常开的采样,也不需要"卸载时一定发得出请求"这种假设。
+ *   ② **最低优先级**:手动 / 武装在跑时后台让路(记一次 `skipped`,不排队、不抢);正在飞的
+ *      后台段被它们顶掉时直接丢弃(记一次 `yielded`),**不冒充成采到的一段**。
+ *   ③ **不假装采到**:起不来 / 收尾失败 / 段与本段对不上(`collections` 没涨、时长或时间锚不符)
+ *      都写进 `errors`,不回一个看起来成功的空段。
+ *   ④ **段是证据**:只淘汰最老的段(`keep`),`total` 是累计采到过几段(不因淘汰回退)。
+ */
+function createAmbientProfiler(profiler) {
+	let timer = null;
+	let enabled = false;
+	let busy = false;             // tick 正在跑(异步重入保护)
+	let inFlight = false;         // 当前 profiler 里那一段是这里起的
+	let startedAt = 0;
+	let stoppedAt = 0;
+	let stopReason = '';
+	let intervalSeconds = AMBIENT_INTERVAL_SECONDS;
+	let segmentSeconds = AMBIENT_SEGMENT_SECONDS;
+	let keep = AMBIENT_SEGMENTS_MAX;
+	let nextAt = 0;               // 下一段该开始的时刻(墙钟)
+	let leaseUntil = 0;
+	let leaseMs = ambientLeaseMs(AMBIENT_INTERVAL_SECONDS);
+	let segments = [];            // 最近 keep 段
+	let nextIndex = 0;            // 段序只增不减(客户端按 since 增量取)
+	let total = 0;                // 累计采到段数
+	let skipped = 0;              // 因为手动 / 武装在跑而让路的次数
+	let yielded = 0;              // 在飞那一段被更高优先级顶掉(丢弃)的次数
+	let aborted = 0;              // 关闭时丢弃在飞段的次数
+	let collectionsAtStart = 0;
+	let preemptedAtStart = 0;
+	let inFlightSeconds = 0;
+	let inFlightStartedAt = 0;
+	let errors = [];
+
+	const state = () => ({
+		mode: 'ambient',
+		enabled,
+		collecting: inFlight,
+		intervalSeconds,
+		segmentSeconds,
+		keep,
+		startedAt: startedAt > 0 ? startedAt : null,
+		stoppedAt: stoppedAt > 0 ? stoppedAt : null,
+		stopReason,
+		nextAt: enabled === true && nextAt > 0 ? nextAt : null,
+		leaseMs,
+		leaseUntil: leaseUntil > 0 ? leaseUntil : null,
+		collected: segments.length,
+		total,
+		lastAt: segments.length === 0 ? null : (Number.isFinite(Number(segments[segments.length - 1].meta.endedAt))
+			? Number(segments[segments.length - 1].meta.endedAt) : null),
+		lastIndex: segments.length === 0 ? -1 : segments[segments.length - 1].index,
+		bytes: segments.reduce((sum, row) => sum + (Number.isFinite(row.meta.bytes) ? row.meta.bytes : 0), 0),
+		skipped,
+		yielded,
+		aborted,
+		error: errors.length === 0 ? '' : errors[errors.length - 1].error,
+		errors: errors.slice(-5),
+	});
+	const noteError = (text) => {
+		const error = String(text);
+		if (errors.length > 0 && errors[errors.length - 1].error === error) return;
+		errors.push({ at: Date.now(), error });
+		if (errors.length > 20) errors.splice(0, errors.length - 20);
+	};
+	const schedule = (ms) => {
+		if (timer !== null) clearTimeout(timer);
+		timer = setTimeout(() => { void tick(); }, Math.max(0, ms));
+		if (typeof timer.unref === 'function') timer.unref();
+	};
+	/** 空闲时该睡多久:下一段 / 租约到期,谁先到就谁(租约到期必须有话事权,不能睡满 5 分钟)。 */
+	const idleWaitMs = (now) => {
+		const due = nextAt > 0 ? Math.max(0, nextAt - now) : 0;
+		if (leaseUntil <= 0) return due;
+		return Math.max(0, Math.min(due, leaseUntil - now + 1));
+	};
+
+	/** 收下一段:成功后进段表并按 keep 淘汰最老的;失败只记原因。 */
+	function takeFinishedSegment() {
+		const snapshot = profiler.state();
+		if (snapshot.preempted !== preemptedAtStart) {
+			// 被手动 / 武装顶掉了:这一段压根没采完,不能算"采到了"
+			yielded += 1;
+			return false;
+		}
+		if (snapshot.collections <= collectionsAtStart) {
+			noteError(snapshot.error === '' ? '这一段没有采到(宿主单飞被占用或 Profiler.stop 失败)' : snapshot.error);
+			return false;
+		}
+		const got = profiler.get();
+		if (got.ok !== true || got.profile === null || typeof got.profile !== 'object') {
+			noteError(got.error === undefined || got.error === '' ? '取回这一段失败' : got.error);
+			return false;
+		}
+		const meta = got.meta === null || typeof got.meta !== 'object' ? {} : got.meta;
+		// 自证"取回来的就是这一段"(与武装同一条纪律):手动采样在两次轮询之间跑完的话,
+		// collections 也会 +1,直接 get() 会把**手动那一段**冒充成后台段。
+		const actualSeconds = Number(meta.seconds);
+		const tolerance = Math.max(0.5, inFlightSeconds * 0.5);
+		if (!Number.isFinite(actualSeconds) || Math.abs(actualSeconds - inFlightSeconds) > tolerance
+			|| !Number.isFinite(Number(meta.startedAt)) || Number(meta.startedAt) < inFlightStartedAt - 1000) {
+			noteError('取回的 profile 与本段对不上(时长 / 时间锚不符),不拿它冒充这一段');
+			return false;
+		}
+		segments.push({ index: nextIndex, requestedSeconds: inFlightSeconds, meta, profile: got.profile });
+		nextIndex += 1;
+		total += 1;
+		while (segments.length > keep) segments.shift();
+		return true;
+	}
+
+	/** 起一段。返回 false = 没起来(原因已记下,调用方隔一会儿再看)。 */
+	async function beginSegment() {
+		const snapshot = profiler.state();
+		// 手动 / 武装在跑:后台让路(**不排队、不抢**,也不打断它们)
+		if (snapshot.running === true || snapshot.pending === true) {
+			skipped += 1;
+			schedule(AMBIENT_BUSY_RETRY_MS);
+			return false;
+		}
+		collectionsAtStart = snapshot.collections;
+		preemptedAtStart = snapshot.preempted;
+		const startedAtBefore = Date.now();
+		const started = await profiler.start(segmentSeconds, 'ambient');
+		if (started.ok !== true) {
+			noteError(started.error === undefined || started.error === '' ? '宿主没能开始这一段采样' : started.error);
+			schedule(AMBIENT_BUSY_RETRY_MS);
+			return false;
+		}
+		inFlight = true;
+		inFlightSeconds = segmentSeconds;
+		inFlightStartedAt = startedAtBefore;
+		nextAt = Date.now() + Math.round(intervalSeconds * 1000);
+		return true;
+	}
+
+	async function tick() {
+		timer = null;
+		if (busy === true) return;      // 上一拍还在等 inspector 的往返:不叠第二个
+		busy = true;
+		try {
+			if (enabled !== true) return;
+			const now = Date.now();
+			if (leaseUntil > 0 && now > leaseUntil) { stop('lease-expired'); return; }
+			if (inFlight === true) {
+				const snapshot = profiler.state();
+				if (snapshot.running === true) {
+					// 被手动 / 武装顶掉:立刻放弃等待,别占着"后台在采"这个假象
+					if (snapshot.owner !== 'ambient' || snapshot.preempted !== preemptedAtStart) {
+						inFlight = false;
+						yielded += 1;
+						if (enabled === true) schedule(idleWaitMs(Date.now()));
+						return;
+					}
+					schedule(AMBIENT_TICK_MS);
+					return;
+				}
+				inFlight = false;
+				takeFinishedSegment();
+				if (enabled === true) schedule(idleWaitMs(Date.now()));
+				return;
+			}
+			if (now < nextAt) { schedule(idleWaitMs(now)); return; }
+			const started = await beginSegment();
+			if (enabled !== true) {
+				// 起段期间被关掉:把刚好起来的那一段丢掉(关闭之后不该还有采样在跑)
+				inFlight = false;
+				if (profiler.state().owner === 'ambient') {
+					profiler.stop();
+					aborted += 1;
+				}
+				return;
+			}
+			if (started === true) schedule(AMBIENT_TICK_MS);
+		} finally {
+			busy = false;
+		}
+	}
+
+	/** 停:清定时器、丢在飞段(证据只有"已收完的段",在飞那一段还没成形)。 */
+	function stop(reason) {
+		if (timer !== null) { clearTimeout(timer); timer = null; }
+		if (enabled === true) {
+			enabled = false;
+			stoppedAt = Date.now();
+			stopReason = typeof reason === 'string' && reason !== '' ? reason : 'stopped';
+		}
+		nextAt = 0;
+		leaseUntil = 0;
+		if (inFlight === true) {
+			inFlight = false;
+			// owner 已经换人时别乱停别人的采样(手动 / 武装可能刚接手)
+			if (profiler.state().owner === 'ambient') {
+				profiler.stop();
+				aborted += 1;
+			} else {
+				yielded += 1;
+			}
+		}
+		return { ok: true, ambient: state() };
+	}
+
+	return {
+		/**
+		 * 开启(幂等):已经在采就只续租约。参数只在**这次调用**生效,面板读的是回执里的值;
+		 * 不传就用上面那四个常量(客户端从不传 —— 常量只有这一处)。
+		 */
+		async start(options) {
+			const opts = options === null || typeof options !== 'object' ? {} : options;
+			if (enabled === true) {
+				renew();
+				return { ok: true, ambient: state(), already: true };
+			}
+			intervalSeconds = clampAmbientInterval(opts.intervalSeconds);
+			segmentSeconds = clampAmbientSegment(opts.segmentSeconds);
+			keep = clampAmbientKeep(opts.keep);
+			leaseMs = ambientLeaseMs(intervalSeconds);
+			startedAt = Date.now();
+			stoppedAt = 0;
+			stopReason = '';
+			errors = [];
+			enabled = true;
+			nextAt = startedAt;      // 第一段立刻采:打开开关之后马上就能看到"上次采到段的时间"
+			leaseUntil = startedAt + leaseMs;
+			while (segments.length > keep) segments.shift();
+			const started = await beginSegment();
+			if (enabled !== true) {
+				// 起段期间被关掉(或者被卸载):把刚好起来的那一段丢掉
+				inFlight = false;
+				if (profiler.state().owner === 'ambient') {
+					profiler.stop();
+					aborted += 1;
+				}
+				return { ok: true, ambient: state() };
+			}
+			if (started === true) schedule(AMBIENT_TICK_MS);
+			return { ok: true, ambient: state() };
+		},
+		/** 续租约(客户端每次 GET 带 ?ambient=1 时调):只有开着才有意义。 */
+		renew() {
+			if (enabled !== true) return false;
+			leaseUntil = Date.now() + leaseMs;
+			return true;
+		},
+		/** 取回段:`since` 之前的段不带(客户端按 index 增量取)。没有段不是错误,回空数组。 */
+		get(rawSince) {
+			const since = Number(rawSince);
+			const from = Number.isFinite(since) ? Math.floor(since) : -1;
+			return {
+				ok: true,
+				ambient: state(),
+				segments: segments
+					.filter((row) => row.index > from)
+					.map((row) => ({ index: row.index, requestedSeconds: row.requestedSeconds, meta: row.meta, profile: row.profile })),
+			};
+		},
+		stop,
+		state,
+		/** 宿主卸载:清定时器(**不清段**:调用方马上要断开 inspector,拿不到的就拿不到了)。 */
+		dispose() {
+			if (timer !== null) clearTimeout(timer);
+			timer = null;
+			enabled = false;
+			nextAt = 0;
+			leaseUntil = 0;
+			inFlight = false;
+		},
+	};
+}
+
+/**
  * 宿主进程的 CPU profile(按需,单飞)。
  *
  * 事故包里宿主侧原来只有一个 event-loop p99 数字,而那个数字常常是事故**之后**才采的,
@@ -431,13 +765,33 @@ function createArmedProfiler(profiler) {
  *      报错;真正防止"两段采样互相踩"的是下面那条单飞,不是 V8。
  *   3. **不改宿主原型**:只用 `new Session()` 这个公开句柄,不 patch 任何全局/原型。
  *
+ * 优先级(④):这台 profiler 有三个使用者 —— 手动 `profileStart` / 武装窗口 / 后台滚动采样。
+ * `start(seconds, owner)` 带一个来源标签,只有**更低优先级**的采样会被顶掉丢弃:
+ *
+ *   手动(manual) > 武装(armed) > 后台(ambient)
+ *
+ * 后台那一段被顶掉时只丢那一段(`preempted` +1,调用方按 owner / preempted 认出"这段不是我的"),
+ * 绝不会出现两段并行 —— V8 的"后者接手"会把彼此的样本切碎。手动与武装之间**保持原有规则**
+ * (武装期间手动仍被拒,见 W2 与 host 套件的断言):那两条都是用户在等的一次性采样,后台不参与
+ * 它们的先后。防重入还有一道 `pending`:从 `start()` 进来到 `running=true` 之间有几个 await,
+ * 不做保留就会出现"两个请求同时通过 running 检查"。
+ *
  * `start` 只等在"真的开起来"这一步(毫秒级)就返回,`stop` 由定时器异步收尾 —— 一次 HTTP
  * 请求不该挂 5 秒;调用方按 `running` 轮询,采完再 `get()` 取回。
  */
+const OWNERS = new Set(['ambient', 'armed', 'manual']);
+/** 来源标签归一:不认识的(含老调用方不传)一律按手动 —— 手动不会被任何东西顶掉。 */
+function ownerOf(raw) {
+	return typeof raw === 'string' && OWNERS.has(raw) ? raw : 'manual';
+}
+
 function createCpuProfiler(inspector) {
 	let session = null;
 	let timer = null;
 	let running = false;
+	let pending = false;         // start() 正在等 inspector 的往返(还没到 running=true)
+	let owner = '';              // 当前 / 最近一次采样的来源:manual / armed / ambient
+	let preempted = 0;           // 被更高优先级顶掉的次数(被顶掉的那一段**不产出证据**)
 	let startedAt = 0;
 	let profile = null;          // 最近一次采到的 .cpuprofile(只在内存里)
 	let meta = null;             // 上面那份的元信息(不含 profile 本体)
@@ -455,6 +809,9 @@ function createCpuProfiler(inspector) {
 
 	const state = () => ({
 		running,
+		pending,
+		owner,
+		preempted,
 		collected: profile !== null,
 		collections,
 		lastSeconds: meta === null ? null : meta.seconds,
@@ -498,29 +855,59 @@ function createCpuProfiler(inspector) {
 		return failure === '' ? { ...state(), ok: true } : { ...state(), ok: false, error: failure };
 	}
 
+	/**
+	 * 立刻丢掉正在飞的那一段(**不产出证据**):只给"更高优先级要这台 profiler"用。
+	 * 被顶掉的调用方(武装 / 后台)靠 `preempted` 的增量认出"这一段不是我的",不会把别人的
+	 * profile 冒充成自己的段;它们各自的自证检查(时长 / 时间锚 / collections)也还在。
+	 */
+	function forceStop() {
+		if (timer !== null) clearTimeout(timer);
+		timer = null;
+		running = false;
+		pending = false;
+		const sess = session;
+		session = null;
+		preempted += 1;
+		try { sess?.disconnect(); } catch (ignored) { /* 已断开就无所谓 */ }
+	}
+
 	return {
-		/** 触发一次采样;只在"真的开起来了"之后才返回 ok。 */
-		async start(rawSeconds) {
+		/** 触发一次采样;只在"真的开起来了"之后才返回 ok。`owner` 决定谁能让谁(见优先级)。 */
+		async start(rawSeconds, rawOwner) {
 			const seconds = clampSeconds(rawSeconds);
+			const who = ownerOf(rawOwner);
 			// 先展开 state、再放本次请求专用的字段:同名字段以本次为准(否则 seconds 会被 null 盖掉)。
-			if (running) return { ...state(), ok: false, error: '已有一个采样在进行中', seconds };
+			if (pending === true) return { ...state(), ok: false, error: '另一个采样正在启动中', seconds };
+			if (running === true) {
+				// 优先级:手动 / 武装 > 后台。**只有后台那一段可以被顶掉**(丢弃,不叠采);
+				// 手动与武装之间保持 W2 的既有规则 —— 武装期间手动 profileStart 仍被拒(host 套件
+				// 钉着它):那两条都是用户在等的一次性采样,互相顶掉只会把两边的证据一起作废。
+				if (ownerOf(owner) !== 'ambient' || who === 'ambient') {
+					return { ...state(), ok: false, error: '已有一个采样在进行中', seconds };
+				}
+				forceStop();
+			}
 			if (typeof inspector?.Session !== 'function') {
 				error = 'node:inspector 不可用';
 				return { ...state(), ok: false, error, seconds };
 			}
 			let sess = null;
+			pending = true;
 			try {
 				sess = new inspector.Session();
 				sess.connect();
 				await post(sess, 'Profiler.enable');
 				await post(sess, 'Profiler.start');
 			} catch (err) {
+				pending = false;
 				try { sess?.disconnect(); } catch (ignored) { /* 半开的会话也要收掉 */ }
 				error = reason(err);
 				return { ...state(), ok: false, error, seconds };
 			}
+			pending = false;
 			session = sess;
 			running = true;
+			owner = who;
 			error = '';
 			startedAt = Date.now();
 			timer = setTimeout(() => { void finish(); }, seconds * 1000);
@@ -537,6 +924,7 @@ function createCpuProfiler(inspector) {
 			if (timer !== null) clearTimeout(timer);
 			timer = null;
 			running = false;
+			pending = false;
 			const sess = session;
 			session = null;
 			try { sess?.disconnect(); } catch (ignored) { /* 已断开就无所谓 */ }
@@ -556,11 +944,14 @@ export function apply(ctx, options = {}) {
 	// 武装窗口的滚动采样器与手动采样**共用**上面那台 profiler:V8 允许多会话并存,
 	// 两个 Profiler.start 并行会互相"接手"采样,所以这里靠同一份单飞挡住叠采。
 	const armed = createArmedProfiler(profiler);
+	// 后台低占空比滚动采样(默认关)也是同一台 profiler 的第三个使用者,优先级最低。
+	const ambient = createAmbientProfiler(profiler);
 
 	ctx.effect(() => () => {
 		loop.stop();
 		watch.uninstall();
 		armed.dispose();
+		ambient.dispose();
 		profiler.stop();
 	}, 'perf-hud: host instrumentation');
 
@@ -576,6 +967,9 @@ export function apply(ctx, options = {}) {
 
 		const status = (url) => {
 			const bytes = Math.min(Number(url.searchParams.get('bytes') ?? 0) || 0, MAX_LOAD_BYTES);
+			// 后台采样的租约**借这条已经在跑的 GET 续期**(客户端每 10 秒就 GET 一次,不另加心跳):
+			// 客户端停下(页面关掉 / 插件卸载 / 关了开关)之后,租约到点宿主自己停。
+			if (url.searchParams.get('ambient') === '1') ambient.renew();
 			const window = loop.ring.slice(-60);
 			// 每秒一个采样:窗口 p50 取"每秒 p50 的中位",窗口 p99 取"每秒 p99 的最大"。
 			const p50s = window.map((row) => row.p50).sort((a, b) => a - b);
@@ -601,6 +995,8 @@ export function apply(ctx, options = {}) {
 					// 武装窗口的宿主滚动采样:**只回状态与段数**,段本体走 armedGet 增量取
 					// (段里带原始 .cpuprofile,每个 GET 都背它没有意义)。
 					armed: armed.state(),
+					// 后台低占空比滚动采样:同样只回状态;段本体走 ambientGet。
+					ambient: ambient.state(),
 				},
 			};
 			if (bytes > 0) payload.pad = 'x'.repeat(bytes);
@@ -663,6 +1059,24 @@ export function apply(ctx, options = {}) {
 
 			if (op === 'armedStop') {
 				return reply(armed.stop(typeof body.reason === 'string' ? body.reason : 'client-stop'));
+			}
+
+			// ── 后台低占空比滚动采样(方向 2 的常开版)──
+			// 默认是关的:不调 ambientStart 就一段都不采。手动 / 武装随时可以顶掉它的在飞段。
+			if (op === 'ambientStart') {
+				return reply(await ambient.start({
+					intervalSeconds: body.intervalSeconds,
+					segmentSeconds: body.segmentSeconds,
+					keep: body.keep,
+				}));
+			}
+
+			if (op === 'ambientGet') {
+				return reply(ambient.get(body.since));
+			}
+
+			if (op === 'ambientStop') {
+				return reply(ambient.stop(typeof body.reason === 'string' ? body.reason : 'client-stop'));
 			}
 
 			if (op === 'listBundles') {

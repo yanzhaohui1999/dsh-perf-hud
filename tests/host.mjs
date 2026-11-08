@@ -285,6 +285,119 @@ check('武装:停之后不会再起新段(段数在窗口结束后保持稳定)'
 	return kept >= 1 && armedAfterStop.armed?.samplingStarted === true;
 })(), true);
 
+// ── 后台低占空比滚动采样(方向 2 的常开版,默认关)──────────────────────────
+// 状态机用假 inspector 驱到位:路由 / 单飞与优先级 / 只留最近 keep 段 / 关闭清理 / 租约兜底。
+// 参数(间隔 / 段长 / 留几段)在真实宿主里由常量给(5 分钟 / 1 秒 / 3 段);这里传小值只为
+// 在毫秒级复跑同一台状态机 —— 客户端从不传这三个参数。
+const ambientIdle = await (await get('')).json();
+check('后台:默认关(没调用 ambientStart 就一段都不采)',
+	ambientIdle.host?.ambient?.enabled === false && ambientIdle.host?.ambient?.total === 0
+	&& ambientIdle.host?.ambient?.collected === 0 && ambientIdle.host?.ambient?.collecting === false,
+	JSON.stringify({ enabled: ambientIdle.host?.ambient?.enabled, total: ambientIdle.host?.ambient?.total }));
+check('后台:GET 只回状态,不回段本体(段里有原始 .cpuprofile)',
+	ambientIdle.host?.ambient?.segments === undefined, true);
+check('后台:默认常量是 5 分钟 / 1 秒 / 3 段(与文档同一处来源)',
+	[ambientIdle.host?.ambient?.intervalSeconds, ambientIdle.host?.ambient?.segmentSeconds, ambientIdle.host?.ambient?.keep],
+	[300, 1, 3]);
+
+const beforeAmbient = inspectorCalls.filter((m) => m === 'Profiler.start').length;
+const ambientStartedRes = await post({ op: 'ambientStart', intervalSeconds: 0.5, segmentSeconds: 0.4, keep: 3 });
+const ambientStarted = await ambientStartedRes.json();
+check('后台:开启立刻采第一段,回执带夹取后的间隔 / 段长 / 保留段数',
+	ambientStarted.ok === true && ambientStarted.ambient?.enabled === true
+	&& ambientStarted.ambient?.collecting === true && ambientStarted.ambient?.intervalSeconds === 0.5
+	&& ambientStarted.ambient?.segmentSeconds === 0.4 && ambientStarted.ambient?.keep === 3
+	&& inspectorCalls.filter((m) => m === 'Profiler.start').length === beforeAmbient + 1,
+	JSON.stringify({ ok: ambientStarted.ambient?.enabled, i: ambientStarted.ambient?.intervalSeconds, s: ambientStarted.ambient?.segmentSeconds }));
+
+// 等一会儿,并且像真客户端那样续租约(真客户端是每 10 秒一次的 RTT 探针带 ?ambient=1;
+// 这里的租约下限 2 秒,不续就会被"到点自己停"提前收掉 —— 那一条单独在后面测)。
+const waitWithRenew = async (ms) => {
+	const until = Date.now() + ms;
+	while (Date.now() < until) {
+		await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(1, until - Date.now()))));
+		await (await get('?ambient=1')).json();
+	}
+};
+
+// 优先级:手动 > 后台。手动请求**顶掉**在飞的后台段(不叠采、不排队),后台那一段被丢弃。
+const manualOverAmbientRes = await post({ op: 'profileStart', seconds: 0.1 });
+const manualOverAmbient = await manualOverAmbientRes.json();
+check('后台:手动 profileStart 顶掉在飞的后台段(owner 换成 manual,不两路并行)',
+	manualOverAmbientRes.status === 200 && manualOverAmbient.ok === true && manualOverAmbient.owner === 'manual'
+	&& manualOverAmbient.preempted >= 1,
+	JSON.stringify({ status: manualOverAmbientRes.status, owner: manualOverAmbient.owner, preempted: manualOverAmbient.preempted }));
+await waitWithRenew(300);
+await waitWithRenew(700);   // 让后台再起一段(并收完)
+
+// 武装窗口同样能顶掉后台段(后台是三者里最低的):开窗后手动仍被拒(W2 规则没变)。
+const armedVsAmbientRes = await post({ op: 'armedStart', windowSeconds: 0.5, segmentSeconds: 0.2 });
+const armedVsAmbient = await armedVsAmbientRes.json();
+check('后台:武装窗口能开起来(顶掉后台段,不被后台挡成 409/500)',
+	armedVsAmbientRes.status === 200 && armedVsAmbient.ok === true && armedVsAmbient.armed?.samplingStarted === true,
+	JSON.stringify({ status: armedVsAmbientRes.status, started: armedVsAmbient.armed?.samplingStarted }));
+await (await post({ op: 'armedStop', reason: 'test-ambient' })).json();
+
+await waitWithRenew(1800);
+const ambientGot = await (await post({ op: 'ambientGet' })).json();
+const ambientSegments = Array.isArray(ambientGot.segments) ? ambientGot.segments : [];
+check('后台:让路之后照常继续采段(每段带 meta 与原始 profile,序号连续递增)',
+	ambientSegments.length >= 1
+	&& ambientSegments.every((row) => Array.isArray(row.profile?.nodes) && typeof row.meta?.startedAt === 'number')
+	&& ambientSegments.every((row, i) => (i === 0 ? true : row.index === ambientSegments[i - 1].index + 1)),
+	`segments=${ambientSegments.length}`);
+check('后台:被顶掉的那一段记成 yielded(不冒充成"采到的一段")',
+	(ambientGot.ambient?.yielded ?? 0) >= 1, `yielded=${ambientGot.ambient?.yielded}`);
+const ambientAfterYield = await (await post({ op: 'ambientGet', since: 99999 })).json();
+check('后台:since 之后没有新段就回空数组(客户端按段号增量取)',
+	Array.isArray(ambientAfterYield.segments) && ambientAfterYield.segments.length === 0,
+	`segments=${ambientAfterYield.segments?.length}`);
+
+// 只留最近 keep 段(默认 3;这里压到 2 好在 1 秒内采到 4 段以上)
+await (await post({ op: 'ambientStop', reason: 'test-retention' })).json();
+const retentionStart = await (await post({ op: 'ambientStart', intervalSeconds: 0.5, segmentSeconds: 0.1, keep: 2 })).json();
+check('后台:停止不清段(已经采到的证据不因关掉开关消失)',
+	(retentionStart.ambient?.collected ?? 0) >= 1 && retentionStart.ambient?.keep === 2,
+	JSON.stringify({ collected: retentionStart.ambient?.collected, keep: retentionStart.ambient?.keep }));
+await waitWithRenew(1600);
+const retention = await (await post({ op: 'ambientGet' })).json();
+check('后台:内存里只留最近 keep 段(total 继续涨 = 老段被淘汰,不是没采到)',
+	retention.segments.length === 2 && (retention.ambient?.total ?? 0) > (retention.ambient?.collected ?? 0),
+	`kept=${retention.segments.length} total=${retention.ambient?.total}`);
+
+// 关闭清理:ambientStop 之后定时器清掉,不再起新段
+const stoppedAt = (await (await post({ op: 'ambientStop', reason: 'test-disabled' })).json());
+const stoppedTotal = stoppedAt.ambient?.total ?? 0;
+await new Promise((resolve) => setTimeout(resolve, 900));
+const afterStop = await (await get('')).json();
+check('后台:关闭时干净停(不再起新段、没在飞段、原因照抄)',
+	afterStop.host?.ambient?.enabled === false && afterStop.host?.ambient?.collecting === false
+	&& afterStop.host?.ambient?.stopReason === 'test-disabled' && (afterStop.host?.ambient?.total ?? -1) === stoppedTotal,
+	JSON.stringify({ enabled: afterStop.host?.ambient?.enabled, collecting: afterStop.host?.ambient?.collecting, reason: afterStop.host?.ambient?.stopReason, total: afterStop.host?.ambient?.total, want: stoppedTotal }));
+
+// 租约兜底:客户端每 10 秒的 GET 带 ?ambient=1 续期;不续了就自己停(页面关掉 / 插件卸载
+// 之后不会留下宿主里常开的采样 —— "卸载时一定发得出停止请求"这个假设不成立)。
+const leaseStart = await (await post({ op: 'ambientStart', intervalSeconds: 0.5, segmentSeconds: 0.1, keep: 2 })).json();
+const leaseFirst = leaseStart.ambient?.leaseUntil ?? 0;
+await new Promise((resolve) => setTimeout(resolve, 30));
+await (await get('?ambient=1')).json();
+const renewed = await (await get('')).json();
+check('后台:GET ?ambient=1 续租约(借已经在跑的探针,不加心跳请求)',
+	(renewed.host?.ambient?.leaseUntil ?? 0) > leaseFirst && renewed.host?.ambient?.enabled === true,
+	JSON.stringify({ before: leaseFirst, after: renewed.host?.ambient?.leaseUntil }));
+await new Promise((resolve) => setTimeout(resolve, 2300));   // 租约 = interval × 4 = 2 秒(下限)
+const leaseExpired = await (await get('')).json();
+check('后台:租约到点自己停(不需要客户端发停止请求)',
+	leaseExpired.host?.ambient?.enabled === false && leaseExpired.host?.ambient?.stopReason === 'lease-expired'
+	&& leaseExpired.host?.ambient?.collecting === false,
+	JSON.stringify({ enabled: leaseExpired.host?.ambient?.enabled, reason: leaseExpired.host?.ambient?.stopReason }));
+const expiredTotal = leaseExpired.host?.ambient?.total ?? 0;
+await new Promise((resolve) => setTimeout(resolve, 700));
+const stillStopped = await (await get('')).json();
+check('后台:停就是停(租约过期之后不再起新段)', (stillStopped.host?.ambient?.total ?? -1) === expiredTotal,
+	`total=${stillStopped.host?.ambient?.total}`);
+
+
 // 失败路径:宿主已经开着别的 profiler / inspector 被占 —— 必须回错误原文,绝不假装成功。
 const routes2 = new Map();
 const CONNECT_ERROR = 'inspector 会话不可用:已被占用';
