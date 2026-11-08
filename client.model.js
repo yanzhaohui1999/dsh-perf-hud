@@ -28,6 +28,10 @@ window.__ModuleLoader__.load({
 				HUD_POS_MARGIN,
 				HUD_POS_MIN_ROOM,
 				HUD_POS_PILL_ROOM,
+				// 30 天趋势:存储与聚合在 client.js,渲染层只读它算好的格子
+				HISTORY_DAYS,
+				HISTORY_HEIGHT,
+				HISTORY_MAX_MS,
 				LS_INCIDENTS,
 				LS_MAP,
 				LS_MAP_INDEX,
@@ -83,6 +87,8 @@ window.__ModuleLoader__.load({
 				frame,
 				frameRing,
 				h,
+				historyCells,
+				historyReport,
 				hostFreshness,
 				hostLoopText,
 				incidentTallyCache,
@@ -2306,6 +2312,8 @@ window.__ModuleLoader__.load({
 					},
 					// 发生频次(跨刷新,最近 24h 滚动窗口)—— 与上面的 store(本次会话)不是同一窗口
 					tally: tallyReport(),
+					// 30 天趋势(日聚合,不存原始帧)—— 可选段,老包没有它照样读;口径在 history.scope
+					history: historyReport(),
 					// 能力矩阵:哪一层采到了、哪一层没有、为什么 —— 与事故包读同一份函数
 					capabilities: capabilities(),
 					// A2:跨会话基线(每个会话一条,只进导出件)。口径写在 note 里
@@ -2477,6 +2485,8 @@ window.__ModuleLoader__.load({
 					// 导出时刻的滚动 24h 计数(跨刷新)。它**不属于事故窗口** —— 用途是回答
 					// "最近是偶发还是变频繁了";scope / sessionCounters 里写明别当这一条的统计口径
 					tally: tallyReport(),
+					// 30 天趋势(日聚合,不存原始帧)—— 可选段,不升 schemaVersion;口径在 history.scope
+					history: historyReport(),
 					// A2:跨会话基线(只进导出件)。readonly 参照,别当回归判定
 					sessionBaselines: sessionBaselines(),
 					// 宿主进程的 CPU 采样(按需采到的最近一段)。**不是页面开销**,不能与帧时间相加;
@@ -3899,6 +3909,55 @@ window.__ModuleLoader__.load({
 				style: { display: 'block' },
 			}, bars);
 		}
+		// ───────────────── 30 天趋势(方向 5:日聚合,不存原始帧)─────────────────
+		/**
+		 * 一根柱的读数:日期 / 样本分钟数 / p50 / p99 / 最差 / 场景秒数 / 事故数。
+		 * **只给事实**,不给"变快了 / 变慢了"的判断 —— 这是粗参照,不是回归判定。
+		 */
+		function historyCellTitle(cell) {
+			if (cell === null || cell === undefined || cell.exists !== true) return translate('historyNoData');
+			return [
+				cell.day,
+				`${translate('historySamples')} ${cell.activeMinutes}${translate('historyMinutes')}`,
+				`p50 ${cell.p50Ms}ms`,
+				`p99 ${cell.p99Ms}ms`,
+				`${translate('maxLabel')} ${cell.worstMs}ms`,
+				`${translate('historyStreaming')} ${cell.streamingSeconds}s / ${translate('historyIdle')} ${cell.idleSeconds}s`,
+				`${translate('historyIncidents')} ${cell.incidents}`,
+			].join(' · ');
+		}
+		/**
+		 * 30 天 sparkline:一天一根柱,柱高 = 那天帧间隔的 p99;没有数据的那天**留空**
+		 * (不画、不补 0)。柱高封顶在 HISTORY_MAX_MS(500ms;再高也只是画满,具体数值看悬停)。
+		 * 读数方式写在容器 title(`historyHint`)里;每根柱自己的 title 给样本分钟数与分位。
+		 */
+		function historyStrip() {
+			const cells = historyCells();
+			const bars = [];
+			for (let i = 0; i < cells.length; i += 1) {
+				const cell = cells[i];
+				if (cell.exists !== true) continue;
+				const p99 = typeof cell.p99Ms === 'number' ? cell.p99Ms : 0;
+				const height = Math.max(2, Math.min(HISTORY_HEIGHT, Math.round((p99 / HISTORY_MAX_MS) * HISTORY_HEIGHT)));
+				bars.push(h('rect', {
+					key: cell.day, x: i, y: HISTORY_HEIGHT - height, width: 1, height,
+					fill: SPARK_COLORS.ok, title: historyCellTitle(cell),
+				}));
+			}
+			return h('svg', {
+				width: '100%', height: HISTORY_HEIGHT, viewBox: `0 0 ${HISTORY_DAYS} ${HISTORY_HEIGHT}`,
+				preserveAspectRatio: 'none', style: { display: 'block' },
+			}, bars);
+		}
+		/** 覆盖量:有数据的 N 天 + 合计样本分钟数 —— 样本稀疏时先看这个,再看柱高。 */
+		function historySummary() {
+			const rows = historyReport().rows;
+			return { days: rows.length, minutes: rows.reduce((sum, row) => sum + row.activeMinutes, 0) };
+		}
+		function historyMetaText() {
+			const summary = historySummary();
+			return `${summary.days}${translate('historyDaysWithData')} · ${summary.minutes}${translate('historyMinutes')}`;
+		}
 		/**
 		 * 「帧内未归因」的值。⚠️ 它只在**插桩**下有定义:`idle = 帧间隔 − 插桩回调耗时`,
 		 * 没插桩时 busy 恒为 0,这个数就退化成"平均帧间隔"(实测 16.7ms 被当成未归因 ——
@@ -4314,6 +4373,11 @@ window.__ModuleLoader__.load({
 				crossSingleText,
 				crossTable,
 				sparkStrip,
+				// 30 天趋势(主界面)
+				historyStrip,
+				historyMetaText,
+				historySummary,
+				historyCellTitle,
 				unattrText,
 				hitText,
 				detailSummary,

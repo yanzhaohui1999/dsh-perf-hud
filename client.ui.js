@@ -92,6 +92,10 @@ window.__ModuleLoader__.load({
 				healthVerdict,
 				heapRateText,
 				hitText,
+				// 30 天趋势:数据与 SVG 都在模型层算好,这里只排版
+				historyStrip,
+				historyMetaText,
+				historySummary,
 				hostEventsText,
 				hostFreshness,
 				hostLoopStateText,
@@ -389,6 +393,14 @@ window.__ModuleLoader__.load({
 						type: 'button', style: { ...S.segItem, ...(trendMs === TALLY_TREND_LONG_MS ? S.segOn : null) },
 						title: t('mainTrend24'), onClick: () => props.onRange(TALLY_TREND_LONG_MS),
 					}, t('mainTrend24')))));
+			// ⑥ 30 天趋势:一天一根柱,柱高 = 那天 p99;没有数据的天留空(不补 0)。
+			//    只有真有样本时才渲染 —— 第一次用的时候,一条空图只是噪音。
+			if (props.history !== null && props.history !== undefined && props.history.days > 0) {
+				kids.push(h('div', { style: S.historyHead, title: t('historyHint') },
+					h('span', { style: S.historyLabel }, t('historyLabel')),
+					h('span', { style: S.historyMeta }, historyMetaText())));
+				kids.push(h('div', { style: S.historyStrip, title: t('historyHint') }, historyStrip()));
+			}
 			if (props.why === true && trendRaw !== null) {
 				kids.push(h('div', { style: { ...S.sub, fontFamily: MONO_FONT } }, trendRaw));
 			}
@@ -1639,6 +1651,8 @@ window.__ModuleLoader__.load({
 					health: healthVerdict(),
 					latest: latestRow,
 					trendMs: state.ui.trendMs,
+					// 30 天趋势的覆盖量(有数据的 N 天 / 合计样本分钟数);空 = 不渲染那一条
+					history: historySummary(),
 					why: state.ui.causeOpen,
 					preview: state.ui.packPreview !== null && latestRow !== null && state.ui.packPreview.incident.id === latestRow.id ? state.ui.packPreview : null,
 					onOpen: (id) => { state.ui.incidentBack = state.ui.view; setView('incident'); revealIncident(id); },

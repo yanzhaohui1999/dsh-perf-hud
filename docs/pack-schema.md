@@ -158,10 +158,12 @@ redaction
 hostCpuProfile
 recorder
 armed
+history
 ```
 
 - `missing` 是**字符串数组**,每行大多形如 `前缀:说明`,前缀表见 §5。**缺键 != 没有缺口**:老包没有 `missing` 就是"这份没写",不许读成"齐了"。
 - `hostCpuProfile` / `recorder` 是 0.9.0 后才加的可选段 —— **没有它们不升版本**,读方按"这一栏没采"读。
+- `history` 是 30 天趋势的日聚合(方向 5,1.1 之后):**每天一条,不存原始帧**,只保留最近 30 个日历日;`rows[]` 每项给 `day` / `activeMinutes` / `frames` / `p50Ms` / `p99Ms` / `worstMs` / `streamingSeconds` / `idleSeconds` / `incidents`,`daysWithData` 是其中真有样本的天数。**p50 / p99 由固定直方图桶估出、报的是桶的上沿**(例如 p99 落在 100–200ms 档就报 200ms),所以它是**粗参照,不是回归判定**;样本少或场景混杂的日子不能直接比。老包没有这一栏 = 没写,不是"没有卡顿"。它**不改变** `summary` / `baseline` 的语义,也不占事故留存那份 3MB 配额(本地键 `dsh-perf-hud:history:v1`)。
 - `armed` 是 1.1 加的可选段:导出时刻「武装窗口」的状态(窗口秒数 / 段长 / 宿主段数 / 是否还开着 / 还原原因 / 宿主错误原文),以及这条事故是否在窗口里采的。**只在开过窗口、或这条事故带 `incident.env.armed` 时出现**;没有它 = 这个页面这次没武装过,不是"武装了但没采到"。形状见 §3.7 下面的说明。
 - `thresholds` / `tally` / `watch` 的内部字段不冻(没有读方依赖它们的全部键):`thresholds` 的 `triggerMs` / `gapMs` / `preMs` / `postMs` / `keep` / `dailyDays` / `recent` / `keepMax` / `reactionMs` 与 `tally` 的 `detected` / `triggered` / `captured` / `coalesced` / `kept` / `lost` 是读方会用到的那些;其余随实现增减。
 
@@ -465,7 +467,7 @@ README.md
 | incident `schema: 1` → `2` | 脚本 URL 从每条脚本里抽成 `incident.urls` + `scripts[].u` |
 | incident `schema: 2` → `3` | 加 `incident.integrity`(窗口完整性:到底采全没有) |
 | manifest `schemaVersion: 1` → `2` | 加 `manifest.complete` 与 `manifest.incident.integrity`(都来自上面那条) |
-| 不升版本的加字段 | `context.hostCpuProfile` / `context.recorder`(0.9.x)、`summary.worstFrameJs` 一类的派生读数、`incident.timeline`(1.0 / A4)、`frames[].gapReason` + `summary.visibleFreezeMs/visibleFreezeFrames/refreshHz/budgetMisses`(1.0 之后)—— 都是**可选**,老包里没有照样读 |
+| 不升版本的加字段 | `context.hostCpuProfile` / `context.recorder`(0.9.x)、`summary.worstFrameJs` 一类的派生读数、`incident.timeline`(1.0 / A4)、`frames[].gapReason` + `summary.visibleFreezeMs/visibleFreezeFrames/refreshHz/budgetMisses`(1.0 之后)、`context.history`(30 天日聚合,1.1 之后)—— 都是**可选**,老包里没有照样读 |
 | 不升版本的删字段 | `manifest.dshVersion`(0.9.0)—— **违反本节规则的那一条**,已记进 [REVIEW](../REVIEW.md) §2;以后不许再这样 |
 
 ---

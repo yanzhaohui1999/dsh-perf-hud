@@ -174,6 +174,16 @@ window.__ModuleLoader__.load({
 		const TALLY_DAYS = 30;                 // 按天汇总留最近 30 天
 		const TALLY_SAVE_DELAY_MS = 2000;      // 一次卡顿里 coalesced 会被连加很多次,落盘要合并
 		const LS_TALLY = 'dsh-perf-hud:tally:v1';
+		// ── 30 天趋势(方向 5):每天一条聚合,不存原始帧 ─────────────────────
+		// 与 tally 的日桶是两件事:tally 记"发生了几次",这里记"帧有多慢 / 采了多久 / 场景分布"。
+		// 分位不存原始帧:用固定直方图桶,报桶的上沿(粗参照,不是回归判定)。
+		const LS_HISTORY = 'dsh-perf-hud:history:v1';
+		const HISTORY_DAYS = 30;
+		const HISTORY_EDGES = [16.7, 20, 33.3, 50, 100, 200, 500, 1000, 2000];   // 10 档:≤16.7 … >2000
+		const HISTORY_FIELDS = { activeSec: 0, activeMin: 1, frames: 2, worstMs: 3, incidents: 4, streaming: 5, idle: 6, lastSec: 7, lastMin: 8, hist: 9 };
+		const HISTORY_LEN = HISTORY_FIELDS.hist + HISTORY_EDGES.length + 1;
+		const HISTORY_MAX_MS = 500;     // sparkline 画满高度的那天 p99(再高也只是画满;具体数值看悬停)
+		const HISTORY_HEIGHT = 18;
 		const WATCH_PERSIST_MAX_BYTES = 3145728;  // 事故落盘的字节上限(超了丢最弱的)。2MB 只能装 ~20 条小包;
 		// 3MB 给"最近 3 档"留出余地,同时给同源的 map 缓存留位置 —— 每个源 localStorage 常见 5MB(Chrome ~10MB)
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
@@ -659,6 +669,16 @@ window.__ModuleLoader__.load({
 					dirty: false,
 					timer: 0,                // 合并落盘的定时器:一次卡顿里 coalesced 会连加很多次
 				},
+				// 30 天趋势:每天一条定长数组(布局见 HISTORY_FIELDS),不存原始帧。
+				// 它是**另一个 localStorage 键**,不占事故留存那 3MB(见 LS_HISTORY)。
+				history: {
+					day: new Map(),          // 'YYYY-MM-DD'(本地日期)-> 定长数组
+					expiredDays: 0,          // 超出 30 个日历日被丢掉的日聚合数(照实记)
+					prunedDay: '',           // 上次按哪一天裁剪(同一天不重复扫)
+					loadError: null,         // 读回落盘聚合失败的原因(照实记)
+					savedAt: 0,
+					dirty: false,
+				},
 			},
 			// ── host:宿主与链路 ──
 			host: {
@@ -723,6 +743,10 @@ window.__ModuleLoader__.load({
 				HUD_POS_MARGIN,
 				HUD_POS_MIN_ROOM,
 				HUD_POS_PILL_ROOM,
+				// 30 天趋势:存储布局在 client.js,渲染只读 historyCells / historyReport
+				HISTORY_DAYS,
+				HISTORY_HEIGHT,
+				HISTORY_MAX_MS,
 				LS_INCIDENTS,
 				LS_MAP,
 				LS_MAP_INDEX,
@@ -775,6 +799,8 @@ window.__ModuleLoader__.load({
 				frame,
 				frameRing,
 				h,
+				historyCells,
+				historyReport,
 				hostFreshness,
 				hostLoopText,
 				incidentTallyCache,
@@ -1088,6 +1114,10 @@ window.__ModuleLoader__.load({
 		function crossTable(...args) { return model().crossTable(...args); }
 		function crossSingleText(...args) { return model().crossSingleText(...args); }
 		function sparkStrip(...args) { return model().sparkStrip(...args); }
+		// 30 天趋势:纯函数在 model(离线可断言),这里只留同步包装(与 sparkStrip 同一套规矩)
+		function historyStrip(...args) { return model().historyStrip(...args); }
+		function historyMetaText(...args) { return model().historyMetaText(...args); }
+		function historySummary(...args) { return model().historySummary(...args); }
 		function unattrText(...args) { return model().unattrText(...args); }
 		function hitText(...args) { return model().hitText(...args); }
 		function detailSummary(...args) { return model().detailSummary(...args); }
@@ -1419,6 +1449,9 @@ window.__ModuleLoader__.load({
 			pruneTally(at);
 			tallyBucketOf(tally.minute, Math.floor(at / TALLY_BUCKET_MS))[index] += value;
 			tallyBucketOf(tally.day, tallyDayKey(at))[index] += value;
+			// 30 天趋势里的"事故数"与这里的 triggered 是**同一处计数**(同一串只算一次),
+			// 不在别处再数一遍 —— 两套口径会悄悄分叉。
+			if (kind === 'triggered') historyIncident(at);
 			markTallyDirty();
 			return value;
 		}
@@ -1599,6 +1632,228 @@ window.__ModuleLoader__.load({
 			return true;
 		}
 
+		// ───────────────────── 30 天日聚合(方向 5:不存原始帧)─────────────────────
+		/**
+		 * 一天的聚合长什么样(布局见 HISTORY_FIELDS / HISTORY_LEN):
+		 *   活跃秒 / 活跃分钟 / 帧样本数 / 最差帧 / 事故数 / 流式秒 / 空闲秒 / 上一秒 / 上一分钟 / 直方图。
+		 * 为什么用直方图而不是原始帧:p50 / p99 只需要"每个区间落了多少帧",30 天 × 10 档一共
+		 * 300 个数,落盘只有几 KB;原始帧一天就是几十万条,与"不扩 3MB 事故留存"直接冲突。
+		 * ⚠️ 分位是**桶的上沿**(例如 p99 落在 100–200ms 档就报 200ms)—— 粗参照,不是回归判定。
+		 */
+		function historyBlank() {
+			const row = new Array(HISTORY_LEN).fill(0);
+			row[HISTORY_FIELDS.lastSec] = -1;
+			row[HISTORY_FIELDS.lastMin] = -1;
+			return row;
+		}
+
+		function historyBucketOf(ms) {
+			for (let index = 0; index < HISTORY_EDGES.length; index += 1) {
+				if (ms <= HISTORY_EDGES[index]) return index;
+			}
+			return HISTORY_EDGES.length;
+		}
+
+		/** 30 个日历日窗口里最老的那一天(按本地日期;用正午再减天,避开夏令时把日期推前/推后)。 */
+		function historyOldestKey(atMs) {
+			const d = new Date(atMs);
+			d.setHours(12, 0, 0, 0);
+			d.setDate(d.getDate() - (HISTORY_DAYS - 1));
+			return tallyDayKey(d.getTime());
+		}
+
+		/** 丢掉 30 个日历日之外的日聚合。同一天只扫一次;`expiredDays` 照实累计。 */
+		function pruneHistory(atMs) {
+			const history = state.watch.history;
+			const dayKey = tallyDayKey(atMs);
+			if (history.prunedDay === dayKey) return history.expiredDays;
+			history.prunedDay = dayKey;
+			const oldest = historyOldestKey(atMs);
+			for (const key of [...history.day.keys()]) {
+				if (key < oldest) { history.day.delete(key); history.expiredDays += 1; }
+			}
+			// 兜底:按日期字符串排序只留最近 HISTORY_DAYS 个(键是补零的 YYYY-MM-DD,排序即时间序)
+			const keys = [...history.day.keys()].sort();
+			while (keys.length > HISTORY_DAYS) { history.day.delete(keys.shift()); history.expiredDays += 1; }
+			return history.expiredDays;
+		}
+
+		function historyDay(atMs) {
+			const history = state.watch.history;
+			const key = tallyDayKey(atMs);
+			let row = history.day.get(key);
+			if (row !== undefined) return row;
+			pruneHistory(atMs);
+			row = historyBlank();
+			history.day.set(key, row);
+			return row;
+		}
+
+		/**
+		 * 记一帧(非间隙,或可见冻结)。`streaming` 决定场景分布;同一秒里只记一次活跃秒,
+		 * 所以 `streamingSeconds + idleSeconds === activeSeconds` 恒成立(有断言)。
+		 * 间隙(页面隐藏 / 时钟跳变)不算帧:它们不是"这一帧有多慢"。
+		 */
+		function historyFrame(ms, atMs, streaming) {
+			if (typeof ms !== 'number' || Number.isFinite(ms) === false || ms <= 0) return null;
+			const at = typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now();
+			const row = historyDay(at);
+			row[HISTORY_FIELDS.hist + historyBucketOf(ms)] += 1;
+			row[HISTORY_FIELDS.frames] += 1;
+			if (ms > row[HISTORY_FIELDS.worstMs]) row[HISTORY_FIELDS.worstMs] = ms;
+			const second = Math.floor(at / 1000);
+			if (second !== row[HISTORY_FIELDS.lastSec]) {
+				row[HISTORY_FIELDS.lastSec] = second;
+				row[HISTORY_FIELDS.activeSec] += 1;
+				row[streaming === true ? HISTORY_FIELDS.streaming : HISTORY_FIELDS.idle] += 1;
+				const minute = Math.floor(at / 60000);
+				if (minute !== row[HISTORY_FIELDS.lastMin]) {
+					row[HISTORY_FIELDS.lastMin] = minute;
+					row[HISTORY_FIELDS.activeMin] += 1;
+				}
+			}
+			state.watch.history.dirty = true;
+			return ms;
+		}
+
+		/** 一天里检测到几次卡顿 —— 与 bumpTally('triggered') 同一处计数,不另算一遍。 */
+		function historyIncident(atMs) {
+			const at = typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now();
+			const row = historyDay(at);
+			row[HISTORY_FIELDS.incidents] += 1;
+			state.watch.history.dirty = true;
+			return row[HISTORY_FIELDS.incidents];
+		}
+
+		/**
+		 * 直方图上的分位:nearest-rank,返回**桶的上沿**。最后一个桶(>2000ms)用真实最差帧,
+		 * 不把 2000 当成上界。没有样本返回 null(不补 0)。
+		 */
+		function historyQuantile(counts, q, worstMs) {
+			let total = 0;
+			for (const count of counts) total += count;
+			if (total === 0) return null;
+			const rank = Math.max(1, Math.ceil(q * total));
+			let seen = 0;
+			for (let index = 0; index < counts.length; index += 1) {
+				seen += counts[index];
+				if (seen < rank) continue;
+				if (index < HISTORY_EDGES.length) return HISTORY_EDGES[index];
+				return Math.max(HISTORY_EDGES[HISTORY_EDGES.length - 1], typeof worstMs === 'number' ? worstMs : 0);
+			}
+			return null;
+		}
+
+		/** 最近 30 个日历日,一天一格;没有数据的那天 `exists:false`(留空,不补 0)。 */
+		function historyCells(atMs) {
+			const at = typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now();
+			const history = state.watch.history;
+			const base = new Date(at);
+			base.setHours(12, 0, 0, 0);
+			const cells = [];
+			for (let i = HISTORY_DAYS - 1; i >= 0; i -= 1) {
+				const d = new Date(base.getTime());
+				d.setDate(d.getDate() - i);
+				const key = tallyDayKey(d.getTime());
+				const row = history.day.get(key);
+				if (row === undefined) { cells.push({ day: key, exists: false }); continue; }
+				const counts = row.slice(HISTORY_FIELDS.hist, HISTORY_FIELDS.hist + HISTORY_EDGES.length + 1);
+				const worst = row[HISTORY_FIELDS.worstMs];
+				const p50 = historyQuantile(counts, 0.5, worst);
+				const p99 = historyQuantile(counts, 0.99, worst);
+				cells.push({
+					day: key,
+					exists: true,
+					activeSeconds: row[HISTORY_FIELDS.activeSec],
+					activeMinutes: row[HISTORY_FIELDS.activeMin],
+					frames: row[HISTORY_FIELDS.frames],
+					worstMs: round1(worst),
+					p50Ms: p50 === null ? null : round1(p50),
+					p99Ms: p99 === null ? null : round1(p99),
+					streamingSeconds: row[HISTORY_FIELDS.streaming],
+					idleSeconds: row[HISTORY_FIELDS.idle],
+					incidents: row[HISTORY_FIELDS.incidents],
+				});
+			}
+			return cells;
+		}
+
+		/** 导出件 / 面板共用的一份日聚合(只含真有样本的天;缺的天在 `historyCells` 里是空格)。 */
+		function historyReport(atMs) {
+			const at = typeof atMs === 'number' && Number.isFinite(atMs) ? atMs : Date.now();
+			const cells = historyCells(at);
+			const rows = cells.filter((cell) => cell.exists === true);
+			return {
+				at: new Date(at).toISOString(),
+				days: HISTORY_DAYS,
+				coveredFrom: cells.length === 0 ? null : cells[0].day,
+				coveredTo: cells.length === 0 ? null : cells[cells.length - 1].day,
+				daysWithData: rows.length,
+				activeMinutes: rows.reduce((sum, row) => sum + row.activeMinutes, 0),
+				savedAt: state.watch.history.savedAt > 0 ? new Date(state.watch.history.savedAt).toISOString() : null,
+				expiredDays: state.watch.history.expiredDays,
+				loadError: state.watch.history.loadError,
+				rows,
+				scope: '每天一条聚合,不存原始帧;p50 / p99 由固定直方图桶估出,报的是桶的上沿;activeMinutes = 有帧样本的分钟数;streamingSeconds + idleSeconds = activeSeconds(按帧所在秒记一次);可见冻结算一帧,页面隐藏 / 时钟跳变的间隙不算帧;incidents 与 tally 的 detected 同一处计数;只保留最近 30 个日历日。样本稀疏或场景混杂的日子不能直接比 —— 这是粗参照,不是回归判定',
+			};
+		}
+
+		/** 落盘。历史不是事故:它只进新的 LS_HISTORY,不占 WATCH_PERSIST_MAX_BYTES 那 3MB。 */
+		function saveHistory() {
+			const history = state.watch.history;
+			if (history.dirty === false) return true;
+			const payload = { v: 1, savedAt: Date.now(), expiredDays: history.expiredDays, days: {} };
+			for (const [key, value] of history.day) payload.days[key] = value;
+			try {
+				localStorage.setItem(LS_HISTORY, JSON.stringify(payload));
+				history.dirty = false;
+				history.savedAt = payload.savedAt;
+				history.loadError = null;
+				return true;
+			} catch (error) {
+				history.loadError = `save:${error instanceof Error ? error.message : String(error)}`;
+				return false;
+			}
+		}
+
+		/** 读回:形状不对的**整天丢掉**并记原因;键不存在 = 没有历史(不是 0)。 */
+		function restoreHistory() {
+			const history = state.watch.history;
+			let parsed = null;
+			try { parsed = JSON.parse(localStorage.getItem(LS_HISTORY) ?? 'null'); } catch (error) {
+				history.loadError = `parse:${error instanceof Error ? error.message : String(error)}`;
+				return null;
+			}
+			if (parsed === null || typeof parsed !== 'object') return null;
+			let rejected = 0;
+			if (parsed.days !== null && typeof parsed.days === 'object') {
+				for (const key of Object.keys(parsed.days)) {
+					const raw = parsed.days[key];
+					// 日期键必须是补零的 YYYY-MM-DD:否则它会混进排序、把真的 30 天挤出去
+					if (/^\d{4}-\d{2}-\d{2}$/.test(key) === false) { rejected += 1; continue; }
+					if (Array.isArray(raw) === false || raw.length !== HISTORY_LEN) { rejected += 1; continue; }
+					if (raw.every((value) => typeof value === 'number' && Number.isFinite(value)) === false) { rejected += 1; continue; }
+					history.day.set(key, raw.slice());
+				}
+			}
+			if (typeof parsed.expiredDays === 'number') history.expiredDays = parsed.expiredDays;
+			history.savedAt = typeof parsed.savedAt === 'number' ? parsed.savedAt : 0;
+			history.prunedDay = '';   // 让下一次记帧重扫一遍窗口
+			pruneHistory(Date.now());
+			if (rejected > 0) history.loadError = `shape:${rejected}`;
+			return history.savedAt;
+		}
+
+		function clearHistory() {
+			const history = state.watch.history;
+			history.day.clear();
+			history.expiredDays = 0;
+			history.prunedDay = '';
+			history.dirty = true;
+			saveHistory();
+			return true;
+		}
+
 		// ───────────────────────────── FPS:1 秒滚动窗口 ─────────────────────────────
 		const SELF_RING = 600;
 
@@ -1725,6 +1980,9 @@ window.__ModuleLoader__.load({
 					if (idle > state.render.unattrWorst) state.render.unattrWorst = idle;
 				}
 				watchFrame(now, delta, isGap, gapReason);
+				// 30 天趋势:间隙(页面隐藏 / 时钟跳变)不算帧;可见冻结算"最差帧" ——
+				// 它就是用户感到的那一下,不该因为进了 gap 分支就被静默排除。
+				if (isGap === false || gapReason === 'visible-freeze') historyFrame(delta, wallNow, state.watch.streaming);
 			}
 			state.render.lastFrameAt = now;
 			lastFrameWallAt = wallNow;
@@ -2207,6 +2465,7 @@ window.__ModuleLoader__.load({
 			} catch (error) { /* 标记坏了就算了 */ }
 			restoreIncidents();
 			restoreTally();
+			restoreHistory();
 			restoreWatchUI();
 			restoreView();
 			restoreHudPos();
@@ -2218,6 +2477,8 @@ window.__ModuleLoader__.load({
 			// 计数有自己的 dirty 标记:强制落盘(页面隐藏/关闭)时一并写,平时由 markTallyDirty 的
 			// 定时器合并写(一次卡顿里 coalesced 每帧都会加,不能每帧写盘)
 			if (force === true) saveTally();
+			// 30 天聚合每帧都会变;它搭 5 秒一次的 flush 落盘,不另开定时器(不给采集侧加活)。
+			saveHistory();
 			if (dirty === false && force !== true) return;
 			dirty = false;
 			try {
@@ -3675,6 +3936,8 @@ window.__ModuleLoader__.load({
 			// 守夜层同样要能停下来:观察器 disconnect、等后摇的定时器清掉。
 			// 已经留存的事故**不清** —— 那是等了很久才抓到的东西,关一次 HUD 不该丢。
 			state.watch.on = false;
+			// 关 HUD 时把还没落盘的 30 天聚合写下去(它搭 flush 的 5 秒节拍,最后几秒别丢)。
+			saveHistory();
 			if (state.watch.pendingTimer !== 0) { natives.clearTimeout(state.watch.pendingTimer); state.watch.pendingTimer = 0; }
 			state.watch.pending = null;
 			if (state.watch.loafObserver !== null) {
@@ -3753,6 +4016,10 @@ window.__ModuleLoader__.load({
 			storage: storageReport,
 			tallyTitle,
 			clearTally,
+			/** 30 天趋势(跨刷新的日聚合):history() 给最近 30 个日历日的行与口径。 */
+			history: (atMs) => historyReport(atMs),
+			historyOfDay: (dayKey) => historyCells().find((cell) => cell.day === dayKey) ?? null,
+			clearHistory,
 			incidents: () => state.watch.incidents.map((row) => ({
 				id: row.id, severity: row.severity, cause: row.cause, at: row.at, note: row.note, kept: row.kept, summary: row.summary,
 			})),
@@ -3780,6 +4047,8 @@ window.__ModuleLoader__.load({
 			clear() {
 				// 注意:守夜层留存的事故**不在这里清** —— 那是等了很久才抓到的东西,
 				// 清读数的手滑不该把它带走。要清用 clearIncidents()。
+				// 30 天趋势(history)与发生频次(tally)同理:它们是跨会话的事实,要清得显式调
+				// clearHistory() / clearTally()。
 				ring.length = 0;
 				// ⚠️ 帧环(`watch.loaf`)也是**读数**,原来漏了它 —— 于是 `clear()` 之后翻帧清单
 				// 与「窗口:… 跨 …」纹丝不动("我清了怎么还是跨 3 分"的根因)。顺带把翻帧选择也退回自动。
@@ -4175,6 +4444,11 @@ window.__ModuleLoader__.load({
 			},
 			trendRow: { display: 'flex', alignItems: 'center', gap: 9, marginTop: 12, paddingTop: 11, borderTop: '1px solid var(--dsw-alias-border-l2)' },
 			trendText: { flex: '1 1 auto', minWidth: 0, fontSize: 12, fontVariantNumeric: 'tabular-nums', lineHeight: 1.5, whiteSpace: 'normal' },
+			// 30 天趋势:一行轴标签 + 覆盖量,下面一条铺满的 sparkline(没有数据的天留白,不补 0)
+			historyHead: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginTop: 10 },
+			historyLabel: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)', flex: '0 0 auto', whiteSpace: 'nowrap' },
+			historyMeta: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)', flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' },
+			historyStrip: { marginTop: 2, borderBottom: '1px solid var(--dsw-alias-border-l2)', paddingBottom: 2 },
 			seg: { display: 'flex', gap: 2, padding: 2, borderRadius: 7, background: 'var(--dsw-alias-bg-layer-2)', flex: '0 0 auto' },
 			segItem: { font: 'inherit', fontSize: 11, padding: '2px 8px', borderRadius: 5, border: 0, background: 'transparent', color: 'var(--dsw-alias-label-secondary)', cursor: 'pointer' },
 			segOn: { background: 'var(--dsw-alias-bg-overlay)', color: 'var(--dsw-alias-label-primary)', fontWeight: 600 },
@@ -4782,6 +5056,10 @@ window.__ModuleLoader__.load({
 				short,
 				showLiveMode,
 				sparkStrip,
+				// 30 天趋势(主界面「最近趋势」下面那一条)
+				historyStrip,
+				historyMetaText,
+				historySummary,
 				splitLegend,
 				state,
 				strengthText,

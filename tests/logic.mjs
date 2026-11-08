@@ -617,12 +617,12 @@ check('状态四片:state 就是 ui / watch / host / render 四片,每片都有�
 	[['host', 'render', 'ui', 'watch'], true]);
 // 字段数写死是故意的:挪字段(把一页读数搬到另一片)是结构变更,要连同这一行一起交代。
 // 它同时挡住一类静默错误 —— 字段被复制进两片后,谁写谁读就说不清了。
-check('状态四片:四片的字段数 == 23 / 54 / 37 / 16(挪字段要改这一行并说明理由)',
-	// watch 片的 37 = 守夜对象自己的 30 个键 + tally + 场景/空闲基线 6 个(它本来就是一整层)
+check('状态四片:四片的字段数 == 23 / 54 / 38 / 16(挪字段要改这一行并说明理由)',
+	// watch 片的 38 = 守夜对象自己的 30 个键 + tally + history + 场景/空闲基线 6 个(它本来就是一整层)
 	// render +1 = armed(武装窗口的状态机,属于"档位/采集"那一层);
 	// host +1 = armedProfiles(武装窗口从宿主取回的 profile 段,属于宿主数据)。
 	[stateSlices.ui.length, stateSlices.render.length, stateSlices.watch.length, stateSlices.host.length],
-	[23, 54, 37, 16]);
+	[23, 54, 38, 16]);
 
 // ── 别名解析(见文件头 ①)──
 // 规则:别名只能指向**一片**(`= state.<片>`),不能指向整个 state / 解构整个 state(那样所有字段检查都会被绕过);
@@ -1175,6 +1175,28 @@ const newPieces = [
 	'function noteTallySeverity(',
 	'function tallyWindow(',
 	'function tallyOfDay(',
+	// 30 天趋势(方向 5):snapshot / incidentReport 都会带 context.history;bumpTally('triggered')
+	// 也会写历史的事故数 —— 少一个函数不会立刻响,而是等导出时才 ReferenceError。
+	'const LS_HISTORY = ',
+	'const HISTORY_DAYS = ',
+	'const HISTORY_EDGES = ',
+	'const HISTORY_FIELDS = {',
+	'const HISTORY_LEN = ',
+	'const HISTORY_MAX_MS = ',
+	'const HISTORY_HEIGHT = ',
+	'function historyBlank(',
+	'function historyBucketOf(',
+	'function historyOldestKey(',
+	'function pruneHistory(',
+	'function historyDay(',
+	'function historyFrame(',
+	'function historyIncident(',
+	'function historyQuantile(',
+	'function historyCells(',
+	'function historyReport(',
+	'function saveHistory(',
+	'function restoreHistory(',
+	'function clearHistory(',
 	// 能力矩阵 + 可能原因 + 诊断包(整机导出件 snapshot 会调 capabilities)
 	'const CAUSE_MAX = ',
 	'const PACK_SCHEMA_VERSION = ',
@@ -2348,6 +2370,11 @@ const exported = box.EX.snapshot();
 
 
 check('导出含 timeline 段', Array.isArray(exported.timeline?.samples), true);
+// 30 天趋势:整机导出件也带可选 context.history;没有样本时给空 rows(不补造行、不补 0)
+check('30 天趋势:整机导出件带 context.history(空历史 = 0 天,不补造行)',
+	[exported.context.history.days, exported.context.history.daysWithData, exported.context.history.rows,
+		/粗参照/.test(exported.context.history.scope)],
+	[30, 0, [], true]);
 // A2:跨会话基线的口径必须写在文件里 —— 它是粗参照,不是回归判定
 check('A2:导出件带跨会话基线(这个盒子里没有帧环 → 空数组,note 写明口径)',
 	[Array.isArray(exported.context.sessionBaselines.sessions), exported.context.sessionBaselines.sessions.length,
@@ -2914,7 +2941,7 @@ check('createUi 依赖守卫有牙齿:拿掉任意一个键都会被点名,解�
 	const bogus = depGuard([...uiDepNames, 'bogusNewDep'], uiDepKeys).missing;
 	const unusedBonus = depGuard(uiDepNames, [...uiDepKeys, 'unusedBonus']).unused;
 	return { names: uiDepNames.length, uncaught, bogus, unusedBonus };
-})(), { names: 186, uncaught: [], bogus: ['bogusNewDep'], unusedBonus: ['unusedBonus'] });
+})(), { names: 189, uncaught: [], bogus: ['bogusNewDep'], unusedBonus: ['unusedBonus'] });
 check('主界面只吃时间语义(结构上不碰 selectedIncident / 手选那套)', (() => {
 	const seg = extract(renderSource, 'function mainView(');
 	return [seg.includes('selectedIncident') === false, seg.includes('props.latest'), /const latestRow = latestIncident\(\);/.test(renderSource)];
@@ -3250,6 +3277,20 @@ const watchPieces = [
 	extract(source, 'function saveTally('),
 	extract(source, 'function restoreTally('),
 	extract(source, 'function clearTally('),
+	// 30 天趋势(常量已随 watchSource 那一段进来;函数按 extract 逐个抽)
+	extract(source, 'function historyBlank('),
+	extract(source, 'function historyBucketOf('),
+	extract(source, 'function historyOldestKey('),
+	extract(source, 'function pruneHistory('),
+	extract(source, 'function historyDay('),
+	extract(source, 'function historyFrame('),
+	extract(source, 'function historyIncident('),
+	extract(source, 'function historyQuantile('),
+	extract(source, 'function historyCells('),
+	extract(source, 'function historyReport('),
+	extract(source, 'function saveHistory('),
+	extract(source, 'function restoreHistory('),
+	extract(source, 'function clearHistory('),
 	// 能力矩阵(事故包的缺失声明由它推)
 	line('const MUT_SAMPLE'),
 	line('const LS_VIEW'),
@@ -3447,6 +3488,8 @@ const watchBox = new Function(`
 			eventObserver: null, eventState: 'not-started', eventSupported: [], interactions: [], eventCount: 0, elementCount: 0,
 			// 捕获计数的时间桶(与 client.js 的 state.watch.tally 同形;手写桩,加字段要同步)
 			tally: { minute: new Map(), day: new Map(), expiredBuckets: 0, expiredDays: 0, prunedMinute: -1, loadError: null, savedAt: 0, dirty: false, timer: 0 },
+			// 30 天趋势(与 client.js 的 state.watch.history 同形;手写桩,加字段要同步)
+			history: { day: new Map(), expiredDays: 0, prunedDay: '', loadError: null, savedAt: 0, dirty: false },
 		},
 		host: {
 			// 字段 host 在 1.0 的切分里改名叫 snapshot(避开 state.host.host)
@@ -3493,6 +3536,9 @@ const watchBox = new Function(`
 		// 捕获计数(与留存分离):桶 / 窗口 / 落盘
 		tallyWindow, tallyOfDay, tallyTitle, tallyReport, bumpTally, noteTallySeverity, pruneTally,
 		saveTally, restoreTally, clearTally, tallyDayKey, tallySum, TALLY_FIELDS, TALLY_MINUTES, TALLY_BUCKET_MS, TALLY_DAYS, LS_TALLY,
+		// 30 天趋势(方向 5):聚合 / 淘汰 / 跨天 / 场景分布 / 落盘读回
+		historyFrame, historyIncident, historyCells, historyReport, historyQuantile, historyBlank, pruneHistory,
+		saveHistory, restoreHistory, clearHistory, HISTORY_FIELDS, HISTORY_LEN, HISTORY_DAYS, HISTORY_EDGES, LS_HISTORY,
 	};
 `)();
 const watch = watchBox;
@@ -5615,6 +5661,110 @@ check('面板事故详情:可见冻结与最差帧并列显示(冻结不进 wors
 		frames: [{}, {}], span: 13000, worst: { ms: 16.7 }, gaps: 1,
 	}),
 	'窗口 13秒 · 2 帧 · p50 8.3ms · p99 16.7ms · 最差 17ms · 可见冻结 2000ms · rAF 挂起 1');
+
+// ── 30 天趋势(方向 5):日聚合 / 跨天 / 淘汰 / 空样本 / 场景分布 / 落盘读回 / 导出段 ──
+watch.clearHistory();
+const historyNow = Date.now();
+const historyToday = new Date(historyNow);
+historyToday.setHours(12, 0, 0, 0);
+const historyYesterday = new Date(historyToday.getTime());
+historyYesterday.setDate(historyYesterday.getDate() - 1);
+const historyLate = new Date(historyYesterday.getTime());
+historyLate.setHours(23, 59, 0, 0);
+const historyEarly = new Date(historyToday.getTime());
+historyEarly.setHours(0, 0, 30, 0);
+watch.historyFrame(16.7, historyLate.getTime(), true);          // 昨天 23:59:00 流式
+watch.historyFrame(50, historyLate.getTime() + 1000, false);    // 昨天 23:59:01 空闲
+watch.historyFrame(120, historyEarly.getTime(), true);          // 今天 00:00:30 流式
+const historyCells = watch.historyCells(historyNow);
+const historyKeyA = watch.tallyDayKey(historyEarly.getTime());
+const historyKeyB = watch.tallyDayKey(historyLate.getTime());
+const historyCellA = historyCells.find((cell) => cell.day === historyKeyA);
+const historyCellB = historyCells.find((cell) => cell.day === historyKeyB);
+check('30 天趋势:跨天落成两条日聚合(本地日期;不是"最近 24 小时"一条)',
+	[historyCells.length, historyCellA?.exists, historyCellB?.exists, historyKeyA !== historyKeyB],
+	[30, true, true, true]);
+check('30 天趋势:一天聚合给全字段(活跃秒/分钟 / 帧数 / p50 / p99 / 最差 / 场景 / 事故)',
+	[historyCellB.activeSeconds, historyCellB.activeMinutes, historyCellB.frames,
+		historyCellB.p50Ms, historyCellB.p99Ms, historyCellB.worstMs,
+		historyCellB.streamingSeconds, historyCellB.idleSeconds, historyCellB.incidents],
+	[2, 1, 2, 16.7, 50, 50, 1, 1, 0]);
+check('30 天趋势:分位是直方图桶的上沿(120ms 落在 ≤200ms 档 → p50/p99 都报 200,worst 仍是 120)',
+	[historyCellA.p50Ms, historyCellA.p99Ms, historyCellA.worstMs], [200, 200, 120]);
+check('30 天趋势:场景分布恒等式 streamingSeconds + idleSeconds == activeSeconds',
+	historyCells.filter((cell) => cell.exists === true).every((cell) => cell.streamingSeconds + cell.idleSeconds === cell.activeSeconds),
+	true);
+// 事故数与 tally 的 triggered 同一处计数(同一串只算一次)
+watch.clearTally();
+watch.bumpTally('triggered', historyEarly.getTime());
+check('30 天趋势:事故数跟 bumpTally("triggered") 走(不在别处再数一遍)',
+	[watch.historyCells(historyNow).find((cell) => cell.day === historyKeyA).incidents, watch.tallyOfDay(historyKeyA).detected],
+	[1, 1]);
+watch.clearTally();
+// 空样本:没有数据就返回空,不补 0、不编分位
+watch.clearHistory();
+const historyEmpty = watch.historyReport(historyNow);
+check('30 天趋势:空样本给空行(不补 0),直方图分位返回 null',
+	[historyEmpty.daysWithData, historyEmpty.rows.length, historyEmpty.activeMinutes,
+		watch.historyCells(historyNow).every((cell) => cell.exists === false),
+		watch.historyQuantile(new Array(watch.HISTORY_LEN - watch.HISTORY_FIELDS.hist).fill(0), 0.5, 0)],
+	[0, 0, 0, true, null]);
+// kill 判据 3:聚合存储不许超过 200KB —— 30 天 × 定长数组,理论上限远低于它(不存原始帧的意义)
+check('30 天趋势:30 天定长数组的理论上限远小于 200KB 的 kill 线',
+	watch.HISTORY_DAYS * watch.HISTORY_LEN * 8 < 204800, true);
+// 淘汰:31 天前那天在窗口外,下一次裁剪必须丢掉并计数
+const historyOld = new Date(historyToday.getTime());
+historyOld.setDate(historyOld.getDate() - 31);
+const historyOldKey = watch.tallyDayKey(historyOld.getTime());
+watch.historyFrame(50, historyOld.getTime(), false);
+const historyHadOld = watch.state.watch.history.day.has(historyOldKey);
+watch.pruneHistory(historyNow);
+check('30 天趋势:超过 30 个日历日的日聚合被淘汰(并记进 expiredDays)',
+	[historyHadOld, watch.state.watch.history.day.has(historyOldKey), watch.state.watch.history.expiredDays > 0],
+	[true, false, true]);
+// 落盘读回:新键 / 形状不对的整天丢掉
+watch.clearHistory();
+const historyExportAt = new Date(historyToday.getTime());
+historyExportAt.setHours(10, 0, 0, 0);
+watch.historyFrame(16, historyExportAt.getTime(), true);
+watch.historyFrame(50, historyExportAt.getTime() + 1000, false);
+const historyBeforeSave = watch.historyReport(historyNow).rows[0];
+const historySaved = watch.saveHistory();
+const historyRaw = watch.store.get(watch.LS_HISTORY);
+watch.state.watch.history.day.clear();
+const historyRestored = watch.restoreHistory();
+const historyAfterRestore = watch.historyReport(historyNow).rows[0];
+check('30 天趋势:落在新键 LS_HISTORY 上(不扩事故留存),读回与写前逐项一致',
+	[watch.LS_HISTORY, historySaved, historyRaw !== undefined, historyRestored !== null,
+		historyAfterRestore.day, historyAfterRestore.activeMinutes, historyAfterRestore.p99Ms,
+		historyAfterRestore.p50Ms, historyAfterRestore.frames],
+	['dsh-perf-hud:history:v1', true, true, true, historyBeforeSave.day, 1, 50, 16.7, 2]);
+watch.store.set(watch.LS_HISTORY, JSON.stringify({ v: 1, days: { '2026-01-01': [1, 2] } }));
+watch.state.watch.history.day.clear();
+watch.state.watch.history.loadError = null;
+watch.restoreHistory();
+check('30 天趋势:读回时形状不对的整天丢掉并记原因(不静默当成 0)',
+	[watch.state.watch.history.day.size, watch.state.watch.history.loadError], [0, 'shape:1']);
+// 导出段:context.history 与本地聚合逐项一致,且不升 incident schema
+watch.clearHistory();
+watch.historyFrame(16, historyExportAt.getTime(), true);
+watch.historyFrame(50, historyExportAt.getTime() + 1000, false);
+watch.bumpTally('triggered', historyExportAt.getTime());
+watch.clearTally();
+const historySavedIncidents = watch.state.watch.incidents.slice();
+watch.state.watch.incidents.push(causeRow);
+const historyPack = watch.buildPack('i9');
+watch.state.watch.incidents.length = 0;
+for (const row of historySavedIncidents) watch.state.watch.incidents.push(row);
+const historyReportJson = JSON.parse(historyPack.files.find((file) => file.name === 'incident.json').text);
+const historyLocal = watch.historyReport();
+check('30 天趋势:导出件带可选 context.history,与本地聚合逐项一致且不升 schemaVersion',
+	[historyReportJson.schema, historyReportJson.context.history.daysWithData, historyReportJson.context.history.rows.length,
+		historyReportJson.context.history.rows[0].p99Ms, historyLocal.rows[0].p99Ms,
+		historyReportJson.context.history.rows[0].activeMinutes, historyReportJson.context.history.rows[0].incidents,
+		/粗参照/.test(historyReportJson.context.history.scope)],
+	[3, 1, 1, 50, 50, 1, 1, true]);
+watch.clearHistory();
 
 // ── 诊断包 ──
 watch.state.watch.incidents.length = 0;
