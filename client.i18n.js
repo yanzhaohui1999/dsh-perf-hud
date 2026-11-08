@@ -192,7 +192,7 @@ window.__ModuleLoader__.load({
 				viewIncident: '卡顿详情', backHint: '回到主界面(那一屏只回答五个问题)',
 				packFilesLabel: '诊断包内容', packFilesHint: '给 AI 的那条:格式说明 + 摘要 + 原始证据 + 怎么读',
 				packFilesValue: 'manifest.json · summary.md · incident.json · README.md',
-				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / pos / sessions / marks / groups / on / collapsed / deep / precise / map / map:index',
+				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / history / incidents / watchui / view / pos / sessions / marks / groups / on / collapsed / deep / precise / map / map:index',
 				storageKeysHint: '清状态时按需删;on / deep / precise 就是采集档位(守夜 / 深录 / 精确归因),这三个会改变面板贵不贵;map 是那份 12MB sourcemap 的分段表缓存(按 rev 存)',
 				// 本轮:原因说人话(包名收进展开区)、两条导出路径、分享前预览
 				causePlainScript: '某个脚本模块的耗时偏高', causePlainLongTask: '这一段时间里有较重的渲染任务',
@@ -213,6 +213,11 @@ window.__ModuleLoader__.load({
 				frameMixHint: '帧间隔分档 ≤16.7 / 16.7–20 / 20–33.3 / 33.3–50 / 50–100 / ≥100ms(固定 60 秒窗口,与 60 秒帧条同一段):每档给条数与占比,占比两位小数(3600 帧里 1 条 = 0.03%);rAF 间隙不是帧,不计入分母。',
 				frameMixEmpty: '这一分钟还没有帧',
 				mainTrend1: '最近 1 小时', mainTrend24: '最近 24 小时',
+				// 30 天趋势(日聚合,不存原始帧):柱高 = 那天 p99;没有数据的天留空
+				historyLabel: '30 天', historyDaysWithData: ' 天有数据', historyMinutes: ' 分钟',
+				historySamples: '样本', historyStreaming: '流式', historyIdle: '空闲', historyIncidents: '事故',
+				historyNoData: '这天没有数据',
+				historyHint: '最近 30 个日历日,一天一根柱:柱高 = 那天帧间隔的 p99,没有数据的天留空(不补 0);悬停看样本分钟数、p50 / 最差、流式与空闲秒数、事故数。分位由固定直方图桶估出、报桶的上沿 —— 这是粗参照,不是回归判定;样本少或场景混杂的日子不能直接比。',
 				trendHint: '检测到几次 / 最长一次 / 重复线索 —— 三个数各有各的口径',
 				trendScope: '计数是"检测到几次卡顿"(同一串算一次);重复线索只数留存下来的现场,所以它不会比实际更严重',
 				noStallYet: '暂未记录到明显卡顿,仍在后台观察。', noCauseYet: '还没有抓到事故,先让它继续观察。',
@@ -451,7 +456,7 @@ window.__ModuleLoader__.load({
 				viewIncident: 'Stall detail', backHint: 'Back to the overview (that screen only answers five questions)',
 				packFilesLabel: 'diagnostic pack', packFilesHint: 'the AI path: format note + summary + raw evidence + how to read it',
 				packFilesValue: 'manifest.json · summary.md · incident.json · README.md',
-				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / incidents / watchui / view / pos / sessions / marks / groups / on / collapsed / deep / precise / map / map:index',
+				storageKeys: 'localStorage:dsh-perf-hud:ring / tally / history / incidents / watchui / view / pos / sessions / marks / groups / on / collapsed / deep / precise / map / map:index',
 				storageKeysHint: 'delete as needed when clearing state; on / deep / precise are the capture tier (night watch / deep / precise attribution) and change how expensive the panel is; map is the section-table cache for that 12MB sourcemap (keyed by rev)',
 				// this round: plain-language causes (package names behind a disclosure), two export paths, pre-share preview
 				causePlainScript: 'one script module is spending an unusual amount of time', causePlainLongTask: 'a heavy render task happened in this window',
@@ -472,6 +477,11 @@ window.__ModuleLoader__.load({
 				frameMixHint: 'frames by interval ≤16.7 / 16.7–20 / 20–33.3 / 33.3–50 / 50–100 / ≥100ms (fixed 60s window, same as the 60s strip): each band lists count and share, shares to two decimals (1 in 3600 frames = 0.03%); rAF gaps are not frames and are excluded.',
 				frameMixEmpty: 'no frames in this minute yet',
 				mainTrend1: 'Last hour', mainTrend24: 'Last 24 hours',
+				// 30-day trend (daily aggregates, no raw frames): bar height = that day's p99; empty days stay blank
+				historyLabel: '30 days', historyDaysWithData: ' days with data', historyMinutes: ' min',
+				historySamples: 'samples', historyStreaming: 'streaming', historyIdle: 'idle', historyIncidents: 'incidents',
+				historyNoData: 'no data for this day',
+				historyHint: 'Last 30 calendar days, one bar per day: bar height = that day\'s p99 frame interval; days with no samples stay blank (no zero fill). Hover for sample minutes, p50 / worst, streaming and idle seconds, incident count. Quantiles come from fixed histogram buckets and report the bucket\'s upper edge — a rough reference, not a regression verdict; days with few samples or mixed scenarios are not directly comparable.',
 				trendHint: 'How many / the longest / a repeating lead — three numbers with three different calibers',
 				trendScope: 'The count is "stalls detected" (one burst counts once); the repeating lead only counts evidence that was kept, so it never overstates',
 				noStallYet: 'No noticeable stall recorded yet — still watching in the background.', noCauseYet: 'Nothing captured yet; let it keep watching.',

@@ -115,8 +115,19 @@ const freshState = () => new Function('TALLY_TREND_SHORT_MS', 'TALLY_TREND_LONG_
 
 // ───────────────────────── 语义桩:渲染路径要跨过的最小事实 ─────────────────────────
 function makeDeps(state) {
+	// 30 天趋势:主界面那一条的覆盖量。真实实现在 client.model.js,这里只给同形的最小版本 ——
+	// 冒烟要验的是"有样本时这一行真的渲染出来",不是数据口径(那是 logic.mjs 的事)。
+	const historySummary = () => {
+		let days = 0
+		let minutes = 0
+		for (const row of state.watch.history.day.values()) { days += 1; minutes += row[1] ?? 0 }
+		return { days, minutes }
+	}
 	const overrides = {
 		React, h, S, state, translate,
+		historySummary,
+		historyMetaText: () => `${historySummary().days} 天 · ${historySummary().minutes} 分钟`,
+		historyStrip: () => h('svg', { width: '100%', height: 18 }, []),
 		W: { innerWidth: 1400, innerHeight: 900, devicePixelRatio: 2, __DSH_BOOT__: undefined },
 		performance: globalThis.performance,
 		natives: { setTimeout, clearTimeout, setInterval, clearInterval, requestAnimationFrame: (fn) => setTimeout(fn, 16), cancelAnimationFrame: clearTimeout },
@@ -211,6 +222,12 @@ const check = (name, actual, expected) => {
 const DEV_TABS = ['帧与归因', 'DOM 与堆', '宿主', '工具箱', '原始数据']
 const SCREENS = [
 	{ name: '主界面', setup: (state) => { state.ui.view = 'main'; state.ui.collapsed = false; state.watch.mode = 'live' }, expect: ['性能 HUD', '导出诊断报告'] },
+	// 30 天趋势:有样本时主界面多一条「30 天」sparkline(没有样本时整条不渲染 —— 空图只是噪音)
+	{ name: '主界面 · 30 天趋势', setup: (state) => {
+		state.ui.view = 'main'; state.ui.collapsed = false; state.watch.mode = 'live';
+		state.watch.history.day.set('2026-11-07', [60, 42, 900, 50, 1, 30, 12, 0, 0, 800, 100, 0, 0, 0, 0, 0, 0, 0, 0]);
+		state.watch.history.day.set('2026-11-08', [30, 10, 300, 80, 0, 10, 5, 0, 0, 200, 100, 0, 0, 0, 0, 0, 0, 0, 0]);
+	}, expect: ['30 天', '2 天 · 52 分钟'] },
 	// 卡顿详情:这一屏没有事故数据时也要给「武装」入口(它服务的是下一次卡顿,不依赖 row)
 	{ name: '卡顿详情(历史上下文)', setup: (state) => { state.ui.view = 'incident'; state.ui.collapsed = false; state.watch.mode = 'incident' }, expect: ['卡顿详情', '还没抓到', '武装 60 秒'] },
 	// 武装中:剩余秒数 + 取消(取消是真还原,不是装饰按钮)
