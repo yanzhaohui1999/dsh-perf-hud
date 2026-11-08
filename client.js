@@ -2424,6 +2424,7 @@ window.__ModuleLoader__.load({
 			}
 			// 宿主路由的写操作要一次性票据:先 arm,再把 ticket 带上。票据 30 秒有效、
 			// 单次使用 —— confirm:true 只是调用方标志,宿主已经不认它了。
+			// 票据不是授权边界(同源脚本可以自己 arm 取票),只挡盲 CSRF 与重放。
 			if (op === 'setBundle') {
 				const armed = await hostOp({ op: 'arm' }, FETCH_TIMEOUT_MS.bundle);
 				if (armed.ok !== true || typeof armed.ticket !== 'string') {

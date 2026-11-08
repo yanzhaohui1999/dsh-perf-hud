@@ -62,7 +62,7 @@
 | 边界(AGENTS §1) | 当前状态 | 证据 |
 |---|---|---|
 | 不碰 DSH 源码 / 不注册服务 | 守住 | index.js 只有 `connection.fetch.register` 一个路由 + `ctx.on('session/event')`(可卸) |
-| 没有 confirm 不写 bundle 状态 | 守住 | index.js:430 `if (body.confirm !== true) return 400`;tests/host.mjs:166-167 断言"拒绝 + 一次都没写" |
+| 没有 confirm 不写 bundle 状态 | 守住(2026-10-13 当时) | index.js:430 `if (body.confirm !== true) return 400`;tests/host.mjs:166-167 断言"拒绝 + 一次都没写"。**2026-11-08 更新**:协议已改为先 `POST {op:"arm"}` 领一次性票据,无票/伪造/过期/复用一律 403;票据只反盲 CSRF / 重放,**不是授权边界**(同源脚本可以自己 `arm` 取票)。 |
 | 客户端插桩可还原 | 守住 | `applyProbeState()` 逐项"当前仍是我们的包装才还原" |
 | 不许假装成功 | 守住 | `loafState` / `eventState` / `mapStates` / `eventWatch.installed` / `persistError` / `tally.loadError` 全部照实 |
 

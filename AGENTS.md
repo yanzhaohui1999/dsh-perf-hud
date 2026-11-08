@@ -47,7 +47,7 @@
 ## 1. 仓库硬约束
 
 - **`cordis.patch.yml` 只读**:它是"把本插件挂进 profile"的一行声明,内容变化会触发组合 reconcile,**不要把它当配置面**。插件行为一律靠 `package.json` 的 `dsh.*` 与代码里的开关。
-- **bundle 状态写入只认一次性票据**:宿主半的 `setBundle` 会写 profile 的持久化选择,是唯一一个"插件会改用户环境"的操作。它必须:① 面板先 `POST {op:"arm"}` 领一张 30 秒有效、单次使用的票据,`setBundle` 带 `ticket`(`confirm:true` 只是调用方标志,不是授权);② 拒绝改 `dsh-perf-hud` 自己与 `@deepseek-ai/dsh-session-persistence-jsonl`;③ 改动前后逐项核验并恢复。
+- **bundle 状态写入要一次性票据(反盲 CSRF / 重放,不是授权边界)**:宿主半的 `setBundle` 会写 profile 的持久化选择,是唯一一个"插件会改用户环境"的操作。它必须:① 面板先 `POST {op:"arm"}` 领一张 30 秒有效、单次使用的票据,`setBundle` 带 `ticket`(`confirm:true` 只是调用方标志,宿主不认);② 拒绝改 `dsh-perf-hud` 自己与 `@deepseek-ai/dsh-session-persistence-jsonl`;③ 改动前后逐项核验并恢复。⚠️ **票据不等于授权**:同源脚本可以自己 `arm` 取票,它只挡住"读不到响应"的盲 CSRF 与重放,不区分谁有权写;能兜底的只有 deny 名单与改动前后的核验,别把它当授权用。
 - **宿主半不许改宿主任何原型**(离线套件有断言钉住);客户端半的原型插桩(见 §5)必须是**可还原**的,`disable()` 后 `W.setTimeout === natives.setTimeout` 等断言必须成立。
 - **不许假装成功**:宿主回执、map 解析状态、事件测量是否装上,一律照实显示并写进导出件(`application` / `mapStates` / `eventWatch.installed+reason` 都是这个原则的产物)。
 - **不凭记忆写 API**:本项目的每一步(路由注册形态、事件名、sourcemap 形态、DOM 钩子)都来自当场读源码或实测;记忆里"应该如此"的东西(`data-dsh-plugin`、包 `Context.emit`)都被证伪过 —— 见 [归因机制](docs/mechanisms.md) 与 [已知坑](docs/dead-ends.md)。
@@ -62,10 +62,10 @@
 |---|---|---|
 | `client.js` | 浏览器半:采集 / 归因 / 面板状态 / `apply` + 同步包装(约 5.0k 行) | 改客户端行为 |
 | `client.*.js` | 包内分片 6 片:model 约 4.3k / ui 约 1.7k / watch 约 0.9k / i18n 约 0.5k / tools 230 / pack 135 行 | 改分片后 **`touch client.js`** 再刷新(见「改动的生效方式」);清单见下面「代码分片」 |
-| `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(约 0.7k 行) | 改宿主行为,必须重启 |
+| `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(约 0.8k 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 五套离线断言(856 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
+| `tests/` | 五套离线断言(857 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
 | `preview/` | 面板设计对比页 + **事故回放站** `replay.html`(零依赖,拖 zip 进来;读包口径在 `replay-core.js`) | 读包 / 改设计时 |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 九份参考文档(含 [pack-schema](docs/pack-schema.md))+ `images/`(9 张 README 截图)+ `plans/`(按日期归档 + 索引,含 1.0 验收档案) | 按需查,别通读(§9) |
@@ -100,7 +100,7 @@
 | 片 | 字段数 | 管什么 | 谁读 |
 |---|---|---|---|
 | `state.ui` | 23 | 面板自己的视图 / 位置 / 折叠 / 导出预览 / 一次性回执 | 主文件 + model + ui |
-| `state.render` | 54 | 渲染器侧采集:帧 / longtask / 回调 / DOM / 堆 / 自身开销 / 档位(含武装窗口)/ 取数代际 | 主文件 + model + ui + watch |
+| `state.render` | 55 | 渲染器侧采集:帧 / longtask / 回调 / DOM / 堆 / 自身开销 / 档位(含武装窗口)/ 取数代际 | 主文件 + model + ui + watch |
 | `state.watch` | 37 | 守夜层(环形缓冲 / 留存 / 落盘)+ 场景标签 + 捕获计数 | 主文件 + model + ui + watch + tools |
 | `state.host` | 16 | 宿主快照(`state.host.snapshot`)/ 事件回执 / CPU 采样 / 武装窗口取回的 profile 段 / 链路 | 主文件 + model + ui + watch |
 
@@ -119,15 +119,15 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑五套件**(合计 **856** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑五套件**(合计 **857** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
 node tests/logic.mjs         # 741 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
-node tests/host.mjs          # 78 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / 一次性票据安全线)
+node tests/host.mjs          # 79 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / 一次性票据反盲 CSRF·重放)
 node tests/compat.mjs        # 17 条:上一版 schemaVersion 的夹具包 + 真 0.9.0 导出包(契约没漂 + 缺键必红)
 node tests/replay.mjs        # 9 条:回放站读包(含 zip),现算摘要 == 包里 summary
-node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 856)
+node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 857)
 ```
 
 一条命令跑完:`npm test`。线上(先按 [环境与验证](docs/verification.md) 换 cookie):
@@ -144,7 +144,7 @@ DSH_COOKIE=… node tests/live-host.mjs        # 真实路由;退出码 3 = 宿�
 - **口径有歧义就加断言,不要加注释**:注释不能防回归,断言能。
 - **词典两条断言是一对(2026-10-13 补)**:死键那条管"词典里没人用",**反向那条**管"用了但词典里没有" —— 后者更隐蔽:`translate` 会退回 key 本身,面板 / 导出件上**直接印出** `exportPreviewCopy` / `viewIncident` 这种内部键名,而三套件与死键断言都不响(实测一次踩了 8 个)。加文案时两条都要绿。
 - **静态检查必须有牙齿**:`logic.mjs` 顶部两条(① `h(Uppercase…)` 引用的组件必须声明过;② 面板渲染区里的裸函数调用必须声明过)是"整段替换吞掉相邻声明"事故的回归测试([死路](docs/dead-ends.md) 第 7 条);验证它的办法是把声明删掉看它是否报出名字。
-- **宿主半可离线真跑**:`tests/host.mjs` 用假 `ctx`(含 `connection.fetch.register` / `pluginManager` / `ctx.on`)驱动真实 `index.js`,断言路由、事件循环升温、一次性票据安全线。
+- **宿主半可离线真跑**:`tests/host.mjs` 用假 `ctx`(含 `connection.fetch.register` / `pluginManager` / `ctx.on`)驱动真实 `index.js`,断言路由、事件循环升温、一次性票据(反盲 CSRF / 重放,不是授权边界)。
 - **契约冻结两侧都要测**:`tests/logic.mjs` 是**产方**(`manifestFor()` 的键集合 == `docs/pack-schema.md` 的清单,双向),`tests/compat.mjs` 是**读方**(上一版 `schemaVersion` 的夹具包仍能读出摘要与能力矩阵;缺一个必需键必须红)。夹具是**真事故切片**按上一版契约降级出来的(`manifest` v1 / `incident` v2),不是另写一份"像老包"的数据 —— 改夹具上的数值就等于改被测对象,先问"这是不是真采集里的东西"。
 - **离线渲染冒烟是"没浏览器时的那一眼"**:`tools/render-smoke.mjs` 用假 React(元素树 + hooks 桩)、**真词典**与 `client.js` 里抽出来的真 `state` 字面量,把主界面 / 卡顿详情 / 开发者详情五页签 / 设置 / 收起态 / 关闭态各跑一遍,断言"0 抛错 + 关键文案在场 + 没有漏成 key 的文案"。它执行的正是 `PerfHud()` 的函数体 —— 所以**模块作用域的裸标识符、只在某个分支里用的变量**都会在这里红(实测:往 `mainView` 里塞一句 `void smokeBareIdentifier` → `smokeBareIdentifier is not defined`)。⚠️ 数据类 dep 是**通用假值**,它不验读数对不对(那是三套件与真页面验收器的事),只回答"这条渲染路径还跑得下去吗"。**拼错 / 漏传的 dep 不归它管**(Proxy 会把缺的键兜成可调用假值)—— 那一条由 `tests/logic.mjs` 的「createUi 依赖守卫」纯静态核(解构键 ↔ 调用点键,双向)。
 - **`incident.timeline` 的证据边界**:`npm test` 钉的是夹具(两段真忙期、最大偏移 **0 帧**)+ 两段原始序列可重算；**真实卡顿的双端现场采集还没做**(REVIEW §2 第 11 条)—— 别把 fixture 重定位的 64.9% 当现场证据。

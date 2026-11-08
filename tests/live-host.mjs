@@ -6,7 +6,8 @@
  *
  * 退出码:0 = 全过;1 = 有断言失败(实现问题);3 = 宿主半还没加载(需要重启 ai.dsh.web)。
  * 它验证:GET 探针(1KB cache-buster 与 64KB 吞吐)、事件循环 p50/p99 是真的在长、
- * session/event 派发计时能装上并记到数、以及"没有一次性票据绝不写 bundle"这条安全线。
+ * session/event 派发计时能装上并记到数、以及"没有一次性票据绝不写 bundle"这道门
+ * (票据只反盲 CSRF / 重放,不是授权边界 —— 同源脚本可以自己 arm 取票)。
  */
 const cookie = process.env.DSH_COOKIE ?? '';
 if (cookie === '') {
@@ -80,7 +81,7 @@ if (names.length > 0) {
 	console.log(`   派发 Top:${name} ${stat.count} 次 · 合计 ${stat.ms}ms · 单次峰 ${stat.max}ms`);
 }
 
-// ── 安全线:没有一次性票据绝不写 bundle
+// ── 门:没有一次性票据绝不写 bundle(反盲 CSRF / 重放,不是授权边界)
 const listed = await (await post({ op: 'listBundles' })).json();
 check('listBundles 可用', Array.isArray(listed.bundles) && listed.bundles.length > 0, `${listed.bundles?.length} 个`);
 const before = new Map((listed.bundles ?? []).map((bundle) => [bundle.name, bundle.enabled]));

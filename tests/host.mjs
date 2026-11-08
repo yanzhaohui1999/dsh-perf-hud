@@ -5,7 +5,8 @@
  *
  * 用一个最小 ctx 装上 index.js 的 apply(),拿到它注册的 /api/dsh-perf-hud/host 路由,
  * 直接以 Request/Response 驱动它,断言:GET 探针、事件循环读数、bundle 读写代理、
- * 以及"没有一次性票据绝不写配置"这条安全线。顺带打印真实测到的事件循环延迟。
+ * 以及"没有一次性票据绝不写配置"这道门(票据只反盲 CSRF / 重放,不是授权边界)。
+ * 顺带打印真实测到的事件循环延迟。
  *
  * CPU profile 那一段**不真的去采**(那是进程级的重活),用假的 inspector 桩注入 ——
  * 与客户端半 logic.mjs 的做法一致:测的是 index.js 那份代码,不是另写一份等价实现。
@@ -17,6 +18,16 @@ let failed = 0;
 const check = (name, ok, detail = '') => {
 	if (!ok) failed += 1;
 	console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail === '' ? '' : `  ${detail}`}`);
+};
+
+/** 轮询等待:每 10ms 检查一次,最多 2 秒。慢 CI 上不靠"睡固定毫秒"赌采样已经收尾。 */
+const waitUntil = async (predicate, timeoutMs = 2000) => {
+	const until = Date.now() + timeoutMs;
+	while (Date.now() < until) {
+		if (await predicate()) return true;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	return (await predicate()) === true;
 };
 
 const dispatched = [];
@@ -44,7 +55,7 @@ const manager = {
 };
 
 // ── 假的 inspector 桩:离线套件不真的去采(进程级的重活) ────────────
-// 只记录被调用的方法名 + 回一份最小但**结构合法**的 .cpuprofile,用来断言状态机与安全线。
+// 只记录被调用的方法名 + 回一份最小但**结构合法**的 .cpuprofile,用来断言状态机与拒绝路径。
 const inspectorCalls = [];
 const fakeProfile = {
 	nodes: [
@@ -160,8 +171,9 @@ check('能卸载监听器', watchOff.eventWatch?.installed === false && listener
 	`unsubscribed=${JSON.stringify(unsubscribed)}`);
 
 // ── bundle 读写代理:一次性票据优先 ────────────────────────────────
-// 旧实现只校验调用方自带的 confirm:true —— 同源脚本想写就能写。现在必须先 arm 领票据,
-// 30 秒有效、单次使用(测试里压到 150ms,过期路径不用真等 30 秒)。
+// 旧实现只校验调用方自带的 confirm:true。现在必须先 arm 领票据,30 秒有效、单次使用
+// (测试里压到 150ms,过期路径不用真等 30 秒)。注意:这是反盲 CSRF / 重放的门,不是
+// 授权边界 —— 同源脚本可以自己 POST {op:'arm'} 取票,所以这里不测"脚本拿不到票"。
 const listed = await (await post({ op: 'listBundles' })).json();
 check('listBundles 代理可用', listed.bundles?.length === 2, listed.bundles?.map((b) => b.name).join(','));
 
@@ -182,7 +194,7 @@ check('每次 arm 的票据都不同(不可猜、不可复用)', armed1.ticket !
 const guard = await post({ op: 'setBundle', name: 'dsh-perf-hud', enabled: false, ticket: armed1.ticket });
 check('拒绝动自己(400)', guard.status === 400);
 
-// 安全线有**两条** deny 名单,只测一条等于另一条没人钉(改坏了照样全绿)
+// 拒绝路径有**两条** deny 名单,只测一条等于另一条没人钉(改坏了照样全绿)
 const guardSession = await post({ op: 'setBundle', name: '@deepseek-ai/dsh-session-persistence-jsonl', enabled: false, ticket: armed2.ticket });
 check('拒绝动 session-persistence-jsonl(400)', guardSession.status === 400);
 check('两条 deny 名单都拒绝时一次都没写', writes.length === 0);
@@ -229,7 +241,7 @@ const secondBody = await second.json();
 check('同一时间只允许一个采样(重入被拒)', secondBody.ok === false && second.status === 500, secondBody.error);
 check('重入被拒时没有再开一次采样', inspectorCalls.filter((m) => m === 'Profiler.start').length === 1);
 
-await new Promise((resolve) => setTimeout(resolve, 250));
+await waitUntil(async () => (await (await get('')).json()).host?.cpuProfile?.collected === true);
 const collected = await (await post({ op: 'profileGet' })).json();
 check('采完能取回标准 .cpuprofile 结构',
 	collected.ok === true && Array.isArray(collected.profile?.nodes) && Array.isArray(collected.profile?.samples)
@@ -330,6 +342,19 @@ apply(ctx2, {
 	inspector: { Session: class { connect() { throw new Error(CONNECT_ERROR); } disconnect() {} post() {} } },
 });
 const route2 = routes2.get('/api/dsh-perf-hud/host');
+
+// 默认 TTL 单独钉:上面主实例注入 armTtlMs:150 只验证"过期会拒",默认值本身没人管。
+// 这里用不注入 armTtlMs 的 route2 —— 把 ARM_TTL_MS 改成 600000,这条必须红。
+const defaultArm = await (await route2.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host', {
+	method: 'POST',
+	headers: { 'content-type': 'application/json' },
+	body: JSON.stringify({ op: 'arm' }),
+}))).json();
+const defaultTtlLeft = (defaultArm.expiresAt ?? 0) - Date.now();
+check('默认票据 TTL 是 30 秒(未注入 armTtlMs)', defaultArm.ok === true && defaultArm.ttlMs === 30000
+	&& defaultTtlLeft > 25000 && defaultTtlLeft <= 30000,
+	`ttlMs=${defaultArm.ttlMs} left=${defaultTtlLeft}ms`);
+
 const failedRes = await route2.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host', {
 	method: 'POST',
 	headers: { 'content-type': 'application/json' },
@@ -392,7 +417,10 @@ check('宿主:stop() 后 running === false,旧 profile 不丢',
 const restarted = await (await post({ op: 'profileStart', seconds: 0.1 })).json();
 check('宿主:stop() 后再次 start() 成功(不报"已有一个采样在进行中")',
 	restarted.ok === true && restarted.running === true, JSON.stringify(restarted).slice(0, 120));
-await new Promise((resolve) => setTimeout(resolve, 250));
+await waitUntil(async () => {
+	const state = (await (await get('')).json()).host?.cpuProfile ?? {};
+	return state.collections === collectionsBefore + 1 && state.running === false;
+});
 const restartedDone = await (await get('')).json();
 const restartedState = restartedDone.host?.cpuProfile ?? {};
 const connectDelta = inspectorCalls.filter((m) => m === 'connect').length - connectsBeforeRestart;
@@ -455,14 +483,6 @@ const post3 = (body) => route3.fetch(new Request('http://dsh.invalid/api/dsh-per
 	headers: { 'content-type': 'application/json' },
 	body: JSON.stringify(body),
 }));
-const waitUntil = async (predicate, timeoutMs = 2000) => {
-	const until = Date.now() + timeoutMs;
-	while (Date.now() < until) {
-		if (predicate()) return true;
-		await new Promise((resolve) => setTimeout(resolve, 20));
-	}
-	return predicate();
-};
 
 const started3 = await (await post3({ op: 'profileStart', seconds: 0.1 })).json();
 check('世代:第一代采样已开始(前置条件)', started3.ok === true && started3.running === true,
@@ -491,7 +511,7 @@ check('世代:旧 finish 不把新一代 running 打回 false', afterStaleState.
 check('世代:旧 finish 不提交旧 profile(collected 仍为 false)',
 	afterStaleState.collected === false && afterStaleState.collections === 0, JSON.stringify(afterStaleState));
 
-await new Promise((resolve) => setTimeout(resolve, 300));
+await waitUntil(async () => (await (await get3()).json()).host?.cpuProfile?.collections === 1);
 const final3 = await (await get3()).json();
 const got3 = await (await post3({ op: 'profileGet' })).json();
 check('世代:新一代正常收尾(collections=1、running=false)',

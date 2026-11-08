@@ -7,8 +7,10 @@
  *   2. POST {op:'watchEvents'}  —— 可选:包住 session/event 的同步派发,累计每条事件的
  *              派发耗时与次数。装不上就如实回 installed:false + reason,不假装成功。
  *   3. POST {op:'listBundles'|'arm'|'setBundle'} —— 代理 pluginManager 的 bundle 读写,
- *              供「隔离实验」用。写之前必须先 `arm` 领一张 30 秒有效、单次使用的票据;
- *              setBundle 只认票据 —— confirm:true 只是调用方自己的标志,不是授权边界。
+ *              供「隔离实验」用。写之前必须先 `arm` 领一张 30 秒有效、单次使用的票据。
+ *              票据**不是授权边界**:同源脚本可以自己 POST {op:'arm'} 取票;它只挡住
+ *              读不到响应的盲 CSRF 与重放,把可写窗口压到 30 秒且不可复用。confirm:true
+ *              同样只是调用方自己的标志,宿主不认。
  *   4. POST {op:'profileStart', seconds?} / {op:'profileGet'} —— 按需采一段宿主进程的
  *              CPU profile(node:inspector 的 Profiler,产出标准 .cpuprofile);**不常开**,
  *              同时只允许一个采样在跑,profile 只在内存里、不落盘。
@@ -37,6 +39,7 @@ const PLUGIN_VERSION = (() => {
 
 const ROUTE = '/api/dsh-perf-hud/host';
 // setBundle 一次性票据的有效期:面板先 arm,30 秒内带票据写一次,之后作废。
+// 这只是反盲 CSRF / 重放的时间窗,不是"谁有权写"的边界 —— 同源脚本自己也能 arm。
 const ARM_TTL_MS = 30000;
 const WINDOW = 300;          // 每秒一个采样,保留 300 秒
 const MAX_LOAD_BYTES = 262144;
@@ -597,8 +600,10 @@ export function apply(ctx, options = {}) {
 		};
 
 		// setBundle 的一次性票据:面板先 POST {op:'arm'} 领一张,30 秒内有效、用一次就废。
-		// 同源脚本可以伪造 confirm:true,但拿不到「已经 arm 过」的凭证;票据把可写窗口压到
-		// 30 秒且不可重放。票据存在宿主内存里,不落盘,插件卸载即失效。
+		// 它**不是授权边界**:同源脚本本来就能自己 POST {op:'arm'} 拿票,也能伪造 confirm:true。
+		// 票据真正挡住的是"读不到响应"的盲 CSRF(攻击页发得出请求、读不回响应)和重放 ——
+		// 把无票写入与重复提交压成 403,而不是区分谁有权写。票据只在宿主内存里,不落盘,
+		// 插件卸载即失效;arm 本身没有速率限制或数量上限(同源循环 arm 仍会让 Map 增长)。
 		const tickets = new Map();
 		const armTtlMs = Number.isFinite(options?.armTtlMs) && options.armTtlMs > 0 ? options.armTtlMs : ARM_TTL_MS;
 		const issueTicket = () => {
@@ -713,6 +718,7 @@ export function apply(ctx, options = {}) {
 
 			if (op === 'arm') {
 				// 面板/实验工具在 setBundle 之前先领一张票据;GET 不签发,避免被缓存或预取消耗。
+				// 同源脚本也能调这个 op —— 所以票据是反盲 CSRF / 重放,不是授权边界。
 				return reply(issueTicket());
 			}
 
@@ -738,6 +744,7 @@ export function apply(ctx, options = {}) {
 
 			if (op === 'setBundle') {
 				// 只认一次性票据:confirm:true 是调用方自称,不构成授权边界。
+				// 票据同样只反盲 CSRF / 重放,不区分调用者身份(同源脚本可以自己 arm)。
 				const ticketState = consumeTicket(body.ticket);
 				if (ticketState !== '') {
 					const error = ticketState === 'missing'
