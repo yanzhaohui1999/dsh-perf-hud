@@ -2,6 +2,12 @@
 
 本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/),版本号遵循 SemVer。
 
+## [Unreleased]
+
+### 新增
+
+- **可见冻结不再被静默剔除(1.1 / 方向 1)**:`isGap` 原来只看帧间隔 ≥1000ms,可见状态下的 2s busy-loop 会得到 `gap:true`,被 `summary` 剔除 —— 实测 LoAF 能起一次事故,但 `summary.worstFrameMs` 只有 16.7ms;没有 LoAF 时连事故都没有。现在把长间隙分成三类:`hidden`(页面当时不可见)/ `visible-freeze`(可见且时间源一致,或有 longtask / LoAF 重叠)/ `time-jump`(可见但墙钟与性能时钟对不上,更像睡眠)。可见冻结**自己起一次捕获**,并在包里带 `frames[].gapReason` 与 `summary.visibleFreezeMs / visibleFreezeFrames`;同批加 120Hz 读数 `summary.refreshHz`(非 gap 帧间隔中位,样本不足 / 估不准退回 60)与 `budgetMisses`(帧时长 >1.5× 刷新预算的条数)。**旧字段语义不变**:`gap:true`、`worstFrameMs`、`hiddenGaps` 的值都没改(可见冻结仍计入长间隙),新字段全是可选、不升 `schemaVersion`。真页面实测:2s 同步 busy-loop → 事故包 `gapReason:"visible-freeze"`、`visibleFreezeMs≈2008ms`;离线 11 条新断言覆盖分类 / 触发 / 隐藏与跳变不触发 / 120Hz 模拟 / 旧字段不变。
+
 ## [1.0.0] - 2026-11-08
 
 **1.0 的承诺:导出包契约冻结。** `manifest.json` / `incident.json` / `capabilities()` / `missing:` 前缀 / `window.__perfHud` 读接口的形状从这里起冻结 —— [`docs/pack-schema.md`](docs/pack-schema.md) 是唯一权威。加可选字段不升版本;删 / 改名 / 改语义要等 2.0。0.9.0 真导出的一份包由 `tests/compat.mjs` 保证仍读得出来。

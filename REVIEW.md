@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ `cordis.patch.yml` 形态正确 —— 这是市场收录最常见的被拒原因 |
 | 4 | 公开仓库 + topic | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场 |
 | 5 | 产物无死链 | ✅ 1.0.0 已发布(registry `fileCount` **38**;433.9 kB tarball / 1.18 MB unpacked;含 `tools/` 18 个、`locale/`、`skills/`);`tests/` 与 `fixtures/` 不进包;`release.yml` 逐份核(含 `tools/`、`locale/` 按目录核) |
-| 6 | 门禁全绿 | ✅ **763** 条离线断言(attribution 11 / logic 685 / host 41 / compat 17 / replay 9)+ **离线渲染冒烟**(六屏 + 关闭态);CI 与 `release.yml` 都跑:两个半边的 `node --check` + 五套件 + 冒烟 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ **775** 条离线断言(attribution 11 / logic 697 / host 41 / compat 17 / replay 9)+ **离线渲染冒烟**(六屏 + 关闭态);CI 与 `release.yml` 都跑:两个半边的 `node --check` + 五套件 + 冒烟 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ✅ 2026-10-18 提 PR [awesome-dsh-plugin#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814)(单文件 `data/plugins/…yml`),**2026-10-19 01:29 已合并** |
 | 8 | 兼容性声明 | ✅ `engines.dsh` 与三个客户端 inject 包统一 `>=0.2.0-rc.2 <0.3.0-0`;`dsh.compatibility.dshReleases` **只列真跑过的版本**(`0.2.1-rc.1` / `0.2.1-rc.3`),每条在 [1.0 验收档案](docs/plans/2026-11-07-v1-acceptance.md) 里有机器标记,`npm run pack:check` 逐条核(声明了没跑过 / 越界 / 空矩阵都红) |
 
