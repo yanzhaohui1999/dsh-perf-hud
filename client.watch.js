@@ -14,6 +14,8 @@ window.__ModuleLoader__.load({
 			const {
 				BUNDLE_PREFIX,
 				LS_INCIDENTS,
+				REFRESH_BUDGET_RATIO,
+				REFRESH_MIN_SAMPLES,
 				W,
 				WATCH_DAILY_DAYS,
 				WATCH_EVENT_MAX,
@@ -54,6 +56,39 @@ window.__ModuleLoader__.load({
 		 */
 		function watchTrigger(ms) {
 			return typeof ms === 'number' && ms >= WATCH_TRIGGER_MS ? round1(ms) : null;
+		}
+		/**
+		 * 从窗口内**非 gap 帧**的帧间隔中位估刷新率。估不准(样本太少 / 中位异常 / 结果
+		 * 不在 20–360Hz)就退回 60Hz —— 不把"没测出来"猜成 120,也不把 60Hz 屏报成 120。
+		 * ⚠️ 它估的是**effective** 刷新率:页面被浏览器压到 60fps 时,120Hz 屏也会报 60;
+		 * 这种"半帧率"看不出来,也照实写,不假装知道物理屏。
+		 */
+		function estimateRefreshHz(durations) {
+			if (Array.isArray(durations) === false) return 60;
+			const sorted = durations.filter((ms) => typeof ms === 'number' && Number.isFinite(ms) && ms > 0).sort((a, b) => a - b);
+			if (sorted.length < REFRESH_MIN_SAMPLES) return 60;
+			const median = sorted[Math.floor(sorted.length / 2)];
+			const hz = 1000 / median;
+			if (Number.isFinite(hz) === false || hz < 20 || hz > 360) return 60;
+			return Math.round(hz);
+		}
+		/** 超过 1.5× 刷新预算的**非 gap** 帧数(120Hz 屏上持续 60fps 会在这里现形)。 */
+		function budgetMisses(durations, refreshHz) {
+			const line = (1000 / refreshHz) * REFRESH_BUDGET_RATIO;
+			let misses = 0;
+			for (const ms of durations) if (typeof ms === 'number' && Number.isFinite(ms) && ms > line) misses += 1;
+			return misses;
+		}
+		/** 窗口里 gapReason === 'visible-freeze' 的累计时长与条数。 */
+		function visibleFreezeStats(frames) {
+			let ms = 0;
+			let count = 0;
+			for (const row of frames) {
+				if (row === null || row === undefined || row.gap !== true || row.gapReason !== 'visible-freeze') continue;
+				count += 1;
+				ms += typeof row.ms === 'number' ? row.ms : 0;
+			}
+			return { ms: round1(ms), count };
 		}
 		/** 本页性能时钟的原点(墙上时间毫秒)。跨会话读事故时,perf 毫秒要靠它才能对齐。 */
 		function perfOrigin() {
@@ -209,11 +244,22 @@ window.__ModuleLoader__.load({
 		 * 每帧一次(从 FPS 循环里调)。
 		 * 帧间隔超过 WATCH_GAP_MS 说明 rAF 被挂起(标签页隐藏/系统休眠):那是间隙,
 		 * 既不算卡顿也不触发 —— 否则每次切回标签页都会"抓到"一次几百秒的假事故。
+		 *
+		 * ⚠️ 例外是 **visible-freeze**:页面一直可见、时间源也没有跳变,或 longtask / LoAF
+		 * 与这段重叠 —— 那是真的冻结,不是"切回标签页"。它仍然 gap:true(旧语义不变),
+		 * 但必须起一次捕获,否则最坏的一帧会被静默剔掉(实测 2s busy-loop 只有 16.7ms
+		 * 的 worstFrameMs)。hidden / time-jump 依旧不触发。
 		 */
-		function watchFrame(at, ms, isGap) {
+		function watchFrame(at, ms, isGap, gapReason) {
 			if (state.watch.on === false) return;
-			frameRing.push(at, ms, isGap);
-			if (isGap) return;
+			frameRing.push(at, ms, isGap, gapReason);
+			if (isGap) {
+				if (gapReason === 'visible-freeze') {
+					const severity = watchTrigger(ms);
+					if (severity !== null) triggerCapture('frame', at, severity);
+				}
+				return;
+			}
 			const severity = watchTrigger(ms);
 			if (severity !== null) triggerCapture('frame', at, severity);
 		}
@@ -404,6 +450,11 @@ window.__ModuleLoader__.load({
 				if (row.ms >= 100) over100 += 1;
 				if (worst === null || row.ms > worst.ms) worst = row;
 			}
+			// 可见冻结单独汇总:它仍是 gap(旧字段 hiddenGaps 的值不变),但必须让读包的人
+			// 看得到"这一窗里有多久是页面可见却冻住了",而不是只能从 2000ms 的 gap 帧自己猜。
+			const freeze = visibleFreezeStats(frames);
+			const refreshHz = estimateRefreshHz(durations);
+			const misses = budgetMisses(durations, refreshHz);
 			durations.sort((a, b) => a - b);
 			const quantile = (p) => (durations.length === 0 ? null : round1(durations[Math.min(durations.length - 1, Math.floor(p * durations.length))]));
 			const pick50 = quantile(0.5);
@@ -488,6 +539,13 @@ window.__ModuleLoader__.load({
 					framesOver50Ms: over50,
 					framesOver100Ms: over100,
 					hiddenGaps: gaps,
+					// 只加字段,不改 hiddenGaps / worstFrameMs 的值:可见冻结仍计入长间隙,
+					// 读方用这组新字段把它从"页面隐藏"里分出来(老包没有 = 不知道,不当 0)。
+					visibleFreezeMs: freeze.ms,
+					visibleFreezeFrames: freeze.count,
+					// 120Hz:从非 gap 帧的帧间隔中位估 effective 刷新率;预算线取 1.5×。
+					refreshHz,
+					budgetMisses: misses,
 					loafEntries: loaf.length,
 					blockingMs: round1(blocking),
 					pkgCoverage: { resolved: pkgResolved, total: scripts.length },   // 有名字的脚本占比

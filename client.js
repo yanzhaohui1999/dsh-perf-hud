@@ -122,6 +122,15 @@ window.__ModuleLoader__.load({
 		const WATCH_TRIGGER_MS = 100;          // 帧间隔 / blockingDuration 越过它就起一次捕获
 		const PICK_MIN_MS = WATCH_TRIGGER_MS;   // 翻帧清单的下限:blocking ≥ 它才值得回看(与守夜触发线同一条)
 		const WATCH_GAP_MS = 1000;             // 帧间隔超过它视为 rAF 挂起:是间隙,不是卡顿
+		// 间隙不是一种东西:标签页隐藏、系统睡眠、页面可见但冻结,三者都表现为 rAF 隔了很久才回来。
+		// 只按 delta 一律当"隐藏"会静默漏掉**可见冻结**里最坏的一帧(实测 2s busy-loop:
+		// LoAF 能起一次捕获,但 summary.worstFrameMs 只有 16.7ms —— 最坏的一帧被剔掉了)。
+		// 这里只做分类,不改 gap:true 的既有语义;可见冻结仍进 hiddenGaps(旧字段值不变)。
+		const WATCH_TIME_JUMP_MS = 250;        // 墙钟与性能时钟的跳变差超过它 → 更像睡眠 / 时钟跳变
+		const REFRESH_MIN_SAMPLES = 20;        // 少于这么多帧不估刷新率,退回 60Hz(估不准不猜)
+		const REFRESH_BUDGET_RATIO = 1.5;      // 帧时长 > 1.5× 刷新预算 ⇒ 记一次 budget miss
+		const GAP_REASON_NAME = ['', 'hidden', 'visible-freeze', 'time-jump'];
+		const GAP_REASON_CODE = { hidden: 1, 'visible-freeze': 2, 'time-jump': 3 };
 		const WATCH_REACTION_MS = 3000;        // 手动标记时回退的"人的反应时间"
 		// 渲染型卡顿自测(stress):一次同步提交里塞 N 个节点 + 显式燃烧,给三条腿造受控输入。
 		// 观察窗口必须异步等:longtask 由 PerformanceObserver 在任务结束后才投递。
@@ -790,6 +799,8 @@ window.__ModuleLoader__.load({
 			return {
 				BUNDLE_PREFIX,
 				LS_INCIDENTS,
+				REFRESH_BUDGET_RATIO,
+				REFRESH_MIN_SAMPLES,
 				W,
 				WATCH_DAILY_DAYS,
 				WATCH_EVENT_MAX,
@@ -1196,14 +1207,18 @@ window.__ModuleLoader__.load({
 		const frameRing = {
 			at: new Float64Array(WATCH_FRAMES),   // perf 毫秒用 float64:float32 在几小时后会丢到 ~1ms
 			ms: new Float32Array(WATCH_FRAMES),
-			gap: new Uint8Array(WATCH_FRAMES),    // 1 = rAF 被挂起(页面隐藏),不是卡顿
+			gap: new Uint8Array(WATCH_FRAMES),    // 1 = rAF 被挂起(长间隙,不是普通卡顿)
+			// 0 = 没有原因(非 gap / 未分类)。1 hidden / 2 visible-freeze / 3 time-jump,
+			// 用 Uint8 而不是字符串数组:12000 条字符串数组会多占近百 KB,而这是常开层。
+			gapReason: new Uint8Array(WATCH_FRAMES),
 			head: 0,
 			size: 0,
 			total: 0,
-			push(at, ms, isGap) {
+			push(at, ms, isGap, gapReason) {
 				this.at[this.head] = at;
 				this.ms[this.head] = ms;
 				this.gap[this.head] = isGap ? 1 : 0;
+				this.gapReason[this.head] = isGap ? (GAP_REASON_CODE[gapReason] ?? 0) : 0;
 				this.head = (this.head + 1) % WATCH_FRAMES;
 				if (this.size < WATCH_FRAMES) this.size += 1;
 				this.total += 1;
@@ -1223,12 +1238,16 @@ window.__ModuleLoader__.load({
 					const at = this.at[index];
 					if (at < from) break;
 					if (at > to) continue;
-					out.push({ t: round1(at), ms: round1(this.ms[index]), gap: this.gap[index] === 1 });
+					const gap = this.gap[index] === 1;
+					const row = { t: round1(at), ms: round1(this.ms[index]), gap };
+					// 只给 gap 帧加可选键:非 gap 帧没有"原因"这回事,别让每条帧都带一个 null。
+					if (gap && this.gapReason[index] !== 0) row.gapReason = GAP_REASON_NAME[this.gapReason[index]];
+					out.push(row);
 				}
 				out.reverse();
 				return out;
 			},
-			reset() { this.head = 0; this.size = 0; this.total = 0; },
+			reset() { this.head = 0; this.size = 0; this.total = 0; this.gapReason.fill(0); },
 			/**
 			 * 整个环的分布 = 会话基线。没有它,"最差帧 325ms" 判不出是"这一段变坏了"还是
 			 * "这台机器/这个浏览器一直这样"(实测 headless 全程 16fps,单看绝对值会误判)。
@@ -1562,10 +1581,68 @@ window.__ModuleLoader__.load({
 			return stats.p99 === null ? translate('none') : `p99 ${stats.p99}ms · ${translate('peak')} ${stats.max}ms · ${stats.samples}`;
 		}
 
+		/**
+		 * 长间隙分类(纯函数,便于离线复现):
+		 *   hidden          —— 页面当时不可见(visibilitychange 记录或当前 state 不是 visible);
+		 *   visible-freeze  —— 可见 + 时间源没有跳变,或有 longtask / LoAF 与这段重叠(直接证据);
+		 *   time-jump       —— 可见但墙钟与性能时钟对不上,更像系统睡眠 / 时钟被改,不当冻结。
+		 * 返回 null = 没到间隙线(短帧不进这个判据)。
+		 * ⚠️ 不修改 gap:true 的语义:三种间隙都仍是 gap,只是多一个原因标签。
+		 */
+		function gapReasonFor(delta, visibility, hiddenOverlap, wallDelta, hasJsOverlap) {
+			if (typeof delta !== 'number' || Number.isFinite(delta) === false || delta < WATCH_GAP_MS) return null;
+			if (visibility !== 'visible' || hiddenOverlap === true) return 'hidden';
+			if (hasJsOverlap === true) return 'visible-freeze';
+			if (typeof wallDelta === 'number' && Number.isFinite(wallDelta) && Math.abs(wallDelta - delta) > WATCH_TIME_JUMP_MS) return 'time-jump';
+			return 'visible-freeze';
+		}
+
+		// 跨帧的可见性 / 墙钟轨迹:不放进 state 四片 —— 它们只在 frame() 与 visibilitychange
+		// 之间用,不是面板读数;stop() 会清掉,避免下次 start 把旧区间当成本次证据。
+		let lastFrameWallAt = 0;
+		let hiddenSince = 0;
+		const hiddenRanges = [];
+		const HIDDEN_RANGE_MAX = 16;
+		function visibilityTrackStart() {
+			lastFrameWallAt = 0;
+			hiddenSince = document.visibilityState === 'hidden' ? performance.now() : 0;
+			W.addEventListener('visibilitychange', rememberVisibility);
+		}
+		function visibilityTrackStop() {
+			W.removeEventListener('visibilitychange', rememberVisibility);
+			lastFrameWallAt = 0;
+			hiddenSince = 0;
+			hiddenRanges.length = 0;
+		}
+		function rememberVisibility() {
+			if (document.visibilityState === 'hidden') {
+				if (hiddenSince === 0) hiddenSince = performance.now();
+				return;
+			}
+			if (hiddenSince === 0) return;
+			hiddenRanges.push({ from: hiddenSince, to: performance.now() });
+			if (hiddenRanges.length > HIDDEN_RANGE_MAX) hiddenRanges.shift();
+			hiddenSince = 0;
+		}
+		/** 这段间隙里有没有"页面当时确实隐藏"的证据(只认与区间重叠的记录)。 */
+		function hiddenOverlaps(start, end) {
+			if (document.visibilityState === 'hidden') return true;
+			if (hiddenSince !== 0 && hiddenSince < end) return true;
+			for (const range of hiddenRanges) if (range.from < end && range.to > start) return true;
+			return false;
+		}
+		/** 这段间隙里有没有 JS 直接证据(LoAF / longtask 与区间重叠)。 */
+		function jsOverlaps(start, end) {
+			for (const row of state.watch.loaf) if (row.t < end && row.t + row.dur > start) return true;
+			for (const row of state.render.longTasks) if (row.at < end && row.at + row.ms > start) return true;
+			return false;
+		}
+
 		function frame() {
 			if (state.render.on === false) return;
 			const selfStarted = performance.now();
 			const now = performance.now();
+			const wallNow = Date.now();
 			const busy = state.render.busyMs;
 			state.render.busyMs = 0;
 			state.render.windowFrames += 1;
@@ -1575,8 +1652,16 @@ window.__ModuleLoader__.load({
 				// 那是间隙不是卡顿:以前它会直接顶成"最差帧",面板红一整秒(实测误导读数)。
 				// 现在间隙只进守夜层的帧环(标记 gap),并且重置这一秒的窗口 —— 间隙期间
 				// 我们本来就没在测量,不该拿它去算 FPS 与最差帧。
+				// 但"间隙"不等于"页面隐藏":可见状态下的 2s 冻结也走这条路(实测 LoAF 能起
+				// 捕获,summary.worstFrameMs 却只剩 16.7ms)。所以先分类再交给守夜层:
+				// 可见冻结仍然进帧环、仍然 gap:true,但 gapReason 记下来,守夜层据此触发与汇总。
 				const isGap = delta >= WATCH_GAP_MS;
+				let gapReason = null;
 				if (isGap) {
+					const wallDelta = lastFrameWallAt === 0 ? null : wallNow - lastFrameWallAt;
+					const start = now - delta;
+					gapReason = gapReasonFor(delta, document.visibilityState,
+						hiddenOverlaps(start, now), wallDelta, jsOverlaps(start, now));
 					state.render.windowStart = now;
 					state.render.windowFrames = 0;
 					state.render.worstFrameMs = 0;
@@ -1590,9 +1675,10 @@ window.__ModuleLoader__.load({
 					state.render.unattrCount += 1;
 					if (idle > state.render.unattrWorst) state.render.unattrWorst = idle;
 				}
-				watchFrame(now, delta, isGap);
+				watchFrame(now, delta, isGap, gapReason);
 			}
 			state.render.lastFrameAt = now;
+			lastFrameWallAt = wallNow;
 			const span = now - state.render.windowStart;
 			if (span >= 1000) {
 				state.render.fps = (state.render.windowFrames * 1000) / span;
@@ -3073,6 +3159,7 @@ window.__ModuleLoader__.load({
 			state.render.windowFrames = 0;
 			state.render.lastFrameAt = 0;
 			state.render.worstFrameMs = 0;
+			visibilityTrackStart();
 			state.render.fpsLoop = natives.requestAnimationFrame(frame);
 			state.render.sampleTimer = natives.setInterval(sampleTick, 1000);
 			state.render.domTimer = natives.setInterval(sampleDom, 2000);
@@ -3103,6 +3190,7 @@ window.__ModuleLoader__.load({
 			if (experiment.phase === 'running') abortExperiment();
 			applyProbeState();   // state.render.on 已经置 false,这里必然走"卸"的分支
 			natives.cancelAnimationFrame(state.render.fpsLoop);
+			visibilityTrackStop();
 			natives.clearInterval(state.render.sampleTimer);
 			natives.clearInterval(state.render.domTimer);
 			natives.clearInterval(state.render.flushTimer);

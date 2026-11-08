@@ -54,6 +54,7 @@
 - **帧拆分的 clamp(向下夹)**:`frameSplit` 里 `js ≤ head`、`forced + pause ≤ js`、`exec ≥ 0` —— 每条脚本的毫秒各自 `round1`,脚本多而每条约 0.05ms 时求和会反过来超过父区间(四舍五入的算术后果);不夹就会画出负长度的弧。三条都有断言。
 - **60 秒帧条(兼帧导航)**:一格一秒、格值 = 该格里**最差那一帧**的间隔;每格还多记一个 `t`(那一秒最差帧的 perf 毫秒),`sparkPickMap(now)` 给出"格 → 那一秒 `dur` 最大的 LoAF",`sparkCellTitle(cell, pick)` 给每格 `title`(墙钟时间 + 该秒最差帧 + **点得动 / 点不动**)。**只有那一秒真的有 LoAF 的格子才给 `onClick`** —— 帧条是按 `frameRing` 画的(每个 rAF 一条),翻帧却只在 `state.watch.watch.loaf` 里翻,点一个没有 LoAF 的格子会"什么也没发生",那就是假按钮;点得动的格子把翻帧钉到那一秒的 LoAF。它铺满一行(`width: 100%`,实测 365px、一格约 6px;以前是 100px 宽的右对齐窄条,一格 1.7px 根本点不中),并挪到「取证明细」**最前面**。`sparkLevel` 的阈值与 `tools/inspect-incident.mjs` 的 ASCII 条带**逐条对应**(logic.mjs 有一条静态断言读那个文件核阈值,改一处忘另一处会红);整格 rAF 挂起画成矮灰柱。重绘指纹里带 5 秒刻度,否则空闲时帧条会冻在展开那一刻。
 - **近 60 秒帧分布(`frameMix` / `frameMixNow` / `frameMixRows`)**:主界面**独立一块**里的六档表 —— 每档一行(标签 / 条数 / 占比),标题行带总帧数;占比**两位小数**(3,600 帧里 1 条 = 0.03%,整数百分比会抹成 0%),整数不带 `.00`,条数带千分位。边界 16.7 / 20 / 33.3 / 50 / 100 落在 60Hz 一帧 / 50fps / 30fps / LoAF 线 / 守夜线上,不另造刻度。分母是**这段里真的发生了多少帧**:`gap` 不是帧、不进分母,空窗口写「这一分钟还没有帧」。存在的理由:守夜只留 ≥100ms(10fps),**持续 20fps(每帧 50ms)一条事故都不会触发** —— 这一行不新增任何采集,读的就是本来已经在环里的每一帧。
+- **长间隙先分类,再决定算不算冻结(1.0 之后)**:帧间隔 ≥ `WATCH_GAP_MS` 时不再一律当"页面隐藏"。`frames[].gapReason` 三档:`hidden`(页面当时不可见)/ `visible-freeze`(可见且时间源一致,或有 longtask / LoAF 重叠)/ `time-jump`(可见但 `Date.now()` 与 `performance.now()` 跳变对不上,更像睡眠 / 时钟被改)。`gap: true` 与 `worstFrameMs` / `hiddenGaps` 的算法都没变;可见冻结单独进 `summary.visibleFreezeMs` / `visibleFreezeFrames`,并且**自己会触发一次捕获**(以前 2s busy-loop 若 LoAF 没报就完全没有事故)。面板事故详情那行会多一个「可见冻结 Yms」,与「最差 Xms」并列读 —— 最差帧仍可能很小,因为冻结帧不算进 `worstFrameMs`。120Hz 看 `summary.refreshHz`(从非 gap 帧间隔中位估 effective 刷新率,估不准退回 60)与 `budgetMisses`(帧时长 > 1.5× 预算的条数);它是"掉没掉预算"的计数,不是新的严重度。
 - **记录器自身(A1)**:每帧给 HUD 自己的 rAF 回调自计时,留最近 `SELF_RING = 600` 帧,面板与**两个导出件**(整机件与事故包的 `context.recorder`,同一结构)给 `p99` / 峰 / 样本数。这条的读法是"测量工具自证没有明显改变被测对象",**不要读成页面开销**。
 - **深录(D1)是唯一的插桩开关**:`applyProbeState()` 只在 `state.render.deep` 打开时装 `setTimeout` / `setInterval` / `rAF` 与 `appendChild` / `insertBefore` / `setAttribute` 的包装,并同步精确归因(`setDeep` 里两者互锁)。守夜与现场是**同一档采集**,只差面板收放 —— 所以"展开面板会不会改变读数"的答案是**不会**。
 - **归因表行**:`cps/s · 峰 cpsPeak/s`(EMA α=0.4 平滑的执行速率 / 单秒最大执行次数);行悬停给该秒同步耗时 `ms/s` 与累计 `N× / Xms`。覆盖范围只有三次调度的回调 → 是**下界**。
@@ -75,6 +76,6 @@
    `eventLoopLive=false` 写"宿主未采到";宿主恢复后事件监听要重试(不能因为第一次 404 就永久 `hostWatchAsked`)。
 3. **事故窗口要盖完整性章**:LoAF / longtask 条目带 `seq`;窗口落定时算 `expected - kept`,写进
    `incident.integrity = { captureComplete, loafDropped, longTaskDropped, reasons }`。`captureComplete=false` 时
-   事故包 `missing` 加一行、manifest 标 `complete:false`、面板写「现场不完整」。`hiddenGaps`(rAF 挂起)是
-   另一个维度,不混进 `captureComplete`。改这个结构要升 `PACK_SCHEMA_VERSION`。
+   事故包 `missing` 加一行、manifest 标 `complete:false`、面板写「现场不完整」。`hiddenGaps`(rAF 挂起,
+   含可见冻结;细分看 `summary.visibleFreezeFrames`)是另一个维度,不混进 `captureComplete`。改这个结构要升 `PACK_SCHEMA_VERSION`。
 
