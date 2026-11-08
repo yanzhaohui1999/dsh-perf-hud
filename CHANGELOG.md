@@ -10,6 +10,8 @@
 
 - **武装窗口:下一次卡顿自动带深录与宿主 timeline(1.1 / 方向 4+2 按需版)**:卡顿详情结论层加「武装 60 秒」—— 窗口内客户端临时切 deep+precise(不写 localStorage)、宿主按 10s 分段滚动采 CPU profile(≤12 段,与 A5 手动采样单飞,不并行),下一次满足阈值的卡顿自动带 `incident.timeline[]`(多段,复用 A4 段形状)与 `incident.env.armed` / `context.armed`;三条还原路径(倒计时 tick / 一次性 deadline + rAF 兜底 / `stop` 或关深录)都会回到窗口前档位并卸插桩。默认档完全不变,新字段全可选、不升 `schemaVersion`。面板显示剩余秒数 / 抓到次数 / 取消;控制台 `__perfHud.arm() / armed() / disarm()`。断言 775 → **809**(logic 697 → 716、host 41 → 56,新增 34 条:状态机 / 宿主分段路由 / 契约样本 / 多段 timeline / 还原路径)。**未验证**:宿主侧未重启 `dsh web`,`armed` 路由只有 `tests/host.mjs` 的假 inspector 证据;真页面与真实采样开销/覆盖率待重启后补。
 
+- **30 天趋势:日聚合 + sparkline(1.1 / 方向 5)**:新 localStorage 键 `dsh-perf-hud:history:v1`,每天一条**定长聚合**(活跃秒/分钟、帧数、p50/p99、最差帧、流式/空闲秒、事故数、10 档直方图),只留 30 个日历日,**不存原始帧、不扩 3MB 事故留存**。分位取直方图桶上沿(粗参照,不是回归判定);事故数与 `tally` 的 `triggered` 同源,不另数一套。主界面「最近趋势」下方画 30 天 sparkline(柱高 = 当天 p99,封顶 500ms,无数据天留空,悬停给样本分钟/p50/worst/场景/事故数);整机件与事故包可选带 `context.history`(不升 `schemaVersion`)。断言 809 → **821**(logic 716 → 728,新增 12 条:聚合/跨天/30 天淘汰/空样本/场景分布/落盘读回/导出段/体积上限)。**未验证**:真页面与浏览器配额行为、sparkline 实际观感、7 天 dogfooding。
+
 ## [1.0.0] - 2026-11-08
 
 **1.0 的承诺:导出包契约冻结。** `manifest.json` / `incident.json` / `capabilities()` / `missing:` 前缀 / `window.__perfHud` 读接口的形状从这里起冻结 —— [`docs/pack-schema.md`](docs/pack-schema.md) 是唯一权威。加可选字段不升版本;删 / 改名 / 改语义要等 2.0。0.9.0 真导出的一份包由 `tests/compat.mjs` 保证仍读得出来。

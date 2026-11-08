@@ -65,7 +65,7 @@
 | `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(456 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 五套离线断言(809 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
+| `tests/` | 五套离线断言(821 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
 | `preview/` | 面板设计对比页 + **事故回放站** `replay.html`(零依赖,拖 zip 进来;读包口径在 `replay-core.js`) | 读包 / 改设计时 |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 八份参考文档(含 [pack-schema](docs/pack-schema.md))+ `images/`(9 张 README 截图)+ `plans/`(按日期归档 + 索引,含 1.0 验收档案) | 按需查,别通读(§9) |
@@ -101,7 +101,7 @@
 |---|---|---|---|
 | `state.ui` | 23 | 面板自己的视图 / 位置 / 折叠 / 导出预览 / 一次性回执 | 主文件 + model + ui |
 | `state.render` | 54 | 渲染器侧采集:帧 / longtask / 回调 / DOM / 堆 / 自身开销 / 档位(含武装窗口)/ 取数代际 | 主文件 + model + ui + watch |
-| `state.watch` | 37 | 守夜层(环形缓冲 / 留存 / 落盘)+ 场景标签 + 捕获计数 | 主文件 + model + ui + watch + tools |
+| `state.watch` | 38 | 守夜层(环形缓冲 / 留存 / 落盘)+ 场景标签 + 捕获计数 | 主文件 + model + ui + watch + tools |
 | `state.host` | 16 | 宿主快照(`state.host.snapshot`)/ 事件回执 / CPU 采样 / 武装窗口取回的 profile 段 / 链路 | 主文件 + model + ui + watch |
 
 六条离线断言钉住它:① 字面量只有这四片且每片非空;② 四片的字段数写死(挪字段要改同一行并说明);③ **别名解析**:`const watch = state.watch` 这类别名只许指向一片、不许指向整个 state / 解构 state、不许再赋值,且同名变量不能另有来源(否则"它指向哪片"只有运行时才知道);④ 每处引用(**含经别名的**)都命中真实的「片.字段」,裸引用(少一层)与错片都是红;⑤ 每个文件只读白名单里的片(含经别名的)—— `client.watch.js` 只有 `watch/render/host`,工具箱只有 `watch`,pack / i18n 一个都不许读,主文件是四片的所有者;⑥ `client.model.js` 虽拿全四片,但对 `state.ui` 的读点按**字段白名单**收(见 `tests/logic.mjs` 的 `STATE_FIELD_ALLOW`,新增一个要说明模型层为什么需要它)。新增一位状态前先想清**它属于哪一层**,写到对应片里。
@@ -119,15 +119,15 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑五套件**(合计 **809** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑五套件**(合计 **821** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 716 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
+node tests/logic.mjs         # 728 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
 node tests/host.mjs          # 56 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 node tests/compat.mjs        # 17 条:上一版 schemaVersion 的夹具包 + 真 0.9.0 导出包(契约没漂 + 缺键必红)
 node tests/replay.mjs        # 9 条:回放站读包(含 zip),现算摘要 == 包里 summary
-node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 809)
+node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 821)
 ```
 
 一条命令跑完:`npm test`。线上(先按 [环境与验证](docs/verification.md) 换 cookie):
