@@ -126,7 +126,9 @@ the version policy; `tests/compat.mjs` proves packs from the previous schema ver
   text (your note) and sets `noteDropped: true`; the full export keeps it.
 - **Redaction is subtraction, not anonymisation**: page URLs keep origin + path only; script URLs drop protocol/host and
   keep `rev`; secret parameter values become `<redacted>`; `/Users/<name>` becomes `~`; UA keeps major version + OS.
-  Chat text, prompts, cookies, tokens and headers are **never collected**. `context.redaction` states all three lists.
+  Chat text, prompts, cookies, tokens and headers are never collected — **only the transcript character count is read**
+  (the open / switch cost layer needs to know whether the transcript has arrived, so it reads `textContent.length` once;
+  the text itself is never kept, and no other layer touches the transcript DOM). `context.redaction` states all three lists.
 - **One timeline for host + page**: run `__perfHud.cpuProfile(5)`, reproduce the stall, then export that incident — `incident.timeline[0].share.hostPct` gives the host share, with the raw `host.samples[]` / `frames[]` sequences alongside. Acceptance: `node tools/check-timeline.mjs`.
 - **Read one incident**: `node tools/inspect-incident.mjs <file.json>`; **hand it to an AI**: send the `-ai.zip` — the
   bundled [diagnosis Skill](skills/dsh-perf-diagnosis/SKILL.md) reads it by its field table and prefix table.
@@ -142,6 +144,7 @@ the version policy; `tests/compat.mjs` proves packs from the previous schema ver
 | `enable()` / `disable()` / `setPrecise(on)` / `setDeep(on)` | master switch / precise attribution / deep record (installs instrumentation) |
 | `mark(note)` / `tally(ms)` / `stress(nodes, burnMs)` | scenario mark / counter window / synthetic render-stall self-test (three legs) |
 | `hostEvents(on)` / `experiment()` / `abortExperiment()` | host event-latency watch / isolation experiment on & off |
+| `openCost()` | open / switch-session ring (latest 20) + p50/p95 + the pending wait (character count only, no title / ID) |
 
 `localStorage` keys (`dsh-perf-hud:` prefix): `:ring:v1` frame ring, `:tally:v1` counters, `:on` / `:deep` / `:precise`
 (the three that change capture cost), `:collapsed` / `:groups` / `:view:v1` (UI state, no readings),
@@ -162,13 +165,13 @@ the version policy; `tests/compat.mjs` proves packs from the previous schema ver
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 728 assertions: real functions extracted from client.js + static checks + coverage of the frozen contract
+node tests/logic.mjs         # 757 assertions: real functions extracted from client.js + static checks + coverage of the frozen contract
 node tests/host.mjs          # 56 assertions: real index.js driven by a fake ctx
 node tests/compat.mjs        # 17 assertions: a previous-schemaVersion pack fed to the current readers
 node tests/replay.mjs        # 9 assertions: the replay site re-derives the summary from frames and matches the pack
 node tools/render-smoke.mjs  # offline render smoke: six screens + "HUD off", no browser needed
 node tools/gen-prefix-table.mjs --check  # diagnosis Skill §2.6 prefix table in sync with capabilityMissing()
-# 821 assertions + one smoke run, no running DSH required; `npm test` runs them all
+# 850 assertions + one smoke run, no running DSH required; `npm test` runs them all
 ```
 
 Any change to rendering / `apply()` / `start()` also needs a **real-page** pass (`node tools/check-panel.mjs` at

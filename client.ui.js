@@ -129,6 +129,8 @@ window.__ModuleLoader__.load({
 				overviewLine1,
 				overviewLine2,
 				overviewTitle,
+				// 主界面「最近趋势」下面那一行:最近一次"打开 / 切换"耗时(纯函数给了样本才返回字)
+				openCostText,
 				packPreview,
 				pickAuto,
 				pickList,
@@ -403,6 +405,11 @@ window.__ModuleLoader__.load({
 			}
 			if (props.why === true && trendRaw !== null) {
 				kids.push(h('div', { style: { ...S.sub, fontFamily: MONO_FONT } }, trendRaw));
+			}
+			// 最近一次「打开 / 切换会话」耗时:只有真的量到过才渲染(不摆一个 0,也不摆"暂无"),
+			// 而且是**一行字**,不是按钮 —— 这个读数没有可点的动作可给。口径全在悬停里。
+			if (props.openCost !== null && props.openCost !== undefined) {
+				kids.push(h('div', { style: S.sub, title: t('openCostHint') }, props.openCost));
 			}
 			// 入口:只留一个 —— 「设置」在标题栏里常驻(每个视图都在),主界面再放一个就是同一个动作。
 			kids.push(h('div', { style: S.linkRow },
@@ -1653,6 +1660,8 @@ window.__ModuleLoader__.load({
 					trendMs: state.ui.trendMs,
 					// 30 天趋势的覆盖量(有数据的 N 天 / 合计样本分钟数);空 = 不渲染那一条
 					history: historySummary(),
+					// 最近一次打开 / 切换耗时:算好再传,界面自己不做推断(与 trend 同一条规矩)
+					openCost: openCostText(state.render.openCost.ring),
 					why: state.ui.causeOpen,
 					preview: state.ui.packPreview !== null && latestRow !== null && state.ui.packPreview.incident.id === latestRow.id ? state.ui.packPreview : null,
 					onOpen: (id) => { state.ui.incidentBack = state.ui.view; setView('incident'); revealIncident(id); },

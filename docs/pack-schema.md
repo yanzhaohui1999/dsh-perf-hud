@@ -159,12 +159,14 @@ hostCpuProfile
 recorder
 armed
 history
+openCost
 ```
 
 - `missing` 是**字符串数组**,每行大多形如 `前缀:说明`,前缀表见 §5。**缺键 != 没有缺口**:老包没有 `missing` 就是"这份没写",不许读成"齐了"。
 - `hostCpuProfile` / `recorder` 是 0.9.0 后才加的可选段 —— **没有它们不升版本**,读方按"这一栏没采"读。
 - `history` 是 30 天趋势的日聚合(方向 5,1.1 之后):**每天一条,不存原始帧**,只保留最近 30 个日历日;`rows[]` 每项给 `day` / `activeMinutes` / `frames` / `p50Ms` / `p99Ms` / `worstMs` / `streamingSeconds` / `idleSeconds` / `incidents`,`daysWithData` 是其中真有样本的天数。**p50 / p99 由固定直方图桶估出、报的是桶的上沿**(例如 p99 落在 100–200ms 档就报 200ms),所以它是**粗参照,不是回归判定**;样本少或场景混杂的日子不能直接比。老包没有这一栏 = 没写,不是"没有卡顿"。它**不改变** `summary` / `baseline` 的语义,也不占事故留存那份 3MB 配额(本地键 `dsh-perf-hud:history:v1`)。
 - `armed` 是 1.1 加的可选段:导出时刻「武装窗口」的状态(窗口秒数 / 段长 / 宿主段数 / 是否还开着 / 还原原因 / 宿主错误原文),以及这条事故是否在窗口里采的。**只在开过窗口、或这条事故带 `incident.env.armed` 时出现**;没有它 = 这个页面这次没武装过,不是"武装了但没采到"。形状见 §3.7 下面的说明。
+- `openCost` 是 1.1 加的可选段:页面里量到过「打开 / 切换会话」耗时才有,形状见 §3.9。**没有它 = 这个页面这次一条都没量到**(比如从没点过会话行、或每次都超时),不是"量到了 0ms"。
 - `thresholds` / `tally` / `watch` 的内部字段不冻(没有读方依赖它们的全部键):`thresholds` 的 `triggerMs` / `gapMs` / `preMs` / `postMs` / `keep` / `dailyDays` / `recent` / `keepMax` / `reactionMs` 与 `tally` 的 `detected` / `triggered` / `captured` / `coalesced` / `kept` / `lost` 是读方会用到的那些;其余随实现增减。
 
 ### 3.3 `incident`(事故对象)
@@ -363,6 +365,51 @@ context.armed = {
 - `host.segments` 是宿主报告的已完成段数;`profilesKept` 是本页面真的取回并留在内存里的段数 —— 两个数不一样时说明取回没跟上,不是"没采到"。
 - 键名与内部字段 1.1 起稳定,但**不冻**:读方需要的是"有没有这一段"与 `state` / `capturedDuringWindow`;其余随实现增减,不升 `incident.schema`。
 
+### 3.9 `context.openCost`(可选,1.1)
+
+```text
+context.openCost = {
+  note: '…单次读数是粗参照,不是回归证据',
+  n, p50, p95,
+  last: { ms, chars, warm, at }
+}
+```
+
+**量的是什么**:用户在会话列表里点了一行(起点,t0)→ 目标会话的正文**到达可读状态**(终点)。这条读数回答"换一个大会话要等多久",它是 A3 实验室曲线的现场版,不是 A3 的重跑。
+
+**起止定义**(两侧都只有 DOM 事实,没有事件、没有路由):
+
+| 端 | 判据 |
+|---|---|
+| 起点 | `document` **capture 阶段**的 `click`,落点 `closest('[data-row-key^="session:"]')`,且该行的 `aria-selected` **不是** `true`(点已选中的行不换会话) |
+| 终点 | `[data-conversation-content][data-conversation-session="<id>"]` 节点存在 **且** 其 `textContent.length ≥ 1200` **且** 该行 `aria-selected="true"` —— 三个事实**同时**成立才结算 |
+
+- 为什么是"事实组合"而不是"再稳定几帧":正文 DOM 是虚拟化的(实测每次打开只挂 12K–51K 字符的一屏),滚动 / 回收会让字符数上下跳;要求稳定会把终点推到超时。这一条只回答"用户那一屏正文出现了没有"。
+- **不做**"哪个会话更快"的对比:样本里**没有会话标题 / ID / 哈希** —— 只按时间顺序留 ring,所以这一层在结构上无法定位到具体会话。
+
+**读法(文案纪律,读方也必须这么说)**:
+
+1. **单次读数是粗参照,不是回归证据**。同一次打开内,页内终点与 A3 的 CDP 口径差 ≤0.7ms(18/18 次);但**跨运行**的中位本身就抖 ±20~70ms。所以"昨天打开 4.1s、今天 4.4s"不能说明变慢。
+2. `last` 是**时间上最近**的一次,不是最差的;要看尾部看 `p95`。
+3. `n < 20` 时 `p95` 只是"看到过的下界"(最近秩分位在样本少时宁愿写小,不插值)。
+4. `ms` 是端到端(含点击到浏览器交出那一帧的排队);**它不与 `incident.summary` 的任何帧时间相加**,两者窗口不同。
+
+**字段**:
+
+| 键 | 含义 |
+|---|---|
+| `note` | 上面这套口径的原文,随包走(文件离开现场后仍能自证) |
+| `n` | ring 里的样本数(≤20) |
+| `p50` / `p95` | 最近秩分位(毫秒,`round1`);没有样本时这个键根本不存在,不是 `null` |
+| `last.ms` | 最近一次的端到端毫秒 |
+| `last.chars` | 终点那一刻的正文字符数 —— **只读长度,不读内容** |
+| `last.warm` | `true` = 点击那一刻目标会话的正文节点已经在 DOM 里(切换,不是首次打开);`false` = 真·打开 |
+| `last.at` | ISO 墙钟时刻 |
+
+**取消路径**(三条,都不记样本,只加内部计数):30s 超时 / 又点了一次会话行(含点回已选中的行)/ HUD 被关。实现上共用一处释放(observer `disconnect` + `cancelAnimationFrame` + `clearTimeout`),所以不会叠出多个观察器。
+
+**它是导出时刻的读数**:与 `context.recorder` 同一条规矩,不属于这条事故的窗口。
+
 ---
 
 ## 4. `capabilities()`(schema 1)
@@ -467,7 +514,7 @@ README.md
 | incident `schema: 1` → `2` | 脚本 URL 从每条脚本里抽成 `incident.urls` + `scripts[].u` |
 | incident `schema: 2` → `3` | 加 `incident.integrity`(窗口完整性:到底采全没有) |
 | manifest `schemaVersion: 1` → `2` | 加 `manifest.complete` 与 `manifest.incident.integrity`(都来自上面那条) |
-| 不升版本的加字段 | `context.hostCpuProfile` / `context.recorder`(0.9.x)、`summary.worstFrameJs` 一类的派生读数、`incident.timeline`(1.0 / A4)、`frames[].gapReason` + `summary.visibleFreezeMs/visibleFreezeFrames/refreshHz/budgetMisses`(1.0 之后)、`context.history`(30 天日聚合,1.1 之后)—— 都是**可选**,老包里没有照样读 |
+| 不升版本的加字段 | `context.hostCpuProfile` / `context.recorder`(0.9.x)、`summary.worstFrameJs` 一类的派生读数、`incident.timeline`(1.0 / A4)、`frames[].gapReason` + `summary.visibleFreezeMs/visibleFreezeFrames/refreshHz/budgetMisses`(1.0 之后)、`context.history`(30 天日聚合)、`context.armed` 与 `context.openCost`(1.1)—— 都是**可选**,老包里没有照样读 |
 | 不升版本的删字段 | `manifest.dshVersion`(0.9.0)—— **违反本节规则的那一条**,已记进 [REVIEW](../REVIEW.md) §2;以后不许再这样 |
 
 ---

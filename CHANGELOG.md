@@ -12,6 +12,8 @@
 
 - **30 天趋势:日聚合 + sparkline(1.1 / 方向 5)**:新 localStorage 键 `dsh-perf-hud:history:v1`,每天一条**定长聚合**(活跃秒/分钟、帧数、p50/p99、最差帧、流式/空闲秒、事故数、10 档直方图),只留 30 个日历日,**不存原始帧、不扩 3MB 事故留存**。分位取直方图桶上沿(粗参照,不是回归判定);事故数与 `tally` 的 `triggered` 同源,不另数一套。主界面「最近趋势」下方画 30 天 sparkline(柱高 = 当天 p99,封顶 500ms,无数据天留空,悬停给样本分钟/p50/worst/场景/事故数);整机件与事故包可选带 `context.history`(不升 `schemaVersion`)。断言 809 → **821**(logic 716 → 728,新增 12 条:聚合/跨天/30 天淘汰/空样本/场景分布/落盘读回/导出段/体积上限)。**未验证**:真页面与浏览器配额行为、sparkline 实际观感、7 天 dogfooding。
 
+- **现场「打开/切换会话」耗时(1.1 / 方向 3)**:`document` capture 阶段点击会话行(`data-row-key^="session:"`、且当前未选中)→ 终点 = 目标会话正文节点出现 + 正文 ≥1200 字符 + 该行 `aria-selected=true`(三事实同时成立才结算);观察器只扫新增子树,字符数最多 120ms 读一次(不每帧读整棵树),30s 超时 / 再点 / 关 HUD 三条取消路径共用同一个释放函数。`state.render.openCost.ring` 保留最近 20 次 `{ms,chars,warm,at}`,算 p50/p95;事故包可选带 `context.openCost = {note,n,p50,p95,last}`(**不带标题 / ID / 哈希**,只读字符数);主界面「最近趋势」下加一行 `打开 4.2s`(纯文字,title 写口径);`__perfHud.openCost()` 暴露 ring / 聚合 / pending。redaction 口径改成"只读正文字符数、不读内容"。真页面实测:点击一个 12.8K 字符的会话 → ring 记 `ms 1393.2 / chars 12853`、errors 0。断言 821 → **850**(logic 728 → 757,新增 29 条;含 6 条 DOM 桩的 click/observer/rAF/超时/关 HUD 状态机)。**未验证**:36.7MB 会话的终点稳定性与观察开销(合并后真页面待复跑)、7 天 dogfooding。
+
 ## [1.0.0] - 2026-11-08
 
 **1.0 的承诺:导出包契约冻结。** `manifest.json` / `incident.json` / `capabilities()` / `missing:` 前缀 / `window.__perfHud` 读接口的形状从这里起冻结 —— [`docs/pack-schema.md`](docs/pack-schema.md) 是唯一权威。加可选字段不升版本;删 / 改名 / 改语义要等 2.0。0.9.0 真导出的一份包由 `tests/compat.mjs` 保证仍读得出来。
