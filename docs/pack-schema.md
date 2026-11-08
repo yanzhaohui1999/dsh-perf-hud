@@ -160,6 +160,7 @@ recorder
 armed
 history
 openCost
+hostSampling
 ```
 
 - `missing` 是**字符串数组**,每行大多形如 `前缀:说明`,前缀表见 §5。**缺键 != 没有缺口**:老包没有 `missing` 就是"这份没写",不许读成"齐了"。
@@ -167,6 +168,7 @@ openCost
 - `history` 是 30 天趋势的日聚合(方向 5,1.1 之后):**每天一条,不存原始帧**,只保留最近 30 个日历日;`rows[]` 每项给 `day` / `activeMinutes` / `frames` / `p50Ms` / `p99Ms` / `worstMs` / `streamingSeconds` / `idleSeconds` / `incidents`,`daysWithData` 是其中真有样本的天数。**p50 / p99 由固定直方图桶估出、报的是桶的上沿**(例如 p99 落在 100–200ms 档就报 200ms),所以它是**粗参照,不是回归判定**;样本少或场景混杂的日子不能直接比。老包没有这一栏 = 没写,不是"没有卡顿"。它**不改变** `summary` / `baseline` 的语义,也不占事故留存那份 3MB 配额(本地键 `dsh-perf-hud:history:v1`)。
 - `armed` 是 1.1 加的可选段:导出时刻「武装窗口」的状态(窗口秒数 / 段长 / 宿主段数 / 是否还开着 / 还原原因 / 宿主错误原文),以及这条事故是否在窗口里采的。**只在开过窗口、或这条事故带 `incident.env.armed` 时出现**;没有它 = 这个页面这次没武装过,不是"武装了但没采到"。形状见 §3.7 下面的说明。
 - `openCost` 是 1.1 加的可选段:页面里量到过「打开 / 切换会话」耗时才有,形状见 §3.9。**没有它 = 这个页面这次一条都没量到**(比如从没点过会话行、或每次都超时),不是"量到了 0ms"。
+- `hostSampling` 是 1.1 加的可选段(方向 2):**后台低占空比滚动采样**的当前状态。它**默认关**、只在用户打开过那个开关之后才出现 —— 采样本身有开销,所以没有它 = 这个页面这次没开过后台采样,不是"开了但一段都没采到"。键:必有两个布尔 `enabled`(宿主侧此刻是否在采)/ `switchOn`(用户开关的位置;两者不一致说明宿主侧没起来或被租约停了),以及 `mode: 'ambient'`、`phase`、`intervalSeconds` / `segmentSeconds` / `keep`(宿主那一份常量,客户端不复制)、`collected`(宿主内存里留着的段数)/ `total`(累计采到过几段,不因淘汰回退)/ `profilesKept`(本页面真的取回并留在内存里的段数)、`lastAt` / `nextAt`、`skipped` / `yielded` / `aborted`(给手动 / 武装让路与被顶掉的次数 —— 后台是三者里最低的一档,让路是设计)、`stopReason`、`error`、`scope`。**内部字段不冻**(读方需要的是"有没有开"与 `enabled`),随实现增减,不升 `incident.schema`。
 - `thresholds` / `tally` / `watch` 的内部字段不冻(没有读方依赖它们的全部键):`thresholds` 的 `triggerMs` / `gapMs` / `preMs` / `postMs` / `keep` / `dailyDays` / `recent` / `keepMax` / `reactionMs` 与 `tally` 的 `detected` / `triggered` / `captured` / `coalesced` / `kept` / `lost` 是读方会用到的那些;其余随实现增减。
 
 ### 3.3 `incident`(事故对象)
@@ -342,8 +344,9 @@ budgetMisses
 | `host` 其余 | `kept` / `omitted` / `leadingMs`(首样本被跳过的毫秒)/ `jsMs` / `nativeMs` / `idleMs` |
 | `frames[]` | 窗口内的客户端帧序列(与 `incident.frames` 是同一批,只保留与 profile 交集重叠的):`{ t, ms, hostMs, hostPct, jsMs, nativeMs, coveragePct }`;`hostMs` 是与该帧 `[t-ms, t]` 重叠的宿主采样时间 |
 | `armed` | 可选布尔,1.1 加。`true` = 这一段的 profile 来自**武装窗口内的滚动采样**(宿主每 10 秒一段、段间有几十毫秒空档),不是一次手动 `profileCpu()` 采样。**只在为真时出现** |
+| `mode` | 可选字符串,1.1 加。`'ambient'` = 这一段的 profile 来自**后台低占空比滚动采样**(方向 2:宿主每 5 分钟采 1 秒、段间隔着几分钟,默认关)。**只在为真时出现**;两个标记都没有 = 手动 `cpuProfile()` 采的那一份 |
 
-`timeline[]` 是**数组**,一段 profile 一段(不是每帧一条)。手动采到的那一份最多一段;武装窗口里,同一条事故窗口可能压住多段 —— 1.1 起 **`timeline[]` 可以有多段**,每段各自带 `fromMs` / `stall` / `share`,段内形状完全一样(读方按"逐段读"实现即可,不要假设只有一段)。`armed` 只出现在武装期采的段上,读的人据此判断这段采样是"滚动分段"而不是一次性采样。
+`timeline[]` 是**数组**,一段 profile 一段(不是每帧一条)。手动采到的那一份最多一段;滚动采样(武装窗口 / 后台采样)里,同一条事故窗口可能压住多段 —— 1.1 起 **`timeline[]` 可以有多段**,每段各自带 `fromMs` / `stall` / `share`,段内形状完全一样(读方按"逐段读"实现即可,不要假设只有一段)。`armed` / `mode` 是**来源标记**:取段优先级 武装 > 后台 > 手动,同一条事故只用一条路的段(不混着填);一条都不重叠时整个 `timeline` 键不出现。后台段很短(默认 1 秒)且段间隔着几分钟,所以它常常只盖住事故窗口的一角 —— `shareOmitted` 说"覆盖不足"是正常的,别读成"宿主不忙"。
 
 读法:先看 `share.hostPct` 回答"最差这一帧宿主占多少",再看 `host.samples[]` / `frames[]` 自己复核(两段原始序列都在);`share.pagePct` 只能读成"不是宿主",不能读成"页面 JS 全忙"。对齐靠宿主 `Date.now()` 与页面 `performance.timeOrigin`:同一台机器上是同一时钟;跨机器访问时两侧系统时钟偏差不在这条公式里,不承诺 ≤1 帧。完整口径见 [reading-panel](reading-panel.md) 与包内 `context.howToRead`。
 
@@ -514,7 +517,7 @@ README.md
 | incident `schema: 1` → `2` | 脚本 URL 从每条脚本里抽成 `incident.urls` + `scripts[].u` |
 | incident `schema: 2` → `3` | 加 `incident.integrity`(窗口完整性:到底采全没有) |
 | manifest `schemaVersion: 1` → `2` | 加 `manifest.complete` 与 `manifest.incident.integrity`(都来自上面那条) |
-| 不升版本的加字段 | `context.hostCpuProfile` / `context.recorder`(0.9.x)、`summary.worstFrameJs` 一类的派生读数、`incident.timeline`(1.0 / A4)、`frames[].gapReason` + `summary.visibleFreezeMs/visibleFreezeFrames/refreshHz/budgetMisses`(1.0 之后)、`context.history`(30 天日聚合)、`context.armed` 与 `context.openCost`(1.1)—— 都是**可选**,老包里没有照样读 |
+| 不升版本的加字段 | `context.hostCpuProfile` / `context.recorder`(0.9.x)、`summary.worstFrameJs` 一类的派生读数、`incident.timeline`(1.0 / A4)、`frames[].gapReason` + `summary.visibleFreezeMs/visibleFreezeFrames/refreshHz/budgetMisses`(1.0 之后)、`context.history`(30 天日聚合)、`context.armed` 与 `context.openCost`(1.1)、`timeline[].mode` + `context.hostSampling`(1.1,方向 2 后台宿主采样)—— 都是**可选**,老包里没有照样读 |
 | 不升版本的删字段 | `manifest.dshVersion`(0.9.0)—— **违反本节规则的那一条**,已记进 [REVIEW](../REVIEW.md) §2;以后不许再这样 |
 
 ---

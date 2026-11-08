@@ -21,6 +21,9 @@ window.__ModuleLoader__.load({
 				ARMED_WINDOW_SECONDS,
 				armNow,
 				disarmArmed,
+				// 后台宿主采样(方向 2,默认关):开关动作 + 状态行(设置页与开发者详情共用同一份文案)
+				ambientStatusText,
+				setAmbient,
 				// 拖动 / 位置记忆:纯函数与落盘都在主文件那侧(与 panelWidthFor 同一套来源)
 				hudPosClamp,
 				hudPosMake,
@@ -470,7 +473,10 @@ window.__ModuleLoader__.load({
 					h('div', { style: { ...S.seg, marginLeft: 'auto' } },
 						segItem(t('modeWatchShort'), state.render.deep !== true, () => setDeep(false), `${t('modeHintShort')}\n${t('modeWatch')}`),
 						segItem(t('deepShort'), state.render.deep === true, () => setDeep(true), `${t('deepHint')}\n${t('modeDeep')}`))),
-				// ② 留存:三个数(保存 / 裁掉 / 丢失)+ 占用一行小字。留住策略(retainText)进悬停。
+				// ② 后台宿主采样(默认关):开关 + 状态行。宿主半没这个能力、用户也没开过 → 整行不出现
+				// (摆一个点了不会有采样的开关就是假按钮)。
+				ambientRow(),
+				// ③ 留存:三个数(保存 / 裁掉 / 丢失)+ 占用一行小字。留住策略(retainText)进悬停。
 				h('div', { style: S.statRow, title: t('retainText'), 'aria-label': t('settingsRetain') },
 					h('div', { style: { ...S.statCell, ...S.statCellFirst }, title: t('retainKeptHint') },
 						h('b', { style: S.statValue }, String(kept)),
@@ -486,7 +492,7 @@ window.__ModuleLoader__.load({
 					h('button', { type: 'button', style: S.btnGhost, disabled: kept === 0, title: t('clearIncidentsHint'), onClick: () => props.onClearIncidents() }, t('clearIncidentsBtn')),
 					h('button', { type: 'button', style: S.btnGhost, title: t('clearHint'), onClick: () => props.onClearAll() }, t('clear')),
 				),
-				// ③ 隐私 / 脱敏 / 快捷键:三行只说事实,长解释(privacyText / privacyRedaction)进悬停。
+				// ④ 隐私 / 脱敏 / 快捷键:三行只说事实,长解释(privacyText / privacyRedaction)进悬停。
 				h('div', { style: S.setRow, title: t('privacyText'), 'aria-label': t('settingsPrivacy') },
 					h('span', { style: S.setKey }, t('settingsPrivacyShort')),
 					h('span', { style: S.setValue }, t('privacyShort'))),
@@ -497,6 +503,35 @@ window.__ModuleLoader__.load({
 					h('span', { style: S.setKey }, t('settingsShortcut')),
 					h('span', { style: S.setValue }, h('span', { style: S.kbd }, shortcutKeyText()), h('span', { style: { marginLeft: 6, color: 'var(--dsw-alias-label-secondary)' } }, `${t('expand')} / ${t('collapse')}`))),
 			];
+		}
+		/**
+		 * 设置页里「后台宿主采样」那一行:**开关 + 状态**,只在真能起作用的地方出现。
+		 *
+		 * 为什么按需出现:宿主半是人重启的,老宿主没有 `ambient` 这个 op(状态里没有这一栏)。
+		 * 那种情况下摆一个开关就是**假按钮** —— 点了不会有任何采样。所以只有"宿主的快照里已经有
+		 * 这一栏"或者"用户上次开过"时才渲染;两种情况都没有 = 这一行不存在。
+		 *
+		 * 文案口径(不可省):采样本身有开销、**默认关**、只有打开之后才会有数据 —— 这三句在
+		 * `ambientHint` 悬停里写全,状态行只说事实(开 / 关 + 宿主回执里的时间与段数)。
+		 */
+		function ambientRow() {
+			const t = translate;
+			const supported = state.host.snapshot !== null && state.host.snapshot !== undefined
+				&& state.host.snapshot.ambient !== undefined;
+			const on = state.render.ambient === true;
+			if (supported !== true && on !== true) return null;
+			const text = ambientStatusText();
+			return h('div', { title: t('ambientHint'), 'aria-label': t('settingsAmbient') },
+				h('div', { style: S.setRow },
+					h('span', { style: S.setKey }, t('ambientLabel')),
+					h('button', {
+						type: 'button', style: S.deepSwitch, title: t('ambientHint'),
+						'aria-pressed': on, 'aria-label': t('ambientShort'),
+						onClick: () => setAmbient(on === false),
+					},
+						h('span', { style: { ...S.deepDot, ...(on ? S.deepDotOn : null) } }),
+						t('ambientShort'))),
+				text === '' ? null : h('div', { style: S.sub, title: t('ambientHint') }, text));
 		}
 		/**
 		 * 上下文标题栏:左边"这是哪个上下文",中间**核心耗时**(18px/600 等宽数字),右边一个动作。
@@ -1572,6 +1607,12 @@ window.__ModuleLoader__.load({
 						`${t('hostProfileErrorLabel')}: ${state.host.hostCpuProfile.error}`),
 					hostCpuProfileTopText() === '' ? null : h('div', { style: S.sub, title: t('hostProfileTopHint') },
 						`${t('hostProfileTop')}: ${hostCpuProfileTopText()}`),
+					// 后台宿主采样(默认关):这一行回答"后台到底在不在采、上次采到什么时候"。
+					// 开关在设置页;这里只读同一份状态,不再放第二个开关(同一件事不说两遍),
+					// 长解释("采样有开销 / 默认关 / 只有开了才有数据")进悬停。
+					ambientStatusText() === '' ? null : h('div', { style: S.row },
+						h('span', { style: S.label, title: t('ambientHint') }, t('ambientLabel')),
+						h('span', { style: { ...S.num, color: state.render.ambient === true ? undefined : 'var(--dsw-alias-label-secondary)' } }, ambientStatusText())),
 					h('div', { style: S.row },
 						h('span', { style: S.label }, t('idleBase')),
 						h('span', { style: S.num }, idleBase === null || idleBase === undefined

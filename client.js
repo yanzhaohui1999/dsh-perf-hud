@@ -57,6 +57,8 @@ window.__ModuleLoader__.load({
 		const BUNDLE_PREFIX = 'bundle:';       // 多包合并 URL 的 key 前缀
 		const LS_DEEP = 'dsh-perf-hud:deep';
 		const LS_PRECISE = 'dsh-perf-hud:precise';
+		// 后台宿主采样的开关(**默认关**):只存 localStorage,不进 profile(与深录 / 精确归因同一条)。
+		const LS_AMBIENT = 'dsh-perf-hud:ambient';
 		const LS_MAP = 'dsh-perf-hud:map';     // 按 rev 缓存的 section 分段表
 		const LS_MAP_INDEX = 'dsh-perf-hud:map:index';   // 上面那些键的 LRU 索引(只留最近 N 个 rev)
 		const MAP_CACHE_MAX = 8;
@@ -104,6 +106,11 @@ window.__ModuleLoader__.load({
 		const ARMED_TICK_MS = 1000;           // 倒计时刷新 + deadline 检查(正常结束路径)
 		const ARMED_SYNC_MS = 2000;           // 取回已完成宿主段的间隔(增量取,空回执很小)
 		const ARMED_WAKE_MS = 1500;           // 窗口关掉后等最后一段收尾的重试间隔(最多 3 次)
+		// 后台低占空比滚动采样(方向 2 的常开版,**默认关**)。间隔 / 段长 / 留几段**只在宿主那一处**
+		// 定义(那三个数写在 index.js 的 AMBIENT_*),客户端一个都不复制:面板读宿主回执里的值,
+		// 事故包也照抄回执 —— 两边各写一份迟早会漂成"文档说 5 分钟、宿主采 5 秒"。
+		// 这里只有一个兜底:宿主没回 keep 时客户端按几段留(正常永远用不上)。
+		const AMBIENT_KEEP_FALLBACK = 3;
 		const RTT_INTERVAL_MS = 10000;
 		const LOAD_INTERVAL_MS = 60000;
 		// 宿主快照超过 2.5 个轮询周期就算过期(轮询是 10s;留一次重试的余量)。
@@ -610,6 +617,9 @@ window.__ModuleLoader__.load({
 						stopReason: '',
 					},
 				},
+				// 后台宿主采样(方向 2,默认关)的**开关**:落 localStorage(`LS_AMBIENT`),不进 profile。
+				// 打开之后宿主按自己的低占空比滚动采段;事故出包时取与窗口重叠的那段填 `incident.timeline[]`。
+				ambient: false,
 				selfRing: [],          // 最近 SELF_RING 次自身 rAF 回调耗时(A1 自证开销)
 				selfAt: 0,
 				selfCount: 0,
@@ -744,6 +754,11 @@ window.__ModuleLoader__.load({
 				// 出包时按事故窗口挑重叠的段填 `incident.timeline[]`。新开一次武装 = 清空(上一轮
 				// 的段属于另一个窗口,不该混进来)。
 				armedProfiles: [],
+				// 后台采样(方向 2)的宿主回执 + 取回的段。`ambient` 是**最近一次回执**(开关 / 间隔 /
+				// 上次采到段的时间 / 累计段数),`ambientProfiles` 是内存里的段环(只留最近 keep 段,
+				// 出包时按事故窗口挑重叠的那段)。两者都只在内存里 —— 刷新后重新从宿主取。
+				ambient: null,
+				ambientProfiles: [],
 				link: [],                // { t, kind, rtt, kbps?, error? }
 				loadState: 'pending',    // pending | ok | failed:吞吐那一格现在是哪种状态
 				loadKbps: null,          // 吞吐数值(KB/s),显示时 >=1024 折成 MB/s
@@ -2438,7 +2453,17 @@ window.__ModuleLoader__.load({
 			if (ring.length > RING_MAX) ring.splice(0, ring.length - RING_MAX);
 			state.ui.displayKey = displayKey();
 			dirty = true;
+			// 后台宿主段:事故刚结算时立刻取一次。事故窗口常常正压在**刚采完的那一段**上,而导出
+			// 是用户随时点的一瞬间 —— 等到宿主快照的下一个 10 秒才取,那一份包里就可能没有 timeline。
+			// 只在"结算数变了"时发请求(一天几次),不是按秒轮询。
+			if (state.render.ambient === true && state.watch.captured !== ambientCapturedSeen) {
+				ambientCapturedSeen = state.watch.captured;
+				void syncHostAmbient();
+			}
 		}
+
+		// 上次触发后台段取回时的事故结算数(只用来"变了才取";不属于四片状态,也不落盘)
+		let ambientCapturedSeen = 0;
 
 		/**
 		 * 诊断上下文落盘 / 读回:看的是哪条事故、事故里的哪一帧、自动跟最差还是最近。
@@ -2489,6 +2514,8 @@ window.__ModuleLoader__.load({
 			try { state.ui.collapsed = localStorage.getItem(LS_UI) === '1'; } catch (error) { state.ui.collapsed = false; }
 			try { state.render.precise = localStorage.getItem(LS_PRECISE) === '1'; } catch (error) { state.render.precise = false; }
 			try { state.render.deep = localStorage.getItem(LS_DEEP) === '1'; } catch (error) { state.render.deep = false; }
+			// 后台宿主采样:**默认关**,没有这个键就是关(与 want 那条"默认开"故意相反)。
+			try { state.render.ambient = localStorage.getItem(LS_AMBIENT) === '1'; } catch (error) { state.render.ambient = false; }
 			// 深录关着的时候不该还挂着精确归因(那会白拉那份 12MB 的 map)
 			if (state.render.deep === false) state.render.precise = false;
 			try {
@@ -2632,9 +2659,12 @@ window.__ModuleLoader__.load({
 		/** RTT 探针:请求带 1KB cache-buster(别缓存,也别让代理吞掉);吞吐探针多要 64KB。 */
 		async function probeLink(kind) {
 			const started = performance.now();
+			// 后台采样开着时顺带续租约(`?ambient=1`):这条 GET 本来每 10 秒就有,不另加心跳请求。
+			// 客户端停下(关 HUD / 页面关掉 / 插件卸载)之后宿主租约到点自己停。
+			const ambientParam = state.render.ambient === true ? '&ambient=1' : '';
 			const query = kind === 'load'
-				? `?t=${Date.now()}&bytes=${LOAD_BYTES}`
-				: `?t=${Date.now()}&pad=${'x'.repeat(1024)}`;
+				? `?t=${Date.now()}&bytes=${LOAD_BYTES}${ambientParam}`
+				: `?t=${Date.now()}&pad=${'x'.repeat(1024)}${ambientParam}`;
 			try {
 				const { response, data: payload } = await fetchJsonWithin(`${HOST_ROUTE}${query}`, { cache: 'no-store', credentials: 'same-origin' }, FETCH_TIMEOUT_MS.host);
 				if (response.ok === false) throw new Error(`HTTP ${response.status}`);
@@ -2655,6 +2685,17 @@ window.__ModuleLoader__.load({
 				state.host.hostAt = Date.now();
 				state.host.hostError = null;
 				if (payload.host?.eventWatch !== undefined) state.host.hostEvents = payload.host.eventWatch;
+				// 后台采样:回执照抄(开关 / 上次采到段 / 累计段数都从这一份读),并且只在
+				// "宿主那边多了一段"时发一次 ambientGet —— 不按固定节拍拉 profile。
+				const hostAmbient = payload.host?.ambient;
+				if (hostAmbient !== null && hostAmbient !== undefined && typeof hostAmbient === 'object') {
+					state.host.ambient = ambientReceipt(hostAmbient, Date.now());
+					if (state.render.ambient === true) {
+						if (ambientNeedsSync(hostAmbient)) void syncHostAmbient();
+						// 租约把宿主侧停了(比如标签页被冻结过两分钟):开关还开着就补一次
+						else if (hostAmbient.enabled !== true && hostAmbient.stopReason === 'lease-expired') void startHostAmbient();
+					}
+				}
 				// 第一次探测时宿主半可能还没加载(404),不能因此永久放弃事件监听。
 				if (recovered && state.host.hostEvents?.installed !== true) state.host.hostWatchAsked = false;
 				await requestHostEventWatch();
@@ -2969,8 +3010,11 @@ window.__ModuleLoader__.load({
 		/**
 		 * 宿主回执里的段 → 本地的 profile 记录(只收**结构合法**的段:空对象 / 缺 nodes / 缺
 		 * startedAt 一律跳过,不拿它冒充采样结果)。纯函数,便于断言"坏回执不会混进包里"。
+		 *
+		 * 武装窗口(`armedGet`)与后台采样(`ambientGet`)是同一种回执形状,所以校验只有这一份 ——
+		 * 两边各写一份的话,"坏段"迟早能从另一条路混进包里。
 		 */
-		function armedSegmentRecords(receipt) {
+		function hostSegmentRecords(receipt) {
 			if (receipt === null || typeof receipt !== 'object' || receipt.ok !== true) return [];
 			const rows = Array.isArray(receipt.segments) ? receipt.segments : [];
 			const out = [];
@@ -3094,7 +3138,7 @@ window.__ModuleLoader__.load({
 					}
 					if (state.render.epoch !== epoch) return null;
 					const summary = armedHostReceipt(receipt);
-					const records = armedSegmentRecords(receipt);
+					const records = hostSegmentRecords(receipt);
 					for (const record of records) {
 						if (state.host.armedProfiles.some((row) => row.index === record.index)) continue;
 						if (state.host.armedProfiles.length >= ARMED_SEGMENTS_MAX) break;
@@ -3246,6 +3290,261 @@ window.__ModuleLoader__.load({
 			if (armed.phase !== 'armed') return;
 			if (armedTickDue(armed, Date.now())) { disarmArmed('timeout'); return; }
 			bump();
+		}
+
+		// ───────────── 后台宿主采样(方向 2 的常开版,默认关)─────────────
+		/**
+		 * 武装窗口是"用户开一个窗口等下一次卡顿";后台采样是"一直低占空比地采,卡顿发生时宿主那段
+		 * 已经存在"。代价必须说清:采样本身有开销(V8 每次采样都要走 TickSample),所以**默认关**,
+		 * 只有用户打开之后才有数据。
+		 *
+		 * 三条刻意的取舍:
+		 *   ① **开关只存 localStorage**(`LS_AMBIENT`),不进 profile —— 与深录 / 精确归因同一条;
+		 *      默认关,打开后刷新仍然开着(用户显式开的东西不该被刷新偷走)。
+		 *   ② **间隔 / 段长 / 留几段只在宿主那一处**(index.js 的 AMBIENT_*):客户端不传、不复制,
+		 *      面板与事故包都读宿主回执。少一份常量就少一次"文档说 5 分钟、代码采 5 秒"。
+		 *   ③ **不假装成功**:宿主起不来就照实把错误原文写进回执(`phase: 'failed'`),开关会照用户
+		 *      的意思留在"开",但状态行说清"宿主侧没起来"。
+		 *
+		 * 取回段只在两种时机:宿主快照说 `lastIndex` 涨了(那条 GET 本来每 10 秒就有),以及事故刚
+		 * 结算时(事故窗口很可能正压在刚采完的那一段上)。**不按固定节拍拉 profile**,也不给采集侧
+		 * 加定时器 —— 关掉开关时只清请求代际,宿主那边另有租约兜底。
+		 */
+		function ambientHostStartBody() {
+			// 三个参数一个都不传:常量只有宿主那一处。
+			return { op: 'ambientStart' };
+		}
+
+		function ambientHostGetBody(since) {
+			const value = Number(since);
+			return { op: 'ambientGet', since: Number.isFinite(value) ? Math.floor(value) : -1 };
+		}
+
+		function ambientHostStopBody(reason) {
+			return { op: 'ambientStop', reason: typeof reason === 'string' && reason !== '' ? reason : 'client-stop' };
+		}
+
+		/**
+		 * 宿主回执 → 面板 / 包读的那一份。**纯函数**(时钟也从参数进),两种形状都收:
+		 * POST 的 `{ ok, ambient }` 与 GET 快照里那个 state 对象。两份判定迟早会漂成
+		 * "面板说开、宿主说关",所以只有这一处。
+		 */
+		function ambientReceipt(receipt, nowMs) {
+			const at = Number.isFinite(nowMs) ? nowMs : 0;
+			const base = {
+				ok: false, phase: 'failed', enabled: false,
+				intervalSeconds: 0, segmentSeconds: 0, keep: 0,
+				collected: 0, total: 0, lastAt: 0, lastIndex: -1, nextAt: 0,
+				skipped: 0, yielded: 0, aborted: 0, stopReason: '', error: '', at,
+			};
+			if (receipt === null || typeof receipt !== 'object') {
+				return { ...base, error: '宿主没有回执(路由不可达,或响应不是 JSON)' };
+			}
+			const raw = receipt.ambient !== null && typeof receipt.ambient === 'object' ? receipt.ambient : receipt;
+			const ok = receipt.ok === undefined ? true : receipt.ok === true;
+			if (ok !== true) {
+				return { ...base, error: typeof receipt.error === 'string' && receipt.error !== '' ? receipt.error : '宿主回了失败,但没给原因' };
+			}
+			if (typeof raw.enabled !== 'boolean') {
+				return { ...base, error: '宿主回了 ok,但没有采样状态 —— 不假装开起来了' };
+			}
+			const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+			return {
+				ok: true,
+				// 宿主"开着但没在采"(段与段之间的空档)也是 active:面板要显示的是"这个功能在跑",
+				// 不是"这一刻恰好在采";`collecting` 由 ambientStatus 单独给。
+				phase: raw.enabled === true ? 'active' : (raw.stopReason === '' ? 'idle' : 'stopped'),
+				enabled: raw.enabled === true,
+				intervalSeconds: num(raw.intervalSeconds),
+				segmentSeconds: num(raw.segmentSeconds),
+				keep: num(raw.keep) > 0 ? num(raw.keep) : 0,
+				collected: num(raw.collected),
+				total: num(raw.total),
+				lastAt: num(raw.lastAt),
+				lastIndex: Number.isFinite(Number(raw.lastIndex)) ? Number(raw.lastIndex) : -1,
+				nextAt: num(raw.nextAt),
+				skipped: num(raw.skipped),
+				yielded: num(raw.yielded),
+				aborted: num(raw.aborted),
+				stopReason: typeof raw.stopReason === 'string' ? raw.stopReason : '',
+				error: typeof raw.error === 'string' ? raw.error : '',
+				at,
+			};
+		}
+
+		/** 面板 / 控制台 / 断言读的后台采样状态(不回 profile 本体,段有几万个节点)。 */
+		function ambientStatus() {
+			const receipt = state.host.ambient;
+			return {
+				on: state.render.ambient === true,
+				enabled: receipt !== null && receipt.enabled === true,
+				phase: receipt === null ? 'idle' : receipt.phase,
+				intervalSeconds: receipt === null ? 0 : receipt.intervalSeconds,
+				segmentSeconds: receipt === null ? 0 : receipt.segmentSeconds,
+				keep: receipt === null ? 0 : receipt.keep,
+				collected: receipt === null ? 0 : receipt.collected,
+				total: receipt === null ? 0 : receipt.total,
+				lastAt: receipt === null || receipt.lastAt <= 0 ? null : new Date(receipt.lastAt).toISOString(),
+				skipped: receipt === null ? 0 : receipt.skipped,
+				yielded: receipt === null ? 0 : receipt.yielded,
+				error: receipt === null ? '' : receipt.error,
+				profiles: state.host.ambientProfiles.length,
+			};
+		}
+
+		/** 秒数 → 人话(`300` → `5 分钟`、`0.5` → `0.5 秒`)。只给面板那一行用。 */
+		function ambientSpanText(seconds) {
+			const value = Number(seconds);
+			if (!Number.isFinite(value) || value <= 0) return '';
+			if (value >= 60) return `${round1(value / 60)}${translate('ambientMinute')}`;
+			return `${round1(value)}${translate('ambientSecond')}`;
+		}
+
+		/**
+		 * 设置页 / 开发者详情共用的状态行:**开 / 关 + 宿主回执**,不猜。
+		 * 返回空字符串 = 这一行不该出现(宿主半没有这个 op,而且用户从没开过 —— 摆了也只是噪音)。
+		 */
+		function ambientStatusText() {
+			const receipt = state.host.ambient;
+			const on = state.render.ambient === true;
+			if (on !== true && receipt === null) return '';
+			const parts = [on ? translate('ambientOn') : translate('ambientOff')];
+			if (receipt === null) {
+				parts.push(on === true ? translate('ambientWaitHost') : translate('ambientNever'));
+				return parts.join(' · ');
+			}
+			if (receipt.ok !== true) {
+				parts.push(`${translate('ambientFailed')}: ${String(receipt.error).slice(0, 28)}`);
+				return parts.join(' · ');
+			}
+			// 开关开着、宿主侧却没在采(租约被冻结的标签页放过期了 / 刚被顶掉):照实说,不装作在采
+			if (on === true && receipt.enabled !== true) parts.push(translate('ambientHostSideOff'));
+			// 频率只在真有两个数时给:0 是"宿主还没回这一项",不是"每 0 秒一次"
+			if (receipt.intervalSeconds > 0 && receipt.segmentSeconds > 0) {
+				parts.push(`${translate('ambientEvery')} ${ambientSpanText(receipt.intervalSeconds)} · ${translate('ambientSampleLabel')} ${ambientSpanText(receipt.segmentSeconds)}`);
+			}
+			parts.push(receipt.lastAt > 0 ? `${translate('ambientLast')} ${clock(receipt.lastAt)}` : translate('ambientNever'));
+			parts.push(`${translate('ambientTotal')} ${receipt.total}${translate('ambientSegments')}`);
+			return parts.join(' · ');
+		}
+
+		/** 打开 / 关闭这个开关(只存 localStorage,不进 profile)。 */
+		function setAmbient(on) {
+			const want = on === true;
+			state.render.ambient = want;
+			try { localStorage.setItem(LS_AMBIENT, want ? '1' : '0'); } catch (error) { /* 记不住就本次会话有效 */ }
+			// 记住"这一代"的开关意图:在途回执只改状态,不改用户的意图
+			if (want) void startHostAmbient();
+			else void stopHostAmbient('disabled');
+			bump();
+			return want;
+		}
+
+		/** 让宿主进入后台采样。失败照实写进回执,开关按用户的意思留在"开"。 */
+		async function startHostAmbient() {
+			const epoch = state.render.epoch;
+			let receipt = null;
+			try {
+				receipt = await hostOp(ambientHostStartBody());
+			} catch (error) {
+				if (isAbortError(error)) return null;
+				if (state.render.epoch !== epoch) return null;
+				state.host.ambient = { ...ambientReceipt(null, Date.now()), error: fetchFailureText(error, FETCH_TIMEOUT_MS.host) };
+				bump();
+				return null;
+			}
+			if (state.render.epoch !== epoch) return null;
+			const summary = ambientReceipt(receipt, Date.now());
+			state.host.ambient = summary;
+			bump();
+			// 宿主那边可能已经攒了几段(上一个页面会话采的):立刻取回来
+			if (summary.ok === true) void syncHostAmbient();
+			return summary;
+		}
+
+		/** 让宿主停下。宿主那边另有租约兜底,所以这个请求丢了也不会留下常开的采样。 */
+		async function stopHostAmbient(reason) {
+			const epoch = state.render.epoch;
+			let receipt = null;
+			try {
+				receipt = await hostOp(ambientHostStopBody(reason));
+			} catch (error) {
+				if (isAbortError(error)) return null;
+				if (state.render.epoch !== epoch) return null;
+				const previous = state.host.ambient;
+				state.host.ambient = {
+					...(previous === null ? ambientReceipt(null, Date.now()) : previous),
+					ok: previous === null ? false : previous.ok,
+					enabled: false,
+					phase: 'failed',
+					error: fetchFailureText(error, FETCH_TIMEOUT_MS.host),
+					at: Date.now(),
+				};
+				bump();
+				return null;
+			}
+			if (state.render.epoch !== epoch) return null;
+			state.host.ambient = ambientReceipt(receipt, Date.now());
+			bump();
+			return state.host.ambient;
+		}
+
+		let ambientSyncing = false;
+
+		/** 增量取回后台段(以及宿主那边的状态)。失败只记原因,不清已经取回的段。 */
+		async function syncHostAmbient() {
+			if (ambientSyncing === true) return null;
+			ambientSyncing = true;
+			const epoch = state.render.epoch;
+			try {
+				const last = state.host.ambientProfiles.length === 0
+					? -1
+					: state.host.ambientProfiles[state.host.ambientProfiles.length - 1].index;
+				let receipt = null;
+				try {
+					receipt = await hostOp(ambientHostGetBody(last));
+				} catch (error) {
+					if (isAbortError(error) === false && state.render.epoch === epoch) {
+						const previous = state.host.ambient;
+						state.host.ambient = {
+							...(previous === null ? ambientReceipt(null, Date.now()) : previous),
+							ok: false,
+							phase: 'failed',
+							error: fetchFailureText(error, FETCH_TIMEOUT_MS.host),
+							at: Date.now(),
+						};
+						bump();
+					}
+					return null;
+				}
+				if (state.render.epoch !== epoch) return null;
+				const summary = ambientReceipt(receipt, Date.now());
+				state.host.ambient = summary;
+				const records = hostSegmentRecords(receipt);
+				// 客户端留几段以**宿主回执**为准(常量只有宿主那一处);没有回执才用兜底数。
+				const keep = summary.keep > 0 ? summary.keep : AMBIENT_KEEP_FALLBACK;
+				for (const record of records) {
+					if (state.host.ambientProfiles.some((row) => row.index === record.index)) continue;
+					state.host.ambientProfiles.push({ ...record, receivedAt: Date.now() });
+				}
+				state.host.ambientProfiles.sort((a, b) => a.index - b.index);
+				while (state.host.ambientProfiles.length > keep) state.host.ambientProfiles.shift();
+				bump();
+				return summary;
+			} finally {
+				ambientSyncing = false;
+			}
+		}
+
+		/** 宿主快照里已经有段了(而且是我们没见过的)→ 取一次。只在有新段时发请求。 */
+		function ambientNeedsSync(snapshot) {
+			if (snapshot === null || snapshot === undefined || typeof snapshot !== 'object') return false;
+			const lastIndex = Number(snapshot.lastIndex);
+			if (!Number.isFinite(lastIndex) || lastIndex < 0) return false;
+			const known = state.host.ambientProfiles.length === 0
+				? -1
+				: state.host.ambientProfiles[state.host.ambientProfiles.length - 1].index;
+			return lastIndex > known;
 		}
 
 		/** 只看状态、不回 profile 本体(它有几万个节点);要原始文件用 downloadHostCpuProfile()。 */
@@ -3947,6 +4246,9 @@ window.__ModuleLoader__.load({
 			natives.setTimeout(() => probeLink('load'), 3000);
 			state.host.linkTimer = natives.setInterval(() => probeLink('rtt'), RTT_INTERVAL_MS);
 			state.host.loadTimer = natives.setInterval(() => probeLink('load'), LOAD_INTERVAL_MS);
+			// 后台宿主采样:用户开过(落盘了)就重新让宿主采起来。它在宿主进程里,与 HUD 开关解耦 ——
+			// 但关 HUD(=插件不再采)时必须让它停(见 stop()),否则会留下"没人要的采样"。
+			if (state.render.ambient === true) void startHostAmbient();
 		}
 
 		function stop() {
@@ -3954,6 +4256,9 @@ window.__ModuleLoader__.load({
 			// 武装窗口的第三条还原路径:关 HUD 必须同时卸掉临时插桩(否则"关了"却还在插桩),
 			// 并让宿主停下(它到点也会自己停;这里只是不等窗口走完)。
 			if (state.render.armed.phase === 'armed') disarmArmed('disabled');
+			// 后台采样:关 HUD(= 插件不采了)就让宿主停下。**发在 abort 之前** —— 这一代作废之后
+			// 请求会被取消。就算这次请求没送到,宿主那边的租约也会在 2 分钟内自己停(不会常开)。
+			if (state.render.ambient === true) void stopHostAmbient('disabled');
 			state.render.on = false;
 			// 当前代作废:在途的宿主 / map / 脚本文本请求一律 abort,旧代结果不许再改状态。
 			state.render.epoch += 1;
@@ -4571,6 +4876,14 @@ window.__ModuleLoader__.load({
 			 * 口径:单次读数是粗参照,跨运行中位抖动 ±20~70ms —— 别拿单次差异当回归证据。
 			 */
 			openCost: openCostStatus,
+			/**
+			 * 后台宿主采样(方向 2,默认关):`ambient()` 看状态(开关 / 宿主回执 / 取回了几段),
+			 * `ambientOn()` / `ambientOff()` 切开关。它是**宿主进程**的采样,不是页面开销;
+			 * 与手动 `cpuProfile()` / `arm()` 共用同一台 profiler 的单飞,后台优先级最低。
+			 */
+			ambient: ambientStatus,
+			ambientOn: () => { setAmbient(true); return ambientStatus(); },
+			ambientOff: () => { setAmbient(false); return ambientStatus(); },
 			link: () => state.host.link,
 			verification,
 		};
@@ -5379,6 +5692,9 @@ window.__ModuleLoader__.load({
 				ARMED_WINDOW_SECONDS,
 				armNow,
 				disarmArmed,
+				// 后台宿主采样:开关动作 + 状态行(设置页与开发者详情读同一份文案)
+				ambientStatusText,
+				setAmbient,
 				attrText,
 				barSegments,
 				blame,
