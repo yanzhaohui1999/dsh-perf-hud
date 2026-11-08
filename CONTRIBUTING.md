@@ -78,6 +78,9 @@ This file covers the workflow.
   must not patch host prototypes or write bundle state without a one-time ticket from `POST {op:'arm'}`.
   The ticket is **not an authorization boundary**: same-origin scripts can arm themselves; it only stops
   blind CSRF and replay (`confirm: true` is not authorization either); the ticket map is capped at
-  `TICKET_MAX` (oldest evicted, `evicted` counter in `host.tickets`).
+  `TICKET_MAX` (oldest evicted, `evicted` counter in `host.tickets`). Cross-site CSRF is already fenced
+  by DSH's connection layer (`isTrustedApiRequest`: Host fence + `Sec-Fetch-Site` + Origin authority);
+  the plugin has no separate pack/replay HTTP endpoints. Same-origin scripts can still arm — Origin or
+  custom headers cannot tell them apart.
 - **Commits**: Conventional Commits, `<type>(<scope>): description`, scopes `client` / `host` / `attribution` /
   `panel` / `isolation` / `i18n` / `docs` / `tests`.

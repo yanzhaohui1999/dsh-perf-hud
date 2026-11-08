@@ -48,6 +48,7 @@
 
 - **`cordis.patch.yml` 只读**:它是"把本插件挂进 profile"的一行声明,内容变化会触发组合 reconcile,**不要把它当配置面**。插件行为一律靠 `package.json` 的 `dsh.*` 与代码里的开关。
 - **bundle 状态写入要一次性票据(反盲 CSRF / 重放,不是授权边界)**:宿主半的 `setBundle` 会写 profile 的持久化选择,是唯一一个"插件会改用户环境"的操作。它必须:① 面板先 `POST {op:"arm"}` 领一张 30 秒有效、单次使用的票据,`setBundle` 带 `ticket`(`confirm:true` 只是调用方标志,宿主不认);票据容器有上限(`TICKET_MAX = 64`),超限按插入序驱逐最旧并累计 `evicted`(`arm` 回执与 GET `host.tickets` 可读);② 拒绝改 `dsh-perf-hud` 自己与 `@deepseek-ai/dsh-session-persistence-jsonl`;③ 改动前后逐项核验并恢复。⚠️ **票据不等于授权**:同源脚本可以自己 `arm` 取票,它只挡住"读不到响应"的盲 CSRF 与重放,不区分谁有权写;能兜底的只有 deny 名单与改动前后的核验,别把它当授权用。
+- **跨站 CSRF 由宿主连接层挡**:所有 `/api` 请求先经 DSH `connection` 的 `isTrustedApiRequest`(Host 围栏 + `Sec-Fetch-Site: cross-site` 拒绝 + Origin 同权威;0.2.0-rc.1 起),本插件没有独立的 pack / 回放 HTTP 接口(导出与回放分别是页内 Blob 与静态页)。⚠️ 这道围栏不区分**同源**脚本 —— 同源脚本仍可自取票据,Origin / 自定义头都区分不了,票据的定位见上一条。
 - **宿主半不许改宿主任何原型**(离线套件有断言钉住);客户端半的原型插桩(见 §5)必须是**可还原**的,`disable()` 后 `W.setTimeout === natives.setTimeout` 等断言必须成立。
 - **不许假装成功**:宿主回执、map 解析状态、事件测量是否装上,一律照实显示并写进导出件(`application` / `mapStates` / `eventWatch.installed+reason` 都是这个原则的产物)。
 - **不凭记忆写 API**:本项目的每一步(路由注册形态、事件名、sourcemap 形态、DOM 钩子)都来自当场读源码或实测;记忆里"应该如此"的东西(`data-dsh-plugin`、包 `Context.emit`)都被证伪过 —— 见 [归因机制](docs/mechanisms.md) 与 [已知坑](docs/dead-ends.md)。
