@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 2,
+  "kind": "dsh-perf-hud-diagnostic-pack",
+  "plugin": "dsh-perf-hud",
+  "pluginVersion": "0.9.0",
+  "dshVersion": null,
+  "platform": {
+    "page": "http://127.0.0.1:3080/session/1e60a2f4-0000-4000-8000-000000000000",
+    "userAgent": "Chrome/156 · Mac OS X 10_15_7",
+    "viewport": "1600×900",
+    "devicePixelRatio": 2,
+    "hardwareConcurrency": 10,
+    "utcOffsetMin": 480
+  },
+  "captureTier": "watch",
+  "instrumented": false,
+  "language": "zh-CN",
+  "exportedAt": "2026-11-08T01:20:14.516Z",
+  "range": {
+    "from": "2026-10-17T09:15:20.263Z",
+    "to": "2026-10-17T09:15:33.263Z",
+    "preMs": 10000,
+    "postMs": 3000
+  },
+  "complete": true,
+  "incident": {
+    "id": "i3",
+    "at": "2026-10-17T09:15:30.263Z",
+    "cause": "manual",
+    "severity": 137.1,
+    "frames": 74,
+    "loafEntries": 21,
+    "longTasks": 2,
+    "interactions": 0,
+    "integrity": {
+      "captureComplete": true,
+      "loafDropped": 0,
+      "longTaskDropped": 0,
+      "loafKept": 21,
+      "longTaskKept": 2,
+      "reasons": []
+    }
+  },
+  "tally": {
+    "total": 0,
+    "top": [],
+    "byOther": []
+  },
+  "capabilities": {
+    "schema": 1,
+    "renderer": {
+      "frames": {
+        "state": "off",
+        "provenance": "measured",
+        "reason": "HUD 已关闭,帧环没有在采"
+      },
+      "loaf": {
+        "state": "on",
+        "provenance": "measured",
+        "reason": "LoAF 观察器:on"
+      },
+      "longTasks": {
+        "state": "off",
+        "provenance": "measured",
+        "reason": "longtask 明细 0 条 / 累计 0 条"
+      },
+      "scriptAttribution": {
+        "state": "degraded",
+        "provenance": "inferred",
+        "reason": "精确归因没开:合并批次只能给整批,拿不到单包名"
+      },
+      "domWrites": {
+        "state": "off",
+        "provenance": "inferred",
+        "reason": "深录没开:DOM 写入者没有记账"
+      },
+      "interactions": {
+        "state": "on",
+        "provenance": "measured",
+        "reason": "交互计时:on(窗口内保留 0 条)"
+      },
+      "elementTiming": {
+        "state": "unsupported",
+        "provenance": "unknown",
+        "reason": "DSH 的 DOM 上没有 elementtiming 属性,这一路恒为 0"
+      }
+    },
+    "host": {
+      "eventLoop": {
+        "state": "off",
+        "provenance": "measured",
+        "reason": "还没拿到宿主快照"
+      },
+      "events": {
+        "state": "off",
+        "provenance": "measured",
+        "reason": "还没请求宿主事件监听"
+      },
+      "cpuProfile": {
+        "state": "off",
+        "provenance": "unknown",
+        "reason": "入口已接线,但这一段还没采 —— 采样本身有开销,所以只在面板点一下或 __perfHud.cpuProfile(5) 时才采,不常开"
+      }
+    },
+    "link": {
+      "rtt": {
+        "state": "off",
+        "provenance": "measured",
+        "reason": "链路样本 0 条(环形缓冲里全部)"
+      },
+      "throughput": {
+        "state": "off",
+        "provenance": "measured",
+        "reason": "吞吐采样:pending"
+      }
+    },
+    "unobserved": [
+      {
+        "id": "gpu-compositor",
+        "reason": "帧时间花在合成 / 光栅 / GPU 的哪一段,页面内没有 API"
+      },
+      {
+        "id": "electron-main",
+        "reason": "Electron 主进程 / GPU 进程这一层本插件没有采"
+      },
+      {
+        "id": "raw-source-lines",
+        "reason": "原始源码(TS/TSX)行号要解 section 内层 mappings 的 VLQ,本项目没做"
+      },
+      {
+        "id": "frame-inner-order",
+        "reason": "帧内脚本的起止顺序 LoAF 不给(只给每条脚本的时长)"
+      },
+      {
+        "id": "devtools-trace",
+        "reason": "完整 Chrome trace 需要 DevTools 录制,页面内录不了"
+      }
+    ]
+  },
+  "notIncluded": [
+    "聊天正文与提示词(本插件从不读取被测量的 DOM 内容)",
+    "Cookie / Token / 请求头(只读 performance 观察器与自己的宿主路由回执)",
+    "常驻的宿主进程 CPU profile(采样按需触发、不常开;采到的那一段在 incident.json 的 context.hostCpuProfile 里,原始 .cpuprofile 单独下载)"
+  ],
+  "files": [
+    "manifest.json",
+    "summary.md",
+    "incident.json",
+    "README.md"
+  ],
+  "redaction": {
+    "rule": "导出时做减法,不做匿名化;applied / kept / neverCollected 三个数组说明做了什么、没做什么",
+    "applied": [
+      "page / href:只保留 origin + path,查询串整段丢弃(DSH 首屏的 ?token=… 就在这里)",
+      "url / urls / sourceURL:去掉协议与主机,保留路径与 rev;这些键名的值会被替换成 <redacted>:token / accessToken / access_token / refresh_token / id_token / api_key / apikey / api-key / key / secret / client_secret / password / passwd / pwd / auth / authorization / bearer / session / sessionid / sid / sig / signature / credential / code",
+      "其余字符串:/Users/<用户名>、/home/<用户名>、C:\\Users\\<用户名> 一律换成 ~",
+      "宿主 CPU 采样(context.hostCpuProfile):summary 只留函数名 / 文件 / 行号 / 自热毫秒;原始 profile 的 callFrame.url 先做 /Users/<用户名> → ~ 再按 url 规则去协议与主机,raw 超过体积上限时整段不带(只给 rawOmitted)",
+      "userAgent:只保留浏览器主版本 + 操作系统(完整 UA 能指纹到具体机器)",
+      "自由文本(note / 场景标记的 note):原样保留(用户自己敲的字,可能含敏感内容)"
+    ],
+    "kept": [
+      "性能数值本身(毫秒、计数、分位、帧序列)—— 不含个人信息,丢了这份文件就没用了",
+      "插件的包名 / 源文件路径 / 行号 —— 这是归因的全部价值,路径只做了 ~ 降级",
+      "viewport / devicePixelRatio / hardwareConcurrency / 时区 —— 解读帧耗时与分位要用"
+    ],
+    "neverCollected": [
+      "聊天正文与提示词(本插件从不读取被测量的 DOM 内容)",
+      "Cookie / Token / 请求头(只读 performance 观察器与自己的宿主路由回执)",
+      "宿主进程内存 / 磁盘 / 进程树(那是 dsh-perf-lens 的地盘)"
+    ],
+    "freeText": [
+      "incident.note",
+      "timeline.marks[].note"
+    ]
+  }
+}

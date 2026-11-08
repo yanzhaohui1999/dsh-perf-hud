@@ -21,8 +21,12 @@
  * 字段集合由 `git show c970042:client.js` 校准(那是 manifest v1 与 incident v2 一起的提交);
  * `git show c970042:client.js | grep -n "function manifestFor"` 可以复核。
  *
- * ⚠️ 夹具是**手写**的,不是从老版本真导出:数值取自真事故切片,契约形状取自上面那次提交。
- * 所以它证明的是"reads 按这份契约写的包",不是"某个 0.x 版本导出的字节流"。
+ * ⚠️ 下面这份 v1/v2 夹具是**手写**的:数值取自真事故切片,契约形状取自上面那次提交。
+ * 所以它证明的是"读方按这份契约写的包读得出来",不是"某个 0.x 版本导出的字节流"。
+ *
+ * 补上那个缺口(文档 §7 要求的"真包"):`tests/fixtures/pack-0.9.0/` 是 **npm 上 0.9.0 的
+ * `client.model.js` 原样执行 `buildPack()`** 生成的(2026-11-08,见 v1-release-acceptance 文档)。
+ * 它证明"0.9.0 真导出的一份包,当前读方(generic + CLI)仍读得出摘要与缺失声明"。
  */
 import { execFileSync, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -369,6 +373,54 @@ try {
 		[false, true])
 } finally {
 	rmSync(temp, { recursive: true, force: true })
+}
+
+// ───────────────────────── ⑤ 真 0.9.0 导出包(发布门第 3 条)─────────────────────────
+// 生成方式:解包 npm 上的 dsh-perf-hud@0.9.0 → 用它的 client.model.js 调 buildPack('i3'),
+// 输入是 tests/fixtures/incident-real.json 的真事故行。**不是手写**,也不是"像 0.9.0"的数据。
+const realPackDir = new URL('./fixtures/pack-0.9.0/', import.meta.url)
+let realPack = null
+try {
+	const files = ['manifest.json', 'summary.md', 'incident.json', 'README.md']
+		.map((name) => ({ name, text: readFileSync(new URL(name, realPackDir), 'utf8') }))
+	realPack = { files, read: readPack(files) }
+} catch {
+	// 没有这份夹具 = 发布门第 3 条没满足:打印警告并跳过(计数会与文档不符,CI 的 -eq 会红)
+	console.log('⚠️ 没有 tests/fixtures/pack-0.9.0/(真 0.9.0 导出包),跳过真包那组断言')
+}
+if (realPack !== null) {
+	const real = realPack.read
+	check('真 0.9.0 导出包:manifest v2 / incident v3 / pluginVersion 0.9.0(版本号没漂)',
+		[real.manifest.schemaVersion, real.report.schema, real.manifest.pluginVersion, real.manifestFiles],
+		[2, 3, '0.9.0', ['manifest.json', 'summary.md', 'incident.json', 'README.md']])
+	check('真 0.9.0 导出包:读出的摘要与包内 summary 一致(帧数 / p99 / 最差帧),能力矩阵 12 叶子 + 5 unobserved',
+		[real.summary.frames, real.summary.frames === row.summary.frames, real.summary.p99, real.summary.p99 === row.summary.p99,
+			real.summary.worstFrameMs, real.capability.leaves.length, real.capability.unobserved.length, real.capability.invalid],
+		[row.summary.frames, true, row.summary.p99, true, row.summary.worstFrameMs,
+			packSchema.required('capabilities').filter((key) => key !== 'schema').length, 5, []])
+	// 0.9.0 的 manifest 还带着 `dshVersion`(1.0 已删)—— 读方必须当未知键忽略,不影响判断
+	check('真 0.9.0 导出包:已删的 dshVersion 被当作未知键忽略(不参与摘要 / 能力矩阵判断)',
+		[real.ignoredUnknownKeys, Object.prototype.hasOwnProperty.call(real.manifest, 'dshVersion')],
+		[['dshVersion'], true])
+	const brokenReal = JSON.parse(JSON.stringify(real.manifest))
+	delete brokenReal.capabilities
+	let realError = null
+	try { readPack([{ name: 'manifest.json', text: JSON.stringify(brokenReal) }, { name: 'incident.json', text: realPack.files[2].text }]) } catch (error) { realError = error instanceof Error ? error.message : String(error) }
+	check('真 0.9.0 导出包:删掉必需键 capabilities → 读方必须拒绝,并点名这个键',
+		[realError === null ? 'no-error' : /manifest\.json\.capabilities/.test(realError), /缺必需键/.test(realError ?? '')],
+		[true, true])
+	// 真发货的 CLI 也要读得出来(发布门口径是 CLI / Skill 路径)
+	const realTemp = mkdtempSync(join(tmpdir(), 'dsh-perf-hud-090-'))
+	try {
+		for (const file of realPack.files) writeFileSync(join(realTemp, file.name), file.text)
+		const out = spawnSync(process.execPath, [join(ROOT, 'tools/inspect-incident.mjs'), join(realTemp, 'incident.json')], { encoding: 'utf8' })
+		const text = out.stdout ?? ''
+		check('真 0.9.0 导出包:tools/inspect-incident.mjs 退出 0,输出 schema 3 / 帧数 / p99 / 缺失声明',
+			[out.status, /schema 3/.test(text), text.includes(`${row.summary.frames} 帧`), /p99/.test(text), text.includes('precise:')],
+			[0, true, true, true, true])
+	} finally {
+		rmSync(realTemp, { recursive: true, force: true })
+	}
 }
 
 // 一条命令跑完;`ok` 前缀行数与 ci.yml / release.yml 的「断言总数」门禁同一口径

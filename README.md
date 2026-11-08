@@ -5,7 +5,7 @@
 > **守夜层**默认常开:偶发卡顿自动留存最差几次,连证据一次性导出。
 
 <p>
-<img alt="status" src="https://img.shields.io/badge/status-v0.8.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" />
+<img alt="status" src="https://img.shields.io/badge/status-v1.0.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.3-4d6bfe" />
 </p>
@@ -145,7 +145,7 @@ node tests/compat.mjs        # 12 条:上一版 schemaVersion 的夹具包喂当
 node tests/replay.mjs        # 9 条:回放站读包,现算摘要与包里 summary 逐项一致
 node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不需要浏览器)
 node tools/gen-prefix-table.mjs --check  # 诊断 Skill §2.6 的前缀表与 capabilityMissing() 一致
-# 758 条断言 + 一条冒烟,离线,无需 DSH 在跑;npm test 一条命令跑完
+# 763 条断言 + 一条冒烟,离线,无需 DSH 在跑;npm test 一条命令跑完
 ```
 
 改到面板渲染 / `apply()` / `start()` 时**再跑一次真页面验收**(要浏览器 + 本机 `dsh web`,不进 CI):`node tools/check-panel.mjs`(必跑),`check-incident` / `check-counts` / `check-storage` / `check-interaction` 视改动。规则、提交规范、状态四片与全部门禁见 [AGENTS.md](AGENTS.md);供应链与发版门槛见 [REVIEW.md](REVIEW.md)。

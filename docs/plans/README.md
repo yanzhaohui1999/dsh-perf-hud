@@ -10,6 +10,7 @@
 | [2026-10-12-next-phase-plan.md](2026-10-12-next-phase-plan.md) | 0.4.0 时代的产品计划与实施清单(已基本执行完) |
 | [2026-10-13-code-review.md](2026-10-13-code-review.md) | 2026-10-13 代码审计:12 条建议,10 条已落地 |
 | [2026-11-05-release-audit.md](2026-11-05-release-audit.md) | 0.9.0 发版复核:两条 workflow 的实际结果、包内容逐项核对、`release.yml` 缺口与下版 checklist |
-| [2026-11-07-v1-milestone.md](2026-11-07-v1-milestone.md) | **1.0 milestone(进行中)**:契约冻结与兼容策略、状态切分、离线渲染冒烟、只读 MCP(→1.1)、README 重写、顺序与发布门 |
+| [2026-11-07-v1-milestone.md](2026-11-07-v1-milestone.md) | **1.0 milestone(已交付)**:契约冻结与兼容策略、状态切分、离线渲染冒烟、只读 MCP(→1.1)、README 重写、顺序与发布门 |
+| [2026-11-08-v1-release-acceptance.md](2026-11-08-v1-release-acceptance.md) | **1.0.0 发布验收**:发布门三项前置、离线门禁 763 条、真 0.9.0 兼容夹具、五个真页面验收器、`npm pack` 38 个文件与本地 tag |
 | [2026-11-07-v1-acceptance.md](2026-11-07-v1-acceptance.md) | 1.0 验收档案:离线门禁与五个真页面验收器在 DSH `0.2.1-rc.3` 上的实际输出、每个声明版本的机器标记、契约冻结与向后兼容的复核命令 |
 | [2026-11-07-a3-open-cost.md](2026-11-07-a3-open-cost.md) | A3 会话体积 → 打开耗时曲线:6 点 × 3 次实测、分段口径、最小复现与只读边界(`tools/measure-open-cost.mjs`) |

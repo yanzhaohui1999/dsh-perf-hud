@@ -6,7 +6,7 @@
 > few stalls and exports the evidence in one pack.
 
 <p>
-<img alt="status" src="https://img.shields.io/badge/status-v0.8.0%20%C2%B7%20released-green" />
+<img alt="status" src="https://img.shields.io/badge/status-v1.0.0%20%C2%B7%20released-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.3-4d6bfe" />
 </p>
@@ -168,7 +168,7 @@ node tests/compat.mjs        # 12 assertions: a previous-schemaVersion pack fed 
 node tests/replay.mjs        # 8 assertions: the replay site re-derives the summary from frames and matches the pack
 node tools/render-smoke.mjs  # offline render smoke: six screens + "HUD off", no browser needed
 node tools/gen-prefix-table.mjs --check  # diagnosis Skill §2.6 prefix table in sync with capabilityMissing()
-# 758 assertions + one smoke run, no running DSH required; `npm test` runs them all
+# 763 assertions + one smoke run, no running DSH required; `npm test` runs them all
 ```
 
 Any change to rendering / `apply()` / `start()` also needs a **real-page** pass (`node tools/check-panel.mjs` at

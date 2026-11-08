@@ -2,10 +2,20 @@
 
 本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/),版本号遵循 SemVer。
 
-## [Unreleased]
+## [1.0.0] - 2026-11-08
+
+**1.0 的承诺:导出包契约冻结。** `manifest.json` / `incident.json` / `capabilities()` / `missing:` 前缀 / `window.__perfHud` 读接口的形状从这里起冻结 —— [`docs/pack-schema.md`](docs/pack-schema.md) 是唯一权威。加可选字段不升版本;删 / 改名 / 改语义要等 2.0。0.9.0 真导出的一份包由 `tests/compat.mjs` 保证仍读得出来。
+
+### 破坏性变更
+
+无。两处**看起来像**破坏、实际不构成:
+
+- **`manifest.dshVersion`(0.9.0 之后删除)**:它恒为 `null`(宿主半没有可验证的版本来源),任何读方都不判它;0.9.0 真包里这个键还在(值也是 `null`),当前读方按"未知键忽略"读。按 `docs/pack-schema.md` §7 的规则"删键应升版本",这是 1.0 冻结前记下的唯一一笔账,冻结后不再有同类改动。
+- **状态按视图切成四片**:纯内部结构,不进导出件、不进 `__perfHud` 读接口;五个真页面验收器复跑无行为变化。
 
 ### 新增
 
+- **真 0.9.0 导出包当兼容夹具(发布门第 3 条)**:`tests/fixtures/pack-0.9.0/` 不是手写的 —— 解包 npm 上的 `dsh-perf-hud@0.9.0`,用它的 `client.model.js` **原样执行 `buildPack('i3')`**(输入是真事故切片)得到 manifest / summary / incident / README 四份文件。`tests/compat.mjs` 12 → **17 条**:真包喂当前读方,摘要(帧数 / p99 / 最差帧)、能力矩阵(12 叶子 + 5 unobserved)、缺失声明都读得出来;真发货的 `tools/inspect-incident.mjs` 也退出 0;删掉必需键 `capabilities` 必须拒绝并点名。顺带证明 0.9.0 里还在的 `manifest.dshVersion`(恒 `null`)被 1.0 读方按未知键忽略 —— 这是"删除一个从未有值的字段不构成破坏"的实证。
 - **导出包契约冻结(1.0 / S0)**:新增 [`docs/pack-schema.md`](docs/pack-schema.md) —— `manifest.json` / `incident.json` / `capabilities()` 三份键清单(逐键逐层、必需与可选分开)、三个版本号各自的升级条件、旧包怎么读的四步,以及已经发生过的变更史。清单写在 ```schema 代码块里当门禁的输入(`tests/schema.mjs` 解析),所以"代码改了文档没改"与"文档写了代码产不出"都会红。`tests/logic.mjs` 加三条断言:`manifestFor()` 的键集合双向下标、`buildPack()` 的四份文件顺序 == `manifest.files` == 文档、三个版本号与清单同步(期望值写死,升版本要同时改三处)。
 - **兼容套件 `tests/compat.mjs`(12 条)**:用**上一版 `schemaVersion`** 的包(真事故切片按 `manifest` v1 / `incident` v2 的契约降级得到)喂当前读方,断言摘要与能力矩阵仍读得出来;`tools/inspect-incident.mjs` 也真跑一遍。缺一个必需顶层键必须拒绝并点名(实测:删 `capabilities` → `缺必需键:manifest.json.capabilities`)。旧包的兼容点都是真问题:v1 的 `manifest.files` 把 `manifest.json` 写在第二位(读方必须按名字找)、带 0.9.0 已删的 `dshVersion`(未知键忽略)、没有 `integrity` / `complete`(按"不知道"读)。
 

@@ -48,6 +48,7 @@
 | [plans/2026-10-11-acceptance-evidence.md](plans/2026-10-11-acceptance-evidence.md) | 2026-10-07 ~ 10-18 阶段决策 + 67 条实测证据 |
 | [plans/2026-10-12-next-phase-plan.md](plans/2026-10-12-next-phase-plan.md) | 0.4.0 时代的产品计划(已基本执行完) |
 | [plans/2026-10-13-code-review.md](plans/2026-10-13-code-review.md) | 2026-10-13 代码审计:12 条建议,10 条已落地 |
+| [plans/2026-11-08-v1-release-acceptance.md](plans/2026-11-08-v1-release-acceptance.md) | **1.0.0 发布验收**:发布门前置、763 条断言、真 0.9.0 兼容夹具、五个真页面验收器与本地 tag |
 | [plans/2026-11-07-v1-acceptance.md](plans/2026-11-07-v1-acceptance.md) | 1.0 验收档案:五个真页面验收器与离线门禁的实测输出(按 DSH 版本记录) |
 | [plans/2026-11-07-a3-open-cost.md](plans/2026-11-07-a3-open-cost.md) | A3:会话体积 → 打开耗时曲线(6 点 × 3 次实测 + 最小复现) |
 
