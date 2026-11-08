@@ -219,6 +219,72 @@ check('采完断开 inspector 会话(不留常开句柄)',
 	inspectorCalls.filter((m) => m === 'Profiler.stop').length === 1 && inspectorCalls.at(-1) === 'disconnect',
 	JSON.stringify(inspectorCalls));
 
+// ── 武装窗口:分段滚动采样(方向 2 的按需版)────────────────────────────
+// 与手动采样共用同一台 profiler:窗口里手动 profileStart 会被单飞挡住;窗口到点自己停。
+const beforeArmed = inspectorCalls.filter((m) => m === 'Profiler.start').length;
+const armedIdle = await (await get('')).json();
+check('武装:没开窗口时宿主不采(不常开)',
+	armedIdle.host?.armed?.active === false && armedIdle.host?.armed?.kept === 0
+	&& armedIdle.host?.armed?.samplingStarted === false, JSON.stringify(armedIdle.host?.armed));
+check('武装:GET 只回状态,不回段本体(段里有原始 .cpuprofile)',
+	armedIdle.host?.armed?.segments === undefined, true);
+
+const armedStartRes = await post({ op: 'armedStart', windowSeconds: 0.1, segmentSeconds: 0.2 });
+const armedStarted = await armedStartRes.json();
+check('武装:窗口时长夹到下限 0.5 秒,段长按请求值',
+	armedStarted.ok === true && armedStarted.armed?.windowSeconds === 0.5 && armedStarted.armed?.segmentSeconds === 0.2,
+	JSON.stringify({ w: armedStarted.armed?.windowSeconds, s: armedStarted.armed?.segmentSeconds }));
+check('武装:开窗口立刻起第一段采样(共用那台 profiler)',
+	armedStarted.armed?.samplingStarted === true
+	&& inspectorCalls.filter((m) => m === 'Profiler.start').length === beforeArmed + 1,
+	JSON.stringify(inspectorCalls.slice(-3)));
+
+const armedBusyRes = await post({ op: 'profileStart', seconds: 0.1 });
+const armedBusy = await armedBusyRes.json();
+check('武装:窗口期间手动 profileStart 被单飞挡住(不叠采;running:true 说的是武装那段在跑)',
+	armedBusyRes.status === 500 && armedBusy.ok === false && armedBusy.running === true, JSON.stringify(armedBusy.error));
+
+const armedSecondRes = await post({ op: 'armedStart', windowSeconds: 2, segmentSeconds: 1 });
+const armedSecond = await armedSecondRes.json();
+check('武装:已有窗口在跑时重入被拒(409)',
+	armedSecondRes.status === 409 && armedSecond.ok === false, `${armedSecondRes.status} ${armedSecond.error}`);
+
+await new Promise((resolve) => setTimeout(resolve, 1400));
+const armedGot = await (await post({ op: 'armedGet' })).json();
+const armedSegments = Array.isArray(armedGot.segments) ? armedGot.segments : [];
+check('武装:窗口里采到至少一段,每段带 meta 与原始 profile',
+	armedSegments.length >= 1
+	&& armedSegments.every((row) => Array.isArray(row.profile?.nodes) && typeof row.meta?.startedAt === 'number' && typeof row.meta?.endedAt === 'number'),
+	`segments=${armedSegments.length}`);
+check('武装:段序号从 0 起、连续递增(客户端按 since 增量取)',
+	armedSegments.every((row, i) => i === 0 ? row.index === 0 : row.index === armedSegments[i - 1].index + 1),
+	armedSegments.map((row) => row.index).join(','));
+const armedAfter = await (await get('')).json();
+check('武装:到点自己停(窗口结束不留在宿主里常开)',
+	armedAfter.host?.armed?.active === false && armedAfter.host?.armed?.stopReason === 'timeout'
+	&& armedAfter.host?.armed?.kept === armedSegments.length,
+	JSON.stringify({ active: armedAfter.host?.armed?.active, reason: armedAfter.host?.armed?.stopReason, kept: armedAfter.host?.armed?.kept }));
+const armedIncremental = await (await post({ op: 'armedGet', since: armedSegments[armedSegments.length - 1].index })).json();
+check('武装:since 之后没有新段就回空数组(增量取不每次背全部)',
+	Array.isArray(armedIncremental.segments) && armedIncremental.segments.length === 0, armedIncremental.segments?.length);
+
+// 主动停:正在飞的那一段仍然收完并留下(证据不因窗口结束消失)
+await (await post({ op: 'armedStart', windowSeconds: 5, segmentSeconds: 1 })).json();
+const armedStopRes = await (await post({ op: 'armedStop', reason: 'test-stop' })).json();
+check('武装:armedStop 立刻停(active=false,reason 照抄,在飞的那段标 windingDown)',
+	armedStopRes.ok === true && armedStopRes.armed?.active === false
+	&& armedStopRes.armed?.stopReason === 'test-stop' && armedStopRes.windingDown === true,
+	JSON.stringify({ active: armedStopRes.armed?.active, reason: armedStopRes.armed?.stopReason, windingDown: armedStopRes.windingDown }));
+await new Promise((resolve) => setTimeout(resolve, 1500));
+const armedAfterStop = await (await post({ op: 'armedGet' })).json();
+check('武装:主动停之后,在飞的那一段仍然留下',
+	Array.isArray(armedAfterStop.segments) && armedAfterStop.segments.length >= 1 && armedAfterStop.armed?.active === false,
+	`segments=${armedAfterStop.segments?.length}`);
+check('武装:停之后不会再起新段(段数在窗口结束后保持稳定)', (() => {
+	const kept = armedAfterStop.armed?.kept ?? 0;
+	return kept >= 1 && armedAfterStop.armed?.samplingStarted === true;
+})(), true);
+
 // 失败路径:宿主已经开着别的 profiler / inspector 被占 —— 必须回错误原文,绝不假装成功。
 const routes2 = new Map();
 const CONNECT_ERROR = 'inspector 会话不可用:已被占用';
@@ -259,6 +325,26 @@ const failedGet = await route2.fetch(new Request('http://dsh.invalid/api/dsh-per
 const failedGetBody = await failedGet.json();
 check('失败之后仍然是"没采过"', failedGetBody.ok === false && failedGetBody.collected === false,
 	JSON.stringify(failedGetBody).slice(0, 120));
+
+// 武装窗口同样不假装成功:窗口被接受,但 samplingStarted=false + 错误原文,段数为 0。
+const armedFailRes = await route2.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host', {
+	method: 'POST',
+	headers: { 'content-type': 'application/json' },
+	body: JSON.stringify({ op: 'armedStart', windowSeconds: 1, segmentSeconds: 0.2 }),
+}));
+const armedFailBody = await armedFailRes.json();
+check('武装:inspector 起不来时窗口不假装采起来(samplingStarted=false + 错误原文)',
+	armedFailBody.ok === true && armedFailBody.armed?.active === true
+	&& armedFailBody.armed?.samplingStarted === false && armedFailBody.armed?.error === CONNECT_ERROR
+	&& armedFailBody.armed?.kept === 0,
+	JSON.stringify({ started: armedFailBody.armed?.samplingStarted, error: armedFailBody.armed?.error }));
+const armedFailStop = await (await route2.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host', {
+	method: 'POST',
+	headers: { 'content-type': 'application/json' },
+	body: JSON.stringify({ op: 'armedStop', reason: 'test-cleanup' }),
+}))).json();
+check('武装:失败窗口也能被主动停掉(不留重试循环)', armedFailStop.ok === true && armedFailStop.armed?.active === false,
+	JSON.stringify(armedFailStop.armed?.stopReason));
 
 for (const dispose of disposers) {
 	if (typeof dispose === 'function') dispose();

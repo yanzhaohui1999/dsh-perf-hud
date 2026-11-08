@@ -120,6 +120,24 @@ const pieces = [
 	'function hostCpuProfileStartBody(',
 	'function hostCpuProfileAfterStart(',
 	'function hostCpuProfileAfterGet(',
+	// 武装窗口(方向 4 + 方向 2 的按需版):三条还原路径共用一个"到点"判据,开/关窗口是两个纯函数,
+	// 宿主回执只有一处判定 —— 状态机本身全部可离线断言。
+	'const ARMED_WINDOW_SECONDS = ',
+	'const ARMED_SEGMENT_SECONDS = ',
+	'const ARMED_MIN_WINDOW = ',
+	'const ARMED_MAX_WINDOW = ',
+	'const ARMED_MIN_SEGMENT = ',
+	'const ARMED_MAX_SEGMENT = ',
+	'function clampArmedWindow(',
+	'function clampArmedSegment(',
+	'function armedPlanStart(',
+	'function armedPlanEnd(',
+	'function armedTickDue(',
+	'function armedHostStartBody(',
+	'function armedHostGetBody(',
+	'function armedHostStopBody(',
+	'function armedHostReceipt(',
+	'function armedSegmentRecords(',
 ].map((header) => (header.startsWith('const ') && header.endsWith('{') === false
 	? line(header)
 	: extract(source, header))).join('\n');
@@ -128,7 +146,9 @@ const api = new Function(`${pieces}
 	const ring = [];
 	let dirty = false;
 	return { state, ring, isCore, ownerOfUrl, rate, updateRates, pluginTable, worstSecond, blame,
-		clampHostProfileSeconds, hostCpuProfileStartBody, hostCpuProfileAfterStart, hostCpuProfileAfterGet };`)();
+		clampHostProfileSeconds, hostCpuProfileStartBody, hostCpuProfileAfterStart, hostCpuProfileAfterGet,
+		clampArmedWindow, clampArmedSegment, armedPlanStart, armedPlanEnd, armedTickDue,
+		armedHostStartBody, armedHostGetBody, armedHostStopBody, armedHostReceipt, armedSegmentRecords };`)();
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -265,6 +285,96 @@ check('A5:代码里不再有"客户端还没接线"这种说法(那条债已还)
 check('A5:面板「宿主与链路」有入口(状态 + 时长按钮 + 错误原文 + 下载原始采样)',
 	['hostCpuProfileText()', 'HOST_PROFILE_CHOICES.map', 'state.host.hostCpuProfile.error', 'downloadHostCpuProfile()', 'startHostCpuProfile(seconds)']
 		.map((needle) => uiSource.includes(needle)), [true, true, true, true, true]);
+
+// ── 武装窗口(方向 4:武装深录 + 方向 2 的按需版)的状态机 ──
+// 事件链:点一次「武装 60 秒」→ 临时装深录 + 精确归因 + 宿主分段采 profile → 三条路径之一还原。
+// 这里钉的是"纯的那一半":开/关窗口、到点判据、路由形状、宿主回执的失败分支。
+check('武装:窗口长度夹到 [0.5, 120],段长夹到 [0.1, 30],非法值回默认 60 / 10',
+	[api.clampArmedWindow(0), api.clampArmedWindow(-1), api.clampArmedWindow(0.1), api.clampArmedWindow(999), api.clampArmedWindow(1.234),
+		api.clampArmedSegment(0), api.clampArmedSegment(99), api.clampArmedSegment(2.345)],
+	[60, 60, 0.5, 120, 1.2, 10, 30, 2.3]);
+const armedStarted = api.armedPlanStart({ phase: 'idle', restored: 2 }, { windowSeconds: 60, segmentSeconds: 10, deep: false, precise: false }, 1000);
+check('武装:开窗口写入 window/endsAt,并记住窗口前的档位(结束回这里,不是一律关掉)',
+	[armedStarted.phase, armedStarted.startedAt, armedStarted.endsAt, armedStarted.wasDeep, armedStarted.wasPrecise,
+		armedStarted.restored, armedStarted.hostReceipt.phase, armedStarted.hostReceipt.segmentSeconds],
+	['armed', 1000, 61000, false, false, 2, 'starting', 10]);
+const armedAlreadyDeep = api.armedPlanStart({ phase: 'ended', restored: 0 }, { windowSeconds: 1, deep: true, precise: true }, 5);
+check('武装:开窗口时深录本来就开着 → wasDeep/wasPrecise 记 true(结束时保持开,不改用户的档位)',
+	[armedAlreadyDeep.wasDeep, armedAlreadyDeep.wasPrecise, armedAlreadyDeep.endsAt], [true, true, 1005]);
+check('武装:到点判据只在 armed 且 now >= endsAt 时为真(正常结束 / 超时 / 关 HUD 共用)',
+	[api.armedTickDue(armedStarted, 60999), api.armedTickDue(armedStarted, 61000), api.armedTickDue(armedStarted, 0),
+		api.armedTickDue({ ...armedStarted, phase: 'ended' }, 99999), api.armedTickDue(null, 1)],
+	[false, true, false, false, false]);
+const armedEnded = api.armedPlanEnd(armedStarted, 'timeout', 62000);
+check('武装:关窗口 = ended + 还原计数 +1 + 宿主回执转 stopped(不清已经采到的段)',
+	[armedEnded.phase, armedEnded.endedAt, armedEnded.reason, armedEnded.restored, armedEnded.hostReceipt.active, armedEnded.hostReceipt.phase],
+	['ended', 62000, 'timeout', 3, false, 'stopped']);
+check('武装:路由形状只有一处(开 / 取 / 停各一个 body 构造器,秒数出发前已夹过)',
+	[api.armedHostStartBody(60, 10), api.armedHostGetBody(-1), api.armedHostGetBody(3.7), api.armedHostStopBody('timeout'), api.armedHostStopBody('')],
+	[{ op: 'armedStart', windowSeconds: 60, segmentSeconds: 10 }, { op: 'armedGet', since: -1 }, { op: 'armedGet', since: 3 },
+		{ op: 'armedStop', reason: 'timeout' }, { op: 'armedStop', reason: 'client-stop' }]);
+const ARMED_RECEIPT = {
+	ok: true,
+	armed: { mode: 'rolling', active: true, windowSeconds: 60, segmentSeconds: 10, startedAt: 1000, endsAt: 61000, stopReason: '', segmentCount: 2, kept: 2, error: '' },
+	segments: [
+		{ index: 0, requestedSeconds: 10, meta: { startedAt: 1100, endedAt: 11100, seconds: 10, nodes: 3, samples: 9, bytes: 900 }, profile: { nodes: [{ id: 1 }], samples: [1], timeDeltas: [1] } },
+		{ index: 1, requestedSeconds: 10, meta: { startedAt: 11200, endedAt: 21200, seconds: 10, nodes: 3, samples: 8, bytes: 800 }, profile: { nodes: [{ id: 1 }], samples: [1], timeDeltas: [1] } },
+	],
+};
+check('武装:宿主 ok 回执映射成面板/包读的那一份(段数 / 窗口 / 锚点都在,不含 profile 本体)',
+	(() => {
+		const s = api.armedHostReceipt(ARMED_RECEIPT);
+		return [s.ok, s.active, s.phase, s.segments, s.kept, s.windowSeconds, s.segmentSeconds, s.startedAt, s.endsAt, s.error];
+	})(),
+	[true, true, 'active', 2, 2, 60, 10, 1000, 61000, '']);
+check('武装:宿主回执 ok 但没有 armed 状态 → 失败(不假装武装上了)',
+	(() => {
+		const s = api.armedHostReceipt({ ok: true });
+		return [s.ok, s.error.includes('armed')];
+	})(),
+	[false, true]);
+check('武装:宿主错误原文照抄(不吞、不换一句)',
+	(() => {
+		const s = api.armedHostReceipt({ ok: false, error: 'Profiler.start: 会话已被占用' });
+		return [s.ok, s.phase, s.error];
+	})(),
+	[false, 'failed', 'Profiler.start: 会话已被占用']);
+check('武装:段只收结构合法的(缺 profile.nodes / 缺时间锚 / 非 ok 一律跳过,不拿空对象冒充采样)',
+	(() => {
+		const bad = [
+			{ index: 2, meta: { startedAt: 1, endedAt: 2 }, profile: {} },
+			{ index: 3, meta: {}, profile: { nodes: [], samples: [] } },
+			{ index: 4, meta: { startedAt: 1, endedAt: 2 }, profile: { nodes: [], samples: [] } },
+			null,
+		];
+		const records = api.armedSegmentRecords({ ok: true, segments: ARMED_RECEIPT.segments.concat(bad) });
+		return [records.map((row) => row.index), api.armedSegmentRecords({ ok: false, segments: ARMED_RECEIPT.segments }), api.armedSegmentRecords(null)];
+	})(),
+	[[0, 1, 4], [], []]);
+check('武装:面板入口在卡顿详情(按钮 + 取消 + 两条动作都真的接了主文件)',
+	['function armedRow(', 'armNow();', "disarmArmed('manual')", 'ARMED_WINDOW_SECONDS']
+		.map((needle) => uiSource.includes(needle)), [true, true, true, true]);
+check('武装:控制台入口与三条还原路径都在(arm / armed / disarm + on→false 与 deep 关闭时的还原)',
+	[/arm: \(seconds\) => armNow\(seconds\)/, /armed: armedStatus/, /disarm: \(\) => disarmArmed\('manual'\)/,
+		/function stop\(\)[\s\S]{0,400}disarmArmed\('disabled'\)/,
+		/function setDeep\(on\)[\s\S]{0,200}disarmArmed\('deep-off'\)/,
+		/state\.render\.armed\.phase === 'armed' && armedTickDue\(state\.render\.armed, Date\.now\(\)\)\) disarmArmed\('timeout'\)/]
+		.map((re) => re.test(source)), [true, true, true, true, true, true]);
+check('武装:还原路径真的卸插桩(清三个定时器 → 回到窗口前档位 → applyProbeState)', (() => {
+	const start = source.indexOf('function disarmArmed(');
+	const body = source.slice(start, source.indexOf('function armedTick(', start));
+	return [/clearInterval\(armed\.timer\)/, /clearTimeout\(armed\.deadline\)/, /clearInterval\(armed\.syncTimer\)/,
+		/state\.render\.deep = armed\.wasDeep === true/, /state\.render\.precise = armed\.wasPrecise === true/,
+		/applyProbeState\(\)/].map((re) => re.test(body));
+})(), [true, true, true, true, true, true]);
+check('武装:临时插桩**不写 localStorage**(刷新即回默认档,武装不许变成"刷新后还开着")',
+	(() => {
+		const start = source.indexOf('function armNow(');
+		const end = source.indexOf('function disarmArmed(', start);
+		const body = source.slice(start, end);
+		return [start > 0, end > start, /LS_DEEP/.test(body), /LS_PRECISE/.test(body)];
+	})(),
+	[true, true, false, false]);
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;
@@ -507,10 +617,12 @@ check('状态四片:state 就是 ui / watch / host / render 四片,每片都有�
 	[['host', 'render', 'ui', 'watch'], true]);
 // 字段数写死是故意的:挪字段(把一页读数搬到另一片)是结构变更,要连同这一行一起交代。
 // 它同时挡住一类静默错误 —— 字段被复制进两片后,谁写谁读就说不清了。
-check('状态四片:四片的字段数 == 23 / 53 / 37 / 15(挪字段要改这一行并说明理由)',
+check('状态四片:四片的字段数 == 23 / 54 / 37 / 16(挪字段要改这一行并说明理由)',
 	// watch 片的 37 = 守夜对象自己的 30 个键 + tally + 场景/空闲基线 6 个(它本来就是一整层)
+	// render +1 = armed(武装窗口的状态机,属于"档位/采集"那一层);
+	// host +1 = armedProfiles(武装窗口从宿主取回的 profile 段,属于宿主数据)。
 	[stateSlices.ui.length, stateSlices.render.length, stateSlices.watch.length, stateSlices.host.length],
-	[23, 53, 37, 15]);
+	[23, 54, 37, 16]);
 
 // ── 别名解析(见文件头 ①)──
 // 规则:别名只能指向**一片**(`= state.<片>`),不能指向整个 state / 解构整个 state(那样所有字段检查都会被绕过);
@@ -2802,7 +2914,7 @@ check('createUi 依赖守卫有牙齿:拿掉任意一个键都会被点名,解�
 	const bogus = depGuard([...uiDepNames, 'bogusNewDep'], uiDepKeys).missing;
 	const unusedBonus = depGuard(uiDepNames, [...uiDepKeys, 'unusedBonus']).unused;
 	return { names: uiDepNames.length, uncaught, bogus, unusedBonus };
-})(), { names: 183, uncaught: [], bogus: ['bogusNewDep'], unusedBonus: ['unusedBonus'] });
+})(), { names: 186, uncaught: [], bogus: ['bogusNewDep'], unusedBonus: ['unusedBonus'] });
 check('主界面只吃时间语义(结构上不碰 selectedIncident / 手选那套)', (() => {
 	const seg = extract(renderSource, 'function mainView(');
 	return [seg.includes('selectedIncident') === false, seg.includes('props.latest'), /const latestRow = latestIncident\(\);/.test(renderSource)];
@@ -3174,6 +3286,9 @@ const watchPieces = [
 	extract(source, 'function timelineHostSamples('),
 	extract(source, 'function timelineOverlap('),
 	extract(source, 'function incidentTimeline('),
+	// 武装窗口:多段 timeline 的拼装 + context.armed(incidentReport 在出包时调它们)
+	extract(source, 'function incidentTimelineFromArmed('),
+	extract(source, 'function armedContext('),
 	extract(source, 'function provenanceOf('),
 	extract(source, 'function capabilities('),
 	extract(source, 'function capabilityMissing('),
@@ -3316,6 +3431,8 @@ const watchBox = new Function(`
 		render: {
 			on: true, precise: false, heap: 1048576,
 			dom: { total: 1234 },
+			// 武装窗口:triggerCapture 读 phase、settleCapture 累加 captured(手写桩,加字段要同步)
+			armed: { phase: 'idle', startedAt: 0, endsAt: 0, endedAt: 0, windowSeconds: 0, reason: '', wasDeep: false, wasPrecise: false, timer: 0, deadline: 0, syncTimer: 0, captured: 0, restored: 0, hostReceipt: { phase: 'idle', active: false, segments: 0, kept: 0, windowSeconds: 0, segmentSeconds: 0, error: '', stopReason: '' } },
 			// A1 记录器自身开销的环形缓冲
 			selfRing: [], selfAt: 0, selfCount: 0, selfMax: 0,
 			bundleKeys: new Set(),
@@ -3336,6 +3453,8 @@ const watchBox = new Function(`
 			snapshot: null, hostAt: 0,
 			// A5 宿主进程 CPU 采样
 			hostCpuProfile: { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 },
+			// 武装窗口取回的宿主段(出包时挑重叠段填 incident.timeline)
+			armedProfiles: [],
 		},
 	};
 	return {
@@ -4972,6 +5091,135 @@ check('A4:事故包在重叠时带上 incident.timeline;换回 idle 状态时键
 	})(),
 	[true, true, false]);
 
+// ── 武装窗口:窗口内抓的事故带 env.armed;宿主分段 profile 拼成多段 timeline[] ──
+check('武装:窗口内触发的事故 env.armed = true(且深录/精确归因确实开着),窗口外没有这个键',
+	(() => {
+		const savedIncidents = watch.state.watch.incidents.slice();
+		const savedArmed = watch.state.render.armed;
+		const savedPrecise = watch.state.render.precise;
+		const savedDeep = watch.state.render.deep;
+		const savedOn = watch.state.render.on;
+		// 生产里 armNow() 会临时把 deep/precise 一起打开(而且只在 HUD 开着时才能武装)
+		watch.state.render.on = true;
+		watch.state.render.precise = true;
+		watch.state.render.deep = true;
+		watch.state.watch.coveredUntil = 0;
+		// ① 普通档(没武装):同一段帧再抓一条
+		watch.state.render.armed = { ...savedArmed, phase: 'idle', captured: 0 };
+		watch.frameRing.reset();
+		for (let i = 0; i < 6; i += 1) watch.frameRing.push(120000 + i * 16.7, 16.7, false);
+		watch.frameRing.push(120200, 326.5, false);
+		watch.setNow(140000);
+		const plain = watch.triggerCapture('frame', 120200, 326.5);
+		// ② 武装窗口:同一类帧
+		watch.state.render.armed = { ...savedArmed, phase: 'armed', startedAt: Date.now(), endsAt: Date.now() + 60000, captured: 0 };
+		watch.state.watch.coveredUntil = 0;
+		watch.frameRing.reset();
+		for (let i = 0; i < 6; i += 1) watch.frameRing.push(121000 + i * 16.7, 16.7, false);
+		watch.frameRing.push(121200, 326.5, false);
+		watch.setNow(141000);
+		const armedIncident = watch.triggerCapture('frame', 121200, 326.5);
+		const out = [
+			plain === null ? 'no-incident' : Object.prototype.hasOwnProperty.call(plain.env, 'armed'),
+			armedIncident === null ? null : armedIncident.env.armed,
+			armedIncident.env.instrumented,
+			armedIncident.env.deep,
+			armedIncident.env.precise,
+			watch.state.render.armed.captured,
+		];
+		// 收尾:这两条不进留存清单(后面的断言还在读原来那几条)
+		watch.state.watch.incidents.length = 0;
+		for (const row of savedIncidents) watch.state.watch.incidents.push(row);
+		watch.state.render.armed = savedArmed;
+		watch.state.render.precise = savedPrecise;
+		watch.state.render.deep = savedDeep;
+		watch.state.render.on = savedOn;
+		watch.state.watch.coveredUntil = 0;
+		watch.setNow(100000);
+		return out;
+	})(),
+	[false, true, true, true, true, 1]);
+
+const armedTimelineReport = (() => {
+	const savedIncidents = watch.state.watch.incidents.slice();
+	const savedArmed = watch.state.render.armed;
+	const savedProfiles = watch.state.host.armedProfiles.slice();
+	watch.state.watch.incidents.length = 0;
+	watch.state.watch.incidents.push({
+		...causeRow,
+		id: 'i-armed',
+		// 窗口压住 profile 段的一段(perf 900..2400),并且**这条是武装期采的**
+		window: { ...causeRow.window, fromMs: 900, toMs: 2400 },
+		env: { ...causeRow.env, armed: true },
+	});
+	const origin = Date.parse(causeRow.env.perfOrigin);
+	const span = timelineFixture.meta.endedAt - timelineFixture.meta.startedAt;
+	const segment = (index, startPerf) => ({
+		index,
+		requestedSeconds: 10,
+		meta: { ...timelineFixture.meta, startedAt: origin + startPerf, endedAt: origin + startPerf + span },
+		profile: timelineFixture.profile,
+	});
+	// 两段与事故窗口重叠(900 与 1600 起),第三段远在窗口外(不该产出)
+	watch.state.host.armedProfiles = [segment(0, 900), segment(1, 1600), segment(2, 900000)];
+	watch.state.render.armed = {
+		...savedArmed,
+		phase: 'armed', windowSeconds: 60, startedAt: Date.now() - 1000, endsAt: Date.now() + 59000,
+		captured: 1, restored: 0,
+		hostReceipt: { ...savedArmed.hostReceipt, phase: 'active', active: true, segments: 3, kept: 3, windowSeconds: 60, segmentSeconds: 10, error: '', stopReason: '' },
+	};
+	const report = watch.incidentReport('i-armed');
+	watch.state.watch.incidents.length = 0;
+	for (const row of savedIncidents) watch.state.watch.incidents.push(row);
+	watch.state.host.armedProfiles.length = 0;
+	for (const row of savedProfiles) watch.state.host.armedProfiles.push(row);
+	watch.state.render.armed = savedArmed;
+	return report;
+})();
+check('武装:重叠的宿主段按段拼成 timeline[](多段、每段标 armed;窗口外那段不产出)',
+	(() => {
+		const timeline = armedTimelineReport.incident.timeline;
+		return [Array.isArray(timeline), timeline.length, timeline.every((seg) => seg.armed === true),
+			timeline.every((seg, i) => i === 0 || seg.fromMs >= timeline[i - 1].fromMs),
+			timeline.every((seg) => typeof seg.stall.ms === 'number')];
+	})(),
+	[true, 2, true, true, true]);
+check('武装:context.armed 说明这段是窗口里采的(窗口 / 段长 / 段数 / 还原计数都在)',
+	(() => {
+		const armed = armedTimelineReport.context.armed;
+		return [armed.mode, armed.state, armed.capturedDuringWindow, armed.windowSeconds, armed.segmentSeconds,
+			armed.host.segments, armed.host.profilesKept, typeof armed.scope === 'string' && armed.scope.includes('插桩开销')];
+	})(),
+	['armed-window', 'armed', true, 60, 10, 3, 3, true]);
+check('武装:env.armed 进包(并且只在为真时出现)',
+	[armedTimelineReport.incident.env.armed, (
+		(() => {
+			const saved = watch.state.watch.incidents.slice();
+			const savedArmed = watch.state.render.armed;
+			const savedProfiles = watch.state.host.armedProfiles.slice();
+			watch.state.watch.incidents.push({ ...causeRow, id: 'i-plain' });
+			watch.state.render.armed = { ...savedArmed, phase: 'idle', startedAt: 0, endsAt: 0, captured: 0, restored: 0 };
+			watch.state.host.armedProfiles = [];
+			const plain = watch.incidentReport('i-plain');
+			const out = [Object.prototype.hasOwnProperty.call(plain.incident.env, 'armed'),
+				Object.prototype.hasOwnProperty.call(plain.context, 'armed'),
+				Object.prototype.hasOwnProperty.call(plain.incident, 'timeline')];
+			watch.state.watch.incidents.length = 0;
+			for (const row of saved) watch.state.watch.incidents.push(row);
+			watch.state.render.armed = savedArmed;
+			watch.state.host.armedProfiles = savedProfiles;
+			return out;
+		})()
+	)], [true, [false, false, false]]);
+check('武装:howToRead 把 env.armed / context.armed / timeline[].armed 的口径写清(插桩开销不能和默认档比)',
+	(() => {
+		const lines = armedTimelineReport.context.howToRead;
+		return [lines.some((line) => line.includes('env.armed') && line.includes('插桩开销')),
+			lines.some((line) => line.includes('context.armed') && line.includes('not-observed')),
+			lines.some((line) => line.includes('timeline[].armed'))];
+	})(),
+	[true, true, true]);
+
 check('事故包:A2 落地后那条"没有对照基线"改成"跨机器 / 跨浏览器"',
 	watch.incidentReport(0).context.missing.some((line) => line.startsWith('baseline:') && line.includes('跨机器')), true);
 check('事故包:带上渲染环境(视口 / DPR / 核数)',
@@ -5462,6 +5710,33 @@ const contractBlocks = (() => {
 	samples.push(readPack(watch.buildPack('i13')));
 	watch.state.watch.incidents.pop();
 	watch.frameRing.reset();
+	// 第八个样本:武装窗口里采的事故 —— `context.armed` 与 `env.armed` 两个可选键的**产方**
+	// (同一条双向断言:文档写 optional,代码就得至少有一条路径真的产出它)。宿主段同样用
+	// 真采样夹具平移,多段 timeline 由 production 的 incidentTimelineFromArmed() 拼,不手写。
+	const savedArmed = watch.state.render.armed;
+	const savedArmedProfiles = watch.state.host.armedProfiles.slice();
+	watch.state.host.armedProfiles.push({
+		index: 0,
+		requestedSeconds: 10,
+		meta: { ...timelineFixture.meta, startedAt: shiftedStart, endedAt: shiftedStart + (timelineFixture.meta.endedAt - timelineFixture.meta.startedAt) },
+		profile: timelineFixture.profile,
+	});
+	watch.state.render.armed = {
+		...savedArmed,
+		phase: 'armed', windowSeconds: 60, startedAt: Date.now() - 1000, endsAt: Date.now() + 59000,
+		captured: 1, restored: 0,
+		hostReceipt: {
+			...savedArmed.hostReceipt,
+			phase: 'active', active: true, segments: 1, kept: 1, windowSeconds: 60, segmentSeconds: 10, error: '', stopReason: '',
+		},
+	};
+	watch.state.watch.incidents.push({ ...realFixture.incident, id: 'i13', env: { ...realFixture.incident.env, armed: true } });
+	const armedPack = readPack(watch.buildPack('i13'));
+	samples.push(armedPack);
+	watch.state.watch.incidents.pop();
+	watch.state.host.armedProfiles.length = 0;
+	for (const row of savedArmedProfiles) watch.state.host.armedProfiles.push(row);
+	watch.state.render.armed = savedArmed;
 	return samples;
 })();
 const CONTRACT_PATHS = {

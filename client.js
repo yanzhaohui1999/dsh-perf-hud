@@ -91,6 +91,19 @@ window.__ModuleLoader__.load({
 		// "没采到"读成"宿主不忙"。
 		const TIMELINE_SAMPLE_MAX = 4000;
 		const TIMELINE_MIN_COVERAGE = 0.5;
+		// 武装窗口(方向 4 的「武装深录」+ 方向 2 的按需版):用户点一次,只在这段时间里装深录
+		// 插桩 + 精确归因,宿主同时按 `ARMED_SEGMENT_SECONDS` 分段滚动采 CPU profile。窗口由
+		// 客户端给定、宿主到点自己停,所以页面关掉也不会把采样留在宿主里。四个数都在这一处:
+		const ARMED_WINDOW_SECONDS = 60;      // 面板按钮就是「武装 60 秒」
+		const ARMED_SEGMENT_SECONDS = 10;     // 宿主一段 10 秒:盖住一次典型事故窗口(前摇 10 + 后摇 3)
+		const ARMED_MIN_WINDOW = 0.5;         // 下限只为离线套件能在毫秒级复跑状态机
+		const ARMED_MAX_WINDOW = 120;
+		const ARMED_MIN_SEGMENT = 0.1;
+		const ARMED_MAX_SEGMENT = 30;
+		const ARMED_SEGMENTS_MAX = 12;        // 与宿主 ARMED_SEGMENTS_MAX 同一条上限
+		const ARMED_TICK_MS = 1000;           // 倒计时刷新 + deadline 检查(正常结束路径)
+		const ARMED_SYNC_MS = 2000;           // 取回已完成宿主段的间隔(增量取,空回执很小)
+		const ARMED_WAKE_MS = 1500;           // 窗口关掉后等最后一段收尾的重试间隔(最多 3 次)
 		const RTT_INTERVAL_MS = 10000;
 		const LOAD_INTERVAL_MS = 60000;
 		// 宿主快照超过 2.5 个轮询周期就算过期(轮询是 10s;留一次重试的余量)。
@@ -541,6 +554,34 @@ window.__ModuleLoader__.load({
 				// A 精确归因
 				precise: false,
 				deep: false,           // 深录:装插桩 + 精确归因;默认关(守夜/现场都不装)
+				// 武装窗口(方向 4 + 方向 2 的按需版):只在这段里强制走深录档 + 让宿主分段采 profile。
+				// phase = idle / armed / ended;**不落盘** —— 刷新页面必须回到默认档(不想让一次
+				// 武装变成"刷新之后还开着插桩")。host 是宿主那一侧的回执,照实写,不假装成功。
+				armed: {
+					phase: 'idle',
+					windowSeconds: 0,      // 还没武装过;真正的窗口长度由 armedPlanStart 按常量写
+					startedAt: 0,          // 墙钟 ms;0 = 这个页面从没武装过
+					endsAt: 0,
+					endedAt: 0,
+					reason: '',            // timeout / manual / disabled / deep-off
+					wasDeep: false,        // 武装前的档位:结束时要回到这里,而不是一律关掉
+					wasPrecise: false,
+					timer: 0,              // 倒计时 / deadline 检查
+					deadline: 0,           // 一次性超时兜底(定时器被节流时 rAF 那条路接管)
+					syncTimer: 0,          // 取回宿主已完成段
+					captured: 0,           // 窗口内结算的事故数(照实计数,不是估算)
+					restored: 0,           // 还原过几次(正常结束 / 取消 / 关 HUD 都算一次)
+					hostReceipt: {
+						phase: 'idle',     // idle / starting / active / stopping / stopped / failed
+						active: false,
+						segments: 0,       // 宿主已完成的段数(宿主口径)
+						kept: 0,
+						windowSeconds: 0,
+						segmentSeconds: 0,
+						error: '',
+						stopReason: '',
+					},
+				},
 				selfRing: [],          // 最近 SELF_RING 次自身 rAF 回调耗时(A1 自证开销)
 				selfAt: 0,
 				selfCount: 0,
@@ -644,6 +685,10 @@ window.__ModuleLoader__.load({
 					error: '',            // 最近一次失败时宿主回来的**错误原文**(成功时清空)
 					collections: 0,       // 宿主累计采到过几次(宿主口径,不是本页面的次数)
 				},
+				// 武装窗口取回的宿主 profile 段(增量、只在内存里):每一段是 { index, meta, profile },
+				// 出包时按事故窗口挑重叠的段填 `incident.timeline[]`。新开一次武装 = 清空(上一轮
+				// 的段属于另一个窗口,不该混进来)。
+				armedProfiles: [],
 				link: [],                // { t, kind, rtt, kbps?, error? }
 				loadState: 'pending',    // pending | ok | failed:吞吐那一格现在是哪种状态
 				loadKbps: null,          // 吞吐数值(KB/s),显示时 >=1024 折成 MB/s
@@ -1640,6 +1685,10 @@ window.__ModuleLoader__.load({
 
 		function frame() {
 			if (state.render.on === false) return;
+			// 武装窗口的**超时兜底**:后台节流会把 setInterval/setTimeout 一起拖住,但只要页面还在
+			// 跑 rAF,回到前台的第一帧就会走到这里 —— 到点必须还原,不能让临时插桩留在页面上。
+			// 没武装时这里只多一次字符串比较,不做时钟读取。
+			if (state.render.armed.phase === 'armed' && armedTickDue(state.render.armed, Date.now())) disarmArmed('timeout');
 			const selfStarted = performance.now();
 			const now = performance.now();
 			const wallNow = Date.now();
@@ -2480,6 +2529,426 @@ window.__ModuleLoader__.load({
 			return state.host.hostCpuProfile;
 		}
 
+		// ───────────── D3. 武装窗口(方向 4:武装深录 + 方向 2 的按需版)─────────────
+		/**
+		 * 用户点一次「武装 60 秒」,只在这段时间里:
+		 *   ① 客户端装上深录插桩 + 精确归因(与深录开关同一套装法,但**不写 localStorage**);
+		 *   ② 宿主按 `ARMED_SEGMENT_SECONDS` 分段滚动采 CPU profile(窗口由这里给定、宿主到点自己停)。
+		 * 窗口里下一次达到触发线的卡顿,导出时会带上 `incident.timeline[]`(复用 A4 的契约,不加键)。
+		 *
+		 * 三条还原路径(缺一条都会污染后续读数):
+		 *   · **窗口结束**:`ARMED_TICK_MS` 的倒计时 tick 一到点就走 `disarmArmed('timeout')`;
+		 *   · **超时兜底**:一次性 deadline + 每帧 rAF 里的 deadline 检查 —— 后台节流把定时器拖住时,
+		 *     回到前台的第一帧一定还原;
+		 *   · **关 HUD / 用户关深录**:`stop()` 与 `setDeep(false)` 都先走 `disarmArmed(...)`。
+		 */
+		function clampArmedWindow(raw) {
+			const value = Number(raw);
+			if (!Number.isFinite(value) || value <= 0) return ARMED_WINDOW_SECONDS;
+			return Math.round(Math.min(Math.max(value, ARMED_MIN_WINDOW), ARMED_MAX_WINDOW) * 10) / 10;
+		}
+
+		function clampArmedSegment(raw) {
+			const value = Number(raw);
+			if (!Number.isFinite(value) || value <= 0) return ARMED_SEGMENT_SECONDS;
+			return Math.round(Math.min(Math.max(value, ARMED_MIN_SEGMENT), ARMED_MAX_SEGMENT) * 10) / 10;
+		}
+
+		function armedActive() {
+			return state.render.armed.phase === 'armed';
+		}
+
+		/** 开窗口时的状态。**纯函数**(不读时钟、不碰闭包):状态机本身可离线断言。 */
+		function armedPlanStart(current, options, nowMs) {
+			const prev = current === null || typeof current !== 'object' ? {} : current;
+			const opts = options === null || typeof options !== 'object' ? {} : options;
+			const windowSeconds = clampArmedWindow(opts.windowSeconds);
+			return {
+				phase: 'armed',
+				windowSeconds,
+				startedAt: nowMs,
+				endsAt: nowMs + Math.round(windowSeconds * 1000),
+				endedAt: 0,
+				reason: '',
+				wasDeep: opts.deep === true,
+				wasPrecise: opts.precise === true,
+				timer: 0,
+				deadline: 0,
+				syncTimer: 0,
+				captured: 0,
+				restored: typeof prev.restored === 'number' ? prev.restored : 0,
+				hostReceipt: {
+					phase: 'starting',
+					active: false,
+					segments: 0,
+					kept: 0,
+					windowSeconds,
+					segmentSeconds: clampArmedSegment(opts.segmentSeconds),
+					error: '',
+					stopReason: '',
+				},
+			};
+		}
+
+		/** 关窗口时的状态。**纯函数**;`restored` 是"真的回到默认档了吗"的计数。 */
+		function armedPlanEnd(current, reason, nowMs) {
+			const prev = current === null || typeof current !== 'object' ? {} : current;
+			const host = prev.hostReceipt === null || typeof prev.hostReceipt !== 'object' ? {} : prev.hostReceipt;
+			return {
+				...prev,
+				phase: 'ended',
+				endedAt: nowMs,
+				reason: typeof reason === 'string' && reason !== '' ? reason : 'manual',
+				timer: 0,
+				deadline: 0,
+				syncTimer: 0,
+				restored: (typeof prev.restored === 'number' ? prev.restored : 0) + 1,
+				hostReceipt: { ...host, active: false, phase: host.error === '' ? 'stopped' : 'failed' },
+			};
+		}
+
+		/** 到点没有?**纯函数**。三条还原路径都读它,口径只有一处。 */
+		function armedTickDue(armed, nowMs) {
+			if (armed === null || typeof armed !== 'object' || armed.phase !== 'armed') return false;
+			return Number.isFinite(armed.endsAt) && nowMs >= armed.endsAt;
+		}
+
+		// 路由形状只有一处:面板按钮、控制台、断言都从这里发,别各写一份。
+		function armedHostStartBody(windowSeconds, segmentSeconds) {
+			return { op: 'armedStart', windowSeconds: clampArmedWindow(windowSeconds), segmentSeconds: clampArmedSegment(segmentSeconds) };
+		}
+
+		function armedHostGetBody(since) {
+			const value = Number(since);
+			return { op: 'armedGet', since: Number.isFinite(value) ? Math.floor(value) : -1 };
+		}
+
+		function armedHostStopBody(reason) {
+			return { op: 'armedStop', reason: typeof reason === 'string' && reason !== '' ? reason : 'client-stop' };
+		}
+
+		/**
+		 * 宿主回执 → 面板/包里的状态。**纯函数**:成功/失败两条分支只在这一处判定,
+		 * 所以"宿主说开不起来、面板说武装中"在结构上不会发生。
+		 */
+		function armedHostReceipt(receipt) {
+			const base = {
+				ok: false, phase: 'failed', active: false, collecting: false,
+				segments: 0, kept: 0, windowSeconds: 0, segmentSeconds: 0,
+				startedAt: 0, endsAt: 0, stopReason: '', error: '',
+			};
+			if (receipt === null || typeof receipt !== 'object') {
+				return { ...base, error: '宿主没有回执(路由不可达,或响应不是 JSON)' };
+			}
+			if (receipt.ok !== true) {
+				return {
+					...base,
+					error: typeof receipt.error === 'string' && receipt.error !== '' ? receipt.error : '宿主回了失败,但没给原因',
+				};
+			}
+			const armed = receipt.armed === null || typeof receipt.armed !== 'object' ? null : receipt.armed;
+			if (armed === null) return { ...base, error: '宿主回了 ok,但没有 armed 状态 —— 不假装武装上了' };
+			const segments = Number(armed.segmentCount ?? armed.kept);
+			const kept = Number(armed.kept);
+			return {
+				ok: true,
+				phase: armed.active === true ? 'active' : (armed.stopReason === '' ? 'starting' : 'stopped'),
+				active: armed.active === true,
+				// 窗口停了但还有一段在收尾:客户端据此再等一次(最后一段常常正好压住事故)
+				collecting: armed.collecting === true,
+				segments: Number.isFinite(segments) ? segments : 0,
+				kept: Number.isFinite(kept) ? kept : 0,
+				windowSeconds: typeof armed.windowSeconds === 'number' ? armed.windowSeconds : 0,
+				segmentSeconds: typeof armed.segmentSeconds === 'number' ? armed.segmentSeconds : 0,
+				startedAt: typeof armed.startedAt === 'number' ? armed.startedAt : 0,
+				endsAt: typeof armed.endsAt === 'number' ? armed.endsAt : 0,
+				stopReason: typeof armed.stopReason === 'string' ? armed.stopReason : '',
+				error: typeof armed.error === 'string' ? armed.error : '',
+			};
+		}
+
+		/**
+		 * 宿主回执里的段 → 本地的 profile 记录(只收**结构合法**的段:空对象 / 缺 nodes / 缺
+		 * startedAt 一律跳过,不拿它冒充采样结果)。纯函数,便于断言"坏回执不会混进包里"。
+		 */
+		function armedSegmentRecords(receipt) {
+			if (receipt === null || typeof receipt !== 'object' || receipt.ok !== true) return [];
+			const rows = Array.isArray(receipt.segments) ? receipt.segments : [];
+			const out = [];
+			for (const row of rows) {
+				if (row === null || typeof row !== 'object') continue;
+				const profile = row.profile;
+				const meta = row.meta === null || typeof row.meta !== 'object' ? null : row.meta;
+				if (profile === null || typeof profile !== 'object' || !Array.isArray(profile.nodes)) continue;
+				if (meta === null || !Number.isFinite(meta.startedAt) || !Number.isFinite(meta.endedAt)) continue;
+				const index = Number(row.index);
+				if (!Number.isFinite(index)) continue;
+				out.push({
+					index,
+					requestedSeconds: typeof row.requestedSeconds === 'number' ? row.requestedSeconds : null,
+					meta,
+					profile,
+				});
+			}
+			out.sort((a, b) => a.index - b.index);
+			return out;
+		}
+
+		/** 面板 / 控制台 / 断言读的武装状态(不回 profile 本体,它有几万个节点)。 */
+		function armedStatus() {
+			const armed = state.render.armed;
+			return {
+				phase: armed.phase,
+				windowSeconds: armed.windowSeconds,
+				startedAt: armed.startedAt > 0 ? new Date(armed.startedAt).toISOString() : null,
+				endsAt: armed.endsAt > 0 ? new Date(armed.endsAt).toISOString() : null,
+				endedAt: armed.endedAt > 0 ? new Date(armed.endedAt).toISOString() : null,
+				remainingMs: armed.phase === 'armed' ? Math.max(0, armed.endsAt - Date.now()) : 0,
+				reason: armed.reason,
+				captured: armed.captured,
+				restored: armed.restored,
+				instrumented: state.render.on === true && state.render.deep === true,
+				precise: state.render.precise === true,
+				host: { ...armed.hostReceipt },
+				profiles: state.host.armedProfiles.length,
+			};
+		}
+
+		// 宿主段是增量取的:同一时间只跑一次同步(再次触发只记一个"还要再取一次")。
+		let armedSyncing = false;
+		let armedSyncAgain = false;
+		// 窗口关掉之后,宿主那一侧可能还有**最后一段**在收尾(段的边界不跟着窗口走)。
+		// 定时器停了不能就此丢掉它:按宿主回执里的 collecting 再等几次,收完就停。
+		let armedWakeTimer = 0;
+		let armedWakeLeft = 0;
+		function wakeArmedSync(attempts) {
+			armedWakeLeft = attempts;
+			if (armedWakeTimer !== 0) natives.clearTimeout(armedWakeTimer);
+			armedWakeTimer = natives.setTimeout(() => {
+				armedWakeTimer = 0;
+				void syncHostArmed().then(() => {
+					armedWakeLeft -= 1;
+					if (armedWakeLeft > 0 && state.render.armed.hostReceipt.collecting === true) wakeArmedSync(armedWakeLeft);
+				});
+			}, ARMED_WAKE_MS);
+		}
+
+		async function startHostArmed(windowSeconds) {
+			const epoch = state.render.epoch;
+			const seconds = clampArmedWindow(windowSeconds);
+			const segmentSeconds = clampArmedSegment(ARMED_SEGMENT_SECONDS);
+			state.render.armed = {
+				...state.render.armed,
+				hostReceipt: { ...state.render.armed.hostReceipt, phase: 'starting', windowSeconds: seconds, segmentSeconds, error: '' },
+			};
+			bump();
+			let receipt = null;
+			try {
+				receipt = await hostOp(armedHostStartBody(seconds, segmentSeconds));
+			} catch (error) {
+				if (state.render.epoch !== epoch) return null;
+				if (isAbortError(error)) return null;
+				const summary = armedHostReceipt(null);
+				const host = { ...summary, error: fetchFailureText(error, FETCH_TIMEOUT_MS.host) };
+				if (state.render.armed.phase === 'armed') state.render.armed = { ...state.render.armed, hostReceipt: host };
+				bump();
+				return host;
+			}
+			if (state.render.epoch !== epoch) return null;
+			const summary = armedHostReceipt(receipt);
+			if (state.render.armed.phase === 'armed') {
+				state.render.armed = {
+					...state.render.armed,
+					hostReceipt: { ...summary, phase: summary.ok === true ? 'active' : 'failed', error: summary.error },
+				};
+			}
+			bump();
+			if (summary.ok === true) void syncHostArmed();
+			return summary;
+		}
+
+		/** 增量取回宿主已完成的段(以及宿主那边的状态)。失败只记原因,不让武装窗口崩掉。 */
+		async function syncHostArmed() {
+			if (state.render.armed.startedAt === 0) return null;
+			if (armedSyncing === true) { armedSyncAgain = true; return null; }
+			armedSyncing = true;
+			const epoch = state.render.epoch;
+			try {
+				for (;;) {
+					armedSyncAgain = false;
+					const last = state.host.armedProfiles.length === 0
+						? -1
+						: state.host.armedProfiles[state.host.armedProfiles.length - 1].index;
+					let receipt = null;
+					try {
+						receipt = await hostOp(armedHostGetBody(last));
+					} catch (error) {
+						if (state.render.epoch !== epoch) return null;
+						if (isAbortError(error) === false) {
+							state.render.armed = {
+								...state.render.armed,
+								hostReceipt: { ...state.render.armed.hostReceipt, error: fetchFailureText(error, FETCH_TIMEOUT_MS.host) },
+							};
+							bump();
+						}
+						return null;
+					}
+					if (state.render.epoch !== epoch) return null;
+					const summary = armedHostReceipt(receipt);
+					const records = armedSegmentRecords(receipt);
+					for (const record of records) {
+						if (state.host.armedProfiles.some((row) => row.index === record.index)) continue;
+						if (state.host.armedProfiles.length >= ARMED_SEGMENTS_MAX) break;
+						state.host.armedProfiles.push({ ...record, receivedAt: Date.now() });
+					}
+					const previous = state.render.armed.hostReceipt;
+					state.render.armed = {
+						...state.render.armed,
+						hostReceipt: {
+							...previous,
+							...summary,
+							// 计数器只增不减:某次回执刚好落在两次段边界之间时,别把"已有 2 段"写成 0
+							segments: Math.max(previous.segments ?? 0, summary.segments),
+							kept: Math.max(previous.kept ?? 0, summary.kept),
+							phase: state.render.armed.phase === 'armed'
+								? (summary.active === true ? 'active' : previous.phase)
+								: 'stopped',
+						},
+					};
+					bump();
+					if (armedSyncAgain !== true) break;
+				}
+				return state.render.armed.hostReceipt;
+			} finally {
+				armedSyncing = false;
+			}
+		}
+
+		async function stopHostArmed(reason) {
+			const epoch = state.render.epoch;
+			state.render.armed = {
+				...state.render.armed,
+				hostReceipt: { ...state.render.armed.hostReceipt, phase: 'stopping' },
+			};
+			let receipt = null;
+			try {
+				receipt = await hostOp(armedHostStopBody(reason));
+			} catch (error) {
+				if (state.render.epoch !== epoch) return null;
+				if (isAbortError(error) === false) {
+					state.render.armed = {
+						...state.render.armed,
+						hostReceipt: { ...state.render.armed.hostReceipt, phase: 'failed', error: fetchFailureText(error, FETCH_TIMEOUT_MS.host) },
+					};
+					bump();
+				}
+				return null;
+			}
+			if (state.render.epoch !== epoch) return null;
+			const summary = armedHostReceipt(receipt);
+			state.render.armed = {
+				...state.render.armed,
+				hostReceipt: {
+					...state.render.armed.hostReceipt,
+					...summary,
+					active: false,
+					phase: summary.ok === true ? 'stopped' : 'failed',
+				},
+			};
+			bump();
+			return summary;
+		}
+
+		/**
+		 * 开一个武装窗口:装临时插桩 + 让宿主分段采样。返回回执(控制台 `__perfHud.arm()` 读它)。
+		 * HUD 关着时直接拒绝:插桩在"没在采"的状态下装上只会污染别人。
+		 */
+		function armNow(rawSeconds) {
+			if (state.render.on !== true) {
+				return { ok: false, state: 'disabled', reason: 'HUD 关着:插桩只在 HUD 开着时才有意义' };
+			}
+			const current = state.render.armed;
+			if (current.phase === 'armed') {
+				return { ok: true, state: 'already', windowSeconds: current.windowSeconds, remainingMs: Math.max(0, current.endsAt - Date.now()) };
+			}
+			const now = Date.now();
+			const windowSeconds = clampArmedWindow(rawSeconds);
+			// 上一轮关窗口后可能还挂着一个"等最后一段收尾"的唤醒:新窗口不要它再跑
+			if (armedWakeTimer !== 0) { natives.clearTimeout(armedWakeTimer); armedWakeTimer = 0; armedWakeLeft = 0; }
+			// 新窗口 = 新的一段证据:上一轮留下的宿主段属于另一个窗口,不该混进这一轮的事故包
+			state.host.armedProfiles.length = 0;
+			state.render.armed = armedPlanStart(current, {
+				windowSeconds,
+				segmentSeconds: ARMED_SEGMENT_SECONDS,
+				deep: state.render.deep,
+				precise: state.render.precise,
+			}, now);
+			// 临时插桩:与深录开关**同一套装法**,但不写 localStorage —— 刷新即还原,默认档不被污染
+			state.render.deep = true;
+			state.render.precise = true;
+			primeBundleMaps();
+			markResolved();
+			applyProbeState();
+			dirty = true;
+			const armed = state.render.armed;
+			armed.timer = natives.setInterval(armedTick, ARMED_TICK_MS);
+			armed.deadline = natives.setTimeout(() => { disarmArmed('timeout'); }, Math.max(0, armed.endsAt - now));
+			armed.syncTimer = natives.setInterval(() => { void syncHostArmed(); }, ARMED_SYNC_MS);
+			bump();
+			void startHostArmed(windowSeconds);
+			return {
+				ok: true,
+				state: 'armed',
+				windowSeconds,
+				endsAt: new Date(armed.endsAt).toISOString(),
+				host: 'starting',
+			};
+		}
+
+		/**
+		 * 还原:清定时器、回到武装前的档位、卸插桩,并让宿主停(它自己也会到点停)。
+		 * 宿主那一侧再取一次已完成的段 —— 事故常常正好落在窗口末尾那一两段里。
+		 */
+		function disarmArmed(reason) {
+			const armed = state.render.armed;
+			if (armed.phase !== 'armed') return { ok: false, state: armed.phase };
+			const text = typeof reason === 'string' && reason !== '' ? reason : 'manual';
+			natives.clearInterval(armed.timer);
+			natives.clearTimeout(armed.deadline);
+			natives.clearInterval(armed.syncTimer);
+			state.render.armed = armedPlanEnd(armed, text, Date.now());
+			// 还原到窗口前的档位:用户本来就开着深录就保持开,本来关着就真的关回去
+			state.render.deep = armed.wasDeep === true;
+			state.render.precise = armed.wasPrecise === true;
+			if (state.render.precise) primeBundleMaps();
+			markResolved();
+			applyProbeState();
+			dirty = true;
+			bump();
+			void stopHostArmed(text).then(() => {
+				void syncHostArmed();
+				// 最后一段可能还在宿主里收尾:再等两三次把它取回来(收完自动停,不常开)
+				wakeArmedSync(3);
+			});
+			return {
+				ok: true,
+				state: 'ended',
+				reason: text,
+				captured: armed.captured,
+				profiles: state.host.armedProfiles.length,
+				deep: state.render.deep === true,
+				precise: state.render.precise === true,
+			};
+		}
+
+		/** 倒计时 tick:到点就还原(正常结束路径);没到点只刷新面板上的剩余秒数。 */
+		function armedTick() {
+			const armed = state.render.armed;
+			if (armed.phase !== 'armed') return;
+			if (armedTickDue(armed, Date.now())) { disarmArmed('timeout'); return; }
+			bump();
+		}
+
 		/** 只看状态、不回 profile 本体(它有几万个节点);要原始文件用 downloadHostCpuProfile()。 */
 		function hostCpuProfileState() {
 			const { profile, ...rest } = state.host.hostCpuProfile;
@@ -3139,6 +3608,8 @@ window.__ModuleLoader__.load({
 
 		/** 深录开关:插桩 + 精确归因一起进出(两者是"要抓全"的同一件事)。 */
 		function setDeep(on) {
+			// 武装期间用户把深录关掉 = 明确不要插桩了:先还原窗口,否则"关了却还在插桩"。
+			if (on !== true && state.render.armed.phase === 'armed') disarmArmed('deep-off');
 			state.render.deep = on === true;
 			try { localStorage.setItem(LS_DEEP, state.render.deep ? '1' : '0'); } catch (error) { /* 记不住就本次会话有效 */ }
 			if (state.render.deep === false && state.render.precise === true) setPrecise(false);
@@ -3179,6 +3650,9 @@ window.__ModuleLoader__.load({
 
 		function stop() {
 			if (state.render.on === false) return;
+			// 武装窗口的第三条还原路径:关 HUD 必须同时卸掉临时插桩(否则"关了"却还在插桩),
+			// 并让宿主停下(它到点也会自己停;这里只是不等窗口走完)。
+			if (state.render.armed.phase === 'armed') disarmArmed('disabled');
 			state.render.on = false;
 			// 当前代作废:在途的宿主 / map / 脚本文本请求一律 abort,旧代结果不许再改状态。
 			state.render.epoch += 1;
@@ -3364,6 +3838,11 @@ window.__ModuleLoader__.load({
 			cpuProfile: startHostCpuProfile,
 			hostCpuProfile: hostCpuProfileState,
 			downloadHostCpuProfile,
+			// 武装窗口(方向 4 + 方向 2 的按需版):arm(seconds?) 开一次窗口并返回回执,
+			// armed() 看状态,disarm() 立刻还原。面板上那个「武装 60 秒」按的是同一条路。
+			arm: (seconds) => armNow(seconds),
+			armed: armedStatus,
+			disarm: () => disarmArmed('manual'),
 			link: () => state.host.link,
 			verification,
 		};
@@ -4163,6 +4642,10 @@ window.__ModuleLoader__.load({
 				TOP_N,
 				W,
 				anyGroupOpen,
+				// 武装窗口:按钮动作 + 窗口长度(按钮上的秒数只能来自这一处常量)
+				ARMED_WINDOW_SECONDS,
+				armNow,
+				disarmArmed,
 				attrText,
 				barSegments,
 				blame,

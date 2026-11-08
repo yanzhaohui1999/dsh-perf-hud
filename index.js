@@ -1,7 +1,7 @@
 /**
  * dsh-perf-hud 的 Host 半边。
  *
- * 只做四件事,全部经 `connection.fetch.register` 挂在 `/api/dsh-perf-hud/host`:
+ * 只做五件事,全部经 `connection.fetch.register` 挂在 `/api/dsh-perf-hud/host`:
  *   1. GET  —— 事件循环延迟(perf_hooks.monitorEventLoopDelay 的每秒 p50/p99/max);
  *              同时兼作客户端的 RTT 探测端点(?pad=1KB 禁缓存)与吞吐探测(?bytes=N)。
  *   2. POST {op:'watchEvents'}  —— 可选:包住 session/event 的同步派发,累计每条事件的
@@ -11,6 +11,11 @@
  *   4. POST {op:'profileStart', seconds?} / {op:'profileGet'} —— 按需采一段宿主进程的
  *              CPU profile(node:inspector 的 Profiler,产出标准 .cpuprofile);**不常开**,
  *              同时只允许一个采样在跑,profile 只在内存里、不落盘。
+ *   5. POST {op:'armedStart'|'armedGet'|'armedStop'} —— 「武装窗口」的宿主那一半:在客户端
+ *              指定的窗口里**分段滚动**采 CPU profile(默认 10 秒一段、只留本次窗口内的段),
+ *              客户端在卡顿发生时取回与事故窗口重叠的段,填进已有的 `incident.timeline[]`。
+ *              窗口由客户端在 armedStart 里给定,到点自己停(即使页面被关掉也不会留在宿主里
+ *              常开);仍然共用上面那台 profiler 的单飞,手动 profileStart 在武装期间会被拒。
  *
  * 不注册服务、不监听事件(除非显式开启 watchEvents)、不写任何插件自己的持久化状态。
  * 特别注意:本文件不碰 cordis.patch.yml,也不碰 profile 的持久化配置行。
@@ -176,6 +181,237 @@ function clampSeconds(raw) {
 	return Math.min(Math.max(value, MIN_PROFILE_SECONDS), MAX_PROFILE_SECONDS);
 }
 
+// 武装窗口的宿主采样(方向 2 的按需版):窗口由客户端给定,到点自己停。
+const ARMED_WINDOW_SECONDS = 60;     // 默认窗口:够"等下一次卡顿",又不至于长期占着采样
+const ARMED_SEGMENT_SECONDS = 10;    // 默认段长:一段盖住一次典型事故窗口(前摇 10s + 后摇 3s)
+const ARMED_MIN_WINDOW = 0.5;        // 下限放到 0.5 秒只为一件事:离线套件能在毫秒级复跑状态机
+const ARMED_MAX_WINDOW = 120;
+const ARMED_MIN_SEGMENT = 0.1;       // 与 clampSeconds 的下限同一条(再短就不是采样了)
+const ARMED_MAX_SEGMENT = 30;
+const ARMED_SEGMENTS_MAX = 12;       // 窗口内最多留几段(60s / 10s = 6;留一倍余量)
+const ARMED_TICK_MS = 250;           // 段收尾的轮询间隔(只是问一次状态,不采样)
+const ARMED_BUSY = '已有一个武装窗口在进行中';
+
+/** 武装窗口时长(秒):非数字/非正数回默认 60,再夹到 [0.5, 120]。 */
+function clampArmedWindow(raw) {
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value <= 0) return ARMED_WINDOW_SECONDS;
+	return Math.round(Math.min(Math.max(value, ARMED_MIN_WINDOW), ARMED_MAX_WINDOW) * 10) / 10;
+}
+
+/** 武装窗口内每段多长(秒):非数字/非正数回默认 10,再夹到 [0.1, 30]。 */
+function clampArmedSegment(raw) {
+	const value = Number(raw);
+	if (!Number.isFinite(value) || value <= 0) return ARMED_SEGMENT_SECONDS;
+	return Math.round(Math.min(Math.max(value, ARMED_MIN_SEGMENT), ARMED_MAX_SEGMENT) * 10) / 10;
+}
+
+/**
+ * 武装窗口的宿主滚动采样器:在 `windowSeconds` 内反复"起一段 → 等它收尾 → 记进段表",
+ * 段长 `segmentSeconds`(最后一段按剩余时间截短)。窗口到点自己停 —— **不在宿主里常开**。
+ *
+ * 三条刻意的取舍:
+ *   ① **共用同一台 profiler**(单飞):V8 允许多会话并存,后来的 `Profiler.start` 会"接手"
+ *      采样,两段并行会把彼此的样本切碎。所以武装期间手动 `profileStart` 会被拒,武装结束
+ *      立刻恢复(A5 的手动路径一点没改)。
+ *   ② **段是证据,不因窗口结束而丢**:stop 只停止再起新段;正在飞的那一段会收完并留下,
+ *      客户端还能取回(事故窗口常常正好落在窗口末尾那一两段里)。
+ *   ③ **不假装采到**:起不来 / 收尾失败 / 段数超上限都写进 `errors`(带原因原文),`kept`
+ *      是真实留下来的段数,不回一个看起来成功的空集。
+ */
+function createArmedProfiler(profiler) {
+	let timer = null;
+	let active = false;
+	let inFlight = false;
+	let busy = false;
+	let startedAt = 0;
+	let endsAt = 0;
+	let stoppedAt = 0;
+	let stopReason = '';
+	let windowSeconds = ARMED_WINDOW_SECONDS;
+	let segmentSeconds = ARMED_SEGMENT_SECONDS;
+	let segments = [];
+	let errors = [];
+	let collectionsAtStart = 0;
+	let inFlightSeconds = 0;
+	let inFlightStartedAt = 0;     // 这一段是什么时候起的(用来自证"取回来的就是这一段")
+	let samplingStarted = false;   // 这个窗口里有没有真的起过一段(失败重试时仍可能变 true)
+
+	const state = () => ({
+		mode: 'rolling',
+		active,
+		collecting: inFlight,
+		windowSeconds,
+		segmentSeconds,
+		startedAt: startedAt > 0 ? startedAt : null,
+		endsAt: endsAt > 0 ? endsAt : null,
+		stoppedAt: stoppedAt > 0 ? stoppedAt : null,
+		stopReason,
+		segmentCount: segments.length,
+		kept: segments.length,
+		samplingStarted,
+		bytes: segments.reduce((sum, row) => sum + (Number.isFinite(row.meta.bytes) ? row.meta.bytes : 0), 0),
+		error: errors.length === 0 ? '' : errors[errors.length - 1].error,
+		errors: errors.slice(-5),
+	});
+	const noteError = (text) => {
+		const error = String(text);
+		if (errors.length > 0 && errors[errors.length - 1].error === error) return;
+		errors.push({ at: Date.now(), error });
+		if (errors.length > 20) errors.splice(0, errors.length - 20);
+	};
+	const schedule = (ms) => {
+		if (timer !== null) clearTimeout(timer);
+		timer = setTimeout(() => { void tick(); }, Math.max(0, ms));
+		if (typeof timer.unref === 'function') timer.unref();
+	};
+
+	/** 收下一段:成功后写进段表;失败只记原因(不拿上一次的 profile 冒充这一段)。 */
+	function takeFinishedSegment() {
+		const snapshot = profiler.state();
+		if (snapshot.collections <= collectionsAtStart) {
+			noteError(snapshot.error === '' ? '这一段没有采到(宿主单飞被占用或 Profiler.stop 失败)' : snapshot.error);
+			return false;
+		}
+		if (segments.length >= ARMED_SEGMENTS_MAX) {
+			noteError(`段数已到上限 ${ARMED_SEGMENTS_MAX},这一段的 profile 不再保留`);
+			return false;
+		}
+		const got = profiler.get();
+		if (got.ok !== true || got.profile === null || typeof got.profile !== 'object') {
+			noteError(got.error === undefined || got.error === '' ? '取回这一段失败' : got.error);
+			return false;
+		}
+		const meta = got.meta === null || typeof got.meta !== 'object' ? {} : got.meta;
+		// 自证"取回来的就是这一段":手动采样在两次轮询之间(250ms)跑完的话,collections 也会 +1,
+		// 直接 get() 会把**手动那一段**冒充成武装段。时长对不上 / 时间锚早于本段起点 → 不认。
+		const actualSeconds = Number(meta.seconds);
+		const tolerance = Math.max(0.5, inFlightSeconds * 0.5);
+		if (!Number.isFinite(actualSeconds) || Math.abs(actualSeconds - inFlightSeconds) > tolerance
+			|| !Number.isFinite(Number(meta.startedAt)) || Number(meta.startedAt) < inFlightStartedAt - 1000) {
+			noteError('取回的 profile 与本段对不上(时长 / 时间锚不符),不拿它冒充这一段');
+			return false;
+		}
+		segments.push({
+			index: segments.length,
+			requestedSeconds: inFlightSeconds,
+			meta,
+			profile: got.profile,
+		});
+		return true;
+	}
+
+	async function tick() {
+		timer = null;
+		if (busy === true) { schedule(ARMED_TICK_MS); return; }
+		busy = true;
+		try {
+			// ① 上一段还在采:只是问一句状态;采完就收进来。
+			if (inFlight === true) {
+				if (profiler.state().running === true) { schedule(ARMED_TICK_MS); return; }
+				inFlight = false;
+				takeFinishedSegment();
+				if (active === false) return;   // 已停:不再起新段,但上面那一段已经留下
+				schedule(ARMED_TICK_MS);
+				return;
+			}
+			// ② 没在采:窗口到点就停,否则起下一段。
+			if (active === false) return;
+			const now = Date.now();
+			if (now >= endsAt) { stop('timeout'); return; }
+			const remainMs = endsAt - now;
+			// 剩余不足一段的就直接等到窗口结束:开一段 <100ms 的采样没有信息量,
+			// 只会把 Profiler.enable/start 的往返记进段里。
+			if (remainMs < Math.max(ARMED_MIN_SEGMENT, segmentSeconds * 0.2) * 1000) {
+				schedule(remainMs);
+				return;
+			}
+			const seconds = Math.round(Math.min(segmentSeconds, remainMs / 1000) * 10) / 10;
+			collectionsAtStart = profiler.state().collections;
+			const startedAtBefore = Date.now();
+			const started = await profiler.start(seconds);
+			if (started.ok !== true) {
+				noteError(started.error === undefined || started.error === '' ? '宿主没能开始这一段采样' : started.error);
+				schedule(ARMED_TICK_MS);
+				return;
+			}
+			inFlightSeconds = seconds;
+			inFlightStartedAt = startedAtBefore;
+			inFlight = true;
+			samplingStarted = true;
+			schedule(ARMED_TICK_MS);
+		} finally {
+			busy = false;
+		}
+	}
+
+	/** 停:不再起新段;**正在飞的那一段会收完并留下**(它是证据,不是要清掉的状态)。 */
+	function stop(reason) {
+		if (timer !== null) { clearTimeout(timer); timer = null; }
+		if (active === true) {
+			active = false;
+			stoppedAt = Date.now();
+			stopReason = typeof reason === 'string' && reason !== '' ? reason : 'stopped';
+		}
+		if (inFlight === true) schedule(ARMED_TICK_MS);
+		return { ok: true, armed: state(), windingDown: inFlight };
+	}
+
+	return {
+		/** 开一个武装窗口。已经有一个在跑就拒绝(409),不重入、不叠采。 */
+		async start(rawWindow, rawSegment) {
+			if (active === true || inFlight === true) return { ok: false, armed: state(), error: ARMED_BUSY };
+			windowSeconds = clampArmedWindow(rawWindow);
+			segmentSeconds = clampArmedSegment(rawSegment);
+			startedAt = Date.now();
+			endsAt = startedAt + Math.round(windowSeconds * 1000);
+			stoppedAt = 0;
+			stopReason = '';
+			segments = [];
+			errors = [];
+			samplingStarted = false;
+			active = true;
+			// 第一段不能比窗口本身还长:否则窗口结束之后采样还在跑(与"到点自己停"矛盾)。
+			const firstSeconds = Math.round(Math.min(segmentSeconds, windowSeconds) * 10) / 10;
+			collectionsAtStart = profiler.state().collections;
+			const started = await profiler.start(firstSeconds);
+			if (started.ok !== true) {
+				// 开不起来不算"成功开了个空窗口":active 仍然为真,下一拍会重试;
+				// 但错误原文要立刻记下来,客户端照着显示。
+				noteError(started.error === undefined || started.error === '' ? '宿主没能开始第一段采样' : started.error);
+			} else {
+				inFlightSeconds = firstSeconds;
+				inFlightStartedAt = startedAt;
+				inFlight = true;
+				samplingStarted = true;
+			}
+			schedule(ARMED_TICK_MS);
+			return { ok: true, armed: state() };
+		},
+		/** 取回段:`since` 之前的段不带(客户端按 index 增量取)。没有段不是错误,回空数组。 */
+		get(rawSince) {
+			const since = Number(rawSince);
+			const from = Number.isFinite(since) ? Math.floor(since) : -1;
+			return {
+				ok: true,
+				armed: state(),
+				segments: segments
+					.filter((row) => row.index > from)
+					.map((row) => ({ index: row.index, requestedSeconds: row.requestedSeconds, meta: row.meta, profile: row.profile })),
+			};
+		},
+		stop,
+		state,
+		/** 宿主卸载:清定时器(**不清段**:调用方马上要断开 inspector,拿不到的就拿不到了)。 */
+		dispose() {
+			if (timer !== null) clearTimeout(timer);
+			timer = null;
+			active = false;
+			inFlight = false;
+		},
+	};
+}
+
 /**
  * 宿主进程的 CPU profile(按需,单飞)。
  *
@@ -317,10 +553,14 @@ export function apply(ctx, options = {}) {
 		? options.inspector
 		: { Session: InspectorSession };
 	const profiler = createCpuProfiler(inspector);
+	// 武装窗口的滚动采样器与手动采样**共用**上面那台 profiler:V8 允许多会话并存,
+	// 两个 Profiler.start 并行会互相"接手"采样,所以这里靠同一份单飞挡住叠采。
+	const armed = createArmedProfiler(profiler);
 
 	ctx.effect(() => () => {
 		loop.stop();
 		watch.uninstall();
+		armed.dispose();
 		profiler.stop();
 	}, 'perf-hud: host instrumentation');
 
@@ -358,6 +598,9 @@ export function apply(ctx, options = {}) {
 					eventWatch: { installed: watch.installed, reason: watch.reason, mode: 'listener', stats: watch.snapshot() },
 					// 只回状态,不回 profile 本体(实测 5 秒约 10~13KB,但没必要每个 GET 都背它)。
 					cpuProfile: profiler.state(),
+					// 武装窗口的宿主滚动采样:**只回状态与段数**,段本体走 armedGet 增量取
+					// (段里带原始 .cpuprofile,每个 GET 都背它没有意义)。
+					armed: armed.state(),
 				},
 			};
 			if (bytes > 0) payload.pad = 'x'.repeat(bytes);
@@ -403,6 +646,23 @@ export function apply(ctx, options = {}) {
 			if (op === 'profileGet') {
 				const result = profiler.get();
 				return reply(result, result.ok ? 200 : 404);
+			}
+
+			// ── 武装窗口:分段滚动采样(方向 2 的按需版)──
+			// 窗口时长由客户端给,宿主到点自己停:页面关掉/崩掉都不会留下常开的采样。
+			if (op === 'armedStart') {
+				const result = await armed.start(body.windowSeconds, body.segmentSeconds);
+				// 409 = 已有一个窗口在跑(重入被拒),500 = inspector / Profiler.* 起不来。
+				const status = result.ok === true ? 200 : (result.error === ARMED_BUSY ? 409 : 500);
+				return reply(result, status);
+			}
+
+			if (op === 'armedGet') {
+				return reply(armed.get(body.since));
+			}
+
+			if (op === 'armedStop') {
+				return reply(armed.stop(typeof body.reason === 'string' ? body.reason : 'client-stop'));
 			}
 
 			if (op === 'listBundles') {

@@ -157,10 +157,12 @@ redaction
 ```schema context v3 optional
 hostCpuProfile
 recorder
+armed
 ```
 
 - `missing` 是**字符串数组**,每行大多形如 `前缀:说明`,前缀表见 §5。**缺键 != 没有缺口**:老包没有 `missing` 就是"这份没写",不许读成"齐了"。
 - `hostCpuProfile` / `recorder` 是 0.9.0 后才加的可选段 —— **没有它们不升版本**,读方按"这一栏没采"读。
+- `armed` 是 1.1 加的可选段:导出时刻「武装窗口」的状态(窗口秒数 / 段长 / 宿主段数 / 是否还开着 / 还原原因 / 宿主错误原文),以及这条事故是否在窗口里采的。**只在开过窗口、或这条事故带 `incident.env.armed` 时出现**;没有它 = 这个页面这次没武装过,不是"武装了但没采到"。形状见 §3.7 下面的说明。
 - `thresholds` / `tally` / `watch` 的内部字段不冻(没有读方依赖它们的全部键):`thresholds` 的 `triggerMs` / `gapMs` / `preMs` / `postMs` / `keep` / `dailyDays` / `recent` / `keepMax` / `reactionMs` 与 `tally` 的 `detected` / `triggered` / `captured` / `coalesced` / `kept` / `lost` 是读方会用到的那些;其余随实现增减。
 
 ### 3.3 `incident`(事故对象)
@@ -234,6 +236,10 @@ hardwareConcurrency
 visibility
 ```
 
+```schema env v3 optional
+armed
+```
+
 ```schema host v3 required
 at
 snapshotAgeMs
@@ -241,6 +247,8 @@ eventLoop
 ```
 
 `host` 整个可以是 `null`(没拿到宿主快照);`host.eventLoop` 也可以是 `null`。
+
+`env.armed`(可选,1.1):这条事故是在一次「武装窗口」里采到的 —— 窗口内临时装了深录插桩 + 精确归因,宿主同时分段滚动采 CPU profile。**只在为真时出现**这个键;这段帧读数带着插桩开销,不能和默认档的事故直接比。`env.instrumented` / `env.deep` / `env.precise` 在武装期同样为 `true`(`armed` 只是把"这是临时开的那段时间"与"用户一直开着深录"分开)。
 
 ### 3.5 `summary`
 
@@ -329,8 +337,29 @@ budgetMisses
 | `host.samples[]` | 宿主原始采样序列:`{ t, ms, fn, kind }`,`kind ∈ js / native / idle`;`t` 是样本结束的 perf 毫秒,`[t-ms, t]` 是它覆盖的区间。卡顿区间内的样本优先保留,总条数封顶并用 `omitted` 写明截掉多少 |
 | `host` 其余 | `kept` / `omitted` / `leadingMs`(首样本被跳过的毫秒)/ `jsMs` / `nativeMs` / `idleMs` |
 | `frames[]` | 窗口内的客户端帧序列(与 `incident.frames` 是同一批,只保留与 profile 交集重叠的):`{ t, ms, hostMs, hostPct, jsMs, nativeMs, coveragePct }`;`hostMs` 是与该帧 `[t-ms, t]` 重叠的宿主采样时间 |
+| `armed` | 可选布尔,1.1 加。`true` = 这一段的 profile 来自**武装窗口内的滚动采样**(宿主每 10 秒一段、段间有几十毫秒空档),不是一次手动 `profileCpu()` 采样。**只在为真时出现** |
+
+`timeline[]` 是**数组**,一段 profile 一段(不是每帧一条)。手动采到的那一份最多一段;武装窗口里,同一条事故窗口可能压住多段 —— 1.1 起 **`timeline[]` 可以有多段**,每段各自带 `fromMs` / `stall` / `share`,段内形状完全一样(读方按"逐段读"实现即可,不要假设只有一段)。`armed` 只出现在武装期采的段上,读的人据此判断这段采样是"滚动分段"而不是一次性采样。
 
 读法:先看 `share.hostPct` 回答"最差这一帧宿主占多少",再看 `host.samples[]` / `frames[]` 自己复核(两段原始序列都在);`share.pagePct` 只能读成"不是宿主",不能读成"页面 JS 全忙"。对齐靠宿主 `Date.now()` 与页面 `performance.timeOrigin`:同一台机器上是同一时钟;跨机器访问时两侧系统时钟偏差不在这条公式里,不承诺 ≤1 帧。完整口径见 [reading-panel](reading-panel.md) 与包内 `context.howToRead`。
+
+### 3.8 `context.armed`(可选,1.1)
+
+```text
+context.armed = {
+  mode: 'armed-window',
+  scope: '…这段读数带着插桩开销,不要和默认档的事故直接比',
+  state: 'armed' | 'ended' | 'not-observed',
+  windowSeconds, segmentSeconds, startedAt, endsAt, endedAt, reason,
+  capturedDuringWindow, captured, restored,
+  host: { phase, segments, profilesKept, stopReason, error }
+}
+```
+
+- `state`:`armed` = 导出时窗口还开着;`ended` = 窗口已结束(附 `endedAt` / `reason`:`timeout` / `manual` / `disabled` / `deep-off`);`not-observed` = 这条事故自己带 `env.armed`,但本页面没有那次窗口的记录(刷新后读回的事故)。
+- `capturedDuringWindow` 与 `incident.env.armed` 同一个事实:这条事故是不是在窗口里采的。
+- `host.segments` 是宿主报告的已完成段数;`profilesKept` 是本页面真的取回并留在内存里的段数 —— 两个数不一样时说明取回没跟上,不是"没采到"。
+- 键名与内部字段 1.1 起稳定,但**不冻**:读方需要的是"有没有这一段"与 `state` / `capturedDuringWindow`;其余随实现增减,不升 `incident.schema`。
 
 ---
 
