@@ -53,6 +53,9 @@ window.__ModuleLoader__.load({
 		const RING_PERSIST_BUDGET = 60 * 1024;
 		const RING_ENVELOPE_OVERHEAD = 64;   // {"v":1,"savedAt":…,"samples":[]} 这类外壳的余量
 		const FLUSH_INTERVAL_MS = 60000;     // 常开落盘周期(原 5 秒)
+		// 30 天聚合是另一套数据(每天几十字节、按天累加),不跟 60 秒的 ring flush 一起放宽:
+		// 它有自己的 5 秒定时器,写前按 dirty 标记去重 —— 5 秒是 W5 当初承诺的落盘粒度。
+		const HISTORY_FLUSH_MS = 5000;
 		const TOP_N = 3;             // 面板展示的插件条数
 		// 「包 × 来源」摘要里两个名字各自的字符上限:摘要那一行是 label(不收缩)+ value(右对齐),
 		// 不截断就会折成参差的两行(实测 `dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms` = 53 字符)
@@ -573,6 +576,7 @@ window.__ModuleLoader__.load({
 				sampleTimer: 0,
 				domTimer: 0,
 				flushTimer: 0,
+				historyTimer: 0,     // 30 天聚合的独立 5 秒定时器(与 60 秒 ring flush 分开)
 				stressNodes: 0,
 				ltObserver: null,
 				longTasks: [],           // { t, at, ms, owner, seq }
@@ -2644,7 +2648,9 @@ window.__ModuleLoader__.load({
 				// 计数有自己的 dirty 标记:强制落盘(页面隐藏/关闭)时一并写,平时由 markTallyDirty 的
 				// 定时器合并写(一次卡顿里 coalesced 每帧都会加,不能每帧写盘)
 				if (force === true) saveTally();
-				// 30 天聚合每帧都会变;它搭同一次 flush 落盘,不另开定时器(不给采集侧加活)。
+				// 30 天聚合每帧都会变,平时由 start() 里独立的 5 秒定时器落盘(historyTimer);
+				// 这里保留一次补写:force(pagehide / visibilitychange:hidden / 关 HUD)时即时落盘,
+				// 平时与 60 秒 flush 同拍也无妨 —— saveHistory 按 dirty 标记去重,重复调用不重复写。
 				saveHistory();
 				if (dirty === false && force !== true) return;
 				dirty = false;
@@ -4349,6 +4355,9 @@ window.__ModuleLoader__.load({
 			state.render.fpsLoop = natives.requestAnimationFrame(frame);
 			state.render.sampleTimer = natives.setInterval(sampleTick, 1000);
 			state.render.flushTimer = natives.setInterval(() => flush(false), FLUSH_INTERVAL_MS);
+			// 30 天聚合不搭 60 秒的 ring flush:它自己 5 秒写一次(saveHistory 按 dirty 去重,
+			// 没有新帧时是空调用)。落盘粒度是 W5 承诺的"每 5 秒",不是 60 秒。
+			state.render.historyTimer = natives.setInterval(saveHistory, HISTORY_FLUSH_MS);
 			state.render.ltObserver = startLongTask();
 			state.watch.on = true;
 			startLoaf();
@@ -4391,6 +4400,8 @@ window.__ModuleLoader__.load({
 			natives.clearInterval(state.render.sampleTimer);
 			natives.clearTimeout(state.render.domTimer);   // DOM 采样是自适应 setTimeout,不是 setInterval
 			natives.clearInterval(state.render.flushTimer);
+			natives.clearInterval(state.render.historyTimer);
+			state.render.historyTimer = 0;   // 置 0:再开 start() 不会叠出第二个定时器
 			natives.clearInterval(state.host.linkTimer);
 			natives.clearInterval(state.host.loadTimer);
 			stopDomWatch();
@@ -4400,7 +4411,7 @@ window.__ModuleLoader__.load({
 			// 守夜层同样要能停下来:观察器 disconnect、等后摇的定时器清掉。
 			// 已经留存的事故**不清** —— 那是等了很久才抓到的东西,关一次 HUD 不该丢。
 			state.watch.on = false;
-			// 关 HUD 时把还没落盘的 30 天聚合写下去(它搭 flush 的 5 秒节拍,最后几秒别丢)。
+			// 关 HUD 时把还没落盘的 30 天聚合写下去(独立 5 秒定时器已被上面清掉,最后几秒别丢)。
 			saveHistory();
 			if (state.watch.pendingTimer !== 0) { natives.clearTimeout(state.watch.pendingTimer); state.watch.pendingTimer = 0; }
 			state.watch.pending = null;

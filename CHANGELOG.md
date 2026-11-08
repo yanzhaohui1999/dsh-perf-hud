@@ -22,11 +22,13 @@
 
 ### 修复
 
+- **30 天聚合恢复独立的 5 秒落盘(合并后回归)**:`fix/audit-followup` 合并后 `saveHistory()` 只剩 `flush()` 里一次调用,而 `FLUSH_INTERVAL_MS` 是 60 秒 —— W5 承诺的「每 5 秒落盘」被静默放宽 12 倍,两份注释还写着「不另开定时器 / 搭 flush 的 5 秒节拍」。现在 `start()` 单独接 `HISTORY_FLUSH_MS = 5000` 的 `historyTimer`(写前照旧按 dirty 去重),`stop()` 清掉并置 0;`flush()` 里的补写保留(pagehide / visibilitychange:hidden / 关 HUD 仍即时落盘)。新增 3 条断言(5 秒周期与 60 秒 ring flush 并列 / stop 清理且不续排 / flush(true) 补写),把 `HISTORY_FLUSH_MS` 改回 60000 时第一条必红;`state.render` 字段数 57 → 58。断言 930 → **933**(logic 799 → 802)。
+
 - **独立盲审跟进(c751b4b 小修)**:票据叙事改准 —— `arm` 签发的票据**不是授权边界**(同源脚本可以自己 `POST {op:"arm"}` 取票),只挡读不到响应的盲 CSRF 与重放;`index.js`、AGENTS、CONTRIBUTING、测试与两份历史 plan 文档同步这句口径。补一条**不注入 `armTtlMs`** 的断言,钉住默认 `ARM_TTL_MS=30000`(改成 10 分钟必红);`tests/host.mjs` 的两处 `setTimeout(250)` 和一处 300ms 改成每 10ms 轮询(上限 2s),慢 CI 不再赌固定等待。`AGENTS.md` 的 `state.render` 字段数 54 → 55、`index.js` 量级 0.7k → 0.8k(实际 775 行)。断言 856 → **857**(host 78 → 79)。
 
 - **评审 P3-1 / P3-2:宿主采样世代与 setBundle 一次性票据**:`createCpuProfiler` 加 `generation` token,`start()` 递增、`finish()` 只在 token 匹配时提交 `profile` / `meta` / `running` / `session` —— 采样进行中关掉 HUD 再立刻打开,旧一代的 `Profiler.stop` 不再把新一代的 `running` 打回 false、也不再覆盖缓存。`setBundle` 不再认调用方自带的 `confirm:true`:面板先 `POST {op:"arm"}` 领一张 30 秒有效、单次使用的票据,`setBundle` 带 `ticket` 校验;过期 / 复用 / 伪造 / 无票据一律 403。断言 839 → **856**(host 61 → 78,新增 17 条:世代隔离 9 条 + 票据 8 条)。同轮清文档数字漂移:词典键数改为见断言、`client.js` 分片清单 5 → 7 个文件、`docs/` 8 → 9 份、W1 离线断言 11 → 12 条,行数快照改成量级写法。
 
-离线断言合并后总数 **930**(attribution 11 / logic 799 / host 94 / compat 17 / replay 9)。
+离线断言合并后总数 **933**(attribution 11 / logic 802 / host 94 / compat 17 / replay 9)。
 
 
 ## [1.0.0] - 2026-11-08

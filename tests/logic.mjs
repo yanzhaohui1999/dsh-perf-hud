@@ -855,18 +855,19 @@ check('状态四片:state 就是 ui / watch / host / render 四片,每片都有�
 	[['host', 'render', 'ui', 'watch'], true]);
 // 字段数写死是故意的:挪字段(把一页读数搬到另一片)是结构变更,要连同这一行一起交代。
 // 它同时挡住一类静默错误 —— 字段被复制进两片后,谁写谁读就说不清了。
-check('状态四片:四片的字段数 == 23 / 57 / 38 / 18(挪字段要改这一行并说明理由)',
+check('状态四片:四片的字段数 == 23 / 58 / 38 / 18(挪字段要改这一行并说明理由)',
 	// watch 片的 38 = 守夜对象自己的 30 个键 + tally + history + 场景/空闲基线 6 个(它本来就是一整层)
 	// render +1 = armed(武装窗口的状态机,属于"档位/采集"那一层);
 	// render 再 +1 = openCost(打开 / 切换会话耗时的 ring + 一次等待的运行时引用,同属采集层);
 	// render 再 +1 = ambient(后台宿主采样的开关:它决定"宿主那一侧有没有在采",与 deep / precise
 	//   同属"档位/采集"那一层,所以不进 ui —— ui 是面板自己的视图状态);
 	// render 再 +1 = selfPhases(常开回调的分相自计时环,属于"自身开销"那一层);
+	// render 再 +1 = historyTimer(30 天聚合的独立 5 秒落盘定时器:与 flushTimer 同属"定时器接线");
 	// host +1 = armedProfiles(武装窗口从宿主取回的 profile 段,属于宿主数据);
 	// host 再 +2 = ambient(后台采样的宿主回执:开关 / 间隔 / 上次采到段 / 累计段数)+ ambientProfiles
 	//   (取回的段环,出包时挑重叠段)。两者都是宿主数据,与 armedProfiles 同一条。
 	[stateSlices.ui.length, stateSlices.render.length, stateSlices.watch.length, stateSlices.host.length],
-	[23, 57, 38, 18]);
+	[23, 58, 38, 18]);
 
 // ── 别名解析(见文件头 ①)──
 // 规则:别名只能指向**一片**(`= state.<片>`),不能指向整个 state / 解构整个 state(那样所有字段检查都会被绕过);
@@ -6976,6 +6977,7 @@ watch.clearTally();
 		startOpenCostWatch: () => {},
 		startHostAmbient: () => {},
 		flush: (force) => { flushCalls.push(force); },
+		saveHistory: () => {},
 		frame: () => {},
 		probeLink: () => {},
 		applyProbeState: () => {},
@@ -6995,7 +6997,8 @@ watch.clearTally();
 	const startState = { render: { on: false, epoch: 0, abort: null }, watch: {}, host: {} };
 	const runStart = new Function('natives', 'state', 'performance', 'RTT_INTERVAL_MS', 'LOAD_INTERVAL_MS', 'stubs', `
 		${line('const FLUSH_INTERVAL_MS')}
-		const { sampleTick, sampleDom, scheduleDomSample, flush, frame, probeLink, applyProbeState, visibilityTrackStart,
+		${line('const HISTORY_FLUSH_MS')}
+		const { sampleTick, sampleDom, scheduleDomSample, flush, saveHistory, frame, probeLink, applyProbeState, visibilityTrackStart,
 			startLongTask, startLoaf, startInteractions, startDomWatch, startOpenCostWatch, startHostAmbient } = stubs;
 		${extract(source, 'function start()')}
 		start();
@@ -7003,11 +7006,45 @@ watch.clearTally();
 	runStart(natives, startState, { now: () => 0 }, 10000, 60000, stubs);
 	check('常开:start() 接的常开周期是 1s 采样 / 60s 落盘(DOM 采样不再用 setInterval)',
 		intervals.slice(0, 2).map((row) => row.ms), [1000, 60000]);
+	const historyWired = intervals.filter((row) => row.fn === stubs.saveHistory);
+	check('常开:30 天聚合走独立的 5 秒定时器,不搭 60 秒的 ring flush',
+		[historyWired.map((row) => row.ms), intervals[1]?.ms], [[5000], 60000]);
 	const flushWired = intervals[1]?.fn;
 	if (typeof flushWired === 'function') flushWired();
 	check('常开:1s→sampleTick、60s→flush(false);DOM 先量一次再交给自适应调度',
 		[intervals[0]?.fn === stubs.sampleTick, JSON.stringify(flushCalls), JSON.stringify(order)],
 		[true, '[false]', '["sampleDom","scheduleDomSample"]']);
+
+	// stop():关 HUD 必须把 history 的独立定时器清掉并置 0 —— 否则关掉后仍每 5 秒写一次盘,
+	// 再开 start() 还会叠出第二个定时器。抽真 stop(),用桩接住 clearInterval / saveHistory / flush。
+	const stopCalls = { intervals: [], timeouts: [], saveHistory: 0, flush: [] };
+	const stopState = {
+		render: {
+			on: true, epoch: 0, abort: null, armed: { phase: 'idle' }, ambient: false,
+			fpsLoop: 1, sampleTimer: 2, domTimer: 3, flushTimer: 4, historyTimer: 5, ltObserver: null, fps: 120,
+		},
+		watch: { on: true, pendingTimer: 0, pending: null, loafObserver: null, eventObserver: null },
+		host: { linkTimer: 6, loadTimer: 7, hostCpuProfile: { phase: 'idle' } },
+	};
+	const runStop = new Function('natives', 'state', 'experiment', 'saveHistory', 'flush',
+		'disarmArmed', 'stopHostAmbient', 'applyProbeState', 'visibilityTrackStop', 'stopDomWatch', 'stopOpenCostWatch', `
+		${extract(source, 'function stop()')}
+		return stop;
+	`)(
+		{
+			cancelAnimationFrame: () => {},
+			clearInterval: (id) => stopCalls.intervals.push(id),
+			clearTimeout: (id) => stopCalls.timeouts.push(id),
+		},
+		stopState, { phase: 'idle' },
+		() => { stopCalls.saveHistory += 1; },
+		(force) => { stopCalls.flush.push(force); },
+		() => {}, () => {}, () => {}, () => {}, () => {}, () => {},
+	);
+	runStop();
+	check('常开:stop() 清掉 history 定时器并置 0,自己补写一次、不再续排',
+		[stopCalls.intervals.includes(5), stopState.render.historyTimer, stopCalls.saveHistory, JSON.stringify(stopCalls.flush)],
+		[true, 0, 1, '[true]']);
 
 	const push = new Function(`${extract(source, 'function push(')}; return push;`)();
 	const series = [];
@@ -7075,6 +7112,7 @@ watch.clearTally();
 	// 落盘版本 + 条数/体积上限:读方仍按 v:1 认格式;写方只写最近 120 条,并在写前量大小。
 	const flushWritten = [];
 	const flushPhases = [];
+	const flushHistory = [];
 	const flushBox = new Function('localStorage', 'ring', 'saveTally', 'saveHistory', 'recordSelfPhase', `
 		${line('const LS_RING')}
 		${line('const RING_PERSIST_MAX')}
@@ -7083,11 +7121,12 @@ watch.clearTally();
 		let dirty = true;
 		${extract(source, 'function persistTail(')}
 		${extract(source, 'function flush(')}
-		flush(false);
+		return flush;
 	`);
-	flushBox({ setItem: (key, value) => flushWritten.push([key, value]) },
+	const flush = flushBox({ setItem: (key, value) => flushWritten.push([key, value]) },
 		Array.from({ length: 600 }, (_, i) => ({ t: i, fps: 60, top: [] })),
-		() => {}, () => {}, (phase) => flushPhases.push(phase));
+		() => {}, () => flushHistory.push('save'), (phase) => flushPhases.push(phase));
+	flush(false);
 	const flushed = flushWritten.length === 1 ? JSON.parse(flushWritten[0][1]) : null;
 	check('落盘:flush 只写最近 RING_PERSIST_MAX 条(600 → 120),首条 480、末尾 599',
 		[flushWritten.length, flushed?.v, flushed?.samples?.length, flushed?.samples?.[0]?.t, flushed?.samples?.[119]?.t],
@@ -7096,6 +7135,10 @@ watch.clearTally();
 		[box.FLUSH_INTERVAL_MS, flushWritten[0][1].length <= box.RING_PERSIST_BUDGET], [60000, true]);
 	check('落盘:flush 自己进 selfStats 分相(recordSelfPhase("flush"))',
 		flushPhases, ['flush']);
+	// force 路径(pagehide / visibilitychange:hidden / 关 HUD)不靠 5 秒定时器:flush(true) 自己补写。
+	flush(true);
+	check('落盘:flush(true) 仍即时补写 history(force 路径不依赖 5 秒定时器)',
+		flushHistory, ['save', 'save']);
 
 	// 写前量大小:预算不够时从最旧的丢,写出的信封不超预算、最新的一条仍在。
 	const bounded = box.persistTail(Array.from({ length: 50 }, (_, i) => ({ t: i, pad: 'x'.repeat(20) })), 120, 300);
