@@ -137,7 +137,13 @@ const pieces = [
 	'function armedHostGetBody(',
 	'function armedHostStopBody(',
 	'function armedHostReceipt(',
-	'function armedSegmentRecords(',
+	'function hostSegmentRecords(',
+	// 后台低占空比滚动采样(方向 2,默认关):路由形状 / 回执映射是纯函数 ——
+	// 优先级与单飞在宿主那一半(tests/host.mjs 用假 inspector 驱),这里钉"面板与事故包读的那一份"。
+	'function ambientHostStartBody(',
+	'function ambientHostGetBody(',
+	'function ambientHostStopBody(',
+	'function ambientReceipt(',
 	// 打开 / 切换耗时(方向 3):起点 / 终点的判定、环形淘汰、分位、取消记账全是纯函数 ——
 	// DOM 侧只注入"行没有选中 / 正文节点在不在"这类事实,状态机本身整段可离线断言。
 	'const SESSION_ROW_PREFIX = ',
@@ -167,7 +173,8 @@ const api = new Function(`${pieces}
 	return { state, ring, isCore, ownerOfUrl, rate, updateRates, pluginTable, worstSecond, blame,
 		clampHostProfileSeconds, hostCpuProfileStartBody, hostCpuProfileAfterStart, hostCpuProfileAfterGet,
 		clampArmedWindow, clampArmedSegment, armedPlanStart, armedPlanEnd, armedTickDue,
-		armedHostStartBody, armedHostGetBody, armedHostStopBody, armedHostReceipt, armedSegmentRecords,
+		armedHostStartBody, armedHostGetBody, armedHostStopBody, armedHostReceipt, hostSegmentRecords,
+		ambientHostStartBody, ambientHostGetBody, ambientHostStopBody, ambientReceipt,
 		SESSION_ROW_PREFIX, OPEN_ROW_SELECTOR, OPEN_CONTENT_SELECTOR, OPEN_MIN_CHARS, OPEN_TIMEOUT_MS, OPEN_RING_MAX,
 		sessionRowOf, sessionRowId, sessionRowSelected, openContentSession, openContentChars,
 		openCostVerdict, openCostPush, openCostStats, openCostAbandon, openCostContext };`)();
@@ -369,8 +376,8 @@ check('武装:段只收结构合法的(缺 profile.nodes / 缺时间锚 / 非 ok
 			{ index: 4, meta: { startedAt: 1, endedAt: 2 }, profile: { nodes: [], samples: [] } },
 			null,
 		];
-		const records = api.armedSegmentRecords({ ok: true, segments: ARMED_RECEIPT.segments.concat(bad) });
-		return [records.map((row) => row.index), api.armedSegmentRecords({ ok: false, segments: ARMED_RECEIPT.segments }), api.armedSegmentRecords(null)];
+		const records = api.hostSegmentRecords({ ok: true, segments: ARMED_RECEIPT.segments.concat(bad) });
+		return [records.map((row) => row.index), api.hostSegmentRecords({ ok: false, segments: ARMED_RECEIPT.segments }), api.hostSegmentRecords(null)];
 	})(),
 	[[0, 1, 4], [], []]);
 check('武装:面板入口在卡顿详情(按钮 + 取消 + 两条动作都真的接了主文件)',
@@ -397,6 +404,89 @@ check('武装:临时插桩**不写 localStorage**(刷新即回默认档,武装�
 		return [start > 0, end > start, /LS_DEEP/.test(body), /LS_PRECISE/.test(body)];
 	})(),
 	[true, true, false, false]);
+
+// ── 后台宿主采样(方向 2,默认关)的路由形状与回执映射 ─────────────────────
+// 状态机在宿主那一半(tests/host.mjs 用假 inspector 驱到段);这里钉"面板与事故包读的那一份":
+// 三个 body 构造器只在一处、回执的成功/失败/缺状态三条分支、以及 GET 快照与 POST 回执两种形状。
+const AMBIENT_STATE = {
+	enabled: true, collecting: true, intervalSeconds: 300, segmentSeconds: 1, keep: 3,
+	total: 5, collected: 3, lastAt: 1700000000000, lastIndex: 7, nextAt: 1700000300000,
+	skipped: 2, yielded: 1, aborted: 0, stopReason: '', error: '',
+};
+check('后台:路由形状只有一处(开 / 取 / 停各一个 body 构造器,参数一个都不由客户端传)',
+	[api.ambientHostStartBody(), api.ambientHostGetBody(-1), api.ambientHostGetBody(7.8), api.ambientHostStopBody('disabled'), api.ambientHostStopBody('')],
+	[{ op: 'ambientStart' }, { op: 'ambientGet', since: -1 }, { op: 'ambientGet', since: 7 },
+		{ op: 'ambientStop', reason: 'disabled' }, { op: 'ambientStop', reason: 'client-stop' }]);
+check('后台:开 / 取 / 停的请求体里没有间隔 / 段长 / 留几段(常量只有宿主那一处)',
+	[JSON.stringify(api.ambientHostStartBody()), /intervalSeconds|segmentSeconds|keep/.test(JSON.stringify(api.ambientHostStartBody()))],
+	['{"op":"ambientStart"}', false]);
+check('后台:POST 回执映射成面板 / 包读的那一份(开关 / 间隔 / 段数 / 上次时间都在)',
+	(() => {
+		const s = api.ambientReceipt({ ok: true, ambient: AMBIENT_STATE }, 1700000001000);
+		return [s.ok, s.phase, s.enabled, s.intervalSeconds, s.segmentSeconds, s.keep, s.collected, s.total,
+			s.lastAt, s.lastIndex, s.skipped, s.yielded, s.at];
+	})(),
+	[true, 'active', true, 300, 1, 3, 3, 5, 1700000000000, 7, 2, 1, 1700000001000]);
+check('后台:GET 快照(不套 ok 壳)也走同一条映射(两种形状只有一份判定)',
+	(() => {
+		const s = api.ambientReceipt(AMBIENT_STATE, 1);
+		return [s.ok, s.enabled, s.total, s.lastIndex];
+	})(),
+	[true, true, 5, 7]);
+check('后台:停着但没采过一段 → stopped / 0 段,不给假的"上次时间"',
+	(() => {
+		const s = api.ambientReceipt({ ok: true, ambient: { ...AMBIENT_STATE, enabled: false, total: 0, collected: 0, lastAt: null, lastIndex: -1, stopReason: 'disabled' } }, 1);
+		return [s.phase, s.enabled, s.total, s.lastAt, s.lastIndex, s.stopReason];
+	})(),
+	['stopped', false, 0, 0, -1, 'disabled']);
+check('后台:宿主回失败 / 回 ok 但没有采样状态 → 一律 failed + 错误原文(不假装开起来了)',
+	(() => {
+		const failed = api.ambientReceipt({ ok: false, error: '未知 op:ambientStart' }, 1);
+		const hollow = api.ambientReceipt({ ok: true }, 1);
+		const missing = api.ambientReceipt(null, 1);
+		return [failed.phase, failed.error, failed.enabled, hollow.phase, hollow.error.includes('没有采样状态'), missing.phase, missing.error.includes('没有回执')];
+	})(),
+	['failed', '未知 op:ambientStart', false, 'failed', true, 'failed', true]);
+// 客户端那一半的接线(静态核):开着就真的请求宿主、关掉/关 HUD 就真的让宿主停、续租约搭在
+// 已经在跑的探针上、开关只落 localStorage(默认关)。这些"做了但没接上"的错离线只有这里能抓。
+check('后台:开关只落 localStorage(默认关),不写 profile、不进 DSH 配置',
+	(() => {
+		// 默认值是 false:从 state 字面量里读(不是从 restore 的兜底里读,那一句写 false 是第二条保险)
+		const slice = extract(source, 'const state = {');
+		const field = /ambient:\s*false,/.test(slice);
+		const restoreLine = /localStorage\.getItem\(LS_AMBIENT\) === '1'/.test(source);
+		const setLine = /localStorage\.setItem\(LS_AMBIENT, want \? '1' : '0'\)/.test(source);
+		// 不碰 profile:这个功能里出现的 localStorage 写只有 LS_AMBIENT 这一处
+		const setAmbientBody = source.slice(source.indexOf('function setAmbient('), source.indexOf('async function startHostAmbient(', source.indexOf('function setAmbient(')));
+		const writes = [...setAmbientBody.matchAll(/localStorage\.setItem\(([A-Za-z_$][\w$]*)/g)].map((row) => row[1]);
+		return [field, restoreLine, setLine, writes];
+	})(),
+	[true, true, true, ['LS_AMBIENT']]);
+check('后台:开着就请求宿主、关掉就请求宿主停、关 HUD 也让它停(三条路都在)',
+	(() => {
+		const setBody = source.slice(source.indexOf('function setAmbient('), source.indexOf('async function startHostAmbient(', source.indexOf('function setAmbient(')));
+		const stopBody = source.slice(source.indexOf('function stop()'), source.indexOf('function stop()') + 1200);
+		return [/if \(want\) void startHostAmbient\(\);/.test(setBody),
+			/else void stopHostAmbient\('disabled'\);/.test(setBody),
+			/stopHostAmbient\('disabled'\)/.test(stopBody),
+			/if \(state\.render\.ambient === true\) void startHostAmbient\(\);/.test(source)];
+	})(),
+	[true, true, true, true]);
+check('后台:续租约搭在已经在跑的探针上(不新增心跳请求 / 定时器)',
+	(() => {
+		const probe = source.slice(source.indexOf('async function probeLink('), source.indexOf('async function requestHostEventWatch('));
+		return [/ambientParam = state\.render\.ambient === true \? '&ambient=1' : ''/.test(probe),
+			probe.indexOf('ambientParam') < probe.indexOf('const query'),
+			// 采集侧不加新定时器:后台段的取回只由"宿主快照里的 lastIndex 涨了"与"事故刚结算"触发
+			/ambientNeedsSync\(hostAmbient\)/.test(probe),
+			/state\.watch\.captured !== ambientCapturedSeen/.test(source),
+			/setInterval\([^)]*syncHostAmbient/.test(source)];
+	})(),
+	[true, true, true, true, false]);
+check('后台:包里的 timeline 只填与窗口重叠的段(选择那一半是纯函数,见下面那组)',
+	[/function incidentTimelineFromAmbient\(row, records\) \{\s*return incidentTimelineFromSegments\(row, records, \{ mode: 'ambient' \}\);/
+		.test(modelSource), /ambientTimeline !== null \? ambientTimeline/.test(modelSource)], [true, true]);
+
 
 // ── 打开 / 切换耗时(方向 3):起点 / 终点 / 淘汰 / 分位 / 取消 ──────────────
 // 这一组测的是"判定那一半":DOM 侧只注入事实(行选中没有、正文节点在不在、字符数),
@@ -765,13 +855,17 @@ check('状态四片:state 就是 ui / watch / host / render 四片,每片都有�
 	[['host', 'render', 'ui', 'watch'], true]);
 // 字段数写死是故意的:挪字段(把一页读数搬到另一片)是结构变更,要连同这一行一起交代。
 // 它同时挡住一类静默错误 —— 字段被复制进两片后,谁写谁读就说不清了。
-check('状态四片:四片的字段数 == 23 / 55 / 38 / 16(挪字段要改这一行并说明理由)',
+check('状态四片:四片的字段数 == 23 / 56 / 38 / 18(挪字段要改这一行并说明理由)',
 	// watch 片的 38 = 守夜对象自己的 30 个键 + tally + history + 场景/空闲基线 6 个(它本来就是一整层)
 	// render +1 = armed(武装窗口的状态机,属于"档位/采集"那一层);
 	// render 再 +1 = openCost(打开 / 切换会话耗时的 ring + 一次等待的运行时引用,同属采集层);
-	// host +1 = armedProfiles(武装窗口从宿主取回的 profile 段,属于宿主数据)。
+	// render 再 +1 = ambient(后台宿主采样的开关:它决定"宿主那一侧有没有在采",与 deep / precise
+	//   同属"档位/采集"那一层,所以不进 ui —— ui 是面板自己的视图状态);
+	// host +1 = armedProfiles(武装窗口从宿主取回的 profile 段,属于宿主数据);
+	// host 再 +2 = ambient(后台采样的宿主回执:开关 / 间隔 / 上次采到段 / 累计段数)+ ambientProfiles
+	//   (取回的段环,出包时挑重叠段)。两者都是宿主数据,与 armedProfiles 同一条。
 	[stateSlices.ui.length, stateSlices.render.length, stateSlices.watch.length, stateSlices.host.length],
-	[23, 55, 38, 16]);
+	[23, 56, 38, 18]);
 
 // ── 别名解析(见文件头 ①)──
 // 规则:别名只能指向**一片**(`= state.<片>`),不能指向整个 state / 解构整个 state(那样所有字段检查都会被绕过);
@@ -1732,6 +1826,8 @@ const MARKDOWN_TITLE_ONLY = new Set([
 	'splitHint', 'splitJsHint', 'invokerHint', 'windowScopeHint', 'watchHint', 'watchExportHint', 'viewEvidenceHint',
 	'shellNoteHint', 'evidenceUnlocatableHint',
 	'shellNoteHint', 'evidenceUnlocatableHint',
+	// 后台宿主采样的三条口径(采样有开销 / 默认关 / 只有开了才有数据)只进 title
+	'ambientHint',
 ]);
 check('正文文案不含 markdown 记号(`**` / 反引号),带记号的一律是白名单里的"只进悬停"键',
 	Object.keys(box.DICT.zh).filter((key) => /\*\*|`/.test(box.DICT.zh[key]) || /\*\*|`/.test(box.DICT.en[key]))
@@ -3297,7 +3393,7 @@ check('createUi 依赖守卫有牙齿:拿掉任意一个键都会被点名,解�
 	const bogus = depGuard([...uiDepNames, 'bogusNewDep'], uiDepKeys).missing;
 	const unusedBonus = depGuard(uiDepNames, [...uiDepKeys, 'unusedBonus']).unused;
 	return { names: uiDepNames.length, uncaught, bogus, unusedBonus };
-})(), { names: 190, uncaught: [], bogus: ['bogusNewDep'], unusedBonus: ['unusedBonus'] });
+})(), { names: 192, uncaught: [], bogus: ['bogusNewDep'], unusedBonus: ['unusedBonus'] });
 check('主界面只吃时间语义(结构上不碰 selectedIncident / 手选那套)', (() => {
 	const seg = extract(renderSource, 'function mainView(');
 	return [seg.includes('selectedIncident') === false, seg.includes('props.latest'), /const latestRow = latestIncident\(\);/.test(renderSource)];
@@ -3684,8 +3780,12 @@ const watchPieces = [
 	extract(source, 'function timelineOverlap('),
 	extract(source, 'function incidentTimeline('),
 	// 武装窗口:多段 timeline 的拼装 + context.armed(incidentReport 在出包时调它们)
+	extract(source, 'function incidentTimelineFromSegments('),
 	extract(source, 'function incidentTimelineFromArmed('),
+	extract(source, 'function incidentTimelineFromAmbient('),
 	extract(source, 'function armedContext('),
+	// 后台宿主采样(方向 2):context.hostSampling 的产方(没开过这个开关就不产出)
+	extract(source, 'function hostSamplingContext('),
 	// 打开 / 切换耗时:incidentReport 出包时调 openCostContext(读 state.render.openCost 的 ring);
 	// openCostStats 是它用到的最近秩分位(percentile / round1 已在上面抽过)
 	extract(source, 'function openCostStats('),
@@ -3835,6 +3935,8 @@ const watchBox = new Function(`
 			dom: { total: 1234 },
 			// 武装窗口:triggerCapture 读 phase、settleCapture 累加 captured(手写桩,加字段要同步)
 			armed: { phase: 'idle', startedAt: 0, endsAt: 0, endedAt: 0, windowSeconds: 0, reason: '', wasDeep: false, wasPrecise: false, timer: 0, deadline: 0, syncTimer: 0, captured: 0, restored: 0, hostReceipt: { phase: 'idle', active: false, segments: 0, kept: 0, windowSeconds: 0, segmentSeconds: 0, error: '', stopReason: '' } },
+			// 后台宿主采样(方向 2)的开关:incidentReport 出包时读它决定要不要给 context.hostSampling
+			ambient: false,
 			// A1 记录器自身开销的环形缓冲
 			selfRing: [], selfAt: 0, selfCount: 0, selfMax: 0,
 			// 打开 / 切换耗时:incidentReport 出包时读 ring(手写桩,加字段要同步 —— 样本里由
@@ -3862,6 +3964,9 @@ const watchBox = new Function(`
 			hostCpuProfile: { phase: 'idle', seconds: 0, requestedAt: 0, finishedAt: 0, meta: null, profile: null, error: '', collections: 0 },
 			// 武装窗口取回的宿主段(出包时挑重叠段填 incident.timeline)
 			armedProfiles: [],
+			// 后台采样的宿主回执与取回的段(方向 2;出包时优先于手动 profile,次于武装)
+			ambient: null,
+			ambientProfiles: [],
 		},
 	};
 	return {
@@ -3894,6 +3999,8 @@ const watchBox = new Function(`
 		cpuProfileSummary, hostCpuProfileContext,
 		// A4:同一时间轴(assembleIncident 不读它;incidentReport 出包时才接)
 		timelineHostAnchor, timelineAnchorWallAt, timelineHostSamples, timelineOverlap, incidentTimeline,
+		// 方向 2:后台段 → timeline[] 的选择 / 拼装,以及 context.hostSampling 的产方
+		incidentTimelineFromSegments, incidentTimelineFromArmed, incidentTimelineFromAmbient, hostSamplingContext,
 		zipStore,
 		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview,
 		// 打开 / 切换耗时:样本里的 ring 由 production 的 openCostPush 填(连淘汰一起走真函数)
@@ -5655,6 +5762,115 @@ check('武装:howToRead 把 env.armed / context.armed / timeline[].armed 的口�
 	})(),
 	[true, true, true]);
 
+// ── 后台宿主采样(方向 2):重叠段填 timeline[]、没重叠照实不填、优先级低于武装 ──
+// 段用**真采样夹具**平移(与武装那组同一套),选择 / 拼装走 production 的
+// incidentTimelineFromAmbient(),不是手写一个段形状塞进去。
+const ambientReports = (() => {
+	const savedIncidents = watch.state.watch.incidents.slice();
+	const savedAmbient = watch.state.render.ambient;
+	const savedReceipt = watch.state.host.ambient;
+	const savedAmbientProfiles = watch.state.host.ambientProfiles.slice();
+	const savedArmed = watch.state.render.armed;
+	const savedArmedProfiles = watch.state.host.armedProfiles.slice();
+	const origin = Date.parse(causeRow.env.perfOrigin);
+	const span = timelineFixture.meta.endedAt - timelineFixture.meta.startedAt;
+	const segment = (index, startPerf) => ({
+		index,
+		requestedSeconds: 1,
+		meta: { ...timelineFixture.meta, startedAt: origin + startPerf, endedAt: origin + startPerf + span },
+		profile: timelineFixture.profile,
+	});
+	const row = { ...causeRow, window: { ...causeRow.window, fromMs: 900, toMs: 2400 }, env: { ...causeRow.env } };
+	watch.state.render.armed = { ...savedArmed, phase: 'idle', startedAt: 0, endsAt: 0 };
+	watch.state.host.armedProfiles = [];
+	watch.state.render.ambient = true;
+	watch.state.host.ambient = {
+		ok: true, phase: 'active', enabled: true, intervalSeconds: 300, segmentSeconds: 1, keep: 3,
+		collected: 3, total: 5, lastAt: origin + 2000, lastIndex: 2, nextAt: 0,
+		skipped: 1, yielded: 0, aborted: 0, stopReason: '', error: '', at: Date.now(),
+	};
+	watch.state.watch.incidents.length = 0;
+	// ① 两段与窗口重叠(900 / 1600 起),第三段远在窗口外(不该产出)
+	watch.state.host.ambientProfiles = [segment(0, 900), segment(1, 1600), segment(2, 900000)];
+	watch.state.watch.incidents.push({ ...row, id: 'i-ambient' });
+	const overlapped = watch.incidentReport('i-ambient');
+	// ② 同一条事故,手里只有窗口外的段 → timeline 键不出现(context.hostSampling 仍在)
+	watch.state.host.ambientProfiles = [segment(0, 900000)];
+	watch.state.watch.incidents.push({ ...row, id: 'i-ambient-off' });
+	const noOverlap = watch.incidentReport('i-ambient-off');
+	// ③ 武装期也有重叠段 → 武装优先(同一段素材,每段 armed、不带 mode)
+	watch.state.render.armed = { ...savedArmed, phase: 'armed', startedAt: Date.now() - 1000, endsAt: Date.now() + 59000, captured: 1, restored: 0 };
+	watch.state.host.armedProfiles = [segment(0, 900)];
+	watch.state.host.ambientProfiles = [segment(0, 900), segment(1, 1600)];
+	watch.state.watch.incidents.push({ ...row, id: 'i-ambient-both' });
+	const both = watch.incidentReport('i-ambient-both');
+	// ④ 从没开过这个开关 → 包里没有 context.hostSampling(不是"开了但没采到")
+	watch.state.render.ambient = false;
+	watch.state.host.ambient = null;
+	watch.state.host.armedProfiles = [];
+	watch.state.render.armed = { ...savedArmed, phase: 'idle', startedAt: 0, endsAt: 0 };
+	watch.state.watch.incidents.push({ ...row, id: 'i-ambient-never' });
+	const never = watch.incidentReport('i-ambient-never');
+	// 还原
+	watch.state.watch.incidents.length = 0;
+	for (const row2 of savedIncidents) watch.state.watch.incidents.push(row2);
+	watch.state.render.ambient = savedAmbient;
+	watch.state.host.ambient = savedReceipt;
+	watch.state.host.ambientProfiles.length = 0;
+	for (const row2 of savedAmbientProfiles) watch.state.host.ambientProfiles.push(row2);
+	watch.state.render.armed = savedArmed;
+	watch.state.host.armedProfiles.length = 0;
+	for (const row2 of savedArmedProfiles) watch.state.host.armedProfiles.push(row2);
+	return { overlapped, noOverlap, both, never };
+})();
+check('后台:与窗口重叠的段填进 timeline[](每段标 mode:"ambient",不是 armed)',
+	(() => {
+		const timeline = ambientReports.overlapped.incident.timeline;
+		return [Array.isArray(timeline), timeline.length, timeline.every((seg) => seg.mode === 'ambient'),
+			timeline.every((seg) => seg.armed === undefined),
+			timeline.every((seg, i) => i === 0 || seg.fromMs >= timeline[i - 1].fromMs),
+			timeline.every((seg) => typeof seg.stall.ms === 'number')];
+	})(),
+	[true, 2, true, true, true, true]);
+check('后台:没有重叠就照实不填(timeline 键不出现;不猜、也不塞空数组)',
+	(() => {
+		const has = Object.prototype.hasOwnProperty.call(ambientReports.noOverlap.incident, 'timeline');
+		return [has, ambientReports.noOverlap.incident.id];
+	})(),
+	[false, 'i-ambient-off']);
+check('后台:context.hostSampling 说明开关 / 间隔 / 上次采到段 / 累计段数(默认关 + 有开销的口径)',
+	(() => {
+		const row = ambientReports.overlapped.context.hostSampling;
+		return [row.mode, row.enabled, row.switchOn, row.intervalSeconds, row.segmentSeconds, row.keep,
+			row.total, row.collected, row.profilesKept, row.skipped, typeof row.lastAt,
+			typeof row.scope === 'string' && row.scope.includes('默认关')];
+	})(),
+	// profilesKept 是"内存里留着的段数"(3),不是"与窗口重叠的段数"(2 —— 重叠只是填进 timeline 的条件)
+	['ambient', true, true, 300, 1, 3, 5, 3, 3, 1, 'string', true]);
+check('后台:武装期有重叠段时武装优先(每段 armed、不带 mode —— 两条路不混着填)',
+	(() => {
+		const timeline = ambientReports.both.incident.timeline;
+		return [timeline.length, timeline.every((seg) => seg.armed === true), timeline.every((seg) => seg.mode === undefined)];
+	})(),
+	[1, true, true]);
+check('后台:没开过这个开关的包不带 context.hostSampling(不是"开了但没采到")',
+	Object.prototype.hasOwnProperty.call(ambientReports.never.context, 'hostSampling'), false);
+check('后台:一段(1.5 秒夹具、768 个样本)的 timeline 段体积 ≤ 50KB(kill 判据②:样本体积 >50KB 就停)',
+	(() => {
+		const seg = ambientReports.overlapped.incident.timeline[0];
+		const bytes = JSON.stringify(seg).length;
+		return [bytes < 50 * 1024, seg.host.kept <= 4000, typeof bytes === 'number'];
+	})(),
+	[true, true, true]);
+check('后台:howToRead 写清 timeline[].mode / context.hostSampling 的口径(后台段常常只盖住一角)',
+	(() => {
+		const lines = ambientReports.overlapped.context.howToRead;
+		return [lines.some((line) => line.includes('mode: "ambient"')),
+			lines.some((line) => line.includes('context.hostSampling') && line.includes('默认关')),
+			lines.some((line) => line.includes('覆盖不足'))];
+	})(),
+	[true, true, true]);
+
 check('事故包:A2 落地后那条"没有对照基线"改成"跨机器 / 跨浏览器"',
 	watch.incidentReport(0).context.missing.some((line) => line.startsWith('baseline:') && line.includes('跨机器')), true);
 check('事故包:带上渲染环境(视口 / DPR / 核数)',
@@ -6286,6 +6502,38 @@ const contractBlocks = (() => {
 	samples.push(readPack(watch.buildPack('i14')));
 	watch.state.watch.incidents.pop();
 	watch.state.render.openCost = savedOpenCost;
+	// 第十个样本:后台宿主采样的 `context.hostSampling` + `timeline[].mode` —— 同样是**真产方**:
+	// 开关与回执摆进 state,出包走 production 的 hostSamplingContext / incidentTimelineFromAmbient,
+	// 段仍是真采样夹具平移。宿主段压住真事故的最差帧 → 那一段真的产出 timeline。
+	const savedAmbientOn = watch.state.render.ambient;
+	const savedAmbientReceipt = watch.state.host.ambient;
+	const savedAmbientProfiles = watch.state.host.ambientProfiles.slice();
+	const savedArmedReceipt = watch.state.render.armed;
+	const savedArmedProfiles2 = watch.state.host.armedProfiles.slice();
+	watch.state.render.armed = { ...savedArmedReceipt, phase: 'idle', startedAt: 0, endsAt: 0 };
+	watch.state.host.armedProfiles.length = 0;
+	watch.state.render.ambient = true;
+	watch.state.host.ambient = {
+		ok: true, phase: 'active', enabled: true, intervalSeconds: 300, segmentSeconds: 1, keep: 3,
+		collected: 1, total: 1, lastAt: shiftedStart + 1000, lastIndex: 0, nextAt: 0,
+		skipped: 0, yielded: 0, aborted: 0, stopReason: '', error: '', at: Date.now(),
+	};
+	watch.state.host.ambientProfiles.push({
+		index: 0,
+		requestedSeconds: 1,
+		meta: { ...timelineFixture.meta, startedAt: shiftedStart, endedAt: shiftedStart + (timelineFixture.meta.endedAt - timelineFixture.meta.startedAt) },
+		profile: timelineFixture.profile,
+	});
+	watch.state.watch.incidents.push({ ...realFixture.incident, id: 'i15' });
+	samples.push(readPack(watch.buildPack('i15')));
+	watch.state.watch.incidents.pop();
+	watch.state.host.ambientProfiles.length = 0;
+	for (const row2 of savedAmbientProfiles) watch.state.host.ambientProfiles.push(row2);
+	watch.state.render.ambient = savedAmbientOn;
+	watch.state.host.ambient = savedAmbientReceipt;
+	watch.state.render.armed = savedArmedReceipt;
+	watch.state.host.armedProfiles.length = 0;
+	for (const row2 of savedArmedProfiles2) watch.state.host.armedProfiles.push(row2);
 	return samples;
 })();
 const CONTRACT_PATHS = {

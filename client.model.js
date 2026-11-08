@@ -1500,27 +1500,41 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * 武装窗口的宿主段 → `incident.timeline[]`(可以**多段**)。
+		 * 宿主滚动采样到的段 → `incident.timeline[]`(可以**多段**)。
 		 *
 		 * A4 的 `incidentTimeline()` 是对"一段 profile"的算法,这里只做选择与拼装:
-		 *   · 逐段调同一条 `incidentTimeline()`,与该事故窗口不重叠的段直接不产出;
-		 *   · 产出的每一段标 `armed: true` —— 读包的人据此知道这段 profile 来自"武装期的
-		 *     滚动采样"(10 秒一段、段与段之间有几十毫秒的空档),而不是一次手动 5 秒采样;
-		 *   · 一段都没重叠时返回 `null`(键不出现在包里),交给手动 profile 那条老路兜底。
+		 *   · 逐段调同一条 `incidentTimeline()`,与该事故窗口不重叠的段直接不产出(**不猜**);
+		 *   · 产出的每一段打上来源标记(见两个包装器),读包的人据此知道这段 profile 来自哪种
+		 *     滚动采样(段与段之间有几十毫秒空档),而不是一次手动 5 秒采样;
+		 *   · 一段都没重叠时返回 `null`(键不出现在包里),交给下一条路兜底。
 		 *
 		 * 不重做对齐、不改段内形状:导出的仍是 A4 已冻结的那份 `timeline[]`。
 		 */
-		function incidentTimelineFromArmed(row, records) {
+		function incidentTimelineFromSegments(row, records, marker) {
 			if (!Array.isArray(records) || records.length === 0) return null;
 			const out = [];
 			for (const record of records) {
 				const segments = incidentTimeline(row, record);
 				if (segments === null) continue;
-				for (const segment of segments) out.push({ ...segment, armed: true });
+				for (const segment of segments) out.push({ ...segment, ...marker });
 			}
 			if (out.length === 0) return null;
 			out.sort((a, b) => a.fromMs - b.fromMs);
 			return out;
+		}
+
+		/** 武装窗口的段 → `timeline[]`,每段标 `armed: true`(1.1 已有的可选键)。 */
+		function incidentTimelineFromArmed(row, records) {
+			return incidentTimelineFromSegments(row, records, { armed: true });
+		}
+
+		/**
+		 * 后台采样(方向 2)的段 → `timeline[]`,每段标 `mode: 'ambient'`。
+		 * 用 `mode` 而不是复用 `armed`,是因为两者的**代价**不同:武装期还带着临时插桩(帧读数偏贵),
+		 * 后台采样只采宿主、页面侧一点没变 —— 读包的人不该把两者读成同一档。
+		 */
+		function incidentTimelineFromAmbient(row, records) {
+			return incidentTimelineFromSegments(row, records, { mode: 'ambient' });
 		}
 
 		/**
@@ -1562,6 +1576,46 @@ window.__ModuleLoader__.load({
 					stopReason: typeof host.stopReason === 'string' ? host.stopReason : '',
 					error: typeof host.error === 'string' ? host.error : '',
 				},
+			};
+		}
+
+		/**
+		 * 事故包的 `context.hostSampling`(可选段,方向 2):后台低占空比滚动采样的**当前状态**。
+		 *
+		 * 只在"用户开过这个开关"时出现(否则返回 null,键不出现):没开过的页面既没有数据、
+		 * 也不该在包里多一行"这里没采" —— 那是一句废话,不是证据。
+		 *
+		 * 口径必须自证:采样本身有开销,所以**默认关**;只有打开之后才有数据;它是宿主进程的
+		 * 采样,不是页面开销(与 `context.hostCpuProfile` 同一档);`profilesKept` 是本页面真的
+		 * 取回并留在内存里的段数 —— 与 `collected`(宿主留着的段数)不一样时说明取回没跟上。
+		 */
+		function hostSamplingContext(enabled, receipt, segments) {
+			const on = enabled === true;
+			const row = receipt === null || typeof receipt !== 'object' ? null : receipt;
+			const ever = row !== null && (row.total > 0 || row.phase !== 'idle');
+			if (on === false && ever === false) return null;
+			const num = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+			const iso = (ms) => (typeof ms === 'number' && ms > 0 ? new Date(ms).toISOString() : null);
+			return {
+				mode: 'ambient',
+				scope: '宿主进程的低占空比滚动采样(不是页面开销,别和 incident.frames 的帧时间相加)。采样本身有开销,所以默认关;只有打开开关之后才会有数据',
+				enabled: row !== null && row.enabled === true,
+				switchOn: on,
+				phase: row === null ? 'idle' : String(row.phase),
+				intervalSeconds: row === null ? 0 : num(row.intervalSeconds),
+				segmentSeconds: row === null ? 0 : num(row.segmentSeconds),
+				keep: row === null ? 0 : num(row.keep),
+				collected: row === null ? 0 : num(row.collected),
+				total: row === null ? 0 : num(row.total),
+				lastAt: row === null ? null : iso(row.lastAt),
+				nextAt: row === null ? null : iso(row.nextAt),
+				// 让路与丢弃照实写:后台是三者里最低的一档,让路是设计而不是故障
+				skipped: row === null ? 0 : num(row.skipped),
+				yielded: row === null ? 0 : num(row.yielded),
+				aborted: row === null ? 0 : num(row.aborted),
+				stopReason: row === null ? '' : String(row.stopReason),
+				error: row === null ? '' : String(row.error),
+				profilesKept: Array.isArray(segments) ? segments.length : 0,
 			};
 		}
 
@@ -2468,12 +2522,22 @@ window.__ModuleLoader__.load({
 			const howToAdd = gaps.howToAdd;
 			// A4:最近一次宿主 CPU 采样与这条事故的窗口重叠时,才把 `timeline[]` 放进包里。
 			// 没重叠 / 没采过 → 键不存在(可选字段的定义,不是"空数组"也不是"采到了但空")。
-			// 武装期采到的段优先:它们本来就是为了"下次卡顿发生时数据已经存在"而采的;
-			// 一段都没重叠才退回手动采到的那一份(老路一点没改)。
+			// 取段的优先级:**武装期 > 后台采样 > 手动采样**。
+			//   ① 武装窗口是用户显式开的"等下一次卡顿",它的段离事故最近、也是用户要的那份;
+			//   ② 后台采样是默认关的低占空比滚动采样,事故发生时数据已经存在(方向 2 的正题);
+			//   ③ 手动 profile 是一次性的旧样本(老路一点没改),只在上面两条都没重叠时兜底。
+			// 一条都没重叠就**照实不给** `timeline` 键 —— 不猜、不把不重叠的段塞进来充数。
 			const armedTimeline = incidentTimelineFromArmed(incident, state.host.armedProfiles);
-			const timeline = armedTimeline === null ? incidentTimeline(incident, state.host.hostCpuProfile) : armedTimeline;
+			const ambientTimeline = armedTimeline === null
+				? incidentTimelineFromAmbient(incident, state.host.ambientProfiles)
+				: null;
+			const timeline = armedTimeline !== null
+				? armedTimeline
+				: (ambientTimeline !== null ? ambientTimeline : incidentTimeline(incident, state.host.hostCpuProfile));
 			// 武装窗口是**可选**段:没开过、这条也不是窗口里采的 → 键不出现。
 			const armed = armedContext(state.render.armed, incident, state.host.armedProfiles);
+			// 后台宿主采样的状态(可选):没开过这个开关 → 键不出现(不是"开了但没采到")。
+			const hostSampling = hostSamplingContext(state.render.ambient, state.host.ambient, state.host.ambientProfiles);
 			// 打开 / 切换耗时也是**可选**段:页面里一条样本都没有 → 键不出现(不是空对象、不是 0)。
 			// 它是**导出时刻**的读数(与 context.recorder 同一条规矩),不属于这条事故的窗口 ——
 			// 形状与口径由 openCostContext 一处给(面板 / 控制台 / 事故包读同一份 ring)。
@@ -2501,6 +2565,9 @@ window.__ModuleLoader__.load({
 					// 武装窗口(可选):这段事故是不是在窗口里采的、窗口参数、宿主分段采到了几段。
 					// 读包的人靠它判断"这份帧读数带着多少插桩开销"。
 					...(armed === null ? null : { armed }),
+					// 后台宿主采样(可选):开关 / 间隔 / 上次采到段 / 累计段数 / 让路与丢弃计数。
+					// 它是宿主进程的采样(与 hostCpuProfile 同一档),不是页面开销。
+					...(hostSampling === null ? null : { hostSampling }),
 					// 打开 / 切换耗时(可选):最近 OPEN_RING_MAX 次的 ring 聚合 + 最近一次。
 					// 只读正文字符数、不读正文,不带会话标题 / ID(见 howToRead 那一条)。
 					...(openCost === null ? null : { openCost }),
@@ -2547,7 +2614,8 @@ window.__ModuleLoader__.load({
 						'context.watch.kept 按**严重度降序**,不是时间序;带 restored 的条目来自上一次会话(时间靠 env.perfOrigin 对齐),所以 id 与时间看起来会跳',
 						'context.watch.kept[].tier 说明这条是靠哪一档留下来的:worst = 全局最差那一档(前 10 条)、daily = 它那一天最差的一条(最多留最近 7 天)、recent = 最近 3 次(不看严重度)、both = 最差与当天最差两档都占。留存是**三档并集**,所以条数上限是 10 + 7 + 3 = 20 而不是 10 —— 单靠全局最差档时,"昨天下午那次卡"会被同一小时里的 10 次挤掉,而"刚才那一下"永远进不了榜',
 						'手动标记(`__perfHud.capture` / 面板「标记刚才」)的返回值分三态:settled 有 incident(已经切片,id / tier / 清单位置都在)、pending 表示已起了一次但后摇没到还没结算、coalesced 表示并进了正在等的那一次(本次备注没有单独留下)。面板回执读同一份返回值,不另猜',
-						'incident.timeline[] 是**可选**的:只有"最近一次宿主 CPU 采样"与这条事故的窗口有交集时才出现,一个 profile 一段(不是每帧一条;武装窗口里采到的会**多段**,每段标 `armed: true`(`timeline[].armed`))。`fromMs/toMs` 是对齐后的区间(perf 毫秒,与 incident.frames 同一坐标系),`profile.startedAt/endedAt` 是宿主的 Date.now 锚点,`alignment.errorMs` 是两端锚点跨度差(对齐不确定度的估计,不是保证)。`stall` 是这条事故**最差那一帧**的区间;`share.hostMs/hostPct` 只算这一段,`pageMs/pagePct` 是剩余部分(**不等于页面 JS 全忙**;宿主空闲、profile 没采到的部分都在里面),`coveragePct < 100` 时 hostPct 是下界。`host.samples[]` 与 `frames[]` 是两段原始序列:`host.samples[]` 每条是 [t-ms, t] 的宿主采样(三档 js / native / idle),`frames[]` 每帧带对齐后的宿主毫秒 —— 拿到包的人可以自己重算占比,不用信一个孤立的百分比。宿主序列超过上限时按"卡顿内的优先"截断并写 `omitted`。⚠️ 对齐靠两侧的 Date.now / performance.timeOrigin:同一台机器上是同一时钟,跨机器访问(DSH 在 Mac、浏览器在 Windows)时仍有系统时钟偏差,这条轴不承诺跨机器误差 ≤1 帧',
+						'incident.timeline[] 是**可选**的:只有"宿主那一段 profile"与这条事故的窗口有交集时才出现,一个 profile 一段(不是每帧一条)。来源看段上的标记:`armed: true`(`timeline[].armed`)= 武装窗口里采的,`mode: "ambient"`(`timeline[].mode`)= 后台低占空比滚动采样采的,两个标记都没有 = 手动采的那一份。取段优先级 武装 > 后台 > 手动;一条都不重叠时整个键不出现(不猜)。`fromMs/toMs` 是对齐后的区间(perf 毫秒,与 incident.frames 同一坐标系),`profile.startedAt/endedAt` 是宿主的 Date.now 锚点,`alignment.errorMs` 是两端锚点跨度差(对齐不确定度的估计,不是保证)。`stall` 是这条事故**最差那一帧**的区间;`share.hostMs/hostPct` 只算这一段,`pageMs/pagePct` 是剩余部分(**不等于页面 JS 全忙**;宿主空闲、profile 没采到的部分都在里面),`coveragePct < 100` 时 hostPct 是下界。`host.samples[]` 与 `frames[]` 是两段原始序列:`host.samples[]` 每条是 [t-ms, t] 的宿主采样(三档 js / native / idle),`frames[]` 每帧带对齐后的宿主毫秒 —— 拿到包的人可以自己重算占比,不用信一个孤立的百分比。宿主序列超过上限时按"卡顿内的优先"截断并写 `omitted`。后台段(`mode: "ambient"`)每段**只覆盖很短的一段**(默认 1 秒),而且段与段隔着几分钟:所以它常常只盖住事故窗口的一角,`shareOmitted` 说"覆盖不足"是正常的,别读成"宿主不忙"。⚠️ 对齐靠两侧的 Date.now / performance.timeOrigin:同一台机器上是同一时钟,跨机器访问(DSH 在 Mac、浏览器在 Windows)时仍有系统时钟偏差,这条轴不承诺跨机器误差 ≤1 帧',
+						'context.hostSampling(可选)是**后台宿主采样**的开关状态:默认关,只有用户打开之后才会有数据 —— 采样本身有开销(宿主进程里的 V8 CPU profile),所以它不默认开。`enabled` 是宿主侧此刻是否在采,`switchOn` 是用户开关的位置(两者不一致说明宿主侧没起来或被租约停了);`intervalSeconds` / `segmentSeconds` / `keep` 是宿主那一份常量(客户端一个都不复制),`lastAt` 是最近一段采完的墙钟时间,`total` 是累计采到过几段(不因淘汰回退)、`collected` 是宿主内存里还留着的段数,`profilesKept` 是本页面真的取回并留在内存里的段数(比 `collected` 小 = 取回没跟上,不是没采到)。`skipped` / `yielded` 是后台给手动 / 武装让路的次数与在飞段被顶掉的次数 —— 后台是三者里最低的一档,让路是设计,不是故障。⚠️ 它测的是**宿主进程**,不是页面开销:别和 incident.frames / summary 的帧时间相加',
 						'incident.env.armed 为 true(只有为真时才出现这个键)表示这条事故是在一次「武装窗口」里采到的:那段时间里客户端临时装了深录插桩 + 精确归因,宿主同时分段滚动采 CPU profile —— 这段帧读数**带着插桩开销**,别直接和默认档的事故比。context.armed 是导出时刻的窗口状态(窗口 / 段长 / 段数 / 是否还开着 / 还原原因 / 宿主错误原文);刷新之后读回的事故仍然带着 env.armed,但本页面已经不知道那个窗口了,所以 context.armed.state 会写 not-observed',
 					],
 				},

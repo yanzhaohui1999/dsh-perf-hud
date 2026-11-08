@@ -138,6 +138,14 @@ function makeDeps(state) {
 		ARMED_WINDOW_SECONDS: 60,
 		armNow: () => ({ ok: true, state: 'armed' }),
 		disarmArmed: () => ({ ok: true, state: 'ended' }),
+		// 后台宿主采样(方向 2):状态行的真实实现在 client.js(读宿主回执),这里只回答
+		// "开关与状态行渲染得出来吗"。**没有回执时返回空串** —— 那样这一行就不该出现(与真实现同一条)。
+		ambientStatusText: () => {
+			const receipt = state.host.ambient
+			if (receipt === null || receipt === undefined) return ''
+			return `${state.render.ambient === true ? '开' : '关'} · 每 5 分钟 · 采样 1 秒 · 上次 14:03:22 · 累计 ${receipt.total ?? 0} 段`
+		},
+		setAmbient: (on) => { state.render.ambient = on === true },
 		Top: 3,
 		// 尺寸 / 位置:与真实现同形的最小版本
 		PANEL_WIDTH: 396,
@@ -257,6 +265,32 @@ const SCREENS = [
 	{ name: '开发者详情 · 工具箱', setup: (state) => { state.ui.view = 'dev'; state.ui.devTab = 'tools'; state.ui.collapsed = false }, expect: DEV_TABS },
 	{ name: '开发者详情 · 原始数据', setup: (state) => { state.ui.view = 'dev'; state.ui.devTab = 'raw'; state.ui.collapsed = false }, expect: DEV_TABS },
 	{ name: '设置', setup: (state) => { state.ui.view = 'settings'; state.ui.collapsed = false }, expect: ['设置', '记录模式', '数据保留'] },
+	// 后台宿主采样(方向 2):**默认关** —— 宿主快照里有这一栏(新宿主)才摆开关,
+	// 状态行说清"关 + 上次采到的时间 + 累计段数"。宿主半没升级(快照里没有这一栏)时整行不出现:
+	// 摆一个点了不会有任何采样的开关就是**假按钮**。
+	{ name: '设置 · 后台采样(默认关)', setup: (state) => {
+		state.ui.view = 'settings'; state.ui.collapsed = false;
+		state.host.snapshot = { ambient: { enabled: false, total: 5 } };
+		// 真实现里 GET 快照一到就把这一栏抄进回执(probeLink),所以这里也摆上
+		state.host.ambient = { ok: true, phase: 'stopped', enabled: false, total: 5 };
+	}, expect: ['后台宿主采样', '后台采样', '关 · 每 5 分钟', '累计 5 段'] },
+	{ name: '设置 · 后台采样(开着)', setup: (state) => {
+		state.ui.view = 'settings'; state.ui.collapsed = false;
+		state.host.snapshot = { ambient: { enabled: true, total: 7 } };
+		state.host.ambient = { ok: true, phase: 'active', enabled: true, total: 7 };
+		state.render.ambient = true;
+	}, expect: ['后台宿主采样', '开 · 每 5 分钟', '累计 7 段'] },
+	{ name: '设置 · 旧宿主不摆假按钮', setup: (state) => {
+		state.ui.view = 'settings'; state.ui.collapsed = false;
+		state.host.snapshot = { eventLoopLive: true };
+		state.host.ambient = null;
+		state.render.ambient = false;
+	}, expect: ['设置'], absent: ['后台宿主采样'] },
+	{ name: '开发者详情 · 后台采样状态', setup: (state) => {
+		state.ui.view = 'dev'; state.ui.devTab = 'host'; state.ui.collapsed = false;
+		state.host.ambient = { ok: true, phase: 'active', enabled: true, total: 3 };
+		state.render.ambient = true;
+	}, expect: [...DEV_TABS.slice(0, 3), '后台宿主采样', '累计 3 段'] },
 	{ name: '收起态(药丸)', setup: (state) => { state.ui.collapsed = true }, expect: ['性能 HUD', 'fps'] },
 	// HUD 关着也是一条真实路径:主界面会给出"监测受限"而不是一串 0(不许伪装成正常)
 	{ name: '关闭态(HUD 没在采)', off: true, setup: (state) => { state.ui.view = 'main'; state.ui.collapsed = false }, expect: ['已关'] },
@@ -281,6 +315,10 @@ for (const screen of SCREENS) {
 	const texts = textOf(tree)
 	if (VERBOSE) console.log(`     ${screen.name} 文本片段:${JSON.stringify(texts.slice(0, 24))}`)
 	for (const expect of screen.expect) check(`${screen.name}:关键文案在场(${expect})`, texts.some((text) => text.includes(expect)), true)
+	// 反向:不该出现的东西真的没出现(假按钮 / 宿主不支持时那一行)
+	for (const gone of screen.absent ?? []) {
+		check(`${screen.name}:不该出现(${gone})`, texts.some((text) => text.includes(gone)), false)
+	}
 	check(`${screen.name}:没有漏成 key 的文案`, leakedKeys(texts), [])
 }
 
