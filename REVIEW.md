@@ -16,7 +16,7 @@
 | 3 | 声明 `dsh.bundle.patch` | ✅ `cordis.patch.yml` 形态正确 —— 这是市场收录最常见的被拒原因 |
 | 4 | 公开仓库 + topic | ✅ 已公开,`dsh-plugin` 等 6 个 topic 在场 |
 | 5 | 产物无死链 | ✅ 0.8.0 `npm pack` **31 个文件**(0.5.0 的 23 + 6 个 `client.*.js` 分片);`release.yml` 逐份核(含 `tools/`、`locale/` 按目录核) |
-| 6 | 门禁全绿 | ✅ **757** 条离线断言(attribution 11 / logic 684 / host 41 / compat 12 / replay 9)+ **离线渲染冒烟**(六屏 + 关闭态);CI 与 `release.yml` 都跑:两个半边的 `node --check` + 五套件 + 冒烟 + 「断言总数与文档一致」 |
+| 6 | 门禁全绿 | ✅ **758** 条离线断言(attribution 11 / logic 685 / host 41 / compat 12 / replay 9)+ **离线渲染冒烟**(六屏 + 关闭态);CI 与 `release.yml` 都跑:两个半边的 `node --check` + 五套件 + 冒烟 + 「断言总数与文档一致」 |
 | 7 | 投稿形式 | ✅ 2026-10-18 提 PR [awesome-dsh-plugin#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814)(单文件 `data/plugins/…yml`),**2026-10-19 01:29 已合并** |
 | 8 | 兼容性声明 | ✅ `engines.dsh` 与三个客户端 inject 包统一 `>=0.2.0-rc.2 <0.3.0-0`;`dsh.compatibility.dshReleases` **只列真跑过的版本**(`0.2.1-rc.1` / `0.2.1-rc.3`),每条在 [1.0 验收档案](docs/plans/2026-11-07-v1-acceptance.md) 里有机器标记,`npm run pack:check` 逐条核(声明了没跑过 / 越界 / 空矩阵都红) |
 
@@ -35,6 +35,7 @@
 7. ~~**`dshVersion` 恒为 `null`**~~ → **已还(2026-11-07,`c7bc488`)**:选了**客户端别读** —— 字段整个从 `manifest.json` 删掉。宿主半没有可验证的版本来源(`profileContext` 只有 `name` / `dir` / `home` / `patchPath` / `overlays` / `startedBundles`,环境变量里没有 DSH 版本),补它只能猜 API(违背 §1);而一个恒 `null` 的字段会让读包的人去追一个不存在的采集失败。宿主运行时版本没丢:采过宿主 CPU profile 时在 `context.hostCpuProfile.meta.nodeVersion`。断言「诊断包:manifest 不宣称拿不到的 DSH 版本」钉住"别读回来"。
 8. ~~**跨分片共享的单一 `state` 是 99 字段、900 处引用的一大坨**~~ → **已还(2026-11-07,1.0 / S1)**:状态按视图切成四片 —— `state.ui`(23)/ `state.render`(53)/ `state.watch`(37,守夜层自己就是一整片)/ `state.host`(15);900 处引用全部改写成 `state.<片>.<字段>`,裸字段引用为 0。宿主快照字段 `host` 顺手改名 `snapshot`(`state.host.snapshot`,否则会出现 `state.host.host`)。四条离线断言钉住边界:片名只有这四个、四片字段数写死(挪字段要交代)、每处引用都命中真实的「片.字段」、**采集侧只读自己那片**(守夜层读不到面板状态,工具箱只读场景标签;model / ui 拿全四片)。真页面五个验收器全绿。仍留在原地的:测试仍抽源码文本(那是测试写法,不是状态问题);**守卫是基于正则的文本匹配,不是 AST** —— 解构 / 点号与方括号别名 / 赋值式别名 / 方括号字面量字段已覆盖,但**换一种拼法就可能绕过**(`const { frames } = state["watch"]`、`state["watch"]["frames"]`、`(state).watch`、`state .watch`、`w2 = state["watch"]` 实测全绿),**函数参数 / 对象属性携带整片**也判不出 —— 这两类都明确写成"靠评审,不靠断言"。
 9. ~~**Skill 的 `missing:` 前缀漂移没有守卫**~~ → **已还(2026-11-07,`80fb093`)**:`capabilityMissing()` 产出的是自由字符串,而诊断 Skill 按 §2.6 那张前缀表分类读包 —— 客户端换措辞 / 加前缀时三套件照绿,Skill 会静默落进"其它"类。补断言「缺失声明的前缀集合与诊断 Skill §2.6 的前缀表一一对应」:两边去重集合**双向**比(代码有而表里没有 / 表里有而代码已不生成),外加"每个 `missing.push` 都真的以 `前缀:` 开头"(把前缀拼进变量会绕过前两项)。新断言一上来就抓到真实漂移:`host-snapshot:` 与 `loaf-pkg:` 从没进过 Skill 的表,已补进「采集丢了 / 还没采到」。
+11. **A4 timeline 只有 fixture 重定位证据(未还)**:`incident.timeline[]` 的对齐与 64.9% 宿主占比,都是在"真 V8 profile + 同进程帧夹具"上算的 —— **真实卡顿的双端现场采集(真页面 + 真宿主同一次事故)还没做**;`check-panel` / `check-counts` / `check-incident` 都不覆盖 `incident.timeline`(它们里的 `timeline` 是旧的帧条 UI 层)。已钉住的部分:`npm test` 断言夹具对齐 = `[2, 0]`(两段真忙期、最大偏移 0 帧)且两段序列能重算；补齐条件:一次可复现的真实卡顿 + 页面侧抓到同一窗口的 profile,再按 fixture 同样的方式验。
 10. ~~**`tools/inspect-incident.mjs` 读不了自家 fixture**~~ → **已还(2026-11-07,`00b4706`)**:`tests/fixtures/incident-real.json` 是 `{incident, thresholds, redaction}` 的**切片**,工具按完整包判 `kind`,于是 `kind=undefined` 退出 1 —— 仓库自带的样本自己读不了。现在按形状自动认切片(`thresholds` / `redaction` 从顶层搬进 `context`,渲染仍只有一条路),其它形状明确报错并提示 `--allow-slice`;**切片会被说出来**(没有 `context.missing`,那三段显式写"切片里没有这一栏 —— 不是没有缺口")。用法写进工具头部注释,人读的入口在 [`docs/verification.md`](docs/verification.md) §2.2。
 
 ---

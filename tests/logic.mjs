@@ -4872,6 +4872,32 @@ check('A4:两段原始序列都按时间升序,宿主样本带三档 kind 与区
 	[true, true, true, true, true, true]);
 // 对齐误差:把"真烧了 CPU 的帧"与"对齐后 js 采样占比 ≥50% 的帧"各自切成连续段,
 // 比每段的起止下标。夹具里两段忙期 = 两个 idle↔busy 转换,误差 ≤1 帧。
+check('A4:夹具上两端对齐误差 = 0 帧(明确期望值,不再是"≤1"的宽松断言)', (() => {
+	if (tl === null) return null;
+	const byT = new Map(tl.frames.map((row) => [row.t, row]));
+	const paired = timelineFixture.frames.filter((row) => byT.has(row.t));
+	if (paired.length < timelineFixture.frames.length - 1) return null;
+	const runs = (flags) => {
+		const out = [];
+		let start = -1;
+		for (let i = 0; i <= flags.length; i += 1) {
+			const on = i < flags.length && flags[i] === true;
+			if (on && start === -1) start = i;
+			if (on === false && start !== -1) { out.push([start, i - 1]); start = -1; }
+		}
+		return out;
+	};
+	const truth = runs(paired.map((row) => row.busyMs > 0));
+	const aligned = runs(paired.map((row) => byT.get(row.t).ms > 0 && byT.get(row.t).jsMs / byT.get(row.t).ms >= 0.5));
+	const overlap = (a, b) => Math.max(0, Math.min(a[1], b[1]) - Math.max(a[0], b[0]) + 1);
+	const offsets = truth.map((run) => {
+		const best = aligned.reduce((top, cur) => (overlap(cur, run) > overlap(top, run) ? cur : top), aligned[0] ?? [99, 99]);
+		return Math.max(Math.abs(best[0] - run[0]), Math.abs(best[1] - run[1]));
+	});
+	// 复核指出"0 帧"原来只活在 `tools/check-timeline.mjs` 的输出里,`npm test` 只钉 ≤1。
+	// 这条把夹具的明确期望写死:两段真忙期,最大偏移 0 帧。
+	return [truth.length, Math.max(...offsets)];
+})(), [2, 0]);
 check('A4:夹具上两端对齐误差 ≤1 帧(真烧 CPU 的帧段 vs 对齐后的宿主忙帧段)',
 	(() => {
 		if (tl === null) return null;

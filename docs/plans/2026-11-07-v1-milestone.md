@@ -133,7 +133,7 @@
 | A3 | **会话体积 → 打开耗时曲线** | 独立分支，与任何阶段并行 | 只动 `tools/` 与 `docs/`，不碰 `client.*.js`；5–7 h（大头是播种会话） |
 | A4 | **宿主 + 客户端同一时间轴** | **S1（状态切分）之后** | 要动 `client.js` 的时间线接线，与「900 处 `state.` 引用重排」正面冲突；先做会白改一遍。6–8 h |
 
-**状态(2026-11-07 晚)**：A2 已随 S0 落地(`ed0702f`);A1 已交付(`b56991d`,`preview/replay.html` + `tests/replay.mjs` 8 条,页面在 headless Chrome 里真跑过);A4 已合并(`e356e90`,`check-panel` / `check-counts` / `check-incident` 全绿);A3 已合并(`fb905f9`,实测 6 点 × 3 次,36.7MB 台阶)(`feat/a3-open-cost` / `feat/a4-timeline`,各自 worktree,合并后连同真页面复跑一起报)。
+**状态(2026-11-07 晚)**：A2 已随 S0 落地(`ed0702f`);A1 已交付(`b56991d`,`preview/replay.html` + `tests/replay.mjs` 8 条,页面在 headless Chrome 里真跑过);A4 已合并(`e356e90`,三个真页面验收全绿;但**真实卡顿的双端现场采集还没做**,目前只有 fixture 重定位证据 —— 见 REVIEW §2 第 11 条);A3 已合并(`fb905f9`,实测 6 点 × 3 次,36.7MB 台阶)。
 
 ### A1 回放站（与 S0 同期）
 
