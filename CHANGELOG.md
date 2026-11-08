@@ -10,6 +10,10 @@
 
 - **武装窗口:下一次卡顿自动带深录与宿主 timeline(1.1 / 方向 4+2 按需版)**:卡顿详情结论层加「武装 60 秒」—— 窗口内客户端临时切 deep+precise(不写 localStorage)、宿主按 10s 分段滚动采 CPU profile(≤12 段,与 A5 手动采样单飞,不并行),下一次满足阈值的卡顿自动带 `incident.timeline[]`(多段,复用 A4 段形状)与 `incident.env.armed` / `context.armed`;三条还原路径(倒计时 tick / 一次性 deadline + rAF 兜底 / `stop` 或关深录)都会回到窗口前档位并卸插桩。默认档完全不变,新字段全可选、不升 `schemaVersion`。面板显示剩余秒数 / 抓到次数 / 取消;控制台 `__perfHud.arm() / armed() / disarm()`。断言 775 → **809**(logic 697 → 716、host 41 → 56,新增 34 条:状态机 / 宿主分段路由 / 契约样本 / 多段 timeline / 还原路径)。**未验证**:宿主侧未重启 `dsh web`,`armed` 路由只有 `tests/host.mjs` 的假 inspector 证据;真页面与真实采样开销/覆盖率待重启后补。
 
+### 变更
+
+- **常开档的固定开销降下来(评审 P2-1 / P2-2)**:落盘从「每 5 秒全量重写 500 条(≈217KB)」改成「60 秒写一次、只留最近 120 条、写前按 UTF-16 码元量 60KB 预算」;旧 `{ v:1, samples }` 数据仍可 restore(`RING_MAX = 500` 是内存上限,restore 不变)。DOM 采样从固定 2 秒改成自适应:`> 5k` 节点或面板折叠时降到 10 秒,`series` 语义不变(点更稀,`rate` 用真实跨度)。`sampleTick` / `sampleDom` / `flush` 三个常开回调纳入 `context.recorder.phases` 分相自计时,不再只报 rAF。断言 826 → **839**(logic 728 → 741)。
+
 ## [1.0.0] - 2026-11-08
 
 **1.0 的承诺:导出包契约冻结。** `manifest.json` / `incident.json` / `capabilities()` / `missing:` 前缀 / `window.__perfHud` 读接口的形状从这里起冻结 —— [`docs/pack-schema.md`](docs/pack-schema.md) 是唯一权威。加可选字段不升版本;删 / 改名 / 改语义要等 2.0。0.9.0 真导出的一份包由 `tests/compat.mjs` 保证仍读得出来。

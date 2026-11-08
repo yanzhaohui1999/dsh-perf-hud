@@ -617,12 +617,13 @@ check('状态四片:state 就是 ui / watch / host / render 四片,每片都有�
 	[['host', 'render', 'ui', 'watch'], true]);
 // 字段数写死是故意的:挪字段(把一页读数搬到另一片)是结构变更,要连同这一行一起交代。
 // 它同时挡住一类静默错误 —— 字段被复制进两片后,谁写谁读就说不清了。
-check('状态四片:四片的字段数 == 23 / 54 / 37 / 16(挪字段要改这一行并说明理由)',
+check('状态四片:四片的字段数 == 23 / 55 / 37 / 16(挪字段要改这一行并说明理由)',
 	// watch 片的 37 = 守夜对象自己的 30 个键 + tally + 场景/空闲基线 6 个(它本来就是一整层)
 	// render +1 = armed(武装窗口的状态机,属于"档位/采集"那一层);
+	// render +1 = selfPhases(常开回调的分相自计时环,属于"自身开销"那一层);
 	// host +1 = armedProfiles(武装窗口从宿主取回的 profile 段,属于宿主数据)。
 	[stateSlices.ui.length, stateSlices.render.length, stateSlices.watch.length, stateSlices.host.length],
-	[23, 54, 37, 16]);
+	[23, 55, 37, 16]);
 
 // ── 别名解析(见文件头 ①)──
 // 规则:别名只能指向**一片**(`= state.<片>`),不能指向整个 state / 解构整个 state(那样所有字段检查都会被绕过);
@@ -960,7 +961,10 @@ const newPieces = [
 	'function sectionOwner(',
 	'function bundleMap(',
 	'const SELF_RING = ',
+	'const SELF_PHASE_RING = ',
 	'function recordSelf(',
+	'function recordSelfPhase(',
+	'function selfPhaseStats(',
 	'function selfStats(',
 	'function recorderText(',
 	'const LS_MAP = ',
@@ -1025,6 +1029,15 @@ const newPieces = [
 	'const RTT_INTERVAL_MS = ',
 	'const HOST_STALE_MS = ',
 	'const TOP_N = ',
+	'const RING_PERSIST_MAX = ',
+	'const RING_PERSIST_BUDGET = ',
+	'const RING_ENVELOPE_OVERHEAD = ',
+	'const FLUSH_INTERVAL_MS = ',
+	'const DOM_SAMPLE_MS = ',
+	'const DOM_SAMPLE_SLOW_MS = ',
+	'const DOM_SAMPLE_BIG_NODES = ',
+	'function domSampleInterval(',
+	'function persistTail(',
 	'const CROSS_SUMMARY_NAME_MAX = ',
 	'const CROSS_SUMMARY_SRC_MAX ',
 	'const EXPERIMENT_LOAD_BURN_MS = ',
@@ -1240,6 +1253,9 @@ const box = new Function(`${sandbox}
 		setNativesTimeout: (fn) => { const previous = natives.setTimeout; natives.setTimeout = fn; return previous; },
 		stressSelfTest, stressReport, captureReceiptText,
 		SELF_RING, recordSelf, selfStats, recorderText,
+		SELF_PHASE_RING, recordSelfPhase, selfPhaseStats,
+		RING_PERSIST_MAX, RING_PERSIST_BUDGET, RING_ENVELOPE_OVERHEAD, persistTail, FLUSH_INTERVAL_MS,
+		DOM_SAMPLE_MS, DOM_SAMPLE_SLOW_MS, DOM_SAMPLE_BIG_NODES, domSampleInterval,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_RECENT_MAX, WATCH_KEEP_MAX,
 		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, uniqueInteractions, evidenceGroups, evidenceGroupLine, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact, hudPosParse, hudPosClamp, hudPosMake, hudPosMaxHeight, HUD_POS_MIN_ROOM, HUD_POS_PILL_ROOM,
@@ -3188,6 +3204,7 @@ const watchPieces = [
 	// 事故包带记录器自身开销(context.recorder):capabilityMissing 会读 selfStats —— 少一个就
 	// 只在守夜盒里 ReferenceError(各盒子的 pieces 列表与桩必须同步,见 AGENTS §3)
 	extract(source, 'function percentile('),
+	extract(source, 'function selfPhaseStats('),
 	extract(source, 'function selfStats('),
 	// 诊断上下文 + 历史帧数据层(实时 / 历史两支的分流点)
 	source.slice(source.indexOf('const LS_WATCHUI'), source.indexOf('\n', source.indexOf('const LS_WATCHUI'))),
@@ -3435,6 +3452,11 @@ const watchBox = new Function(`
 			armed: { phase: 'idle', startedAt: 0, endsAt: 0, endedAt: 0, windowSeconds: 0, reason: '', wasDeep: false, wasPrecise: false, timer: 0, deadline: 0, syncTimer: 0, captured: 0, restored: 0, hostReceipt: { phase: 'idle', active: false, segments: 0, kept: 0, windowSeconds: 0, segmentSeconds: 0, error: '', stopReason: '' } },
 			// A1 记录器自身开销的环形缓冲
 			selfRing: [], selfAt: 0, selfCount: 0, selfMax: 0,
+			selfPhases: {
+				sampleTick: { ring: [], at: 0, count: 0, max: 0 },
+				sampleDom: { ring: [], at: 0, count: 0, max: 0 },
+				flush: { ring: [], at: 0, count: 0, max: 0 },
+			},
 			bundleKeys: new Set(),
 			longTasks: [],
 			ltSeq: 0, ltDropped: 0,
@@ -4833,7 +4855,7 @@ check('A1:事故包带 context.recorder,结构与整机导出件一致(p99 / 峰
 	watch.state.render.selfCount = savedCount;
 	watch.state.render.selfMax = savedMax;
 	return out;
-})(), ['max,p99,samples', true, 0.3, 0.3, 3]);
+})(), ['max,p99,phases,samples', true, 0.3, 0.3, 3]);
 check('A1:有样本之后 missing 不再含 recorder-cost(旧口径"没带在这份包里"已删)', (() => {
 	const saved = watch.state.render.selfRing.slice();
 	const savedCount = watch.state.render.selfCount;
@@ -6148,10 +6170,12 @@ watch.clearTally();
 {
 	const intervals = [];
 	const flushCalls = [];
+	const order = [];
 	let timerId = 1;
 	const stubs = {
 		sampleTick: () => {},
-		sampleDom: () => {},
+		sampleDom: () => { order.push('sampleDom'); },
+		scheduleDomSample: () => { order.push('scheduleDomSample'); },
 		flush: (force) => { flushCalls.push(force); },
 		frame: () => {},
 		probeLink: () => {},
@@ -6165,26 +6189,26 @@ watch.clearTally();
 	const natives = {
 		requestAnimationFrame: () => timerId++,
 		setInterval: (fn, ms) => { intervals.push({ fn, ms }); return timerId++; },
-		setTimeout: () => timerId++,
+		setTimeout: () => timerId++,   // start() 里 3 秒后的 load 探针;DOM 调度由上面的 stub 接管
 		clearInterval: () => {},
 		cancelAnimationFrame: () => {},
 	};
 	const startState = { render: { on: false, epoch: 0, abort: null }, watch: {}, host: {} };
 	const runStart = new Function('natives', 'state', 'performance', 'RTT_INTERVAL_MS', 'LOAD_INTERVAL_MS', 'stubs', `
-		const { sampleTick, sampleDom, flush, frame, probeLink, applyProbeState, visibilityTrackStart,
+		${line('const FLUSH_INTERVAL_MS')}
+		const { sampleTick, sampleDom, scheduleDomSample, flush, frame, probeLink, applyProbeState, visibilityTrackStart,
 			startLongTask, startLoaf, startInteractions, startDomWatch } = stubs;
 		${extract(source, 'function start()')}
 		start();
 	`);
 	runStart(natives, startState, { now: () => 0 }, 10000, 60000, stubs);
-	check('常开:start() 接的常开周期是 1s / 2s / 5s(采样 / DOM / 落盘)',
-		intervals.slice(0, 3).map((row) => row.ms), [1000, 2000, 5000]);
-	const wired = new Map(intervals.map((row) => [row.ms, row.fn]));
-	const flushWired = wired.get(5000);
+	check('常开:start() 接的常开周期是 1s 采样 / 60s 落盘(DOM 采样不再用 setInterval)',
+		intervals.slice(0, 2).map((row) => row.ms), [1000, 60000]);
+	const flushWired = intervals[1]?.fn;
 	if (typeof flushWired === 'function') flushWired();
-	check('常开:三个周期各接各的函数(1s→sampleTick、2s→sampleDom、5s→flush(false))',
-		[wired.get(1000) === stubs.sampleTick, wired.get(2000) === stubs.sampleDom, JSON.stringify(flushCalls)],
-		[true, true, '[false]']);
+	check('常开:1s→sampleTick、60s→flush(false);DOM 先量一次再交给自适应调度',
+		[intervals[0]?.fn === stubs.sampleTick, JSON.stringify(flushCalls), JSON.stringify(order)],
+		[true, '[false]', '["sampleDom","scheduleDomSample"]']);
 
 	const push = new Function(`${extract(source, 'function push(')}; return push;`)();
 	const series = [];
@@ -6229,18 +6253,105 @@ watch.clearTally();
 	check('上限:restore 从 600 条里只读回最近 RING_MAX 条(当前 500;改成 400 会红)',
 		[restoreRing.length, restoreRing[0]?.t, restoreRing[499]?.t], [500, 100, 599]);
 
-	// 落盘版本:读方按 v 认格式,写 2 就是换了契约(现在读方不校验,靠这条断言钉住写入值)。
+	// 兼容:旧版落盘(v:1 / 500 条 / 带 top·lt 字段)仍原样读回 —— 新写法不升 v,读方也不挑字段。
+	const legacyRing = [];
+	const legacyApi = makeRestore(ringStorage, { render: {}, ui: { groups: {}, marks: [] } }, legacyRing);
+	const legacySamples = Array.from({ length: 500 }, (_, i) => ({ t: i, fps: 60, top: [['p', 1, 2, 3]], lt: null }));
+	ringStore.set(legacyApi.LS_RING, JSON.stringify({ v: 1, savedAt: 1, samples: legacySamples }));
+	legacyApi.run();
+	check('兼容:旧版落盘(v:1 / 500 条 / 带 top·lt)仍能 restore,字段不丢',
+		[legacyRing.length, legacyRing[0]?.t, legacyRing[499]?.top?.[0]?.[0]], [500, 0, 'p']);
+
+	// 新版只落 120 条;读方按同样的 { v:1, samples } 读,不要求 500 条。
+	const shortRing = [];
+	const shortApi = makeRestore(ringStorage, { render: {}, ui: { groups: {}, marks: [] } }, shortRing);
+	ringStore.set(shortApi.LS_RING, JSON.stringify({
+		v: 1, savedAt: 2, samples: Array.from({ length: 120 }, (_, i) => ({ t: i })),
+	}));
+	shortApi.run();
+	check('兼容:新版 120 条落盘原样读回(500 是上限不是下限)',
+		[shortRing.length, shortRing[0]?.t, shortRing[119]?.t], [120, 0, 119]);
+
+	// 落盘版本 + 条数/体积上限:读方仍按 v:1 认格式;写方只写最近 120 条,并在写前量大小。
 	const flushWritten = [];
-	const flushBox = new Function('localStorage', 'ring', 'saveTally', `
+	const flushPhases = [];
+	const flushBox = new Function('localStorage', 'ring', 'saveTally', 'recordSelfPhase', `
 		${line('const LS_RING')}
+		${line('const RING_PERSIST_MAX')}
+		${line('const RING_PERSIST_BUDGET')}
+		${line('const RING_ENVELOPE_OVERHEAD')}
 		let dirty = true;
+		${extract(source, 'function persistTail(')}
 		${extract(source, 'function flush(')}
 		flush(false);
 	`);
-	flushBox({ setItem: (key, value) => flushWritten.push([key, value]) }, [{ t: 1 }], () => {});
+	flushBox({ setItem: (key, value) => flushWritten.push([key, value]) },
+		Array.from({ length: 600 }, (_, i) => ({ t: i, fps: 60, top: [] })),
+		() => {}, (phase) => flushPhases.push(phase));
 	const flushed = flushWritten.length === 1 ? JSON.parse(flushWritten[0][1]) : null;
-	check('落盘:flush 写出的环带 v:1(升到 2 会红),samples 原样',
-		[flushWritten.length, flushed?.v, flushed?.samples?.length, flushed?.samples?.[0]?.t], [1, 1, 1, 1]);
+	check('落盘:flush 只写最近 RING_PERSIST_MAX 条(600 → 120),首条 480、末尾 599',
+		[flushWritten.length, flushed?.v, flushed?.samples?.length, flushed?.samples?.[0]?.t, flushed?.samples?.[119]?.t],
+		[1, 1, 120, 480, 599]);
+	check('落盘:周期 60 秒,写出体积不超过 RING_PERSIST_BUDGET',
+		[box.FLUSH_INTERVAL_MS, flushWritten[0][1].length <= box.RING_PERSIST_BUDGET], [60000, true]);
+	check('落盘:flush 自己进 selfStats 分相(recordSelfPhase("flush"))',
+		flushPhases, ['flush']);
+
+	// 写前量大小:预算不够时从最旧的丢,写出的信封不超预算、最新的一条仍在。
+	const bounded = box.persistTail(Array.from({ length: 50 }, (_, i) => ({ t: i, pad: 'x'.repeat(20) })), 120, 300);
+	const boundedText = JSON.stringify({ v: 1, savedAt: Date.now(), samples: bounded });
+	check('落盘:超预算时从最旧的丢,信封严格不超预算且保留最新',
+		[bounded.length > 0, boundedText.length <= 300, bounded[bounded.length - 1]?.t, bounded[0]?.t > 0],
+		[true, true, 49, true]);
+
+	// 自计时:frame 之外的三个分相(常开档真正的成本)也要有读数,不再只报 rAF。
+	for (const phase of ['sampleTick', 'sampleDom', 'flush']) {
+		box.state.render.selfPhases[phase] = { ring: [], at: 0, count: 0, max: 0 };
+	}
+	for (const ms of [1, 2, 3]) box.recordSelfPhase('sampleTick', ms);
+	box.recordSelfPhase('sampleDom', 4.55);
+	box.recordSelfPhase('flush', 7.89);
+	const phases = box.selfStats().phases;
+	check('自计时:frame 之外 sampleTick / sampleDom / flush 都进 selfStats(各带 p99 / 峰 / 样本数)',
+		[phases.sampleTick.samples, phases.sampleTick.p99, phases.sampleTick.max,
+			phases.sampleDom.samples, phases.sampleDom.p99,
+			phases.flush.samples, phases.flush.max, phases.frame !== undefined],
+		[3, 3, 3, 1, 4.6, 1, 7.9, true]);
+	check('自计时:三个常开回调都真的调 recordSelfPhase(只包 frame 会红)',
+		['sampleTick', 'sampleDom', 'flush'].map((phase) => source.includes(`recordSelfPhase('${phase}'`)),
+		[true, true, true]);
+
+	// DOM 采样:规则抽成纯函数;折叠态 / >5k 节点降到 10 秒,采样序列语义不变。
+	check('DOM 采样:默认 2 秒,>5k 节点降到 10 秒(边界 5000 仍 2 秒)',
+		[0, 5000, 5001, 12000].map((n) => box.domSampleInterval(n, false)), [2000, 2000, 10000, 10000]);
+	check('DOM 采样:折叠态直接 10 秒(没人看时不遍历),非法节点数退回默认',
+		[box.domSampleInterval(100, true), box.domSampleInterval(undefined, false), box.domSampleInterval(NaN, false)],
+		[10000, 2000, 2000]);
+
+	const scheduled = [];
+	let domSamples = 0;
+	const schedState = { render: { on: true, domTimer: 0, dom: { total: 0 } }, ui: { collapsed: false } };
+	const makeSchedule = new Function('state', 'natives', 'sampleDom', `
+		${line('const DOM_SAMPLE_MS')}
+		${line('const DOM_SAMPLE_SLOW_MS')}
+		${line('const DOM_SAMPLE_BIG_NODES')}
+		${extract(source, 'function domSampleInterval(')}
+		${extract(source, 'function scheduleDomSample(')}
+		return scheduleDomSample;
+	`);
+	makeSchedule(schedState, {
+		setTimeout: (fn, ms) => { scheduled.push({ fn, ms }); return scheduled.length; },
+	}, () => { domSamples += 1; })();
+	check('DOM 采样:首次按当前节点数排 2 秒', scheduled.map((row) => row.ms), [2000]);
+	schedState.render.dom.total = 6000;
+	scheduled[0].fn();
+	check('DOM 采样:节点数 >5k 后下一次自动降到 10 秒(sampleDom 仍照常跑)',
+		[scheduled.map((row) => row.ms), domSamples], [[2000, 10000], 1]);
+	schedState.render.on = false;
+	scheduled[1].fn();
+	check('DOM 采样:stop 之后回调不再采样也不再续排', [domSamples, scheduled.length], [1, 2]);
+	check('DOM 采样:自适应只改频率,series 照常推进(sampleDom 里仍有 dom.series 的 push)',
+		/dom\.series/.test(extract(source, 'function sampleDom(')), true);
 }
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
