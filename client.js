@@ -1,9 +1,11 @@
 /**
  * dsh-perf-hud — 浏览器端性能 HUD(纯客户端)。
  *
- * 浏览器半由五个文件组成(DSH 的包内分片,零构建):
+ * 浏览器半由七个文件组成(DSH 的包内分片,零构建):
  *   client.js        采集 / 归因 / 守夜捕获 / 宿主探针 / apply(+ 模型层同步包装)
  *   client.model.js  证据链 / 能力矩阵 / 可能原因 / 诊断包 / 视图模型(159 个函数)
+ *   client.watch.js  守夜层:observer 回调 / 事故组装 / 落盘
+ *   client.i18n.js   中英词典(纯数据,键数见 tests/logic.mjs 的断言)
  *   client.ui.js     渲染层(四视图 + 各 block)
  *   client.pack.js   zip(store 模式)
  *   client.tools.js  隔离实验(首次调用才加载)
@@ -44,6 +46,13 @@ window.__ModuleLoader__.load({
 		const LS_ON = 'dsh-perf-hud:on';
 		const LS_UI = 'dsh-perf-hud:collapsed';
 		const RING_MAX = 500;        // 环形缓冲条数(1 条/秒 ≈ 8 分钟)
+		// 常开档落盘:内存里仍留 500 条,但 localStorage 只留最近 120 条(≈52KB)且 60 秒写一次 ——
+		// 旧实现每 5 秒全量重写 500 条(≈217KB),让「测量工具自己」成了被测对象的一部分。
+		// 写前按序列化后的 UTF-16 码元数量一次大小,超预算就从最旧的再丢;读方仍认 { v:1, samples }。
+		const RING_PERSIST_MAX = 120;
+		const RING_PERSIST_BUDGET = 60 * 1024;
+		const RING_ENVELOPE_OVERHEAD = 64;   // {"v":1,"savedAt":…,"samples":[]} 这类外壳的余量
+		const FLUSH_INTERVAL_MS = 60000;     // 常开落盘周期(原 5 秒)
 		const TOP_N = 3;             // 面板展示的插件条数
 		// 「包 × 来源」摘要里两个名字各自的字符上限:摘要那一行是 label(不收缩)+ value(右对齐),
 		// 不截断就会折成参差的两行(实测 `dsh-client-ui-renderer · DOMWebSocket.onmessage 1234ms` = 53 字符)
@@ -624,6 +633,13 @@ window.__ModuleLoader__.load({
 				selfAt: 0,
 				selfCount: 0,
 				selfMax: 0,
+				// 采集分相自计时:frame 之外,每秒 / 每 N 秒的定时器回调也计入 ——
+				// 否则「落盘 + 全 DOM 遍历」花了多少时间,自计时里永远看不见。
+				selfPhases: {
+					sampleTick: { ring: [], at: 0, count: 0, max: 0 },
+					sampleDom: { ring: [], at: 0, count: 0, max: 0 },
+					flush: { ring: [], at: 0, count: 0, max: 0 },
+				},
 				bundleKeys: new Set(),   // 见过的多包 URL
 				mapCache: { evicted: 0, failed: 0 },   // map 缓存淘汰 / 写失败计数(只进导出件)
 				epoch: 0,                // 每个采集代递增:异步结果跨代一律丢弃(见 fetchTextWithin)
@@ -1211,6 +1227,18 @@ window.__ModuleLoader__.load({
 				find: () => document.querySelector('[data-conversation-content]') ?? document.querySelector('[data-chat-flow]'),
 			},
 		];
+
+		// DOM 采样的自适应周期(毫秒)。全 DOM 遍历是大头:节点数上 5k 或面板折叠(没人看)时降到 10 秒,
+		// 采样序列本身不变(`series` 照常推进,只是点更稀)。抽成纯函数,离线断言这条规则。
+		const DOM_SAMPLE_MS = 2000;
+		const DOM_SAMPLE_SLOW_MS = 10000;
+		const DOM_SAMPLE_BIG_NODES = 5000;
+
+		function domSampleInterval(nodes, collapsed) {
+			if (collapsed === true) return DOM_SAMPLE_SLOW_MS;
+			if (typeof nodes === 'number' && Number.isFinite(nodes) && nodes > DOM_SAMPLE_BIG_NODES) return DOM_SAMPLE_SLOW_MS;
+			return DOM_SAMPLE_MS;
+		}
 
 		// ───────────────────────── 插桩:调度点抓栈 + 回调计时 ─────────────────────────
 		/** 把回调包成"记归属 + 记同步耗时"的版本;arguments 原样透传(rAF 的时间戳等)。 */
@@ -1909,6 +1937,7 @@ window.__ModuleLoader__.load({
 
 		// ───────────────────────────── FPS:1 秒滚动窗口 ─────────────────────────────
 		const SELF_RING = 600;
+		const SELF_PHASE_RING = 240;   // 分相计时环:每秒一次的回调留最近 4 分钟
 
 		/**
 		 * A1:记录器自身开销。测量别人的东西必须先自证"我没让它变慢" —— 每帧给自己的
@@ -1922,11 +1951,45 @@ window.__ModuleLoader__.load({
 			if (ms > state.render.selfMax) state.render.selfMax = ms;
 		}
 
+		/**
+		 * 分相自计时:frame 之外的常开定时器(sampleTick / sampleDom / flush)各留一个环。
+		 * 每次调用都记,含"这次什么都没做"的 flush —— 它也要算进记录器自己的成本里。
+		 */
+		function recordSelfPhase(phase, ms) {
+			const entry = state.render.selfPhases === undefined ? undefined : state.render.selfPhases[phase];
+			if (entry === undefined) return;
+			if (entry.ring.length < SELF_PHASE_RING) entry.ring.push(ms);
+			else { entry.ring[entry.at % SELF_PHASE_RING] = ms; entry.at += 1; }
+			entry.count += 1;
+			if (ms > entry.max) entry.max = ms;
+		}
+
+		/** 一个分相环的 p99 / 峰 / 样本数;空环照实给 null,不编 0。 */
+		function selfPhaseStats(entry) {
+			if (entry === undefined || entry.ring.length === 0) return { p99: null, max: null, samples: 0 };
+			const sorted = entry.ring.slice().sort((a, b) => a - b);
+			return { p99: round1(percentile(sorted, 99)), max: round1(entry.max), samples: entry.count };   // percentile 的 p 是百分数
+		}
+
 		function selfStats() {
-			const ring = state.render.selfRing;
-			if (ring.length === 0) return { p99: null, max: null, samples: 0 };
-			const sorted = ring.slice().sort((a, b) => a - b);
-			return { p99: round1(percentile(sorted, 99)), max: round1(state.render.selfMax), samples: state.render.selfCount };   // percentile 的 p 是百分数
+			const frame = selfPhaseStats({
+				ring: state.render.selfRing,
+				max: state.render.selfMax,
+				count: state.render.selfCount,
+			});
+			const phases = state.render.selfPhases;
+			return {
+				p99: frame.p99,
+				max: frame.max,
+				samples: frame.samples,
+				// frame 之外的三个分相:常开档的主要成本在这里,不只报 rAF。
+				phases: {
+					frame,
+					sampleTick: selfPhaseStats(phases === undefined ? undefined : phases.sampleTick),
+					sampleDom: selfPhaseStats(phases === undefined ? undefined : phases.sampleDom),
+					flush: selfPhaseStats(phases === undefined ? undefined : phases.flush),
+				},
+			};
 		}
 
 		function recorderText() {
@@ -2154,10 +2217,11 @@ window.__ModuleLoader__.load({
 
 		function push(series, point) {
 			series.push(point);
-			if (series.length > 40) series.shift(); // 2 秒一点 ≈ 80 秒窗口
+			if (series.length > 40) series.shift(); // 2 秒一点 ≈ 80 秒窗口(慢档 10 秒一点 ≈ 6.7 分钟;rate 用真实跨度算)
 		}
 
 		function sampleDom() {
+			const selfStarted = performance.now();
 			state.render.dom.total = document.getElementsByTagName('*').length - nodeCount(state.ui.root);
 			push(state.render.dom.series, { t: performance.now(), n: state.render.dom.total });
 			// 堆用量:非标准 API,只有 Chromium 系有;没有就不显示这一行。
@@ -2174,6 +2238,22 @@ window.__ModuleLoader__.load({
 				entry.nodes = element === null ? null : nodeCount(element);
 				if (entry.nodes !== null) push(entry.series, { t: performance.now(), n: entry.nodes });
 			}
+			recordSelfPhase('sampleDom', performance.now() - selfStarted);
+		}
+
+		/**
+		 * DOM 采样的自适应调度:每次按**上一次量到的**节点数与折叠态决定下一次间隔
+		 * (>5k 节点或折叠态 → 10 秒)。不用 setInterval,因为周期要能变;
+		 * `series` 的语义不变,只是长会话里点更稀。
+		 */
+		function scheduleDomSample() {
+			if (state.render.on === false) return;
+			const delay = domSampleInterval(state.render.dom.total, state.ui.collapsed);
+			state.render.domTimer = natives.setTimeout(() => {
+				if (state.render.on === false) return;
+				sampleDom();
+				scheduleDomSample();
+			}, delay);
 		}
 
 		/**
@@ -2432,6 +2512,7 @@ window.__ModuleLoader__.load({
 		}
 
 		function sampleTick() {
+			const selfStarted = performance.now();
 			updateRates(performance.now());
 			idleTick(performance.now());
 			const worst = worstLongTask();
@@ -2460,6 +2541,7 @@ window.__ModuleLoader__.load({
 				ambientCapturedSeen = state.watch.captured;
 				void syncHostAmbient();
 			}
+			recordSelfPhase('sampleTick', performance.now() - selfStarted);
 		}
 
 		// 上次触发后台段取回时的事故结算数(只用来"变了才取";不属于四片状态,也不落盘)
@@ -2538,19 +2620,43 @@ window.__ModuleLoader__.load({
 			pruneMapCache();
 		}
 
-		function flush(force) {
-			// 计数有自己的 dirty 标记:强制落盘(页面隐藏/关闭)时一并写,平时由 markTallyDirty 的
-			// 定时器合并写(一次卡顿里 coalesced 每帧都会加,不能每帧写盘)
-			if (force === true) saveTally();
-			// 30 天聚合每帧都会变;它搭 5 秒一次的 flush 落盘,不另开定时器(不给采集侧加活)。
-			saveHistory();
-			if (dirty === false && force !== true) return;
-			dirty = false;
-			try {
-				localStorage.setItem(LS_RING, JSON.stringify({ v: 1, savedAt: Date.now(), samples: ring }));
-			} catch (error) { /* 配额满:持久化放弃,内存缓冲照常 */ }
+		/**
+		 * 落盘只留最近一段:先按条数截(max),再按**序列化后的大小**从最旧的丢到预算内。
+		 * 纯函数(不读时钟、不碰 localStorage),离线断言条数上限与预算守卫。
+		 * 返回的数组仍按时间升序,读方(restore)看到的格式与旧版完全一样。
+		 */
+		function persistTail(samples, max, budget) {
+			const tail = [];
+			let size = RING_ENVELOPE_OVERHEAD;
+			for (let i = samples.length - 1; i >= 0 && tail.length < max; i -= 1) {
+				const piece = JSON.stringify(samples[i]);
+				if (typeof piece !== 'string') continue;
+				if (size + piece.length + 1 > budget) break;
+				size += piece.length + 1;
+				tail.unshift(samples[i]);
+			}
+			return tail;
 		}
 
+		function flush(force) {
+			const selfStarted = performance.now();
+			try {
+				// 计数有自己的 dirty 标记:强制落盘(页面隐藏/关闭)时一并写,平时由 markTallyDirty 的
+				// 定时器合并写(一次卡顿里 coalesced 每帧都会加,不能每帧写盘)
+				if (force === true) saveTally();
+				// 30 天聚合每帧都会变;它搭同一次 flush 落盘,不另开定时器(不给采集侧加活)。
+				saveHistory();
+				if (dirty === false && force !== true) return;
+				dirty = false;
+				try {
+					// 60 秒写一次、只写最近 120 条(≈52KB);先量大小再写,超预算继续丢最旧的。
+					const samples = persistTail(ring, RING_PERSIST_MAX, RING_PERSIST_BUDGET);
+					localStorage.setItem(LS_RING, JSON.stringify({ v: 1, savedAt: Date.now(), samples }));
+				} catch (error) { /* 配额满:持久化放弃,内存缓冲照常 */ }
+			} finally {
+				recordSelfPhase('flush', performance.now() - selfStarted);
+			}
+		}
 		// ───────────────────────── A2:跨会话基线 ─────────────────────────
 		/**
 		 * 一次会话的帧分布(整段帧环,不排除任何窗口)。
@@ -2640,6 +2746,17 @@ window.__ModuleLoader__.load({
 				if (op === 'setBundle' && typeof manager.setBundleEnabled === 'function') {
 					return { ok: true, via: 'remote', result: await manager.setBundleEnabled(args.name, args.enabled) };
 				}
+			}
+			// 宿主路由的写操作要一次性票据:先 arm,再把 ticket 带上。票据 30 秒有效、
+			// 单次使用 —— confirm:true 只是调用方标志,宿主已经不认它了。
+			// 票据不是授权边界(同源脚本可以自己 arm 取票),只挡盲 CSRF 与重放。
+			if (op === 'setBundle') {
+				const armed = await hostOp({ op: 'arm' }, FETCH_TIMEOUT_MS.bundle);
+				if (armed.ok !== true || typeof armed.ticket !== 'string') {
+					return { ...armed, via: 'route', ok: false, error: armed.error ?? '宿主没有签发一次性票据' };
+				}
+				const payload = await hostOp({ ...args, op: 'setBundle', ticket: armed.ticket }, FETCH_TIMEOUT_MS.bundle);
+				return { ...payload, via: 'route' };
 			}
 			const payload = await hostOp(args, FETCH_TIMEOUT_MS.bundle);
 			return { ...payload, via: 'route' };
@@ -4231,8 +4348,7 @@ window.__ModuleLoader__.load({
 			visibilityTrackStart();
 			state.render.fpsLoop = natives.requestAnimationFrame(frame);
 			state.render.sampleTimer = natives.setInterval(sampleTick, 1000);
-			state.render.domTimer = natives.setInterval(sampleDom, 2000);
-			state.render.flushTimer = natives.setInterval(() => flush(false), 5000);
+			state.render.flushTimer = natives.setInterval(() => flush(false), FLUSH_INTERVAL_MS);
 			state.render.ltObserver = startLongTask();
 			state.watch.on = true;
 			startLoaf();
@@ -4240,7 +4356,8 @@ window.__ModuleLoader__.load({
 			startDomWatch();
 			// 打开 / 切换耗时的起点只有一个:capture 阶段的 click(见 onSessionRowClick)
 			startOpenCostWatch();
-			sampleDom();
+			sampleDom();              // 先量一次,拿到真实节点数
+			scheduleDomSample();      // 再按节点数 / 折叠态决定下一次是 2s 还是 10s
 			probeLink('rtt');
 			// 吞吐探针原来是首个 60 秒才跑,面板那一格会空一分钟看着像被截断 —— 先补一次。
 			natives.setTimeout(() => probeLink('load'), 3000);
@@ -4272,7 +4389,7 @@ window.__ModuleLoader__.load({
 			natives.cancelAnimationFrame(state.render.fpsLoop);
 			visibilityTrackStop();
 			natives.clearInterval(state.render.sampleTimer);
-			natives.clearInterval(state.render.domTimer);
+			natives.clearTimeout(state.render.domTimer);   // DOM 采样是自适应 setTimeout,不是 setInterval
 			natives.clearInterval(state.render.flushTimer);
 			natives.clearInterval(state.host.linkTimer);
 			natives.clearInterval(state.host.loadTimer);

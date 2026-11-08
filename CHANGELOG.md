@@ -6,7 +6,7 @@
 
 ### 新增
 
-- **可见冻结不再被静默剔除(1.1 / 方向 1)**:`isGap` 原来只看帧间隔 ≥1000ms,可见状态下的 2s busy-loop 会得到 `gap:true`,被 `summary` 剔除 —— 实测 LoAF 能起一次事故,但 `summary.worstFrameMs` 只有 16.7ms;没有 LoAF 时连事故都没有。现在把长间隙分成三类:`hidden`(页面当时不可见)/ `visible-freeze`(可见且时间源一致,或有 longtask / LoAF 重叠)/ `time-jump`(可见但墙钟与性能时钟对不上,更像睡眠)。可见冻结**自己起一次捕获**,并在包里带 `frames[].gapReason` 与 `summary.visibleFreezeMs / visibleFreezeFrames`;同批加 120Hz 读数 `summary.refreshHz`(非 gap 帧间隔中位,样本不足 / 估不准退回 60)与 `budgetMisses`(帧时长 >1.5× 刷新预算的条数)。**旧字段语义不变**:`gap:true`、`worstFrameMs`、`hiddenGaps` 的值都没改(可见冻结仍计入长间隙),新字段全是可选、不升 `schemaVersion`。真页面实测:2s 同步 busy-loop → 事故包 `gapReason:"visible-freeze"`、`visibleFreezeMs≈2008ms`;离线 11 条新断言覆盖分类 / 触发 / 隐藏与跳变不触发 / 120Hz 模拟 / 旧字段不变。
+- **可见冻结不再被静默剔除(1.1 / 方向 1)**:`isGap` 原来只看帧间隔 ≥1000ms,可见状态下的 2s busy-loop 会得到 `gap:true`,被 `summary` 剔除 —— 实测 LoAF 能起一次事故,但 `summary.worstFrameMs` 只有 16.7ms;没有 LoAF 时连事故都没有。现在把长间隙分成三类:`hidden`(页面当时不可见)/ `visible-freeze`(可见且时间源一致,或有 longtask / LoAF 重叠)/ `time-jump`(可见但墙钟与性能时钟对不上,更像睡眠)。可见冻结**自己起一次捕获**,并在包里带 `frames[].gapReason` 与 `summary.visibleFreezeMs / visibleFreezeFrames`;同批加 120Hz 读数 `summary.refreshHz`(非 gap 帧间隔中位,样本不足 / 估不准退回 60)与 `budgetMisses`(帧时长 >1.5× 刷新预算的条数)。**旧字段语义不变**:`gap:true`、`worstFrameMs`、`hiddenGaps` 的值都没改(可见冻结仍计入长间隙),新字段全是可选、不升 `schemaVersion`。真页面实测:2s 同步 busy-loop → 事故包 `gapReason:"visible-freeze"`、`visibleFreezeMs≈2008ms`;离线 12 条新断言覆盖分类 / 触发 / 隐藏与跳变不触发 / 120Hz 模拟 / 旧字段不变。
 
 - **武装窗口:下一次卡顿自动带深录与宿主 timeline(1.1 / 方向 4+2 按需版)**:卡顿详情结论层加「武装 60 秒」—— 窗口内客户端临时切 deep+precise(不写 localStorage)、宿主按 10s 分段滚动采 CPU profile(≤12 段,与 A5 手动采样单飞,不并行),下一次满足阈值的卡顿自动带 `incident.timeline[]`(多段,复用 A4 段形状)与 `incident.env.armed` / `context.armed`;三条还原路径(倒计时 tick / 一次性 deadline + rAF 兜底 / `stop` 或关深录)都会回到窗口前档位并卸插桩。默认档完全不变,新字段全可选、不升 `schemaVersion`。面板显示剩余秒数 / 抓到次数 / 取消;控制台 `__perfHud.arm() / armed() / disarm()`。断言 775 → **809**(logic 697 → 716、host 41 → 56,新增 34 条:状态机 / 宿主分段路由 / 契约样本 / 多段 timeline / 还原路径)。**未验证**:宿主侧未重启 `dsh web`,`armed` 路由只有 `tests/host.mjs` 的假 inspector 证据;真页面与真实采样开销/覆盖率待重启后补。
 
@@ -15,6 +15,19 @@
 - **现场「打开/切换会话」耗时(1.1 / 方向 3)**:`document` capture 阶段点击会话行(`data-row-key^="session:"`、且当前未选中)→ 终点 = 目标会话正文节点出现 + 正文 ≥1200 字符 + 该行 `aria-selected=true`(三事实同时成立才结算);观察器只扫新增子树,字符数最多 120ms 读一次(不每帧读整棵树),30s 超时 / 再点 / 关 HUD 三条取消路径共用同一个释放函数。`state.render.openCost.ring` 保留最近 20 次 `{ms,chars,warm,at}`,算 p50/p95;事故包可选带 `context.openCost = {note,n,p50,p95,last}`(**不带标题 / ID / 哈希**,只读字符数);主界面「最近趋势」下加一行 `打开 4.2s`(纯文字,title 写口径);`__perfHud.openCost()` 暴露 ring / 聚合 / pending。redaction 口径改成"只读正文字符数、不读内容"。真页面实测:点击一个 12.8K 字符的会话 → ring 记 `ms 1393.2 / chars 12853`、errors 0。断言 821 → **850**(logic 728 → 757,新增 29 条;含 6 条 DOM 桩的 click/observer/rAF/超时/关 HUD 状态机)。**未验证**:36.7MB 会话的终点稳定性与观察开销(合并后真页面待复跑)、7 天 dogfooding。
 
 - **后台宿主采样(1.1 / 方向 2)**:设置页加「后台宿主采样」开关,**默认关**;开启后宿主低占空比滚动采 CPU profile(每 5 分钟 1 秒、内存里留最近 3 段,常量只在 `index.js`),与手动 / 武装共用同一台 profiler(单飞,优先级 **手动 > 武装 > 后台**;后台在跑时被前两者顶掉并记 `yielded`)。客户端每 10s 的 GET 续租约,`interval×4`(夹 2s–120s)没续上宿主自己停(`lease-expired`),页面关掉 / 插件卸载不会留下常开采样。事故捕获时取与窗口重叠的段填 `incident.timeline[]`(可选 `timeline[].mode:'ambient'`;无重叠不填、不猜);`context.hostSampling` 可选说明开关 / 段数 / 跳过 / 让路 / 停止原因。**没有新增 `missing:` 前缀**。断言 850 → **882**(logic 774 / host 71,新增 32 条:状态机 / 单飞 / 优先级 / 租约 / 段环 / 重叠选择 / 开关默认关)。**未验证**:真宿主重启后的实际开销与覆盖率、真页面设置页排版(worktree 的 client.js 浏览器看不到)、单段实测 27,195B 与 3 段的现场命中率。
+
+### 变更
+
+- **常开档的固定开销降下来(评审 P2-1 / P2-2)**:落盘从「每 5 秒全量重写 500 条(≈217KB)」改成「60 秒写一次、只留最近 120 条、写前按 UTF-16 码元量 60KB 预算」;旧 `{ v:1, samples }` 数据仍可 restore(`RING_MAX = 500` 是内存上限,restore 不变)。DOM 采样从固定 2 秒改成自适应:`> 5k` 节点或面板折叠时降到 10 秒,`series` 语义不变(点更稀,`rate` 用真实跨度)。`sampleTick` / `sampleDom` / `flush` 三个常开回调纳入 `context.recorder.phases` 分相自计时,不再只报 rAF。断言 826 → **839**(logic 728 → 741)。
+
+### 修复
+
+- **独立盲审跟进(c751b4b 小修)**:票据叙事改准 —— `arm` 签发的票据**不是授权边界**(同源脚本可以自己 `POST {op:"arm"}` 取票),只挡读不到响应的盲 CSRF 与重放;`index.js`、AGENTS、CONTRIBUTING、测试与两份历史 plan 文档同步这句口径。补一条**不注入 `armTtlMs`** 的断言,钉住默认 `ARM_TTL_MS=30000`(改成 10 分钟必红);`tests/host.mjs` 的两处 `setTimeout(250)` 和一处 300ms 改成每 10ms 轮询(上限 2s),慢 CI 不再赌固定等待。`AGENTS.md` 的 `state.render` 字段数 54 → 55、`index.js` 量级 0.7k → 0.8k(实际 775 行)。断言 856 → **857**(host 78 → 79)。
+
+- **评审 P3-1 / P3-2:宿主采样世代与 setBundle 一次性票据**:`createCpuProfiler` 加 `generation` token,`start()` 递增、`finish()` 只在 token 匹配时提交 `profile` / `meta` / `running` / `session` —— 采样进行中关掉 HUD 再立刻打开,旧一代的 `Profiler.stop` 不再把新一代的 `running` 打回 false、也不再覆盖缓存。`setBundle` 不再认调用方自带的 `confirm:true`:面板先 `POST {op:"arm"}` 领一张 30 秒有效、单次使用的票据,`setBundle` 带 `ticket` 校验;过期 / 复用 / 伪造 / 无票据一律 403。断言 839 → **856**(host 61 → 78,新增 17 条:世代隔离 9 条 + 票据 8 条)。同轮清文档数字漂移:词典键数改为见断言、`client.js` 分片清单 5 → 7 个文件、`docs/` 8 → 9 份、W1 离线断言 11 → 12 条,行数快照改成量级写法。
+
+离线断言合并后总数 **930**(attribution 11 / logic 799 / host 94 / compat 17 / replay 9)。
+
 
 ## [1.0.0] - 2026-11-08
 

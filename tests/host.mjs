@@ -5,7 +5,8 @@
  *
  * 用一个最小 ctx 装上 index.js 的 apply(),拿到它注册的 /api/dsh-perf-hud/host 路由,
  * 直接以 Request/Response 驱动它,断言:GET 探针、事件循环读数、bundle 读写代理、
- * 以及"没有 confirm 绝不写配置"这条安全线。顺带打印真实测到的事件循环延迟。
+ * 以及"没有一次性票据绝不写配置"这道门(票据只反盲 CSRF / 重放,不是授权边界)。
+ * 顺带打印真实测到的事件循环延迟。
  *
  * CPU profile 那一段**不真的去采**(那是进程级的重活),用假的 inspector 桩注入 ——
  * 与客户端半 logic.mjs 的做法一致:测的是 index.js 那份代码,不是另写一份等价实现。
@@ -17,6 +18,16 @@ let failed = 0;
 const check = (name, ok, detail = '') => {
 	if (!ok) failed += 1;
 	console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail === '' ? '' : `  ${detail}`}`);
+};
+
+/** 轮询等待:每 10ms 检查一次,最多 2 秒。慢 CI 上不靠"睡固定毫秒"赌采样已经收尾。 */
+const waitUntil = async (predicate, timeoutMs = 2000) => {
+	const until = Date.now() + timeoutMs;
+	while (Date.now() < until) {
+		if (await predicate()) return true;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	return (await predicate()) === true;
 };
 
 const dispatched = [];
@@ -44,7 +55,7 @@ const manager = {
 };
 
 // ── 假的 inspector 桩:离线套件不真的去采(进程级的重活) ────────────
-// 只记录被调用的方法名 + 回一份最小但**结构合法**的 .cpuprofile,用来断言状态机与安全线。
+// 只记录被调用的方法名 + 回一份最小但**结构合法**的 .cpuprofile,用来断言状态机与拒绝路径。
 const inspectorCalls = [];
 const fakeProfile = {
 	nodes: [
@@ -93,7 +104,8 @@ const pluginContext = {
 	},
 };
 
-apply(pluginContext, { inspector: fakeInspector });
+// 票据 TTL 在测试里压到 150ms:过期路径不用真等 30 秒,正常路径的 arm→setBundle 仍是毫秒级。
+apply(pluginContext, { inspector: fakeInspector, armTtlMs: 150 });
 
 const route = routes.get('/api/dsh-perf-hud/host');
 check('注册了 /api/dsh-perf-hud/host', route !== undefined);
@@ -158,25 +170,49 @@ const watchOff = await (await post({ op: 'watchEvents', enable: false })).json()
 check('能卸载监听器', watchOff.eventWatch?.installed === false && listeners.has('session/event') === false,
 	`unsubscribed=${JSON.stringify(unsubscribed)}`);
 
-// ── bundle 读写代理:安全线优先 ────────────────────────────────────
+// ── bundle 读写代理:一次性票据优先 ────────────────────────────────
+// 旧实现只校验调用方自带的 confirm:true。现在必须先 arm 领票据,30 秒有效、单次使用
+// (测试里压到 150ms,过期路径不用真等 30 秒)。注意:这是反盲 CSRF / 重放的门,不是
+// 授权边界 —— 同源脚本可以自己 POST {op:'arm'} 取票,所以这里不测"脚本拿不到票"。
 const listed = await (await post({ op: 'listBundles' })).json();
 check('listBundles 代理可用', listed.bundles?.length === 2, listed.bundles?.map((b) => b.name).join(','));
 
-const noConfirm = await post({ op: 'setBundle', name: 'dsh-status-rotator', enabled: false });
-check('没有 confirm 时拒绝(400)', noConfirm.status === 400, `status=${noConfirm.status}`);
-check('没有 confirm 时一次都没写', writes.length === 0);
+const noTicket = await post({ op: 'setBundle', name: 'dsh-status-rotator', enabled: false, confirm: true });
+check('没有票据时拒绝(confirm:true 不再是授权)', noTicket.status === 403, `status=${noTicket.status}`);
+check('没有票据时一次都没写', writes.length === 0);
 
-const guard = await post({ op: 'setBundle', name: 'dsh-perf-hud', enabled: false, confirm: true });
+const forged = await post({ op: 'setBundle', name: 'dsh-status-rotator', enabled: false, ticket: 'forged-ticket' });
+check('伪造票据被拒(403)', forged.status === 403, `status=${forged.status}`);
+check('伪造票据也没有写', writes.length === 0);
+
+const armed1 = await (await post({ op: 'arm' })).json();
+check('arm 签发一张不可猜的票据', armed1.ok === true && typeof armed1.ticket === 'string' && armed1.ticket.length >= 16,
+	`len=${armed1.ticket?.length} ttl=${armed1.ttlMs}`);
+const armed2 = await (await post({ op: 'arm' })).json();
+check('每次 arm 的票据都不同(不可猜、不可复用)', armed1.ticket !== armed2.ticket);
+
+const guard = await post({ op: 'setBundle', name: 'dsh-perf-hud', enabled: false, ticket: armed1.ticket });
 check('拒绝动自己(400)', guard.status === 400);
 
-// 安全线有**两条** deny 名单,只测一条等于另一条没人钉(改坏了照样全绿)
-const guardSession = await post({ op: 'setBundle', name: '@deepseek-ai/dsh-session-persistence-jsonl', enabled: false, confirm: true });
+// 拒绝路径有**两条** deny 名单,只测一条等于另一条没人钉(改坏了照样全绿)
+const guardSession = await post({ op: 'setBundle', name: '@deepseek-ai/dsh-session-persistence-jsonl', enabled: false, ticket: armed2.ticket });
 check('拒绝动 session-persistence-jsonl(400)', guardSession.status === 400);
 check('两条 deny 名单都拒绝时一次都没写', writes.length === 0);
 
-const ok = await (await post({ op: 'setBundle', name: 'dsh-status-rotator', enabled: false, confirm: true })).json();
-check('确认后写入并把 ChangeResult 原样带回', ok.result?.application === 'applied' && writes.length === 1,
+const armed3 = await (await post({ op: 'arm' })).json();
+const ok = await (await post({ op: 'setBundle', name: 'dsh-status-rotator', enabled: false, ticket: armed3.ticket })).json();
+check('有效票据写入并把 ChangeResult 原样带回', ok.result?.application === 'applied' && writes.length === 1,
 	JSON.stringify(writes));
+
+const replay = await post({ op: 'setBundle', name: 'dsh-status-rotator', enabled: true, ticket: armed3.ticket });
+check('同一张票据第二次使用被拒(单次使用)', replay.status === 403, `status=${replay.status}`);
+check('重放被拒后没有再写', writes.length === 1);
+
+const armedExpiring = await (await post({ op: 'arm' })).json();
+await new Promise((resolve) => setTimeout(resolve, 220));
+const expired = await post({ op: 'setBundle', name: 'dsh-status-rotator', enabled: true, ticket: armedExpiring.ticket });
+check('过期票据被拒(150ms 测试 TTL)', expired.status === 403, `status=${expired.status}`);
+check('过期票据也没有写', writes.length === 1);
 
 const unknown = await post({ op: 'nope' });
 check('未知 op 返回 400', unknown.status === 400);
@@ -205,7 +241,7 @@ const secondBody = await second.json();
 check('同一时间只允许一个采样(重入被拒)', secondBody.ok === false && second.status === 500, secondBody.error);
 check('重入被拒时没有再开一次采样', inspectorCalls.filter((m) => m === 'Profiler.start').length === 1);
 
-await new Promise((resolve) => setTimeout(resolve, 250));
+await waitUntil(async () => (await (await get('')).json()).host?.cpuProfile?.collected === true);
 const collected = await (await post({ op: 'profileGet' })).json();
 check('采完能取回标准 .cpuprofile 结构',
 	collected.ok === true && Array.isArray(collected.profile?.nodes) && Array.isArray(collected.profile?.samples)
@@ -419,6 +455,19 @@ apply(ctx2, {
 	inspector: { Session: class { connect() { throw new Error(CONNECT_ERROR); } disconnect() {} post() {} } },
 });
 const route2 = routes2.get('/api/dsh-perf-hud/host');
+
+// 默认 TTL 单独钉:上面主实例注入 armTtlMs:150 只验证"过期会拒",默认值本身没人管。
+// 这里用不注入 armTtlMs 的 route2 —— 把 ARM_TTL_MS 改成 600000,这条必须红。
+const defaultArm = await (await route2.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host', {
+	method: 'POST',
+	headers: { 'content-type': 'application/json' },
+	body: JSON.stringify({ op: 'arm' }),
+}))).json();
+const defaultTtlLeft = (defaultArm.expiresAt ?? 0) - Date.now();
+check('默认票据 TTL 是 30 秒(未注入 armTtlMs)', defaultArm.ok === true && defaultArm.ttlMs === 30000
+	&& defaultTtlLeft > 25000 && defaultTtlLeft <= 30000,
+	`ttlMs=${defaultArm.ttlMs} left=${defaultTtlLeft}ms`);
+
 const failedRes = await route2.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host', {
 	method: 'POST',
 	headers: { 'content-type': 'application/json' },
@@ -458,6 +507,135 @@ const armedFailStop = await (await route2.fetch(new Request('http://dsh.invalid/
 }))).json();
 check('武装:失败窗口也能被主动停掉(不留重试循环)', armedFailStop.ok === true && armedFailStop.armed?.active === false,
 	JSON.stringify(armedFailStop.armed?.stopReason));
+
+// ── 宿主 stop → start:同一台 profiler 停下之后能重新采,不留两代状态 ──
+// REVIEW §5-3:stop() 原来只清 session/timer,不把 running 放回 false(变异体存活)。
+// 那样「关掉 HUD 再打开」会永远卡在"已有一个采样在进行中"。这里不 mock monitorEventLoopDelay,
+// 真停真起(仍用上面的假 inspector,离线不采真 profile),走的是 apply() 注册的卸载句柄。
+const hostDispose = disposers[0];
+check('宿主:拿到宿主卸载句柄(前置条件)', typeof hostDispose === 'function');
+const collectionsBefore = (await (await get('')).json()).host?.cpuProfile?.collections ?? 0;
+const runningBefore = await (await post({ op: 'profileStart', seconds: 5 })).json();
+check('宿主:停之前先开一段 5 秒采样(前置条件)',
+	runningBefore.ok === true && runningBefore.running === true, JSON.stringify(runningBefore).slice(0, 100));
+const startsBeforeRestart = inspectorCalls.filter((m) => m === 'Profiler.start').length;
+const connectsBeforeRestart = inspectorCalls.filter((m) => m === 'connect').length;
+const stopsBeforeRestart = inspectorCalls.filter((m) => m === 'Profiler.stop').length;
+hostDispose();
+const afterStopRestart = await (await get('')).json();
+const stopState = afterStopRestart.host?.cpuProfile ?? {};
+check('宿主:stop() 后 running === false,旧 profile 不丢',
+	stopState.running === false && stopState.collected === true && stopState.collections === collectionsBefore,
+	JSON.stringify({ running: stopState.running, collected: stopState.collected, collections: stopState.collections }));
+const restarted = await (await post({ op: 'profileStart', seconds: 0.1 })).json();
+check('宿主:stop() 后再次 start() 成功(不报"已有一个采样在进行中")',
+	restarted.ok === true && restarted.running === true, JSON.stringify(restarted).slice(0, 120));
+await waitUntil(async () => {
+	const state = (await (await get('')).json()).host?.cpuProfile ?? {};
+	return state.collections === collectionsBefore + 1 && state.running === false;
+});
+const restartedDone = await (await get('')).json();
+const restartedState = restartedDone.host?.cpuProfile ?? {};
+const connectDelta = inspectorCalls.filter((m) => m === 'connect').length - connectsBeforeRestart;
+const startDelta = inspectorCalls.filter((m) => m === 'Profiler.start').length - startsBeforeRestart;
+const stopDelta = inspectorCalls.filter((m) => m === 'Profiler.stop').length - stopsBeforeRestart;
+check('宿主:重启只产出一代状态(collections +1,connect / start / stop 各 +1)',
+	restartedState.running === false && restartedState.collections === collectionsBefore + 1
+	&& restartedState.error === '' && connectDelta === 1 && startDelta === 1 && stopDelta === 1,
+	JSON.stringify({ running: restartedState.running, collections: restartedState.collections,
+		error: restartedState.error, connectDelta, startDelta, stopDelta }));
+
+// ── 采样世代:采样中 stop → start,旧 finish 不得覆盖新一代 ────────────
+// 复现窗口:定时器已触发 finish(),`Profiler.stop` 还挂着;这时卸载(dispose)再重新
+// profileStart。旧 finish 返回时必须只收掉自己的会话,不能把新一代的 running 打回 false、
+// 也不能把旧 profile 写进缓存。用一台新 ctx + 可暂扣 Profiler.stop 的 inspector 隔离状态。
+const staleProfile = {
+	nodes: [{ id: 9, callFrame: { functionName: 'staleGeneration', url: '/w/old.js', lineNumber: 1, columnNumber: 1 }, hitCount: 1, children: [] }],
+	startTime: 1,
+	endTime: 2,
+	samples: [9],
+	timeDeltas: [1],
+};
+const routes3 = new Map();
+const ctx3Disposers = [];
+let heldStop = null;
+let gateNextStop = true;
+const gatedInspector = {
+	Session: class {
+		connect() {}
+		disconnect() {}
+		post(method, _params, callback) {
+			if (method === 'Profiler.stop' && gateNextStop === true) {
+				gateNextStop = false;
+				heldStop = callback;
+				return;
+			}
+			callback(null, method === 'Profiler.stop' ? { profile: fakeProfile } : {});
+		}
+	},
+};
+const ctx3 = {
+	root: Object.create(proto),
+	get() { return undefined; },
+	on() { return () => {}; },
+	effect(fn) { const dispose = fn(); if (typeof dispose === 'function') ctx3Disposers.push(dispose); return () => {}; },
+	inject(_names, callback) {
+		callback({
+			get: (name) => (name === 'connection'
+				? { fetch: { register: (route) => { routes3.set(route.path, route); return () => {}; } } }
+				: undefined),
+			effect(fn) { const dispose = fn(); if (typeof dispose === 'function') ctx3Disposers.push(dispose); return () => {}; },
+		});
+	},
+};
+apply(ctx3, { inspector: gatedInspector });
+const route3 = routes3.get('/api/dsh-perf-hud/host');
+const get3 = () => route3.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host'));
+const post3 = (body) => route3.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host', {
+	method: 'POST',
+	headers: { 'content-type': 'application/json' },
+	body: JSON.stringify(body),
+}));
+
+const started3 = await (await post3({ op: 'profileStart', seconds: 0.1 })).json();
+check('世代:第一代采样已开始(前置条件)', started3.ok === true && started3.running === true,
+	JSON.stringify(started3).slice(0, 100));
+await waitUntil(() => heldStop !== null);
+check('世代:Profiler.stop 已发出并被暂扣(前置条件)', typeof heldStop === 'function');
+const midFinish = await (await get3()).json();
+check('世代:收尾挂起时仍报「采集中」', midFinish.host?.cpuProfile?.running === true,
+	JSON.stringify(midFinish.host?.cpuProfile));
+
+ctx3Disposers[0]();                       // 关 HUD:停掉 timer / 会话
+const stopped3 = await (await get3()).json();
+check('世代:卸载后 running=false(前置条件)', stopped3.host?.cpuProfile?.running === false,
+	JSON.stringify(stopped3.host?.cpuProfile));
+
+const second3 = await (await post3({ op: 'profileStart', seconds: 0.1 })).json();
+check('世代:卸载后立刻重新 start 成功(前置条件)', second3.ok === true && second3.running === true,
+	JSON.stringify(second3).slice(0, 100));
+
+// 放行旧一代的 profiler.stop,并把一份可辨认的旧 profile 交回去。
+heldStop(null, { profile: staleProfile });
+await new Promise((resolve) => setTimeout(resolve, 20));
+const afterStale = await (await get3()).json();
+const afterStaleState = afterStale.host?.cpuProfile ?? {};
+check('世代:旧 finish 不把新一代 running 打回 false', afterStaleState.running === true, JSON.stringify(afterStaleState));
+check('世代:旧 finish 不提交旧 profile(collected 仍为 false)',
+	afterStaleState.collected === false && afterStaleState.collections === 0, JSON.stringify(afterStaleState));
+
+await waitUntil(async () => (await (await get3()).json()).host?.cpuProfile?.collections === 1);
+const final3 = await (await get3()).json();
+const got3 = await (await post3({ op: 'profileGet' })).json();
+check('世代:新一代正常收尾(collections=1、running=false)',
+	final3.host?.cpuProfile?.running === false && final3.host?.cpuProfile?.collections === 1,
+	JSON.stringify(final3.host?.cpuProfile));
+check('世代:缓存里是新一代 profile,不是旧一代',
+	got3.profile?.nodes?.[0]?.callFrame?.functionName === 'fakeHostLoop', got3.profile?.nodes?.[0]?.callFrame?.functionName);
+
+for (const dispose of ctx3Disposers) {
+	if (typeof dispose === 'function') dispose();
+}
 
 for (const dispose of disposers) {
 	if (typeof dispose === 'function') dispose();
