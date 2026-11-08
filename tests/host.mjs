@@ -214,6 +214,51 @@ const expired = await post({ op: 'setBundle', name: 'dsh-status-rotator', enable
 check('过期票据被拒(150ms 测试 TTL)', expired.status === 403, `status=${expired.status}`);
 check('过期票据也没有写', writes.length === 1);
 
+// ── 票据容器上限:超限驱逐最旧 + 可观测计数 ────────────────────────
+// 盲审遗留:arm 可被同源循环调用,不设上限时 Map 会在 30 秒窗口内一直长。
+// 这里把上限压到 4、TTL 拉长到 60 秒,验证"驱逐最旧 / 长度不再增长 / 计数可读"。
+const routesCap = new Map();
+const ctxCap = {
+	root: Object.create(proto),
+	get() { return undefined; },
+	on() { return () => {}; },
+	effect(fn) { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose); return () => {}; },
+	inject(_names, callback) {
+		callback({
+			get: (name) => (name === 'connection'
+				? { fetch: { register: (route) => { routesCap.set(route.path, route); return () => {}; } } }
+				: name === 'pluginManager' ? manager : undefined),
+			effect(fn) { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose); return () => {}; },
+		});
+	},
+};
+apply(ctxCap, { inspector: fakeInspector, armTtlMs: 60000, ticketMax: 4 });
+const routeCap = routesCap.get('/api/dsh-perf-hud/host');
+const postCap = (body) => routeCap.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host', {
+	method: 'POST',
+	headers: { 'content-type': 'application/json' },
+	body: JSON.stringify(body),
+}));
+const issuedCap = [];
+for (let i = 0; i < 4; i += 1) issuedCap.push((await (await postCap({ op: 'arm' })).json()).ticket);
+const overflowCap = await (await postCap({ op: 'arm' })).json();
+check('票据上限:到上限后驱逐最旧,长度停在 max 且 evicted 计数 +1',
+	overflowCap.tickets?.max === 4 && overflowCap.tickets?.live === 4 && overflowCap.tickets?.evicted === 1,
+	JSON.stringify(overflowCap.tickets));
+const evictedWrite = await postCap({ op: 'setBundle', name: 'dsh-status-rotator', enabled: false, ticket: issuedCap[0] });
+check('票据上限:被驱逐的最旧票据不能再写(403)', evictedWrite.status === 403, `status=${evictedWrite.status}`);
+let newestCap = overflowCap.ticket;
+for (let i = 0; i < 20; i += 1) newestCap = (await (await postCap({ op: 'arm' })).json()).ticket;
+const cappedStats = await (await routeCap.fetch(new Request('http://dsh.invalid/api/dsh-perf-hud/host'))).json();
+check('票据上限:再连续 arm 20 次后 live 不再增长(GET 也能读到计数)',
+	cappedStats.host?.tickets?.live === 4 && cappedStats.host?.tickets?.evicted === 21 && cappedStats.host?.tickets?.max === 4,
+	JSON.stringify(cappedStats.host?.tickets));
+const newestCapWrite = await postCap({ op: 'setBundle', name: 'dsh-status-rotator', enabled: false, ticket: newestCap });
+check('票据上限:驱逐后最新票据仍然有效(200)', newestCapWrite.status === 200, `status=${newestCapWrite.status}`);
+const defaultTickets = (await (await post({ op: 'arm' })).json()).tickets;
+check('票据上限:默认上限是 64(未注入 ticketMax)', defaultTickets?.max === 64 && defaultTickets?.live <= 64,
+	JSON.stringify(defaultTickets));
+
 const unknown = await post({ op: 'nope' });
 check('未知 op 返回 400', unknown.status === 400);
 

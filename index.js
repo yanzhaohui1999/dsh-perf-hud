@@ -48,6 +48,9 @@ const ROUTE = '/api/dsh-perf-hud/host';
 // setBundle 一次性票据的有效期:面板先 arm,30 秒内带票据写一次,之后作废。
 // 这只是反盲 CSRF / 重放的时间窗,不是"谁有权写"的边界 —— 同源脚本自己也能 arm。
 const ARM_TTL_MS = 30000;
+// 票据容器的上限:同源脚本可以循环 arm,不设上限时 30 秒窗口内 Map 会一直长。
+// 超限按插入序驱逐最旧的一张,并累计 evicted(arm 回执与 GET host.tickets 都可读)。
+const TICKET_MAX = 64;
 const WINDOW = 300;          // 每秒一个采样,保留 300 秒
 const MAX_LOAD_BYTES = 262144;
 // 直方图分辨率(ms)。默认 10 会把 p50 直接顶到 ~10ms 的地板上,看不出真实抖动,
@@ -994,18 +997,28 @@ export function apply(ctx, options = {}) {
 		// 它**不是授权边界**:同源脚本本来就能自己 POST {op:'arm'} 拿票,也能伪造 confirm:true。
 		// 票据真正挡住的是"读不到响应"的盲 CSRF(攻击页发得出请求、读不回响应)和重放 ——
 		// 把无票写入与重复提交压成 403,而不是区分谁有权写。票据只在宿主内存里,不落盘,
-		// 插件卸载即失效;arm 本身没有速率限制或数量上限(同源循环 arm 仍会让 Map 增长)。
+		// 插件卸载即失效;容器有上限(TICKET_MAX),超限按插入序驱逐最旧并累计 evicted,
+		// 所以同源循环 arm 只会抬高驱逐计数,不会让 Map 无限增长。
 		const tickets = new Map();
+		let ticketsEvicted = 0;
 		const armTtlMs = Number.isFinite(options?.armTtlMs) && options.armTtlMs > 0 ? options.armTtlMs : ARM_TTL_MS;
+		const ticketMax = Number.isInteger(options?.ticketMax) && options.ticketMax > 0 ? options.ticketMax : TICKET_MAX;
+		const ticketStats = () => ({ max: ticketMax, live: tickets.size, evicted: ticketsEvicted });
 		const issueTicket = () => {
 			const now = Date.now();
 			for (const [key, expiresAt] of tickets) {
 				if (expiresAt <= now) tickets.delete(key);
 			}
+			// 过期清理之后仍然满员,就按插入序驱逐最旧的一张(Map 的迭代序就是插入序)。
+			while (tickets.size >= ticketMax) {
+				const oldest = tickets.keys().next().value;
+				tickets.delete(oldest);
+				ticketsEvicted += 1;
+			}
 			const ticket = randomBytes(24).toString('base64url');
 			const expiresAt = now + armTtlMs;
 			tickets.set(ticket, expiresAt);
-			return { ok: true, ticket, expiresAt, ttlMs: armTtlMs };
+			return { ok: true, ticket, expiresAt, ttlMs: armTtlMs, tickets: ticketStats() };
 		};
 		/** 校验并消费票据:返回 '' 表示有效,否则是拒绝原因。无论后续成败,用过即废。 */
 		const consumeTicket = (raw) => {
@@ -1041,6 +1054,8 @@ export function apply(ctx, options = {}) {
 					},
 					eventRing: loop.ring.slice(-30),
 					eventWatch: { installed: watch.installed, reason: watch.reason, mode: 'listener', stats: watch.snapshot() },
+					// 票据容器的可观测计数:同源循环 arm 时 evicted 会涨,live 停在上限。
+					tickets: ticketStats(),
 					// 只回状态,不回 profile 本体(实测 5 秒约 10~13KB,但没必要每个 GET 都背它)。
 					cpuProfile: profiler.state(),
 					// 武装窗口的宿主滚动采样:**只回状态与段数**,段本体走 armedGet 增量取

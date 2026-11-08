@@ -47,7 +47,7 @@
 ## 1. 仓库硬约束
 
 - **`cordis.patch.yml` 只读**:它是"把本插件挂进 profile"的一行声明,内容变化会触发组合 reconcile,**不要把它当配置面**。插件行为一律靠 `package.json` 的 `dsh.*` 与代码里的开关。
-- **bundle 状态写入要一次性票据(反盲 CSRF / 重放,不是授权边界)**:宿主半的 `setBundle` 会写 profile 的持久化选择,是唯一一个"插件会改用户环境"的操作。它必须:① 面板先 `POST {op:"arm"}` 领一张 30 秒有效、单次使用的票据,`setBundle` 带 `ticket`(`confirm:true` 只是调用方标志,宿主不认);② 拒绝改 `dsh-perf-hud` 自己与 `@deepseek-ai/dsh-session-persistence-jsonl`;③ 改动前后逐项核验并恢复。⚠️ **票据不等于授权**:同源脚本可以自己 `arm` 取票,它只挡住"读不到响应"的盲 CSRF 与重放,不区分谁有权写;能兜底的只有 deny 名单与改动前后的核验,别把它当授权用。
+- **bundle 状态写入要一次性票据(反盲 CSRF / 重放,不是授权边界)**:宿主半的 `setBundle` 会写 profile 的持久化选择,是唯一一个"插件会改用户环境"的操作。它必须:① 面板先 `POST {op:"arm"}` 领一张 30 秒有效、单次使用的票据,`setBundle` 带 `ticket`(`confirm:true` 只是调用方标志,宿主不认);票据容器有上限(`TICKET_MAX = 64`),超限按插入序驱逐最旧并累计 `evicted`(`arm` 回执与 GET `host.tickets` 可读);② 拒绝改 `dsh-perf-hud` 自己与 `@deepseek-ai/dsh-session-persistence-jsonl`;③ 改动前后逐项核验并恢复。⚠️ **票据不等于授权**:同源脚本可以自己 `arm` 取票,它只挡住"读不到响应"的盲 CSRF 与重放,不区分谁有权写;能兜底的只有 deny 名单与改动前后的核验,别把它当授权用。
 - **宿主半不许改宿主任何原型**(离线套件有断言钉住);客户端半的原型插桩(见 §5)必须是**可还原**的,`disable()` 后 `W.setTimeout === natives.setTimeout` 等断言必须成立。
 - **不许假装成功**:宿主回执、map 解析状态、事件测量是否装上,一律照实显示并写进导出件(`application` / `mapStates` / `eventWatch.installed+reason` 都是这个原则的产物)。
 - **不凭记忆写 API**:本项目的每一步(路由注册形态、事件名、sourcemap 形态、DOM 钩子)都来自当场读源码或实测;记忆里"应该如此"的东西(`data-dsh-plugin`、包 `Context.emit`)都被证伪过 —— 见 [归因机制](docs/mechanisms.md) 与 [已知坑](docs/dead-ends.md)。
@@ -65,7 +65,7 @@
 | `index.js` | 宿主半:事件循环与 bundle 代理两个探针 + 路由(约 0.8k 行) | 改宿主行为,必须重启 |
 | `cordis.patch.yml` | 把本包挂进 profile 的一行声明 | **只读**,不当配置面(§1) |
 | `locale/en.json` | 插件登记信息(title / description),**不是**面板词典(中英词典都在 `client.i18n.js`) | 发版 / 改市场卡片文案 |
-| `tests/` | 五套离线断言(933 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
+| `tests/` | 五套离线断言(938 条)+ 两套线上 + `fixtures/incident-real.json` + 契约清单解析器 `schema.mjs` | 每次改完(§3) |
 | `preview/` | 面板设计对比页 + **事故回放站** `replay.html`(零依赖,拖 zip 进来;读包口径在 `replay-core.js`) | 读包 / 改设计时 |
 | `tools/` | `cdp.mjs` 是底座;五个 `check-*.mjs` 是真页面验收器;`dead-code` / `measure-cost` / `inspect-incident` / `shots` 是人工工具 | 改渲染 / `apply` / `start` 后至少跑 `check-panel` |
 | `docs/` | 九份参考文档(含 [pack-schema](docs/pack-schema.md))+ `images/`(9 张 README 截图)+ `plans/`(按日期归档 + 索引,含 1.0 验收档案) | 按需查,别通读(§9) |
@@ -119,15 +119,15 @@ cookie 三步、验收器清单、401/404 判据、`check-incident` 的 DOM 约�
 
 ## 3. 测试与门禁
 
-**每次改完必须跑五套件**(合计 **933** 条;改文案还要顺带跑长度预算与单位一致性断言):
+**每次改完必须跑五套件**(合计 **938** 条;改文案还要顺带跑长度预算与单位一致性断言):
 
 ```sh
 node tests/attribution.mjs   # 11 条:客户端脚本 URL 形状 → 包名 / bundle key
 node tests/logic.mjs         # 802 条:从 client.js 与分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
-node tests/host.mjs          # 94 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
+node tests/host.mjs          # 99 条:用假 ctx 驱动真实 index.js(路由 / 事件循环 / confirm 安全线)
 node tests/compat.mjs        # 17 条:上一版 schemaVersion 的夹具包 + 真 0.9.0 导出包(契约没漂 + 缺键必红)
 node tests/replay.mjs        # 9 条:回放站读包(含 zip),现算摘要 == 包里 summary
-node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 933)
+node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不计入上面的 938)
 ```
 
 一条命令跑完:`npm test`。线上(先按 [环境与验证](docs/verification.md) 换 cookie):
