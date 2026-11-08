@@ -17,6 +17,10 @@ window.__ModuleLoader__.load({
 				MONO_FONT,
 				panelWidthFor,
 				pillCompact,
+				// 武装窗口:按钮动作 + 窗口长度(秒数只能来自主文件那一处常量)
+				ARMED_WINDOW_SECONDS,
+				armNow,
+				disarmArmed,
 				// 拖动 / 位置记忆:纯函数与落盘都在主文件那侧(与 panelWidthFor 同一套来源)
 				hudPosClamp,
 				hudPosMake,
@@ -957,6 +961,44 @@ window.__ModuleLoader__.load({
 			});
 		}
 		/**
+		 * 「武装 60 秒」那一行(卡顿详情,普通用户也会走到的那屏)。
+		 *
+		 * 它服务的是**下一次**卡顿:窗口里临时装深录插桩 + 精确归因,宿主同时分段采 profile,
+		 * 窗口里抓到的事故导出时自动带 `incident.timeline[]`。三个状态各有自己的话:
+		 *   · 没武装 —— 一个按钮(点了真的会装插桩,不是装饰;HUD 关着时整屏不渲染,不会出现假按钮);
+		 *   · 武装中 —— 剩余秒数 + 窗口内抓到几次 + 「取消」(取消是真还原);
+		 *   · 已结束 —— 结果一行 + 按钮回来(可以再武装一次)。
+		 * 宿主那一侧失败时就地写错误原文,不假装武装成功(「不许假装成功」)。
+		 */
+		function armedRow() {
+			const t = translate;
+			const armed = state.render.armed;
+			const host = armed.hostReceipt === null || armed.hostReceipt === undefined ? {} : armed.hostReceipt;
+			const armButton = (key) => h('button', {
+				key,
+				type: 'button', style: S.btnGhost, title: t('armedBtnHint'),
+				onClick: () => { armNow(); },
+			}, `${t('armedBtn')} ${Math.round(ARMED_WINDOW_SECONDS)}${t('secondsUnit')}`);
+			if (armed.phase === 'armed') {
+				const left = Math.max(0, Math.ceil((armed.endsAt - Date.now()) / 1000));
+				const parts = [`${t('armedRunning')} · ${t('armedLeft')} ${left}${t('secondsUnit')}`];
+				if (armed.captured > 0) parts.push(`${t('armedCaptured')} ${armed.captured}${t('times')}`);
+				const hostText = typeof host.error === 'string' && host.error !== ''
+					? `${t('armedHostOff')}:${host.error}`
+					: `${t('armedHostSegments')} ${host.segments ?? 0} · ${t('deepShort')}`;
+				return h('div', { style: { ...S.metaLine, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }, title: `${hostText}\n${t('armedBtnHint')}` },
+					h('span', { style: { color: 'var(--dsw-alias-state-warn-primary)' } }, parts.join(' · ')),
+					h('button', { type: 'button', style: S.btnGhost, title: t('armedCancelHint'), onClick: () => { disarmArmed('manual'); } }, t('armedCancel')));
+			}
+			if (armed.phase === 'ended') {
+				const out = armed.captured > 0 ? `${t('armedCaptured')} ${armed.captured}${t('times')}` : t('armedNone');
+				return h('div', { style: { ...S.metaLine, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }, title: t('armedEndedHint') },
+					h('span', null, `${t('armedEnded')} · ${out} · ${t('armedRestored')}`),
+					armButton('armed-again'));
+			}
+			return h('div', { style: S.metaLine }, armButton('armed-start'));
+		}
+		/**
 		 * **历史事故上下文**的取证明细。数据全部来自 `detailContext()`(只吃事故包:
 		 * `incident.frames` / `incident.loaf` / `summary` / `longTasks` / `urls`),所以:
 		 *   · 刷新生效(事故落盘 + 上下文落盘),零新增采集;
@@ -969,7 +1011,11 @@ window.__ModuleLoader__.load({
 		function incidentDetail(detail) {
 			const t = translate;
 			const row = detail.row;
-			if (row === null) return [h('div', { style: S.sub }, t('watchNone'))];
+			if (row === null) {
+				// 老包 / 还没抓到:这一屏没有事故数据,但「武装」服务的是**下一次**卡顿,
+				// 所以入口照样在(它不是"查看这条事故"的动作,不依赖 row)。
+				return [h('div', { style: S.sub }, t('watchNone')), armedRow()];
+			}
 			const frame = detail.frame;
 			const nav = detail.nav;
 			const kids = [];
@@ -987,6 +1033,8 @@ window.__ModuleLoader__.load({
 				h('div', { style: S.heroActions },
 					h('button', { type: 'button', style: S.btnGhost, title: t('copySummaryHint'), onClick: () => copyText(incidentSummaryText(row), t('copySummary')) }, t('copySummary')),
 					h('button', { type: 'button', style: S.btnGhost, title: t('exportIncidentBtnHint'), onClick: () => exportIncident(row.id) }, t('exportIncidentBtn')))));
+			// 「武装 60 秒」:入口放在这一屏(普通用户走到的那屏),它服务的是下一次卡顿
+			kids.push(armedRow());
 			// 采集本身丢过记录时,这一屏必须自己说出来 —— 否则"没看到证据"会被读成"没有证据"。
 			if (row.integrity?.captureComplete === false) {
 				const drop = row.integrity;

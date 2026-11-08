@@ -100,9 +100,9 @@
 | 片 | 字段数 | 管什么 | 谁读 |
 |---|---|---|---|
 | `state.ui` | 23 | 面板自己的视图 / 位置 / 折叠 / 导出预览 / 一次性回执 | 主文件 + model + ui |
-| `state.render` | 53 | 渲染器侧采集:帧 / longtask / 回调 / DOM / 堆 / 自身开销 / 档位 / 取数代际 | 主文件 + model + ui + watch |
+| `state.render` | 54 | 渲染器侧采集:帧 / longtask / 回调 / DOM / 堆 / 自身开销 / 档位(含武装窗口)/ 取数代际 | 主文件 + model + ui + watch |
 | `state.watch` | 37 | 守夜层(环形缓冲 / 留存 / 落盘)+ 场景标签 + 捕获计数 | 主文件 + model + ui + watch + tools |
-| `state.host` | 15 | 宿主快照(`state.host.snapshot`)/ 事件回执 / CPU 采样 / 链路 | 主文件 + model + ui + watch |
+| `state.host` | 16 | 宿主快照(`state.host.snapshot`)/ 事件回执 / CPU 采样 / 武装窗口取回的 profile 段 / 链路 | 主文件 + model + ui + watch |
 
 六条离线断言钉住它:① 字面量只有这四片且每片非空;② 四片的字段数写死(挪字段要改同一行并说明);③ **别名解析**:`const watch = state.watch` 这类别名只许指向一片、不许指向整个 state / 解构 state、不许再赋值,且同名变量不能另有来源(否则"它指向哪片"只有运行时才知道);④ 每处引用(**含经别名的**)都命中真实的「片.字段」,裸引用(少一层)与错片都是红;⑤ 每个文件只读白名单里的片(含经别名的)—— `client.watch.js` 只有 `watch/render/host`,工具箱只有 `watch`,pack / i18n 一个都不许读,主文件是四片的所有者;⑥ `client.model.js` 虽拿全四片,但对 `state.ui` 的读点按**字段白名单**收(见 `tests/logic.mjs` 的 `STATE_FIELD_ALLOW`,新增一个要说明模型层为什么需要它)。新增一位状态前先想清**它属于哪一层**,写到对应片里。
 

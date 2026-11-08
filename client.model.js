@@ -1492,6 +1492,72 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * 武装窗口的宿主段 → `incident.timeline[]`(可以**多段**)。
+		 *
+		 * A4 的 `incidentTimeline()` 是对"一段 profile"的算法,这里只做选择与拼装:
+		 *   · 逐段调同一条 `incidentTimeline()`,与该事故窗口不重叠的段直接不产出;
+		 *   · 产出的每一段标 `armed: true` —— 读包的人据此知道这段 profile 来自"武装期的
+		 *     滚动采样"(10 秒一段、段与段之间有几十毫秒的空档),而不是一次手动 5 秒采样;
+		 *   · 一段都没重叠时返回 `null`(键不出现在包里),交给手动 profile 那条老路兜底。
+		 *
+		 * 不重做对齐、不改段内形状:导出的仍是 A4 已冻结的那份 `timeline[]`。
+		 */
+		function incidentTimelineFromArmed(row, records) {
+			if (!Array.isArray(records) || records.length === 0) return null;
+			const out = [];
+			for (const record of records) {
+				const segments = incidentTimeline(row, record);
+				if (segments === null) continue;
+				for (const segment of segments) out.push({ ...segment, armed: true });
+			}
+			if (out.length === 0) return null;
+			out.sort((a, b) => a.fromMs - b.fromMs);
+			return out;
+		}
+
+		/**
+		 * 事故包的 `context.armed`(可选段):说明"这条事故是不是在武装窗口里采的",以及
+		 * 窗口本身的参数与宿主分段采样到了什么 —— 读包的人据此判断**插桩开销**。
+		 *
+		 * 只在两种情况下出现(否则返回 null,键不出现):
+		 *   ① 本页面开过武装窗口(`startedAt > 0`);
+		 *   ② 这条事故自己带着 `env.armed`(刷新后读回的事故,本页面已经不知道窗口了)。
+		 * ② 的 `state` 写 `not-observed` —— 不假装我们知道那个窗口现在是什么状态。
+		 */
+		function armedContext(armedState, incident, profiles) {
+			const armed = armedState === null || typeof armedState !== 'object' ? {} : armedState;
+			const env = incident === null || typeof incident !== 'object'
+				? {}
+				: (incident.env === null || typeof incident.env !== 'object' ? {} : incident.env);
+			const captured = env.armed === true;
+			const ever = typeof armed.startedAt === 'number' && armed.startedAt > 0;
+			if (ever === false && captured === false) return null;
+			const host = armed.hostReceipt === null || typeof armed.hostReceipt !== 'object' ? {} : armed.hostReceipt;
+			const iso = (ms) => (typeof ms === 'number' && ms > 0 ? new Date(ms).toISOString() : null);
+			return {
+				mode: 'armed-window',
+				scope: '窗口内临时装的深录插桩 + 精确归因,并让宿主分段滚动采 CPU profile;默认档不装。这段事故的帧读数带着插桩开销,不要和默认档的事故直接比',
+				state: armed.phase === 'armed' ? 'armed' : (ever === true ? 'ended' : 'not-observed'),
+				windowSeconds: typeof armed.windowSeconds === 'number' ? armed.windowSeconds : null,
+				segmentSeconds: typeof host.segmentSeconds === 'number' ? host.segmentSeconds : null,
+				startedAt: iso(armed.startedAt),
+				endsAt: iso(armed.endsAt),
+				endedAt: iso(armed.endedAt),
+				reason: typeof armed.reason === 'string' ? armed.reason : '',
+				capturedDuringWindow: captured,
+				captured: typeof armed.captured === 'number' ? armed.captured : 0,
+				restored: typeof armed.restored === 'number' ? armed.restored : 0,
+				host: {
+					phase: typeof host.phase === 'string' ? host.phase : 'unknown',
+					segments: typeof host.segments === 'number' ? host.segments : 0,
+					profilesKept: Array.isArray(profiles) ? profiles.length : 0,
+					stopReason: typeof host.stopReason === 'string' ? host.stopReason : '',
+					error: typeof host.error === 'string' ? host.error : '',
+				},
+			};
+		}
+
+		/**
 		 * raw profile 里会带用户名的 url 先换掉:键名是 `url` 时 `redactExport` 走
 		 * `redactScriptUrl`(只剥协议 + 主机),对 `file:///Users/<用户名>/…` 不命中 ——
 		 * 这条路径会把用户名原样交出去,所以在包里先过一遍 `redactPath`。
@@ -1749,7 +1815,7 @@ window.__ModuleLoader__.load({
 			}
 			howToAdd.push('零成本、当场可做:chrome://gpu 看是不是落到了软件渲染;DevTools → Rendering 打开 Frame Rendering Stats(FPS 表)与 Paint flashing —— 页面完全静止时帧率是否也上不去');
 			howToAdd.push('判定"主线程之外":Performance 面板录 5 秒,看 Main 轨道自身的忙碌时间是否远小于墙钟 —— 注意 blocking=0 / scripts 为空**不能**当证据(见上面的读取说明),要看 Main 轨道本身');
-			howToAdd.push('宿主火焰图:面板「宿主与链路 → 宿主 CPU 采样」点一下(或 __perfHud.cpuProfile(5)),采完这份包就会带 context.hostCpuProfile(汇总 + 自热 top);要逐帧看再点「下载 .cpuprofile」用 speedscope / Chrome DevTools 打开。等价的手动路径:带宿主 cookie(见 docs/verification.md)POST /api/dsh-perf-hud/host {op:"profileStart", seconds:5},再 POST {op:"profileGet"} 取回标准 .cpuprofile;退一步也可以 kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record');
+			howToAdd.push('宿主火焰图:面板「宿主与链路 → 宿主 CPU 采样」点一下(或 __perfHud.cpuProfile(5)),采完这份包就会带 context.hostCpuProfile(汇总 + 自热 top);要逐帧看再点「下载 .cpuprofile」用 speedscope / Chrome DevTools 打开。想让它**在卡顿发生时已经存在**,改用卡顿详情里的「武装 N 秒」(或 __perfHud.arm()):窗口里宿主会每 10 秒分段采一段,事故包的重叠段会自动进 incident.timeline[]。等价的手动路径:带宿主 cookie(见 docs/verification.md)POST /api/dsh-perf-hud/host {op:"profileStart", seconds:5},再 POST {op:"profileGet"} 取回标准 .cpuprofile;退一步也可以 kill -USR1 <dsh web pid> → chrome://inspect → Performance → Record');
 			return { missing, howToAdd, capabilities: caps };
 		}
 		/** 出处 / 线索强度的文字档位 —— 只给名字,颜色与排版由 UI 那一侧定。 */
@@ -2392,7 +2458,12 @@ window.__ModuleLoader__.load({
 			const howToAdd = gaps.howToAdd;
 			// A4:最近一次宿主 CPU 采样与这条事故的窗口重叠时,才把 `timeline[]` 放进包里。
 			// 没重叠 / 没采过 → 键不存在(可选字段的定义,不是"空数组"也不是"采到了但空")。
-			const timeline = incidentTimeline(incident, state.host.hostCpuProfile);
+			// 武装期采到的段优先:它们本来就是为了"下次卡顿发生时数据已经存在"而采的;
+			// 一段都没重叠才退回手动采到的那一份(老路一点没改)。
+			const armedTimeline = incidentTimelineFromArmed(incident, state.host.armedProfiles);
+			const timeline = armedTimeline === null ? incidentTimeline(incident, state.host.hostCpuProfile) : armedTimeline;
+			// 武装窗口是**可选**段:没开过、这条也不是窗口里采的 → 键不出现。
+			const armed = armedContext(state.render.armed, incident, state.host.armedProfiles);
 			const payload = {
 				plugin: PKG,
 				kind: 'perf-hud-incident',
@@ -2411,6 +2482,9 @@ window.__ModuleLoader__.load({
 					// 宿主进程的 CPU 采样(按需采到的最近一段)。**不是页面开销**,不能与帧时间相加;
 					// 字段含义 / 抽样口径见下面的 howToRead。
 					hostCpuProfile: hostCpuProfileContext(state.host.hostCpuProfile),
+					// 武装窗口(可选):这段事故是不是在窗口里采的、窗口参数、宿主分段采到了几段。
+					// 读包的人靠它判断"这份帧读数带着多少插桩开销"。
+					...(armed === null ? null : { armed }),
 					// 记录器自身开销:与整机导出件 `context.recorder` **同一个结构**(selfStats 给的
 					// p99 / max / samples),不另创一套。它是**导出时刻**的读数(与整机件同一时间基准);
 					// 事故那一刻的帧数据在 incident.frames / incident.summary 里,两者别混读。
@@ -2451,7 +2525,8 @@ window.__ModuleLoader__.load({
 						'context.watch.kept 按**严重度降序**,不是时间序;带 restored 的条目来自上一次会话(时间靠 env.perfOrigin 对齐),所以 id 与时间看起来会跳',
 						'context.watch.kept[].tier 说明这条是靠哪一档留下来的:worst = 全局最差那一档(前 10 条)、daily = 它那一天最差的一条(最多留最近 7 天)、recent = 最近 3 次(不看严重度)、both = 最差与当天最差两档都占。留存是**三档并集**,所以条数上限是 10 + 7 + 3 = 20 而不是 10 —— 单靠全局最差档时,"昨天下午那次卡"会被同一小时里的 10 次挤掉,而"刚才那一下"永远进不了榜',
 						'手动标记(`__perfHud.capture` / 面板「标记刚才」)的返回值分三态:settled 有 incident(已经切片,id / tier / 清单位置都在)、pending 表示已起了一次但后摇没到还没结算、coalesced 表示并进了正在等的那一次(本次备注没有单独留下)。面板回执读同一份返回值,不另猜',
-						'incident.timeline[] 是**可选**的:只有"最近一次宿主 CPU 采样"与这条事故的窗口有交集时才出现,一个 profile 一段(不是每帧一条)。`fromMs/toMs` 是对齐后的区间(perf 毫秒,与 incident.frames 同一坐标系),`profile.startedAt/endedAt` 是宿主的 Date.now 锚点,`alignment.errorMs` 是两端锚点跨度差(对齐不确定度的估计,不是保证)。`stall` 是这条事故**最差那一帧**的区间;`share.hostMs/hostPct` 只算这一段,`pageMs/pagePct` 是剩余部分(**不等于页面 JS 全忙**;宿主空闲、profile 没采到的部分都在里面),`coveragePct < 100` 时 hostPct 是下界。`host.samples[]` 与 `frames[]` 是两段原始序列:`host.samples[]` 每条是 [t-ms, t] 的宿主采样(三档 js / native / idle),`frames[]` 每帧带对齐后的宿主毫秒 —— 拿到包的人可以自己重算占比,不用信一个孤立的百分比。宿主序列超过上限时按"卡顿内的优先"截断并写 `omitted`。⚠️ 对齐靠两侧的 Date.now / performance.timeOrigin:同一台机器上是同一时钟,跨机器访问(DSH 在 Mac、浏览器在 Windows)时仍有系统时钟偏差,这条轴不承诺跨机器误差 ≤1 帧',
+						'incident.timeline[] 是**可选**的:只有"最近一次宿主 CPU 采样"与这条事故的窗口有交集时才出现,一个 profile 一段(不是每帧一条;武装窗口里采到的会**多段**,每段标 `armed: true`(`timeline[].armed`))。`fromMs/toMs` 是对齐后的区间(perf 毫秒,与 incident.frames 同一坐标系),`profile.startedAt/endedAt` 是宿主的 Date.now 锚点,`alignment.errorMs` 是两端锚点跨度差(对齐不确定度的估计,不是保证)。`stall` 是这条事故**最差那一帧**的区间;`share.hostMs/hostPct` 只算这一段,`pageMs/pagePct` 是剩余部分(**不等于页面 JS 全忙**;宿主空闲、profile 没采到的部分都在里面),`coveragePct < 100` 时 hostPct 是下界。`host.samples[]` 与 `frames[]` 是两段原始序列:`host.samples[]` 每条是 [t-ms, t] 的宿主采样(三档 js / native / idle),`frames[]` 每帧带对齐后的宿主毫秒 —— 拿到包的人可以自己重算占比,不用信一个孤立的百分比。宿主序列超过上限时按"卡顿内的优先"截断并写 `omitted`。⚠️ 对齐靠两侧的 Date.now / performance.timeOrigin:同一台机器上是同一时钟,跨机器访问(DSH 在 Mac、浏览器在 Windows)时仍有系统时钟偏差,这条轴不承诺跨机器误差 ≤1 帧',
+						'incident.env.armed 为 true(只有为真时才出现这个键)表示这条事故是在一次「武装窗口」里采到的:那段时间里客户端临时装了深录插桩 + 精确归因,宿主同时分段滚动采 CPU profile —— 这段帧读数**带着插桩开销**,别直接和默认档的事故比。context.armed 是导出时刻的窗口状态(窗口 / 段长 / 段数 / 是否还开着 / 还原原因 / 宿主错误原文);刷新之后读回的事故仍然带着 env.armed,但本页面已经不知道那个窗口了,所以 context.armed.state 会写 not-observed',
 					],
 				},
 				incident: timeline === null ? incident : { ...incident, timeline },

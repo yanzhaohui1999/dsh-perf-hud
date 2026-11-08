@@ -123,6 +123,10 @@ function makeDeps(state) {
 		ROOT_ID: 'dsh-perf-hud-root',
 		MONO_FONT: 'ui-monospace',
 		LS_UI: 'dsh-perf-hud:collapsed',
+		// 武装窗口:按钮上的秒数来自主文件的常量(真值 60;这里只是同一形状的桩)
+		ARMED_WINDOW_SECONDS: 60,
+		armNow: () => ({ ok: true, state: 'armed' }),
+		disarmArmed: () => ({ ok: true, state: 'ended' }),
 		Top: 3,
 		// 尺寸 / 位置:与真实现同形的最小版本
 		PANEL_WIDTH: 396,
@@ -207,7 +211,22 @@ const check = (name, actual, expected) => {
 const DEV_TABS = ['帧与归因', 'DOM 与堆', '宿主', '工具箱', '原始数据']
 const SCREENS = [
 	{ name: '主界面', setup: (state) => { state.ui.view = 'main'; state.ui.collapsed = false; state.watch.mode = 'live' }, expect: ['性能 HUD', '导出诊断报告'] },
-	{ name: '卡顿详情(历史上下文)', setup: (state) => { state.ui.view = 'incident'; state.ui.collapsed = false; state.watch.mode = 'incident' }, expect: ['卡顿详情', '还没抓到'] },
+	// 卡顿详情:这一屏没有事故数据时也要给「武装」入口(它服务的是下一次卡顿,不依赖 row)
+	{ name: '卡顿详情(历史上下文)', setup: (state) => { state.ui.view = 'incident'; state.ui.collapsed = false; state.watch.mode = 'incident' }, expect: ['卡顿详情', '还没抓到', '武装 60 秒'] },
+	// 武装中:剩余秒数 + 取消(取消是真还原,不是装饰按钮)
+	{ name: '卡顿详情 · 武装中', setup: (state) => {
+		state.ui.view = 'incident'; state.ui.collapsed = false; state.watch.mode = 'incident';
+		state.render.armed = {
+			...state.render.armed, phase: 'armed', windowSeconds: 60,
+			startedAt: Date.now() - 20000, endsAt: Date.now() + 40000, captured: 1,
+			hostReceipt: { ...state.render.armed.hostReceipt, phase: 'active', active: true, segments: 2, kept: 2 }
+		};
+	}, expect: ['武装中', '还剩', '取消', '宿主段 2'] },
+	// 武装已结束:结果一行 + 按钮回来(可以再武装一次)
+	{ name: '卡顿详情 · 武装结束', setup: (state) => {
+		state.ui.view = 'incident'; state.ui.collapsed = false; state.watch.mode = 'incident';
+		state.render.armed = { ...state.render.armed, phase: 'ended', windowSeconds: 60, startedAt: Date.now() - 70000, endsAt: Date.now() - 10000, endedAt: Date.now() - 10000, captured: 2, restored: 1 };
+	}, expect: ['武装结束', '已还原', '武装 60 秒'] },
 	{ name: '开发者详情 · 帧与归因', setup: (state) => { state.ui.view = 'dev'; state.ui.devTab = 'frames'; state.ui.collapsed = false }, expect: [...DEV_TABS, '深录'] },
 	{ name: '开发者详情 · DOM 与堆', setup: (state) => { state.ui.view = 'dev'; state.ui.devTab = 'dom'; state.ui.collapsed = false }, expect: DEV_TABS },
 	{ name: '开发者详情 · 宿主与链路', setup: (state) => { state.ui.view = 'dev'; state.ui.devTab = 'host'; state.ui.collapsed = false }, expect: DEV_TABS },

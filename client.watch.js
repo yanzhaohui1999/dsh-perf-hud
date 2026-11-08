@@ -235,6 +235,11 @@ window.__ModuleLoader__.load({
 			}
 			watch.pending = {
 				cause, at, severity: round1(severity), note: note ?? null, until: at + WATCH_POST_MS,
+				// 武装窗口:在**触发那一刻**记下来,而不是结算时再问 —— 触发落在窗口末尾、结算时
+				// 窗口已经结束时,这条事故仍然属于"武装期采的"(env.armed 会写进包里)。
+				// startedAt 用来把"结算时又开了一轮新窗口"这种情况排除在计数之外。
+				armed: state.render.armed.phase === 'armed',
+				armedStartedAt: state.render.armed.startedAt,
 				// 窗口完整性的起点状态:环满 + 确实丢过记录 + 最老一条晚于窗口起点 ⇒ 前摇已经丢了记录。
 				loafFull: watch.loaf.length >= WATCH_LOAF_MAX,
 				loafDroppedAtTrigger: watch.loafDropped,
@@ -533,6 +538,9 @@ window.__ModuleLoader__.load({
 					instrumented: state.render.on && state.render.deep === true,
 					deep: state.render.deep === true,
 					precise: state.render.precise,
+					// 这条事故是在一次「武装窗口」里采到的吗(窗口内临时装的深录插桩 + 宿主分段采样)。
+					// **只在为真时出现**:默认档的事故不该凭空多一个键(可选字段的定义)。
+					...(pending.armed === true ? { armed: true } : null),
 					// 跨会话(落盘后重开页面)读这份事故时,perf 毫秒要靠它才能对齐墙上时间
 					perfOrigin: new Date(perfOrigin()).toISOString(),
 					// 渲染环境:判断"这段是坏还是这台机器一直这样"的另一个前提
@@ -555,6 +563,11 @@ window.__ModuleLoader__.load({
 			if (pending === null) return null;
 			const incident = assembleIncident(pending);
 			watch.captured += 1;
+			// 武装窗口内的结算数(面板用它回答"这 60 秒有没有等到卡顿");只计数,不改留存策略。
+			// 对 startedAt:触发之后、结算之前用户又开了**新一轮**窗口时,不能把这次算到新的那一轮上。
+			if (pending.armed === true && state.render.armed.startedAt === pending.armedStartedAt) {
+				state.render.armed.captured += 1;
+			}
 			// 计数与留存分开记:上面那个 captured 是**本次会话**的计数,下面这份是跨刷新的时间桶
 			const now = Date.now();
 			bumpTally('captured', now);
