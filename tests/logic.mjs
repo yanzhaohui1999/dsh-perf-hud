@@ -6076,5 +6076,172 @@ watch.state.watch.incidents.length = 0;
 for (const row of savedTallyIncidents) watch.state.watch.incidents.push(row);
 watch.clearTally();
 
+// ── §5-1 可见性生命周期:start/stop 成对,hiddenRanges 真的记下隐藏区间 ──
+// REVIEW §5-1:这组函数在 tests/ 里零命中,守卫取反 / 重复挂监听都能全绿。
+// 这里从 client.js 抽**真函数**进沙箱,用桩 W 记监听次数、伪 visibilityState + 可控时钟造区间。
+{
+	const visibilityBox = new Function('W', 'document', 'performance', `
+		let lastFrameWallAt = 0;
+		let hiddenSince = 0;
+		const hiddenRanges = [];
+		${line('const HIDDEN_RANGE_MAX')}
+		${extract(source, 'function visibilityTrackStart()')}
+		${extract(source, 'function visibilityTrackStop()')}
+		${extract(source, 'function rememberVisibility()')}
+		return {
+			start: visibilityTrackStart, stop: visibilityTrackStop, remember: rememberVisibility,
+			ranges: () => hiddenRanges, hiddenSince: () => hiddenSince,
+		};
+	`);
+	const visListeners = new Set();
+	let visAdded = 0;
+	let visRemoved = 0;
+	const fakeW = {
+		addEventListener(type, listener) { if (type === 'visibilitychange') { visAdded += 1; visListeners.add(listener); } },
+		removeEventListener(type, listener) { if (type === 'visibilitychange') { visRemoved += 1; visListeners.delete(listener); } },
+	};
+	const fakeDocument = { visibilityState: 'visible' };
+	let clock = 1000;
+	const fakePerformance = { now: () => clock };
+	const vis = visibilityBox(fakeW, fakeDocument, fakePerformance);
+	vis.start();
+	check('可见性:start 后恰好挂 1 个 visibilitychange 监听(重复注册会红)',
+		[visAdded, visListeners.size], [1, 1]);
+	fakeDocument.visibilityState = 'hidden';
+	clock = 2000;
+	vis.remember();
+	fakeDocument.visibilityState = 'visible';
+	clock = 5000;
+	vis.remember();
+	check('可见性:visible→hidden→visible 恰好记 1 段,区间就是隐藏的那段时间',
+		[vis.ranges().length, vis.ranges()[0]?.from, vis.ranges()[0]?.to], [1, 2000, 5000]);
+	vis.remember();
+	vis.remember();
+	check('可见性:连续 visible 不新增区间,hiddenSince 也已复位',
+		[vis.ranges().length, vis.hiddenSince()], [1, 0]);
+	fakeDocument.visibilityState = 'hidden';
+	clock = 6000;
+	vis.remember();
+	fakeDocument.visibilityState = 'visible';
+	clock = 7000;
+	vis.remember();
+	check('可见性:第二次隐藏→可见再记一段(上一段真的收尾了,不是只记第一次)',
+		[vis.ranges().length, vis.ranges()[1]?.from, vis.ranges()[1]?.to], [2, 6000, 7000]);
+	vis.stop();
+	check('可见性:stop 后 removeEventListener 恰好 1 次,监听与区间都清空',
+		[visRemoved, visListeners.size, vis.ranges().length, vis.hiddenSince()], [1, 0, 0, 0]);
+	fakeDocument.visibilityState = 'hidden';
+	clock = 10000;
+	vis.start();
+	fakeDocument.visibilityState = 'visible';
+	clock = 12000;
+	vis.remember();
+	check('可见性:隐藏时 start,区间从 start 那一刻算起(不是从第一次 visible 起)',
+		[vis.ranges().length, vis.ranges()[0]?.from, vis.ranges()[0]?.to], [1, 10000, 12000]);
+	vis.stop();
+}
+
+// ── §5-2 常开接线与落盘契约:1s/2s/5s、40 点窗口、RING_MAX、v:1 ──
+// REVIEW §5-2:定时器只在 start() 里接线,`push` / `restore` / `flush` 从不进测试 ——
+// 把 2000 改成 1000、窗口改成 `>= 40`、RING_MAX 改成 400、落盘版本改成 2,全都全绿。
+// 手法同上:抽真函数,用桩 natives/localStorage 接住调用。
+{
+	const intervals = [];
+	const flushCalls = [];
+	let timerId = 1;
+	const stubs = {
+		sampleTick: () => {},
+		sampleDom: () => {},
+		flush: (force) => { flushCalls.push(force); },
+		frame: () => {},
+		probeLink: () => {},
+		applyProbeState: () => {},
+		visibilityTrackStart: () => {},
+		startLongTask: () => null,
+		startLoaf: () => {},
+		startInteractions: () => {},
+		startDomWatch: () => {},
+	};
+	const natives = {
+		requestAnimationFrame: () => timerId++,
+		setInterval: (fn, ms) => { intervals.push({ fn, ms }); return timerId++; },
+		setTimeout: () => timerId++,
+		clearInterval: () => {},
+		cancelAnimationFrame: () => {},
+	};
+	const startState = { render: { on: false, epoch: 0, abort: null }, watch: {}, host: {} };
+	const runStart = new Function('natives', 'state', 'performance', 'RTT_INTERVAL_MS', 'LOAD_INTERVAL_MS', 'stubs', `
+		const { sampleTick, sampleDom, flush, frame, probeLink, applyProbeState, visibilityTrackStart,
+			startLongTask, startLoaf, startInteractions, startDomWatch } = stubs;
+		${extract(source, 'function start()')}
+		start();
+	`);
+	runStart(natives, startState, { now: () => 0 }, 10000, 60000, stubs);
+	check('常开:start() 接的常开周期是 1s / 2s / 5s(采样 / DOM / 落盘)',
+		intervals.slice(0, 3).map((row) => row.ms), [1000, 2000, 5000]);
+	const wired = new Map(intervals.map((row) => [row.ms, row.fn]));
+	const flushWired = wired.get(5000);
+	if (typeof flushWired === 'function') flushWired();
+	check('常开:三个周期各接各的函数(1s→sampleTick、2s→sampleDom、5s→flush(false))',
+		[wired.get(1000) === stubs.sampleTick, wired.get(2000) === stubs.sampleDom, JSON.stringify(flushCalls)],
+		[true, true, '[false]']);
+
+	const push = new Function(`${extract(source, 'function push(')}; return push;`)();
+	const series = [];
+	for (let i = 0; i < 40; i += 1) push(series, { i });
+	check('窗口:series 前 40 个点原样保留', [series.length, series[0]?.i, series[39]?.i], [40, 0, 39]);
+	push(series, { i: 40 });
+	check('窗口:第 41 个点挤掉最旧点,长度仍为 40(边界改成 >= 40 会红)',
+		[series.length, series[0]?.i, series[39]?.i], [40, 1, 40]);
+
+	// 恢复:600 条样本进 restore,只该留下最近 RING_MAX 条(常量从源码抽,改小会红)。
+	const ringStore = new Map();
+	const ringStorage = {
+		getItem: (key) => (ringStore.has(key) ? ringStore.get(key) : null),
+		setItem: (key, value) => { ringStore.set(key, String(value)); },
+	};
+	const restoreRing = [];
+	const makeRestore = new Function('localStorage', 'state', 'ring', `
+		${line('const LS_RING')}
+		${line('const LS_ON')}
+		${line('const LS_UI')}
+		${line('const LS_PRECISE')}
+		${line('const LS_DEEP')}
+		${line('const LS_GROUPS')}
+		${line('const LS_MARKS')}
+		${line('const RING_MAX')}
+		const restoreIncidents = () => {};
+		const restoreTally = () => {};
+		const restoreWatchUI = () => {};
+		const restoreView = () => {};
+		const restoreHudPos = () => {};
+		const pruneMapCache = () => {};
+		${extract(source, 'function restore()')}
+		return { run: () => restore(), LS_RING };
+	`);
+	const restoreApi = makeRestore(ringStorage, { render: {}, ui: { groups: {}, marks: [] } }, restoreRing);
+	ringStore.set(restoreApi.LS_RING, JSON.stringify({
+		v: 1,
+		savedAt: 1,
+		samples: Array.from({ length: 600 }, (_, i) => ({ t: i })),
+	}));
+	restoreApi.run();
+	check('上限:restore 从 600 条里只读回最近 RING_MAX 条(当前 500;改成 400 会红)',
+		[restoreRing.length, restoreRing[0]?.t, restoreRing[499]?.t], [500, 100, 599]);
+
+	// 落盘版本:读方按 v 认格式,写 2 就是换了契约(现在读方不校验,靠这条断言钉住写入值)。
+	const flushWritten = [];
+	const flushBox = new Function('localStorage', 'ring', 'saveTally', `
+		${line('const LS_RING')}
+		let dirty = true;
+		${extract(source, 'function flush(')}
+		flush(false);
+	`);
+	flushBox({ setItem: (key, value) => flushWritten.push([key, value]) }, [{ t: 1 }], () => {});
+	const flushed = flushWritten.length === 1 ? JSON.parse(flushWritten[0][1]) : null;
+	check('落盘:flush 写出的环带 v:1(升到 2 会红),samples 原样',
+		[flushWritten.length, flushed?.v, flushed?.samples?.length, flushed?.samples?.[0]?.t], [1, 1, 1, 1]);
+}
+
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;

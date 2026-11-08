@@ -346,6 +346,40 @@ const armedFailStop = await (await route2.fetch(new Request('http://dsh.invalid/
 check('武装:失败窗口也能被主动停掉(不留重试循环)', armedFailStop.ok === true && armedFailStop.armed?.active === false,
 	JSON.stringify(armedFailStop.armed?.stopReason));
 
+// ── 宿主 stop → start:同一台 profiler 停下之后能重新采,不留两代状态 ──
+// REVIEW §5-3:stop() 原来只清 session/timer,不把 running 放回 false(变异体存活)。
+// 那样「关掉 HUD 再打开」会永远卡在"已有一个采样在进行中"。这里不 mock monitorEventLoopDelay,
+// 真停真起(仍用上面的假 inspector,离线不采真 profile),走的是 apply() 注册的卸载句柄。
+const hostDispose = disposers[0];
+check('宿主:拿到宿主卸载句柄(前置条件)', typeof hostDispose === 'function');
+const collectionsBefore = (await (await get('')).json()).host?.cpuProfile?.collections ?? 0;
+const runningBefore = await (await post({ op: 'profileStart', seconds: 5 })).json();
+check('宿主:停之前先开一段 5 秒采样(前置条件)',
+	runningBefore.ok === true && runningBefore.running === true, JSON.stringify(runningBefore).slice(0, 100));
+const startsBeforeRestart = inspectorCalls.filter((m) => m === 'Profiler.start').length;
+const connectsBeforeRestart = inspectorCalls.filter((m) => m === 'connect').length;
+const stopsBeforeRestart = inspectorCalls.filter((m) => m === 'Profiler.stop').length;
+hostDispose();
+const afterStop = await (await get('')).json();
+const stopState = afterStop.host?.cpuProfile ?? {};
+check('宿主:stop() 后 running === false,旧 profile 不丢',
+	stopState.running === false && stopState.collected === true && stopState.collections === collectionsBefore,
+	JSON.stringify({ running: stopState.running, collected: stopState.collected, collections: stopState.collections }));
+const restarted = await (await post({ op: 'profileStart', seconds: 0.1 })).json();
+check('宿主:stop() 后再次 start() 成功(不报"已有一个采样在进行中")',
+	restarted.ok === true && restarted.running === true, JSON.stringify(restarted).slice(0, 120));
+await new Promise((resolve) => setTimeout(resolve, 250));
+const restartedDone = await (await get('')).json();
+const restartedState = restartedDone.host?.cpuProfile ?? {};
+const connectDelta = inspectorCalls.filter((m) => m === 'connect').length - connectsBeforeRestart;
+const startDelta = inspectorCalls.filter((m) => m === 'Profiler.start').length - startsBeforeRestart;
+const stopDelta = inspectorCalls.filter((m) => m === 'Profiler.stop').length - stopsBeforeRestart;
+check('宿主:重启只产出一代状态(collections +1,connect / start / stop 各 +1)',
+	restartedState.running === false && restartedState.collections === collectionsBefore + 1
+	&& restartedState.error === '' && connectDelta === 1 && startDelta === 1 && stopDelta === 1,
+	JSON.stringify({ running: restartedState.running, collections: restartedState.collections,
+		error: restartedState.error, connectDelta, startDelta, stopDelta }));
+
 for (const dispose of disposers) {
 	if (typeof dispose === 'function') dispose();
 }
