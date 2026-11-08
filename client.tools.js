@@ -70,7 +70,7 @@ window.__ModuleLoader__.load({
 			for (const [name, enabled] of stateBefore) {
 				if (enabled !== true) continue;
 				try {
-					const payload = await bundleOp('setBundle', { op: 'setBundle', name, enabled: true, confirm: true });
+					const payload = await bundleOp('setBundle', { op: 'setBundle', name, enabled: true });
 					restores.push({
 						name,
 						ok: payload.ok === true && payload.result?.application === 'applied',
@@ -156,7 +156,7 @@ window.__ModuleLoader__.load({
 						continue;
 					}
 					experiment.message = `${step} ${name}:关闭`;
-					const off = await bundleOp('setBundle', { op: 'setBundle', name, enabled: false, confirm: true });
+					const off = await bundleOp('setBundle', { op: 'setBundle', name, enabled: false });
 					const offApplied = off.ok === true && off.result?.application === 'applied';
 					const row = {
 						name,
@@ -172,7 +172,7 @@ window.__ModuleLoader__.load({
 					experiment.message = `${step} ${name}:测量窗口(${Math.round(STEP_MS / 1000)}s)`;
 					row.window = await measureWindow(`off:${name}`, STEP_MS);
 					experiment.message = `${step} ${name}:恢复`;
-					const back = await bundleOp('setBundle', { op: 'setBundle', name, enabled: true, confirm: true });
+					const back = await bundleOp('setBundle', { op: 'setBundle', name, enabled: true });
 					row.restore = {
 						ok: back.ok === true && back.result?.application === 'applied',
 						application: back.result?.application ?? null,

@@ -1,9 +1,11 @@
 /**
  * dsh-perf-hud — 浏览器端性能 HUD(纯客户端)。
  *
- * 浏览器半由五个文件组成(DSH 的包内分片,零构建):
+ * 浏览器半由七个文件组成(DSH 的包内分片,零构建):
  *   client.js        采集 / 归因 / 守夜捕获 / 宿主探针 / apply(+ 模型层同步包装)
  *   client.model.js  证据链 / 能力矩阵 / 可能原因 / 诊断包 / 视图模型(159 个函数)
+ *   client.watch.js  守夜层:observer 回调 / 事故组装 / 落盘
+ *   client.i18n.js   中英词典(纯数据,键数见 tests/logic.mjs 的断言)
  *   client.ui.js     渲染层(四视图 + 各 block)
  *   client.pack.js   zip(store 模式)
  *   client.tools.js  隔离实验(首次调用才加载)
@@ -2419,6 +2421,16 @@ window.__ModuleLoader__.load({
 				if (op === 'setBundle' && typeof manager.setBundleEnabled === 'function') {
 					return { ok: true, via: 'remote', result: await manager.setBundleEnabled(args.name, args.enabled) };
 				}
+			}
+			// 宿主路由的写操作要一次性票据:先 arm,再把 ticket 带上。票据 30 秒有效、
+			// 单次使用 —— confirm:true 只是调用方标志,宿主已经不认它了。
+			if (op === 'setBundle') {
+				const armed = await hostOp({ op: 'arm' }, FETCH_TIMEOUT_MS.bundle);
+				if (armed.ok !== true || typeof armed.ticket !== 'string') {
+					return { ...armed, via: 'route', ok: false, error: armed.error ?? '宿主没有签发一次性票据' };
+				}
+				const payload = await hostOp({ ...args, op: 'setBundle', ticket: armed.ticket }, FETCH_TIMEOUT_MS.bundle);
+				return { ...payload, via: 'route' };
 			}
 			const payload = await hostOp(args, FETCH_TIMEOUT_MS.bundle);
 			return { ...payload, via: 'route' };

@@ -6,7 +6,7 @@
  *
  * 退出码:0 = 全过;1 = 有断言失败(实现问题);3 = 宿主半还没加载(需要重启 ai.dsh.web)。
  * 它验证:GET 探针(1KB cache-buster 与 64KB 吞吐)、事件循环 p50/p99 是真的在长、
- * session/event 派发计时能装上并记到数、以及"没有 confirm 绝不写 bundle"这条安全线。
+ * session/event 派发计时能装上并记到数、以及"没有一次性票据绝不写 bundle"这条安全线。
  */
 const cookie = process.env.DSH_COOKIE ?? '';
 if (cookie === '') {
@@ -80,15 +80,17 @@ if (names.length > 0) {
 	console.log(`   派发 Top:${name} ${stat.count} 次 · 合计 ${stat.ms}ms · 单次峰 ${stat.max}ms`);
 }
 
-// ── 安全线:没有 confirm 绝不写 bundle
+// ── 安全线:没有一次性票据绝不写 bundle
 const listed = await (await post({ op: 'listBundles' })).json();
 check('listBundles 可用', Array.isArray(listed.bundles) && listed.bundles.length > 0, `${listed.bundles?.length} 个`);
 const before = new Map((listed.bundles ?? []).map((bundle) => [bundle.name, bundle.enabled]));
 for (const name of ['dsh-status-rotator', 'dsh-notify-me', 'dsh-better-sidebar', 'dsh-context']) {
 	check(`候选 ${name} 在列表里`, before.has(name), `enabled=${before.get(name)}`);
 }
+const armed = await (await post({ op: 'arm' })).json();
+check('arm 能签发一次性票据', armed.ok === true && typeof armed.ticket === 'string', `len=${armed.ticket?.length}`);
 const refused = await post({ op: 'setBundle', name: 'dsh-status-rotator', enabled: false });
-check('没有 confirm 被拒(400)', refused.status === 400, `HTTP ${refused.status}`);
+check('没有票据被拒(403)', refused.status === 403, `HTTP ${refused.status}`);
 const after = await (await post({ op: 'listBundles' })).json();
 const now = new Map((after.bundles ?? []).map((bundle) => [bundle.name, bundle.enabled]));
 check('被拒之后 bundle 状态一个字节都没动',

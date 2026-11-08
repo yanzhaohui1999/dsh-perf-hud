@@ -6,8 +6,9 @@
  *              同时兼作客户端的 RTT 探测端点(?pad=1KB 禁缓存)与吞吐探测(?bytes=N)。
  *   2. POST {op:'watchEvents'}  —— 可选:包住 session/event 的同步派发,累计每条事件的
  *              派发耗时与次数。装不上就如实回 installed:false + reason,不假装成功。
- *   3. POST {op:'listBundles'|'setBundle'} —— 代理 pluginManager 的 bundle 读写,供
- *              「隔离实验」用。setBundle 必须显式带 confirm:true 才执行,绝不隐式写配置。
+ *   3. POST {op:'listBundles'|'arm'|'setBundle'} —— 代理 pluginManager 的 bundle 读写,
+ *              供「隔离实验」用。写之前必须先 `arm` 领一张 30 秒有效、单次使用的票据;
+ *              setBundle 只认票据 —— confirm:true 只是调用方自己的标志,不是授权边界。
  *   4. POST {op:'profileStart', seconds?} / {op:'profileGet'} —— 按需采一段宿主进程的
  *              CPU profile(node:inspector 的 Profiler,产出标准 .cpuprofile);**不常开**,
  *              同时只允许一个采样在跑,profile 只在内存里、不落盘。
@@ -23,6 +24,7 @@
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { Session as InspectorSession } from 'node:inspector';
 import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 
 /** 本插件自己的版本(导出件要自描述;不要去猜,直接读自己的 package.json)。 */
 const PLUGIN_VERSION = (() => {
@@ -34,6 +36,8 @@ const PLUGIN_VERSION = (() => {
 })();
 
 const ROUTE = '/api/dsh-perf-hud/host';
+// setBundle 一次性票据的有效期:面板先 arm,30 秒内带票据写一次,之后作废。
+const ARM_TTL_MS = 30000;
 const WINDOW = 300;          // 每秒一个采样,保留 300 秒
 const MAX_LOAD_BYTES = 262144;
 // 直方图分辨率(ms)。默认 10 会把 p50 直接顶到 ~10ms 的地板上,看不出真实抖动,
@@ -439,6 +443,7 @@ function createCpuProfiler(inspector) {
 	let timer = null;
 	let running = false;
 	let startedAt = 0;
+	let generation = 0;          // 每次 start() 递增:旧 finish 只认自己那一代
 	let profile = null;          // 最近一次采到的 .cpuprofile(只在内存里)
 	let meta = null;             // 上面那份的元信息(不含 profile 本体)
 	let error = '';              // 最近一次失败的错误原文
@@ -464,23 +469,29 @@ function createCpuProfiler(inspector) {
 		error,
 	});
 
-	/** 收尾:`Profiler.stop` 拿 profile,成功才换掉缓存,失败只更新 error。 */
-	async function finish() {
+	/**
+	 * 收尾:`Profiler.stop` 拿 profile。**只有 token 仍是当前代才提交状态** —— 采样进行中
+	 * 关掉 HUD 再立刻打开时,旧一代的 `Profiler.stop` 可能晚于新 `start()` 返回;那一代
+	 * 只配收掉自己的 inspector 会话,不能把新一代的 `profile/meta/running/session` 打回旧值。
+	 */
+	async function finish(token) {
 		const sess = session;
+		const anchor = startedAt;
 		timer = null;
 		let failure = '';
+		let nextProfile = null;
+		let nextMeta = null;
 		try {
 			const result = await post(sess, 'Profiler.stop');
 			const next = result === null || result === undefined ? null : result.profile;
 			if (next === null || typeof next !== 'object' || !Array.isArray(next.nodes)) {
 				throw new Error('Profiler.stop 没有返回 profile');
 			}
-			profile = next;
-			collections += 1;
-			meta = {
-				startedAt,
+			nextProfile = next;
+			nextMeta = {
+				startedAt: anchor,
 				endedAt: Date.now(),
-				seconds: round2((Date.now() - startedAt) / 1000),
+				seconds: round2((Date.now() - anchor) / 1000),
 				nodes: next.nodes.length,
 				samples: Array.isArray(next.samples) ? next.samples.length : 0,
 				bytes: JSON.stringify(next).length,
@@ -489,11 +500,19 @@ function createCpuProfiler(inspector) {
 			};
 		} catch (err) {
 			failure = reason(err);
-		} finally {
-			running = false;
-			session = null;
-			try { sess?.disconnect(); } catch (ignored) { /* 断开失败不影响读数 */ }
 		}
+		try { sess?.disconnect(); } catch (ignored) { /* 断开失败不影响读数 */ }
+		if (token !== generation) {
+			// 旧一代:新一代可能已经在采,什么都不提交(连 error 也不覆盖)。
+			return { ...state(), ok: false, stale: true };
+		}
+		if (nextProfile !== null) {
+			profile = nextProfile;
+			collections += 1;
+			meta = nextMeta;
+		}
+		running = false;
+		session = null;
 		error = failure;
 		return failure === '' ? { ...state(), ok: true } : { ...state(), ok: false, error: failure };
 	}
@@ -508,6 +527,9 @@ function createCpuProfiler(inspector) {
 				error = 'node:inspector 不可用';
 				return { ...state(), ok: false, error, seconds };
 			}
+			// 新的一代:从这个 token 起,之前所有在飞的 finish 都算旧代。
+			generation += 1;
+			const token = generation;
 			let sess = null;
 			try {
 				sess = new inspector.Session();
@@ -523,7 +545,7 @@ function createCpuProfiler(inspector) {
 			running = true;
 			error = '';
 			startedAt = Date.now();
-			timer = setTimeout(() => { void finish(); }, seconds * 1000);
+			timer = setTimeout(() => { void finish(token); }, seconds * 1000);
 			return { ...state(), ok: true, seconds };
 		},
 		/** 取回最近一次采到的 profile;没采过就照实说没采过,不回空对象。 */
@@ -572,6 +594,30 @@ export function apply(ctx, options = {}) {
 		const manager = () => {
 			const service = c.get('pluginManager');
 			return service === undefined ? null : service;
+		};
+
+		// setBundle 的一次性票据:面板先 POST {op:'arm'} 领一张,30 秒内有效、用一次就废。
+		// 同源脚本可以伪造 confirm:true,但拿不到「已经 arm 过」的凭证;票据把可写窗口压到
+		// 30 秒且不可重放。票据存在宿主内存里,不落盘,插件卸载即失效。
+		const tickets = new Map();
+		const armTtlMs = Number.isFinite(options?.armTtlMs) && options.armTtlMs > 0 ? options.armTtlMs : ARM_TTL_MS;
+		const issueTicket = () => {
+			const now = Date.now();
+			for (const [key, expiresAt] of tickets) {
+				if (expiresAt <= now) tickets.delete(key);
+			}
+			const ticket = randomBytes(24).toString('base64url');
+			const expiresAt = now + armTtlMs;
+			tickets.set(ticket, expiresAt);
+			return { ok: true, ticket, expiresAt, ttlMs: armTtlMs };
+		};
+		/** 校验并消费票据:返回 '' 表示有效,否则是拒绝原因。无论后续成败,用过即废。 */
+		const consumeTicket = (raw) => {
+			if (typeof raw !== 'string' || raw === '') return 'missing';
+			const expiresAt = tickets.get(raw);
+			if (expiresAt === undefined) return 'invalid';
+			tickets.delete(raw);
+			return expiresAt <= Date.now() ? 'expired' : '';
 		};
 
 		const status = (url) => {
@@ -665,6 +711,11 @@ export function apply(ctx, options = {}) {
 				return reply(armed.stop(typeof body.reason === 'string' ? body.reason : 'client-stop'));
 			}
 
+			if (op === 'arm') {
+				// 面板/实验工具在 setBundle 之前先领一张票据;GET 不签发,避免被缓存或预取消耗。
+				return reply(issueTicket());
+			}
+
 			if (op === 'listBundles') {
 				const service = manager();
 				if (service === null) return reply({ ok: false, error: 'pluginManager 不可用' }, 503);
@@ -686,8 +737,16 @@ export function apply(ctx, options = {}) {
 			}
 
 			if (op === 'setBundle') {
-				// 明确同意才会真的写:隔离实验必须逐次带 confirm。
-				if (body.confirm !== true) return reply({ ok: false, error: '需要 confirm:true' }, 400);
+				// 只认一次性票据:confirm:true 是调用方自称,不构成授权边界。
+				const ticketState = consumeTicket(body.ticket);
+				if (ticketState !== '') {
+					const error = ticketState === 'missing'
+						? '需要先 POST {op:"arm"} 领一张一次性票据'
+						: ticketState === 'expired'
+							? '票据已过期(有效期 30 秒),请重新 arm'
+							: '票据无效或已被使用';
+					return reply({ ok: false, error }, 403);
+				}
 				const name = body.name;
 				const enabled = body.enabled === true;
 				if (typeof name !== 'string' || name === '') return reply({ ok: false, error: '缺少 bundle 名' }, 400);
