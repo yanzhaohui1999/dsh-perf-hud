@@ -138,6 +138,25 @@ const pieces = [
 	'function armedHostStopBody(',
 	'function armedHostReceipt(',
 	'function armedSegmentRecords(',
+	// 打开 / 切换耗时(方向 3):起点 / 终点的判定、环形淘汰、分位、取消记账全是纯函数 ——
+	// DOM 侧只注入"行没有选中 / 正文节点在不在"这类事实,状态机本身整段可离线断言。
+	'const SESSION_ROW_PREFIX = ',
+	'const OPEN_ROW_SELECTOR = ',
+	'const OPEN_CONTENT_SELECTOR = ',
+	'const OPEN_MIN_CHARS = ',
+	'const OPEN_TIMEOUT_MS = ',
+	'const OPEN_RING_MAX = ',
+	'function percentile(',
+	'function sessionRowOf(',
+	'function sessionRowId(',
+	'function sessionRowSelected(',
+	'function openContentSession(',
+	'function openContentChars(',
+	'function openCostVerdict(',
+	'function openCostPush(',
+	'function openCostStats(',
+	'function openCostAbandon(',
+	'function openCostContext(',
 ].map((header) => (header.startsWith('const ') && header.endsWith('{') === false
 	? line(header)
 	: extract(source, header))).join('\n');
@@ -148,7 +167,10 @@ const api = new Function(`${pieces}
 	return { state, ring, isCore, ownerOfUrl, rate, updateRates, pluginTable, worstSecond, blame,
 		clampHostProfileSeconds, hostCpuProfileStartBody, hostCpuProfileAfterStart, hostCpuProfileAfterGet,
 		clampArmedWindow, clampArmedSegment, armedPlanStart, armedPlanEnd, armedTickDue,
-		armedHostStartBody, armedHostGetBody, armedHostStopBody, armedHostReceipt, armedSegmentRecords };`)();
+		armedHostStartBody, armedHostGetBody, armedHostStopBody, armedHostReceipt, armedSegmentRecords,
+		SESSION_ROW_PREFIX, OPEN_ROW_SELECTOR, OPEN_CONTENT_SELECTOR, OPEN_MIN_CHARS, OPEN_TIMEOUT_MS, OPEN_RING_MAX,
+		sessionRowOf, sessionRowId, sessionRowSelected, openContentSession, openContentChars,
+		openCostVerdict, openCostPush, openCostStats, openCostAbandon, openCostContext };`)();
 
 let failed = 0;
 const check = (name, actual, expected) => {
@@ -375,6 +397,132 @@ check('武装:临时插桩**不写 localStorage**(刷新即回默认档,武装�
 		return [start > 0, end > start, /LS_DEEP/.test(body), /LS_PRECISE/.test(body)];
 	})(),
 	[true, true, false, false]);
+
+// ── 打开 / 切换耗时(方向 3):起点 / 终点 / 淘汰 / 分位 / 取消 ──────────────
+// 这一组测的是"判定那一半":DOM 侧只注入事实(行选中没有、正文节点在不在、字符数),
+// 状态机本身整段是纯函数 —— 没有浏览器也能把三条取消路径与终点定义钉住。
+check('打开耗时:选择器与常量只有一个来源(session: 前缀 / 1200 字符 / 30s / 最近 20 次)',
+	[api.SESSION_ROW_PREFIX, api.OPEN_ROW_SELECTOR, api.OPEN_CONTENT_SELECTOR, api.OPEN_MIN_CHARS, api.OPEN_TIMEOUT_MS, api.OPEN_RING_MAX],
+	['session:', '[data-row-key^="session:"]', '[data-conversation-content][data-conversation-session]', 1200, 30000, 20]);
+check('打开耗时:点击落点 → 会话行只认 data-row-key^="session:"(文本节点走 parentElement,认不出就 null)',
+	(() => {
+		const row = { nodeType: 1, getAttribute: () => 'session:s1' };
+		const hit = api.sessionRowOf({ nodeType: 1, closest: (selector) => (selector === api.OPEN_ROW_SELECTOR ? row : null) });
+		const viaText = api.sessionRowOf({ nodeType: 3, parentElement: { closest: () => row } });
+		const miss = api.sessionRowOf({ nodeType: 1, closest: () => null });
+		return [hit === row, viaText === row, miss];
+	})(),
+	[true, true, null]);
+check('打开耗时:行 → 会话 id(拿不到就 null,不猜、不补)',
+	[api.sessionRowId({ getAttribute: () => 'session:abc' }), api.sessionRowId({ getAttribute: () => 'session:' }),
+		api.sessionRowId({ getAttribute: () => 'workspace:x' }), api.sessionRowId(null)],
+	['abc', null, null, null]);
+check('打开耗时:点当前已选中的行不算一次打开(aria-selected 三态)',
+	[api.sessionRowSelected({ getAttribute: (key) => (key === 'aria-selected' ? 'true' : null) }),
+		api.sessionRowSelected({ getAttribute: () => 'false' }), api.sessionRowSelected(null)],
+	[true, false, false]);
+check('打开耗时:终点 = 节点在 + 行已选中 + 正文 ≥1200 字符(缺一条都是 wait,不拿骨架屏当交付)',
+	[
+		api.openCostVerdict({ present: true, selected: true, chars: 1200, elapsedMs: 900 }, { minChars: api.OPEN_MIN_CHARS, timeoutMs: api.OPEN_TIMEOUT_MS }),
+		api.openCostVerdict({ present: true, selected: true, chars: 1199, elapsedMs: 900 }, { minChars: api.OPEN_MIN_CHARS, timeoutMs: api.OPEN_TIMEOUT_MS }),
+		api.openCostVerdict({ present: true, selected: false, chars: 99999, elapsedMs: 900 }, { minChars: api.OPEN_MIN_CHARS, timeoutMs: api.OPEN_TIMEOUT_MS }),
+		api.openCostVerdict({ present: false, selected: true, chars: 99999, elapsedMs: 900 }, { minChars: api.OPEN_MIN_CHARS, timeoutMs: api.OPEN_TIMEOUT_MS }),
+	],
+	['done', 'wait', 'wait', 'wait']);
+check('打开耗时:超时先判(到 30s 就不记样本,哪怕这一拍恰好也达标 —— 否则"等太久"会被记成一次很慢的成功)',
+	[api.openCostVerdict({ present: true, selected: true, chars: 99999, elapsedMs: 30000 }, { minChars: api.OPEN_MIN_CHARS, timeoutMs: api.OPEN_TIMEOUT_MS }),
+		api.openCostVerdict({ present: true, selected: true, chars: 99999, elapsedMs: 29999 }, { minChars: api.OPEN_MIN_CHARS, timeoutMs: api.OPEN_TIMEOUT_MS })],
+	['timeout', 'done']);
+check('打开耗时:环形缓冲只留最近 20 次(第 21 次从头部淘汰,顺序不乱)',
+	(() => {
+		const rows = [];
+		for (let i = 1; i <= 21; i += 1) api.openCostPush(rows, { ms: i, chars: 2000, warm: false, at: 'x' }, api.OPEN_RING_MAX);
+		return [rows.length, rows[0].ms, rows[rows.length - 1].ms];
+	})(),
+	[20, 2, 21]);
+check('打开耗时:p50/p95 是最近秩分位(无序输入先排序;空环给 null,不拿 0 冒充)',
+	(() => {
+		const stats = api.openCostStats([40, 10, 30, 20].map((ms) => ({ ms })));
+		return [stats.n, stats.p50, stats.p95, api.openCostStats([]), api.openCostStats([{ ms: 'x' }, null, { ms: -1 }])];
+	})(),
+	[4, 20, 40, { n: 0, p50: null, p95: null }, { n: 0, p50: null, p95: null }]);
+check('打开耗时:取消只清引用并记账(有 pending 才算丢一条;没有 pending 的停止不动计数)',
+	(() => {
+		const open = {
+			ring: [{ ms: 1 }], pending: { sessionId: 's1', t0: 0 }, observer: { disconnect() {} },
+			raf: 7, timer: 8, poll: 9, listening: true, seq: 3, completed: 2, canceled: 1, canceledLast: 'timeout', last: { ms: 1 },
+		};
+		const next = api.openCostAbandon(open, 'superseded');
+		const idle = api.openCostAbandon({ ...next, canceledLast: 'timeout' }, 'stopped');
+		return [next.pending, next.observer, next.raf, next.timer, next.poll, next.canceled, next.canceledLast, next.listening,
+			idle.canceled, idle.canceledLast, next.ring.length, next.completed];
+	})(),
+	[null, null, 0, 0, 0, 2, 'superseded', true, 2, 'timeout', 1, 2]);
+check('打开耗时:context.openCost 的形状固定(note/n/p50/p95/last + last 四个键),样本里没有会话标题 / ID / 哈希',
+	(() => {
+		const ring = [
+			{ ms: 4200.44, chars: 51234, warm: false, at: '2026-11-08T02:40:00.000Z' },
+			{ ms: 410.24, chars: 8123, warm: true, at: '2026-11-08T02:41:00.000Z' },
+		];
+		const ctx = api.openCostContext({ ring });
+		return [Object.keys(ctx).join(','), Object.keys(ctx.last).join(','), ctx.n, ctx.p50, ctx.p95,
+			ctx.last.ms, ctx.last.chars, ctx.last.warm, ctx.last.at, ctx.note.length > 80,
+			/session|title|hash|message/i.test(JSON.stringify({ ...ctx, note: '' })),
+			api.openCostContext({ ring: [] }), api.openCostContext(null)];
+	})(),
+	['note,n,p50,p95,last', 'ms,chars,warm,at', 2, 410.2, 4200.4, 410.2, 8123, true,
+		'2026-11-08T02:41:00.000Z', true, false, null, null]);
+check('打开耗时:正文节点按 data-conversation-session 认人,字符数只从 textContent 取长度',
+	(() => {
+		const node = (id) => ({ nodeType: 1, getAttribute: (key) => (key === 'data-conversation-content' ? '' : (key === 'data-conversation-session' ? id : null)) });
+		return [api.openContentSession(node('s1')), api.openContentSession({ nodeType: 1, getAttribute: () => null }),
+			api.openContentChars({ textContent: 'x'.repeat(1200) }), api.openContentChars(null), api.openContentChars({})];
+	})(),
+	['s1', null, 1200, 0, 0]);
+check('打开耗时:起点只挂 capture 阶段的 click,且 start 挂 / stop 卸(关掉 HUD 不许留着观察整棵树)',
+	[/document\.addEventListener\('click', onSessionRowClick, true\)/, /document\.removeEventListener\('click', onSessionRowClick, true\)/,
+		/startDomWatch\(\);\n\t{3}\/\/[^\n]*\n\t{3}startOpenCostWatch\(\);/, /stopDomWatch\(\);\n\t{3}\/\/[^\n]*\n\t{3}stopOpenCostWatch\(\);/]
+		.map((re) => re.test(source)), [true, true, true, true]);
+check('打开耗时:终点三事实 + 代价纪律在校验点上(观察器只收 aria-selected 属性;字符数节流 + 1 秒兜底扫描)',
+	[/openCostVerdict\(/, /childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: \['aria-selected'\]/,
+		/OPEN_PROBE_MS/, /OPEN_SCAN_MS/, /scheduleOpenCheck\(\)/].map((re) => re.test(source)), [true, true, true, true, true]);
+check('打开耗时:三条取消路径共用一个释放函数(disconnect + cancelAnimationFrame + clearTimeout + clearInterval)',
+	(() => {
+		const release = source.slice(source.indexOf('function openCostRelease('), source.indexOf('function cancelOpenCost('));
+		const cancel = source.slice(source.indexOf('function cancelOpenCost('), source.indexOf('function finishOpenCost('));
+		const finish = source.slice(source.indexOf('function finishOpenCost('), source.indexOf('function openRowNode('));
+		return [/\.disconnect\(\)/, /cancelAnimationFrame\(/, /clearTimeout\(open\.timer\)/, /clearInterval\(open\.poll\)/].map((re) => re.test(release))
+			.concat([/openCostRelease\(open\)/.test(cancel), /openCostRelease\(open\)/.test(finish),
+				/cancelOpenCost\('superseded'\)/.test(source), /cancelOpenCost\('timeout'\)/.test(source), /cancelOpenCost\('stopped'\)/.test(source)]);
+	})(),
+	[true, true, true, true, true, true, true, true, true]);
+check('打开耗时:正文只读长度、不读内容(唯一一处 textContent 只取 .length;全仓没有 innerHTML / innerText)',
+	(() => {
+		const body = source.slice(source.indexOf('function openContentChars('), source.indexOf('function openCostVerdict('));
+		const textReads = body.match(/\btext\.[A-Za-z]+/g) ?? [];
+		return [body.includes('textContent'), /text\.length/.test(body), textReads.length === 1, /innerHTML|innerText/.test(allSource) === false];
+	})(),
+	[true, true, true, true]);
+check('打开耗时:warm 是"点击那一刻正文节点已经在 DOM 里"(切换),不是靠样本猜',
+	[/warm: content !== null/, /const content = openContentNode\(sessionId\);/, /warm: pending\.warm === true/].map((re) => re.test(source)),
+	[true, true, true]);
+check('打开耗时:控制台 API 暴露 ring + 聚合(合并后真页面验收用)',
+	[/openCost: openCostStatus/, /function openCostStatus\(/, /p50: stats\.p50, p95: stats\.p95/, /ring: open\.ring\.map/, /canceledLast: open\.canceledLast/]
+		.map((re) => re.test(source)), [true, true, true, true, true]);
+check('打开耗时:事故包真的产出 context.openCost(可选段:没有样本时键不存在,不是空对象)',
+	[/const openCost = openCostContext\(state\.render\.openCost\);/, /\.\.\.\(openCost === null \? null : \{ openCost \}\)/].map((re) => re.test(modelSource)),
+	[true, true]);
+check('打开耗时:redaction 口径改成"只读字符数、不读内容"(模型与文档同步,旧的"从不读取 DOM 内容"必须消失)',
+	[/只读正文字符数、不读内容/.test(modelSource), /从不读取被测量的 DOM 内容/.test(modelSource) === false,
+		/正文只读字符数、不读内容/.test(readFileSync(new URL('../README.md', import.meta.url), 'utf8')),
+		/只读(?:长度|字符数),不读内容/.test(readFileSync(new URL('../docs/pack-schema.md', import.meta.url), 'utf8'))],
+	[true, true, true, true]);
+check('打开耗时:面板那一行只在有样本时渲染、且不是按钮(读数不是动作),口径进悬停', (() => {
+	const seg = extract(renderSource, 'function mainView(');
+	const tail = seg.slice(seg.indexOf('props.openCost !== null'));
+	const block = tail.slice(0, tail.indexOf('入口:只留一个'));
+	return [seg.includes("t('openCostHint')"), /props\.openCost/.test(block), /'button'/.test(block) === false, /S\.sub/.test(block)];
+})(), [true, true, true, true]);
 
 console.log(failed === 0 ? 'ALL PASS' : `FAILURES=${failed}`);
 process.exitCode = failed === 0 ? 0 : 1;
@@ -617,12 +765,13 @@ check('状态四片:state 就是 ui / watch / host / render 四片,每片都有�
 	[['host', 'render', 'ui', 'watch'], true]);
 // 字段数写死是故意的:挪字段(把一页读数搬到另一片)是结构变更,要连同这一行一起交代。
 // 它同时挡住一类静默错误 —— 字段被复制进两片后,谁写谁读就说不清了。
-check('状态四片:四片的字段数 == 23 / 54 / 37 / 16(挪字段要改这一行并说明理由)',
+check('状态四片:四片的字段数 == 23 / 55 / 37 / 16(挪字段要改这一行并说明理由)',
 	// watch 片的 37 = 守夜对象自己的 30 个键 + tally + 场景/空闲基线 6 个(它本来就是一整层)
 	// render +1 = armed(武装窗口的状态机,属于"档位/采集"那一层);
+	// render 再 +1 = openCost(打开 / 切换会话耗时的 ring + 一次等待的运行时引用,同属采集层);
 	// host +1 = armedProfiles(武装窗口从宿主取回的 profile 段,属于宿主数据)。
 	[stateSlices.ui.length, stateSlices.render.length, stateSlices.watch.length, stateSlices.host.length],
-	[23, 54, 37, 16]);
+	[23, 55, 37, 16]);
 
 // ── 别名解析(见文件头 ①)──
 // 规则:别名只能指向**一片**(`= state.<片>`),不能指向整个 state / 解构整个 state(那样所有字段检查都会被绕过);
@@ -858,6 +1007,8 @@ const sandbox = `
 		stallSaved: '现场已自动保存', stallNotSaved: '现场未完整保存', secondsUnit: ' 秒',
 		stallSuffix: '卡顿', trendNone: '这段时间没有检测到卡顿', trendRepeat: '重复线索', tallyWorst: '最长一次',
 		trendRepeatPlain: '同一个脚本模块',
+		// 打开 / 切换耗时那一行(没有样本时必须返回 null,不摆 0)
+		openCostLabel: '打开',
 		times: ' 次', watchKept: '已保存现场', watchLost: '丢失', tallyUnit: ' 份',
 		// 可能原因 / 能力矩阵 / 诊断包:断言要看真词
 		causeScriptLead: '脚本耗时最高的包', causeLongTaskLead: '长任务归属', causeHostLead: '宿主事件循环', causeNoEvidenceLead: '缺少 JS 阻塞证据',
@@ -1011,6 +1162,8 @@ const newPieces = [
 	'function componentOf(',
 	'function fiberOwner(',
 	'function percentile(',
+	// 打开 / 切换耗时那一行的文案(纯函数:没有样本返回 null,不摆一个 0)
+	'function openCostText(',
 	'function linkStats(',
 	'function short(',
 	'function viaLabel(',
@@ -1242,7 +1395,7 @@ const box = new Function(`${sandbox}
 		SELF_RING, recordSelf, selfStats, recorderText,
 		DICT, docLang, fallback, document, navigator,
 		WATCH_INCIDENT_MAX, WATCH_DAILY_DAYS, WATCH_RECENT_MAX, WATCH_KEEP_MAX,
-		EX: { absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, uniqueInteractions, evidenceGroups, evidenceGroupLine, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact, hudPosParse, hudPosClamp, hudPosMake, hudPosMaxHeight, HUD_POS_MIN_ROOM, HUD_POS_PILL_ROOM,
+		EX: { openCostText, absolutePluginUrl, mapUrlOf, sectionName, sectionOwner, bundleLabel, scriptLineOf, packageOfScript, loadScriptLines, fiberOwner, componentOf, linkStats, suspectLink, experimentDelta, noiseFloor, pickExperimentCandidates, significance, blameText, primaryBlame, longTaskTally, legOf, applyLongTaskStats, descendantComponentOf, subtreeOwner, usableComponentName, isRecorderName, blameName, keepIncident, dayKeyOf, pruneIncidents, overviewLine1, overviewLine2, detailSummary, techSummary, domSummary, hostSummary, hostFreshness, hostLoopText, hostLoopStateText, toolsSummary, rateText, displayKey, bump, infraVerdict, sceneChip, unexplainedFrame, levelFrame, frameLevel, frameMixBuckets, frameBucketOf, frameMix, frameMixCountText, frameMixPctText, frameMixRows, storageReport, bytesText, uniqueInteractions, evidenceGroups, evidenceGroupLine, looksLikeInfrastructure, msPerSecText, attrText, restValueText, restTitleText, toggleGroup, containerNodes, idleTick, snapshot, domWriteSnapshot, domWriteDelta, linkRowText, throughputText, fetchFailureText, timeoutError, cancelledError, isAbortError, pruneMapIndex, hudDodge, panelWidthFor, pillCompact, hudPosParse, hudPosClamp, hudPosMake, hudPosMaxHeight, HUD_POS_MIN_ROOM, HUD_POS_PILL_ROOM,
 		// P0/P1 新增:事故选中上下文 / 严重度文字档位 / 布局动作
 		pickIncident, saveGroups, collapseAll, resetLayout, anyGroupOpen, layoutDirty, setIncidentScope, severityLevel, severityText, severityColor, incidentOwner, selectedIncident, selectIncident, revealIncident, showLiveMode, saveWatchUI, restoreWatchUI, diagMode, incidentFrameHeadingText, liveFrameHeadingText, detailSummary, detailGroupLabel, incidentFrameRows, incidentLoafAt, incidentWorstFrame, selectedIncidentFrame, incidentFrameNav, incidentFrameHot, selectIncidentFrame, incidentFrameStep, incidentVerdict, verdictColor, eventVerdictText, eventEvidenceText, eventWindowText, incidentSummaryText, copyText, watchFlagText, hostLoopText,
 		// 证据 → 代码:位置解析 + 证据行(面板与事故包共用同一份)
@@ -1322,6 +1475,209 @@ check('B2:$ 开头的压缩名被挡掉;具名组件照旧通过,匿名仍是 nu
 // 真正的原因是 usableComponentName 只收 React 的 type,而 `(Name)` 是渲染层加的显示标记。
 check('B2:括号名并不是被 looksLikeInfrastructure 挡掉的(实测那条判据返回 false)',
 	[EX.looksLikeInfrastructure('(ChatView)'), EX.looksLikeInfrastructure('ChatView')], [false, false]);
+
+// ── 打开 / 切换耗时那行文案(主界面「最近趋势」下面)──────────────────────
+check('打开耗时:面板文案 ≥1s 给秒 / <1s 给毫秒,没有样本返回 null(不摆一个 0,也不摆"暂无")',
+	[EX.openCostText([{ ms: 4200 }]), EX.openCostText([{ ms: 420 }]), EX.openCostText([{ ms: 999 }]),
+		EX.openCostText([{ ms: 999.6 }]), EX.openCostText([{ ms: 12000 }]), EX.openCostText([]), EX.openCostText(null), EX.openCostText([null])],
+	['打开 4.2s', '打开 420ms', '打开 999ms', '打开 1.0s', '打开 12.0s', null, null, null]);
+
+// ── 打开 / 切换耗时的窗口状态机(DOM 桩)────────────────────────────────────
+// 上面那组只测"判定";这一组把 start / tick / finish / cancel 整条路跑一遍,桩是**可注入的 DOM**:
+// 点击 → observer 记录 → rAF 合并 → 结算,以及三条取消路径与"不叠 observer"。真页面留给合并后。
+const openBox = (() => {
+	const openPieces = [
+		line('const SESSION_ROW_PREFIX'), line('const OPEN_ROW_SELECTOR'), line('const OPEN_CONTENT_SELECTOR'),
+		line('const OPEN_MIN_CHARS'), line('const OPEN_TIMEOUT_MS'), line('const OPEN_RING_MAX'),
+		line('const OPEN_PROBE_MS'), line('const OPEN_SCAN_MS'), line('const OPEN_POLL_MS'),
+		extract(source, 'function round1('), extract(source, 'function percentile('),
+		extract(source, 'function sessionRowOf('), extract(source, 'function sessionRowId('),
+		extract(source, 'function sessionRowSelected('), extract(source, 'function openContentSession('),
+		extract(source, 'function openContentWithin('), extract(source, 'function openContentNode('),
+		extract(source, 'function openContentChars('), extract(source, 'function openCostVerdict('),
+		extract(source, 'function openCostPush('), extract(source, 'function openCostStats('),
+		extract(source, 'function openCostAbandon('), extract(source, 'function openCostRelease('),
+		extract(source, 'function cancelOpenCost('), extract(source, 'function finishOpenCost('),
+		extract(source, 'function openRowNode('), extract(source, 'function openCostMutations('),
+		extract(source, 'function scheduleOpenCheck('), extract(source, 'function openCostTick('),
+		extract(source, 'function startOpenCost('), extract(source, 'function onSessionRowClick('),
+		extract(source, 'function startOpenCostWatch('), extract(source, 'function stopOpenCostWatch('),
+		extract(source, 'function openCostStatus('),
+	].join('\n');
+	return new Function(`
+		${openPieces}
+		let nowValue = 1000;
+		let bumped = 0;
+		const cancelledRaf = [];
+		const performance = { now: () => nowValue };
+		const rowNodes = [];
+		const contentNodes = [];
+		const listeners = [];
+		const rafQueue = [];
+		const timers = [];
+		const intervals = [];
+		const observers = [];
+		function FakeObserver(callback) { this.callback = callback; this.disconnected = false; observers.push(this); }
+		FakeObserver.prototype.observe = function (target, options) { this.target = target; this.options = options; };
+		FakeObserver.prototype.disconnect = function () { this.disconnected = true; };
+		const W = { MutationObserver: FakeObserver };
+		const natives = {
+			requestAnimationFrame: (fn) => { rafQueue.push(fn); return rafQueue.length; },
+			cancelAnimationFrame: (id) => { cancelledRaf.push(id); },
+			setTimeout: (fn, ms) => { timers.push({ fn, ms, cleared: false, ran: false }); return timers.length; },
+			clearTimeout: (id) => { if (timers[id - 1] !== undefined) timers[id - 1].cleared = true; },
+			setInterval: (fn, ms) => { intervals.push({ fn, ms }); return intervals.length; },
+			clearInterval: () => {},
+		};
+		const document = {
+			documentElement: {},
+			addEventListener: (type, fn, capture) => { listeners.push({ type, fn, capture }); },
+			removeEventListener: (type, fn, capture) => {
+				const at = listeners.findIndex((row) => row.type === type && row.fn === fn && row.capture === capture);
+				if (at !== -1) listeners.splice(at, 1);
+			},
+			querySelectorAll: (selector) => (selector === OPEN_ROW_SELECTOR ? rowNodes : (selector === OPEN_CONTENT_SELECTOR ? contentNodes : [])),
+		};
+		const bump = () => { bumped += 1; };
+		const base = () => ({ ring: [], pending: null, observer: null, raf: 0, timer: 0, poll: 0, listening: false, seq: 0, completed: 0, canceled: 0, canceledLast: '', last: null });
+		const state = { render: { on: true, openCost: base() } };
+		return {
+			state, observers, listeners, timers, intervals, rowNodes, contentNodes, cancelledRaf,
+			makeRow(id, selected) {
+				return {
+					nodeType: 1, isConnected: true, selected, key: SESSION_ROW_PREFIX + id,
+					getAttribute(name) {
+						if (name === 'data-row-key') return this.key;
+						if (name === 'aria-selected') return this.selected === true ? 'true' : 'false';
+						return null;
+					},
+					closest(selector) { return selector === OPEN_ROW_SELECTOR ? this : null; },
+				};
+			},
+			makeContent(id, chars) {
+				return {
+					nodeType: 1, isConnected: true, identifier: id, textContent: 'x'.repeat(chars),
+					getAttribute(name) {
+						if (name === 'data-conversation-content') return '';
+						if (name === 'data-conversation-session') return this.identifier;
+						return null;
+					},
+					querySelectorAll: () => [],
+				};
+			},
+			reset() {
+				state.render.openCost = { ...base(), listening: state.render.openCost.listening === true };
+				rowNodes.length = 0;
+				contentNodes.length = 0;
+				timers.length = 0;
+				rafQueue.length = 0;
+				observers.length = 0;
+			},
+			addRow(node) { rowNodes.push(node); return node; },
+			addContent(node) { contentNodes.push(node); return node; },
+			setNow(value) { nowValue = value; },
+			click(target) { onSessionRowClick({ target }); },
+			mutations(records) { const active = state.render.openCost.observer; if (active !== null) active.callback(records); },
+			flushRaf() { const queue = rafQueue.splice(0); for (const fn of queue) fn(); },
+			runTimers() { for (const timer of timers) if (timer.cleared === false && timer.ran === false) { timer.ran = true; timer.fn(); } },
+			startWatch: startOpenCostWatch,
+			stopWatch: stopOpenCostWatch,
+			status: openCostStatus,
+			bumped: () => bumped,
+		};
+	`)();
+})();
+check('打开耗时(窗口):点未选中行 → 记 t0 + 挂 observer(capture click / 只收 aria-selected);正文 ≥1200 且行选中才结算',
+	(() => {
+		const b = openBox;
+		b.startWatch();
+		const row = b.addRow(b.makeRow('s1', false));
+		b.click(row);
+		const started = b.state.render.openCost;
+		const shape = [started.pending !== null, started.pending.sessionId, started.pending.warm, started.pending.t0,
+			b.listeners.length, b.listeners[0].type, b.listeners[0].capture,
+			b.observers.length, b.observers[0].disconnected, b.observers[0].options.attributeFilter.join(',')];
+		// 正文挂进 DOM(observer 的新增子树路径)→ 合并到下一帧;500 字符还不够,不结算
+		const node = b.addContent(b.makeContent('s1', 500));
+		b.mutations([{ type: 'childList', addedNodes: [node] }]);
+		b.setNow(1040);
+		b.flushRaf();
+		const waiting = [b.state.render.openCost.pending !== null, b.state.render.openCost.ring.length, b.state.render.openCost.pending.chars];
+		// 正文长到 2000、行被选中 → 再读一次 → 结算
+		node.textContent = 'x'.repeat(2000);
+		row.selected = true;
+		b.mutations([{ type: 'childList', addedNodes: [] }]);
+		b.setNow(1180);
+		b.flushRaf();
+		const done = b.state.render.openCost;
+		const sample = done.ring[0];
+		return [...shape, ...waiting, done.pending, sample.ms, sample.chars, sample.warm,
+			Object.keys(sample).join(','), done.completed, done.observer, done.raf, done.timer, done.listening,
+			b.observers[0].disconnected, b.bumped() > 0];
+	})(),
+	// 行还没选中时**不读正文**(chars 停在 0):这是"便宜的那一问在前"的直接证据
+	[true, 's1', false, 1000, 1, 'click', true, 1, false, 'aria-selected',
+		true, 0, 0, null, 180, 2000, false, 'ms,chars,warm,at', 1, null, 0, 0, true, true, true]);
+check('打开耗时(窗口):点已选中的行不开新的等待;正文已在 DOM 里 → warm=true(切换,不是首次打开)',
+	(() => {
+		const b = openBox;
+		b.reset();
+		b.click(b.addRow(b.makeRow('s2', true)));
+		const afterSelected = b.state.render.openCost.pending;
+		const row = b.addRow(b.makeRow('s3', false));
+		b.addContent(b.makeContent('s3', 5000));
+		b.click(row);
+		const pending = b.state.render.openCost.pending;
+		return [afterSelected, pending.warm, pending.content !== null, b.observers.length];
+	})(),
+	[null, true, true, 1]);
+check('打开耗时(窗口):又点另一个会话行 → 上一次按 superseded 取消,旧 observer 断开(不叠观察器)',
+	(() => {
+		const b = openBox;
+		b.reset();
+		b.click(b.addRow(b.makeRow('s1', false)));
+		const first = b.observers[0];
+		b.setNow(1300);
+		b.click(b.addRow(b.makeRow('s2', false)));
+		const open = b.state.render.openCost;
+		return [open.canceled, open.canceledLast, first.disconnected, open.pending.sessionId,
+			b.observers.length, b.observers[1].disconnected, open.observer === b.observers[1]];
+	})(),
+	[1, 'superseded', true, 's2', 2, false, true]);
+check('打开耗时(窗口):30s 超时 → 干净取消(observer 断开 / 不记样本 / canceledLast=timeout)',
+	(() => {
+		const b = openBox;
+		b.reset();
+		b.click(b.addRow(b.makeRow('s1', false)));
+		b.setNow(1000 + 30000);
+		b.runTimers();
+		const open = b.state.render.openCost;
+		return [open.pending, open.ring.length, open.canceled, open.canceledLast, b.observers[0].disconnected, open.timer];
+	})(),
+	[null, 0, 1, 'timeout', true, 0]);
+check('打开耗时(窗口):控制台读数给 ring + 聚合 + 当前等待进度,不含会话 id',
+	(() => {
+		const b = openBox;
+		b.reset();
+		b.click(b.addRow(b.makeRow('s1', false)));
+		const status = b.status();
+		return [Object.keys(status).join(','), status.pending !== null, status.pending.elapsedMs,
+			status.pending.warm, /s1|sessionId|rowKey/.test(JSON.stringify(status)), status.listening];
+	})(),
+	['ring,n,p50,p95,last,pending,completed,canceled,canceledLast,listening', true, 0, false, false, true]);
+check('打开耗时(窗口):关 HUD(=stop)卸监听 + 断开 observer;再开能重新挂上',
+	(() => {
+		const b = openBox;
+		b.reset();
+		b.click(b.addRow(b.makeRow('s1', false)));
+		const observer = b.observers[0];
+		b.stopWatch();
+		const open = b.state.render.openCost;
+		const stopped = [open.pending, open.listening, b.listeners.length, open.canceled, open.canceledLast, observer.disconnected];
+		b.startWatch();
+		return [...stopped, b.listeners.length, b.listeners[0].capture];
+	})(),
+	[null, false, 0, 1, 'stopped', true, 1, true]);
 
 // ── C2:i18n(兜底跟文档语言 + 词典同源)──────────────────────────────
 check('C2:两本字典键集合完全一致(成对改的机器检查)',
@@ -2914,7 +3270,7 @@ check('createUi 依赖守卫有牙齿:拿掉任意一个键都会被点名,解�
 	const bogus = depGuard([...uiDepNames, 'bogusNewDep'], uiDepKeys).missing;
 	const unusedBonus = depGuard(uiDepNames, [...uiDepKeys, 'unusedBonus']).unused;
 	return { names: uiDepNames.length, uncaught, bogus, unusedBonus };
-})(), { names: 186, uncaught: [], bogus: ['bogusNewDep'], unusedBonus: ['unusedBonus'] });
+})(), { names: 187, uncaught: [], bogus: ['bogusNewDep'], unusedBonus: ['unusedBonus'] });
 check('主界面只吃时间语义(结构上不碰 selectedIncident / 手选那套)', (() => {
 	const seg = extract(renderSource, 'function mainView(');
 	return [seg.includes('selectedIncident') === false, seg.includes('props.latest'), /const latestRow = latestIncident\(\);/.test(renderSource)];
@@ -3289,6 +3645,11 @@ const watchPieces = [
 	// 武装窗口:多段 timeline 的拼装 + context.armed(incidentReport 在出包时调它们)
 	extract(source, 'function incidentTimelineFromArmed('),
 	extract(source, 'function armedContext('),
+	// 打开 / 切换耗时:incidentReport 出包时调 openCostContext(读 state.render.openCost 的 ring);
+	// openCostStats 是它用到的最近秩分位(percentile / round1 已在上面抽过)
+	extract(source, 'function openCostStats('),
+	extract(source, 'function openCostContext('),
+	extract(source, 'function openCostPush('),
 	extract(source, 'function provenanceOf('),
 	extract(source, 'function capabilities('),
 	extract(source, 'function capabilityMissing('),
@@ -3435,6 +3796,9 @@ const watchBox = new Function(`
 			armed: { phase: 'idle', startedAt: 0, endsAt: 0, endedAt: 0, windowSeconds: 0, reason: '', wasDeep: false, wasPrecise: false, timer: 0, deadline: 0, syncTimer: 0, captured: 0, restored: 0, hostReceipt: { phase: 'idle', active: false, segments: 0, kept: 0, windowSeconds: 0, segmentSeconds: 0, error: '', stopReason: '' } },
 			// A1 记录器自身开销的环形缓冲
 			selfRing: [], selfAt: 0, selfCount: 0, selfMax: 0,
+			// 打开 / 切换耗时:incidentReport 出包时读 ring(手写桩,加字段要同步 —— 样本里由
+			// production 的 openCostPush 填它,不是手写一个形状塞进去)
+			openCost: { ring: [], pending: null, observer: null, raf: 0, timer: 0, poll: 0, listening: false, seq: 0, completed: 0, canceled: 0, canceledLast: '', last: null },
 			bundleKeys: new Set(),
 			longTasks: [],
 			ltSeq: 0, ltDropped: 0,
@@ -3489,6 +3853,8 @@ const watchBox = new Function(`
 		timelineHostAnchor, timelineAnchorWallAt, timelineHostSamples, timelineOverlap, incidentTimeline,
 		zipStore,
 		manifestFor, diagnosticSummary, packReadme, buildPack, packPreview,
+		// 打开 / 切换耗时:样本里的 ring 由 production 的 openCostPush 填(连淘汰一起走真函数)
+		openCostPush, openCostStats, openCostContext,
 		setPackApi: (api) => { packApi = api; },
 		// 捕获计数(与留存分离):桶 / 窗口 / 落盘
 		tallyWindow, tallyOfDay, tallyTitle, tallyReport, bumpTally, noteTallySeverity, pruneTally,
@@ -4772,6 +5138,29 @@ check('事故包:带阈值与读取说明', [
 check('事故包:如实列出没拿到的东西',
 	['precise:', 'devtools-trace:'].map((prefix) => report.context.missing.some((line) => line.startsWith(prefix))),
 	[true, true]);
+check('打开耗时:事故包里真的出现 context.openCost(真产方:ring 用 openCostPush 填,聚合与 last 对得上)', (() => {
+	const saved = watch.state.render.openCost;
+	watch.state.render.openCost = { ...saved, ring: [] };
+	watch.openCostPush(watch.state.render.openCost.ring, { ms: 4200, chars: 51234, warm: false, at: '2026-11-08T02:40:00.000Z' }, 20);
+	watch.openCostPush(watch.state.render.openCost.ring, { ms: 410, chars: 8123, warm: true, at: '2026-11-08T02:41:00.000Z' }, 20);
+	watch.state.watch.incidents.push({ ...realFixture.incident, id: 'i15' });
+	const pack = JSON.parse(watch.buildPack('i15').files.find((file) => file.name === 'incident.json').text);
+	watch.state.watch.incidents.pop();
+	watch.state.render.openCost = saved;
+	const row = pack.context.openCost;
+	return [row.n, row.p50, row.p95, row.last.ms, Object.keys(row.last).join(','),
+		/session|title|hash/i.test(JSON.stringify({ ...row, note: '' })), row.note.includes('不是回归证据')];
+})(), [2, 410, 4200, 410, 'ms,chars,warm,at', false, true]);
+// 没有样本时**键不存在**(可选段的定义):不是空对象、不是 0
+check('打开耗时:一条样本都没有时 context.openCost 这个键根本不出现', (() => {
+	const saved = watch.state.render.openCost;
+	watch.state.render.openCost = { ...saved, ring: [] };
+	watch.state.watch.incidents.push({ ...realFixture.incident, id: 'i16' });
+	const pack = JSON.parse(watch.buildPack('i16').files.find((file) => file.name === 'incident.json').text);
+	watch.state.watch.incidents.pop();
+	watch.state.render.openCost = saved;
+	return ['openCost' in pack.context, Array.isArray(pack.context.openCost)];
+})(), [false, false]);
 check('事故包:宿主只有陈旧快照时说清楚"别当宿主没问题的证据"', (() => {
 	// 快照年龄 = perfOrigin + at - hostAt,所以把 hostAt 反推成"事故前 6224ms"
 	watch.state.host.snapshot = { eventLoop: { p99: 1.28 } };
@@ -5737,6 +6126,16 @@ const contractBlocks = (() => {
 	watch.state.host.armedProfiles.length = 0;
 	for (const row of savedArmedProfiles) watch.state.host.armedProfiles.push(row);
 	watch.state.render.armed = savedArmed;
+	// 第九个样本:打开 / 切换耗时的 `context.openCost` —— 同样是**真产方**:ring 由 production 的
+	// openCostPush 填(连淘汰一起走真函数),出包由 openCostContext 读同一份 ring,不手写形状。
+	const savedOpenCost = watch.state.render.openCost;
+	watch.state.render.openCost = { ...savedOpenCost, ring: [] };
+	watch.openCostPush(watch.state.render.openCost.ring, { ms: 4200.4, chars: 51234, warm: false, at: '2026-11-08T02:40:00.000Z' }, 20);
+	watch.openCostPush(watch.state.render.openCost.ring, { ms: 410.2, chars: 8123, warm: true, at: '2026-11-08T02:41:00.000Z' }, 20);
+	watch.state.watch.incidents.push({ ...realFixture.incident, id: 'i14' });
+	samples.push(readPack(watch.buildPack('i14')));
+	watch.state.watch.incidents.pop();
+	watch.state.render.openCost = savedOpenCost;
 	return samples;
 })();
 const CONTRACT_PATHS = {

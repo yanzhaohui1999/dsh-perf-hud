@@ -174,6 +174,24 @@ window.__ModuleLoader__.load({
 		const TALLY_DAYS = 30;                 // 按天汇总留最近 30 天
 		const TALLY_SAVE_DELAY_MS = 2000;      // 一次卡顿里 coalesced 会被连加很多次,落盘要合并
 		const LS_TALLY = 'dsh-perf-hud:tally:v1';
+		// ── 现场「打开 / 切换会话」耗时(方向 3,1.1)────────────────────────────
+		// 起点:document capture 阶段的 click,落点必须是会话行(`data-row-key^="session:"`)且
+		// **不是当前已选中的那一行**(点已选中的行不换会话,计时没有意义)。
+		// 终点:目标会话的正文节点出现 + 正文 ≥1200 字符 + 该行 aria-selected=true —— 三个条件
+		// 都是直接可观察的事实,不订阅任何"打开/切换"事件(本版本没有),也不看路由。
+		// ⚠️ 不做"连续 N 帧稳定"判定:正文 DOM 是虚拟化的,滚动 / 回收会让字符数上下跳,要求稳定
+		// 会把终点推到超时;这里只回答"用户那一屏正文出现了没有"。
+		const SESSION_ROW_PREFIX = 'session:';   // 会话行的 data-row-key 前缀(唯一的"会话身份"来源)
+		const OPEN_ROW_SELECTOR = `[data-row-key^="${SESSION_ROW_PREFIX}"]`;
+		// 正文容器:内容节点自己带 `data-conversation-content` + `data-conversation-session="<id>"`。
+		// ⚠️ 这两个属性只用来**定位**;id 不读进样本、不进包(见 openCostContext 的 note)。
+		const OPEN_CONTENT_SELECTOR = '[data-conversation-content][data-conversation-session]';
+		const OPEN_MIN_CHARS = 1200;          // 正文到这个字符数才算"交付"(更小的会话本来就不进这条读数)
+		const OPEN_TIMEOUT_MS = 30000;        // 单次等待上限:超过就干净取消,不记样本
+		const OPEN_RING_MAX = 20;             // 环形缓冲只留最近 20 次(与跨会话基线同一个量级)
+		const OPEN_PROBE_MS = 120;            // 正文字符数最多每 120ms 读一次(**不每帧读整棵树**)
+		const OPEN_SCAN_MS = 1000;            // 文档级兜底扫描的间隔(观察器只扫新增子树,兜底才扫全文档)
+		const OPEN_POLL_MS = 120;             // 没有 MutationObserver 时的兜底节拍
 		const WATCH_PERSIST_MAX_BYTES = 3145728;  // 事故落盘的字节上限(超了丢最弱的)。2MB 只能装 ~20 条小包;
 		// 3MB 给"最近 3 档"留出余地,同时给同源的 map 缓存留位置 —— 每个源 localStorage 常见 5MB(Chrome ~10MB)
 		/** React 自身的容器型具名组件:不是"谁在渲染"的答案,走查时跳过。 */
@@ -590,6 +608,23 @@ window.__ModuleLoader__.load({
 				mapCache: { evicted: 0, failed: 0 },   // map 缓存淘汰 / 写失败计数(只进导出件)
 				epoch: 0,                // 每个采集代递增:异步结果跨代一律丢弃(见 fetchTextWithin)
 				abort: null,             // 当前采集代的 AbortController;stop() 时 abort
+				// 现场「打开 / 切换会话」耗时(方向 3)。ring 只留最近 OPEN_RING_MAX 次;
+				// pending / observer / raf / timer / poll 都是**一次等待**的运行时引用 ——
+				// 取消路径必须把它们清干净(多次点击不许叠出多个 observer)。
+				openCost: {
+					ring: [],            // { ms, chars, warm, at } —— 正文只读字符数,不读内容
+					pending: null,       // 正在等的那一次:sessionId / row / content / t0 / chars / warm
+					observer: null,      // 只在等待期间挂着:documentElement 的变更(结算 / 取消就 disconnect)
+					raf: 0,              // 合并检查:一次 DOM 变更风暴每帧只算一次
+					timer: 0,            // OPEN_TIMEOUT_MS 超时兜底
+					poll: 0,             // 没有 MutationObserver 时的兜底节拍
+					listening: false,    // capture click 监听是否已挂上
+					seq: 0,              // 等待序号(调试:控制台能看到这是第几次)
+					completed: 0,        // 结算成样本的次数
+					canceled: 0,         // 有等待但没结算的次数(超时 / 切走 / 关 HUD)
+					canceledLast: '',    // 最近一次取消原因:timeout / superseded / stopped
+					last: null,          // 最近一次样本(与 ring 末尾同一份)
+				},
 			},
 			// ── watch:守夜层 + 场景标签 + 捕获计数 ──
 			watch: {
@@ -785,6 +820,9 @@ window.__ModuleLoader__.load({
 				markResolved,
 				natives,
 				noiseFloor,
+				// 打开 / 切换耗时(方向 3):事故包的 `context.openCost` 由模型层调这个纯函数拼,
+				// 与面板 / 控制台读同一份 ring(口径只有一个来源)
+				openCostContext,
 				perfOrigin,
 				pluginTable,
 				primaryBlame,
@@ -3640,6 +3678,8 @@ window.__ModuleLoader__.load({
 			startLoaf();
 			startInteractions();
 			startDomWatch();
+			// 打开 / 切换耗时的起点只有一个:capture 阶段的 click(见 onSessionRowClick)
+			startOpenCostWatch();
 			sampleDom();
 			probeLink('rtt');
 			// 吞吐探针原来是首个 60 秒才跑,面板那一格会空一分钟看着像被截断 —— 先补一次。
@@ -3671,6 +3711,8 @@ window.__ModuleLoader__.load({
 			natives.clearInterval(state.host.linkTimer);
 			natives.clearInterval(state.host.loadTimer);
 			stopDomWatch();
+			// 关 HUD 必须同时卸 click 监听并断掉在等的那一次的 observer(不许留着观察整棵树)
+			stopOpenCostWatch();
 			if (state.render.ltObserver !== null) { state.render.ltObserver.disconnect(); state.render.ltObserver = null; }
 			// 守夜层同样要能停下来:观察器 disconnect、等后摇的定时器清掉。
 			// 已经留存的事故**不清** —— 那是等了很久才抓到的东西,关一次 HUD 不该丢。
@@ -3699,6 +3741,417 @@ window.__ModuleLoader__.load({
 			}
 			state.render.fps = 0;
 			flush(true);
+		}
+
+		// ═════════════ 现场「打开 / 切换会话」耗时(方向 3,1.1)═════════════
+		// 为什么用 DOM 而不是事件 / 路由:本版本没有"会话打开 / 切换"事件可订阅(实测),SPA 换会话
+		// 就是消息区整块替换。所以起点与终点都只在 DOM 上判:
+		//   起点 = capture click 落在 `[data-row-key^="session:"]` 且该行不是当前选中行;
+		//   终点 = `[data-conversation-content][data-conversation-session="<id>"]` 出现、
+		//          正文 ≥ OPEN_MIN_CHARS 字符、该行 aria-selected=true。
+		// 三个终点事实**同时**成立才算交付 —— 只看"节点出现了"会把骨架屏/旧会话内容记成终点。
+		// 代价纪律:正文是虚拟化的(12K–51K 字符),所以字符数**只在行已选中时**读、每 OPEN_PROBE_MS
+		// 最多一次;节点靠 MutationObserver 的新增子树找,文档级全扫只是 1 秒一次的兜底。
+		//
+		// 取消路径(共用 openCostRelease,不泄漏 observer / rAF / timer):
+		//   ① 超时 OPEN_TIMEOUT_MS = 30s;② 又点了一次会话行(含点到已选中的行)= 切走;
+		//   ③ HUD 被关(disable / 卸载)= stopped。三档都只加 canceled,不记样本。
+
+		/** 点击落点 → 会话行。`data-row-key^="session:"` 只在这一个入口判定。 */
+		function sessionRowOf(node) {
+			const element = node !== null && typeof node === 'object' && node.nodeType === 3 ? node.parentElement : node;
+			if (element === null || element === undefined || typeof element !== 'object') return null;
+			if (typeof element.closest !== 'function') return null;
+			return element.closest(OPEN_ROW_SELECTOR);
+		}
+
+		/** 会话行 → 会话 id(`data-row-key` 的后半段)。拿不到就 null:不猜、不补。 */
+		function sessionRowId(row) {
+			if (row === null || row === undefined || typeof row.getAttribute !== 'function') return null;
+			const key = row.getAttribute('data-row-key');
+			if (typeof key !== 'string' || key.startsWith(SESSION_ROW_PREFIX) === false) return null;
+			const id = key.slice(SESSION_ROW_PREFIX.length);
+			return id === '' ? null : id;
+		}
+
+		/** 这一行是不是"当前已选中":点它不会换会话,计时没有意义(还会把重新渲染记成一次打开)。 */
+		function sessionRowSelected(row) {
+			if (row === null || row === undefined || typeof row.getAttribute !== 'function') return false;
+			return row.getAttribute('aria-selected') === 'true';
+		}
+
+		/** 一个节点**自己**是不是正文容器;是就回它的会话 id(不是就 null)。 */
+		function openContentSession(node) {
+			if (node === null || typeof node !== 'object' || node.nodeType !== 1) return null;
+			if (typeof node.getAttribute !== 'function') return null;
+			if (node.getAttribute('data-conversation-content') === null) return null;
+			const id = node.getAttribute('data-conversation-session');
+			return typeof id === 'string' && id !== '' ? id : null;
+		}
+
+		/** 在**新增子树**里找目标会话的正文节点(不扫整个文档:大段落挂进来时这一步很便宜)。 */
+		function openContentWithin(node, sessionId) {
+			if (openContentSession(node) === sessionId) return node;
+			if (typeof node.querySelectorAll !== 'function') return null;
+			const nodes = node.querySelectorAll(OPEN_CONTENT_SELECTOR);
+			for (const child of nodes) if (openContentSession(child) === sessionId) return child;
+			return null;
+		}
+
+		/** 文档级的兜底查找(只在点击时与 1 秒一次的兜底里走,不在每帧路径上)。 */
+		function openContentNode(sessionId) {
+			const nodes = document.querySelectorAll(OPEN_CONTENT_SELECTOR);
+			for (const node of nodes) if (openContentSession(node) === sessionId) return node;
+			return null;
+		}
+
+		/**
+		 * 正文字符数 —— **只读长度,不读内容**:这是这一层唯一碰正文 DOM 的地方。
+		 * 读到的数进样本(`chars`);文本本身不缓存、不比较、不进包、不落盘。
+		 */
+		function openContentChars(node) {
+			if (node === null || typeof node !== 'object') return 0;
+			const text = node.textContent;
+			return typeof text === 'string' ? text.length : 0;
+		}
+
+		/** 一次等待的判定(纯函数):'done' / 'wait' / 'timeout'。 */
+		function openCostVerdict(facts, limits) {
+			const row = facts === null || typeof facts !== 'object' ? {} : facts;
+			const cap = limits === null || typeof limits !== 'object' ? {} : limits;
+			const elapsed = typeof row.elapsedMs === 'number' && Number.isFinite(row.elapsedMs) ? row.elapsedMs : 0;
+			const timeoutMs = typeof cap.timeoutMs === 'number' && cap.timeoutMs > 0 ? cap.timeoutMs : OPEN_TIMEOUT_MS;
+			// 超时先判:到了上限就不再把这一条算成样本(哪怕这一次恰好也达标),否则"等太久"会被
+			// 记成一次很慢的成功打开,把 p95 变成假的。
+			if (elapsed >= timeoutMs) return 'timeout';
+			const minChars = typeof cap.minChars === 'number' && cap.minChars > 0 ? cap.minChars : OPEN_MIN_CHARS;
+			const chars = typeof row.chars === 'number' && Number.isFinite(row.chars) ? row.chars : 0;
+			if (row.present === true && row.selected === true && chars >= minChars) return 'done';
+			return 'wait';
+		}
+
+		/** 环形缓冲:压一条样本,超过 max 就从头部淘汰(最近的淘汰最老的)。 */
+		function openCostPush(rows, sample, max) {
+			const list = Array.isArray(rows) ? rows : [];
+			list.push(sample);
+			const limit = typeof max === 'number' && max > 0 ? Math.floor(max) : OPEN_RING_MAX;
+			while (list.length > limit) list.shift();
+			return list;
+		}
+
+		/**
+		 * 取消一次等待时**下一个状态**(纯函数)。DOM 侧的 observer.disconnect / cancelAnimationFrame /
+		 * clearTimeout 由 openCostRelease 先做完再交给它 —— 它只保证状态里不残留
+		 * pending / observer / raf / timer / poll 五个引用,并按原因记账。
+		 * 只有"真的有一次在等"才计数:没有 pending 的 stopped 不算一次丢掉的样本。
+		 */
+		function openCostAbandon(open, reason) {
+			const current = open === null || typeof open !== 'object' ? {} : open;
+			const had = current.pending !== null && current.pending !== undefined;
+			const label = typeof reason === 'string' && reason !== '' ? reason : 'canceled';
+			return {
+				...current,
+				ring: Array.isArray(current.ring) ? current.ring : [],
+				pending: null,
+				observer: null,
+				raf: 0,
+				timer: 0,
+				poll: 0,
+				listening: current.listening === true,
+				seq: typeof current.seq === 'number' ? current.seq : 0,
+				completed: typeof current.completed === 'number' ? current.completed : 0,
+				canceled: (typeof current.canceled === 'number' ? current.canceled : 0) + (had ? 1 : 0),
+				canceledLast: had ? label : (typeof current.canceledLast === 'string' ? current.canceledLast : ''),
+				last: current.last ?? null,
+			};
+		}
+
+		/** 聚合成环的分位(最近秩,与 percentile 同一口径)。没有样本时给 null,不拿 0 冒充。 */
+		function openCostStats(rows) {
+			const values = (Array.isArray(rows) ? rows : [])
+				.map((row) => (row === null || typeof row !== 'object' ? NaN : row.ms))
+				.filter((ms) => typeof ms === 'number' && Number.isFinite(ms) && ms >= 0)
+				.sort((a, b) => a - b);
+			if (values.length === 0) return { n: 0, p50: null, p95: null };
+			return { n: values.length, p50: round1(percentile(values, 50)), p95: round1(percentile(values, 95)) };
+		}
+
+		/**
+		 * 事故包的 `context.openCost`(可选段)。**一条样本都没有就返回 null** —— 键不出现,
+		 * 不是空对象、不是 0。形状固定 `{ note, n, p50, p95, last }`,
+		 * `last` 只有 `{ ms, chars, warm, at }` 四个键:不带会话标题 / id / 哈希。
+		 * 口径写进 note 里(读包的人不必来看代码):单次读数、跨运行噪声、last 是时间上最近的一次。
+		 */
+		function openCostContext(open) {
+			const slice = open === null || typeof open !== 'object' ? {} : open;
+			const rows = Array.isArray(slice.ring) ? slice.ring : [];
+			const stats = openCostStats(rows);
+			if (stats.n === 0) return null;
+			const last = rows[rows.length - 1];
+			return {
+				note: '单次读数,不是回归证据:这是"点会话行 → 目标会话正文 ≥1200 字符且该行已选中"的端到端耗时(页面内直接观察 DOM;本版本没有打开/切换事件,也没有可用的路由)。同一次打开内它与 CDP 口径的差 ≤1 帧,但跨运行的中位本身就有 ±20~70ms 抖动 —— 可以和同机同版本的实验室曲线对照,别拿两次的差判回归。ring 只留最近 20 次;n 是样本数,p50/p95 是最近这 n 次的最近秩分位(n<20 时 p95 只是"看到过的下界");last 是**时间上最近**的一次(不是最差的)。chars 是正文字符数(**只读长度,不读内容**),warm 为真表示点击那一刻目标会话的正文节点已经在 DOM 里(切换,不是首次打开)。这一段是**导出时刻**的读数,不属于这条事故的窗口;不带会话标题 / ID / 哈希',
+				n: stats.n,
+				p50: stats.p50,
+				p95: stats.p95,
+				last: {
+					ms: round1(Math.max(0, Number(last.ms) || 0)),
+					chars: Math.max(0, Math.round(Number(last.chars) || 0)),
+					warm: last.warm === true,
+					at: typeof last.at === 'string' ? last.at : null,
+				},
+			};
+		}
+
+		/**
+		 * 面板那一行:`打开 4.2s` / `open 4.2s`。没有样本返回 null(不摆一个 0,也不摆"暂无")。
+		 * 1 秒以下给 ms:小会话的读数用秒读不出来(0.4s → 0.4s 与 0.42s 分不清)。
+		 */
+		function openCostText(rows) {
+			const list = Array.isArray(rows) ? rows : [];
+			const last = list[list.length - 1];
+			if (last === null || last === undefined || typeof last.ms !== 'number' || Number.isFinite(last.ms) === false) return null;
+			const ms = Math.max(0, last.ms);
+			const rounded = Math.round(ms);
+			// 分档看**取整后**的值:999.6ms 显示成 "1000ms" 比 "1.0s" 更难读
+			const value = rounded >= 1000 ? `${(Math.round(ms / 100) / 10).toFixed(1)}s` : `${rounded}ms`;
+			return `${translate('openCostLabel')} ${value}`;
+		}
+
+		/** 把一次等待的运行时引用全释放掉(observer / rAF / 超时 / 兜底节拍 / 补读定时器)。 */
+		function openCostRelease(open) {
+			const pending = open.pending;
+			if (pending !== null && pending !== undefined && pending.probeTimer !== 0) {
+				natives.clearTimeout(pending.probeTimer);
+				pending.probeTimer = 0;
+			}
+			if (open.observer !== null) {
+				open.observer.disconnect();
+				open.observer = null;
+			}
+			if (open.raf !== 0) {
+				natives.cancelAnimationFrame(open.raf);
+				open.raf = 0;
+			}
+			if (open.timer !== 0) {
+				natives.clearTimeout(open.timer);
+				open.timer = 0;
+			}
+			if (open.poll !== 0) {
+				natives.clearInterval(open.poll);
+				open.poll = 0;
+			}
+		}
+
+		/** 取消一次等待:先释放 DOM 侧引用,再落到纯函数算出来的下一个状态。 */
+		function cancelOpenCost(reason) {
+			const open = state.render.openCost;
+			if (open.pending === null && open.observer === null && open.raf === 0 && open.timer === 0 && open.poll === 0) return false;
+			openCostRelease(open);
+			state.render.openCost = openCostAbandon(open, reason);
+			return true;
+		}
+
+		/** 结算成一条样本。 */
+		function finishOpenCost(now, chars) {
+			const open = state.render.openCost;
+			const pending = open.pending;
+			if (pending === null) return;
+			openCostRelease(open);
+			const sample = {
+				ms: round1(Math.max(0, now - pending.t0)),
+				chars: Math.max(0, Math.round(chars)),
+				warm: pending.warm === true,
+				at: new Date().toISOString(),
+			};
+			openCostPush(open.ring, sample, OPEN_RING_MAX);
+			open.last = sample;
+			open.pending = null;
+			open.completed = (typeof open.completed === 'number' ? open.completed : 0) + 1;
+			bump();   // 主界面那一行要跟着变
+		}
+
+		/** 会话行节点:优先用点击时那一个;React 换了节点就按 data-row-key 重新找(列表很短)。 */
+		function openRowNode(pending) {
+			const row = pending.row;
+			if (row !== null && row !== undefined && row.isConnected !== false) return row;
+			const rows = document.querySelectorAll(OPEN_ROW_SELECTOR);
+			for (const node of rows) {
+				if (typeof node.getAttribute === 'function' && node.getAttribute('data-row-key') === pending.rowKey) {
+					pending.row = node;
+					return node;
+				}
+			}
+			pending.row = null;
+			return null;
+		}
+
+		/** 观察器回调:只做"要不要再看一眼",真正的判定全在 openCostTick 里(每帧最多一次)。 */
+		function openCostMutations(records) {
+			const pending = state.render.openCost.pending;
+			if (pending === null) return;
+			// 已经拿到正文节点:变更只可能改"行选中 / 字符数",合并到下一帧算,不再逐条扫。
+			if (pending.content !== null) {
+				scheduleOpenCheck();
+				return;
+			}
+			for (const record of records) {
+				if (record.type === 'attributes' || record.type === 'characterData') {
+					scheduleOpenCheck();
+					return;
+				}
+				if (record.type !== 'childList') continue;
+				for (const node of record.addedNodes) {
+					if (node === null || typeof node !== 'object' || node.nodeType !== 1) continue;
+					const found = openContentWithin(node, pending.sessionId);
+					if (found !== null) {
+						pending.content = found;
+						scheduleOpenCheck();
+						return;
+					}
+				}
+			}
+		}
+
+		/** 合并一次检查到下一帧(一帧里来一百批 DOM 变更也只算一次)。 */
+		function scheduleOpenCheck() {
+			const open = state.render.openCost;
+			if (open.pending === null || open.raf !== 0) return;
+			open.raf = natives.requestAnimationFrame(openCostTick);
+		}
+
+		/**
+		 * 检查那一拍。顺序是**便宜的在前**:
+		 *   ① 节点在不在(缓存引用,断开才重新找);② 行选中没有(一次属性读);
+		 *   ③ 只有 ①② 都成立才读正文字符数 —— 每 OPEN_PROBE_MS 最多一次,且补一次定时补读
+		 *      (页可能已经静止,等不到下一次 DOM 变更)。
+		 */
+		function openCostTick() {
+			const open = state.render.openCost;
+			open.raf = 0;
+			const pending = open.pending;
+			if (pending === null) return;
+			const now = performance.now();
+			if (pending.content === null || pending.content.isConnected === false) {
+				if (now - pending.scannedAt >= OPEN_SCAN_MS) {
+					pending.content = openContentNode(pending.sessionId);
+					pending.scannedAt = now;
+				}
+			}
+			const present = pending.content !== null && pending.content.isConnected !== false;
+			const row = openRowNode(pending);
+			const selected = sessionRowSelected(row);
+			if (present === true && selected === true) {
+				const since = now - pending.probedAt;
+				if (since >= OPEN_PROBE_MS) {
+					pending.chars = openContentChars(pending.content);
+					pending.probedAt = now;
+				} else if (pending.probeTimer === 0) {
+					// 这一拍刚读过不久:排一次补读,别指望页面上恰好还有下一次 DOM 变更
+					pending.probeTimer = natives.setTimeout(() => {
+						pending.probeTimer = 0;
+						scheduleOpenCheck();
+					}, OPEN_PROBE_MS - since);
+				}
+			}
+			const verdict = openCostVerdict(
+				{ present, selected, chars: pending.chars, elapsedMs: now - pending.t0 },
+				{ minChars: OPEN_MIN_CHARS, timeoutMs: OPEN_TIMEOUT_MS },
+			);
+			if (verdict === 'done') finishOpenCost(now, pending.chars);
+			else if (verdict === 'timeout') cancelOpenCost('timeout');
+		}
+
+		/** 开始等一次打开 / 切换。调用方保证:行不是已选中的、id 拿得到。 */
+		function startOpenCost(row, sessionId) {
+			const open = state.render.openCost;
+			const now = performance.now();
+			// 点击那一瞬就查一次:命中 ⇒ 目标会话的正文节点已经在 DOM 里(这是**切换**,不是首次打开)
+			const content = openContentNode(sessionId);
+			open.pending = {
+				sessionId,
+				rowKey: `${SESSION_ROW_PREFIX}${sessionId}`,
+				row,
+				content,
+				warm: content !== null,
+				t0: now,
+				probedAt: 0,
+				scannedAt: now,
+				chars: 0,
+				probeTimer: 0,
+			};
+			open.seq = (typeof open.seq === 'number' ? open.seq : 0) + 1;
+			open.observer = null;
+			open.poll = 0;
+			if (typeof W.MutationObserver === 'function') {
+				const observer = new W.MutationObserver(openCostMutations);
+				// 只要四类事实:新增子树(正文挂进来)/ 文本变化(正文长出来)/
+				// aria-selected 变化(行切换)/ 其余属性不看(attributeFilter 收窄)。
+				observer.observe(document.documentElement, {
+					childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-selected'],
+				});
+				open.observer = observer;
+			} else {
+				open.poll = natives.setInterval(scheduleOpenCheck, OPEN_POLL_MS);
+			}
+			// 超时是兜底而不是常规终点:rAF 在后台标签页会被挂起,但定时器不会
+			open.timer = natives.setTimeout(() => cancelOpenCost('timeout'), OPEN_TIMEOUT_MS);
+			scheduleOpenCheck();
+		}
+
+		/**
+		 * capture 阶段的 click —— 起点只有这一处。**任何**一次会话行点击都先作废上一条等待
+		 * (含点到已选中的行:那是用户放弃了原来那次);然后再决定要不要开新的。
+		 */
+		function onSessionRowClick(event) {
+			if (state.render.on === false) return;
+			const row = sessionRowOf(event === null || typeof event !== 'object' ? null : event.target);
+			if (row === null) return;
+			cancelOpenCost('superseded');
+			if (sessionRowSelected(row)) return;
+			const id = sessionRowId(row);
+			if (id === null) return;
+			startOpenCost(row, id);
+		}
+
+		/** 挂 capture click(只能在 start 之后挂:关着 HUD 时不该有任何监听)。 */
+		function startOpenCostWatch() {
+			if (state.render.openCost.listening === true) return;
+			document.addEventListener('click', onSessionRowClick, true);
+			state.render.openCost.listening = true;
+		}
+
+		/** 卸监听 + 取消在等的那一次(observer 必须一起断:否则关掉 HUD 还在观察整棵树)。 */
+		function stopOpenCostWatch() {
+			cancelOpenCost('stopped');
+			if (state.render.openCost.listening === true) {
+				document.removeEventListener('click', onSessionRowClick, true);
+				state.render.openCost.listening = false;
+			}
+		}
+
+		/**
+		 * 控制台读数(`__perfHud.openCost()`):当前 ring + 聚合 + 正在等的那一次。
+		 * 只给"等了多少毫秒 / 选中没有 / 字符数",**不给会话 id / 标题** —— 与进包的口径一致。
+		 */
+		function openCostStatus() {
+			const open = state.render.openCost;
+			const stats = openCostStats(open.ring);
+			const pending = open.pending;
+			return {
+				ring: open.ring.map((row) => ({ ...row })),
+				n: stats.n, p50: stats.p50, p95: stats.p95,
+				last: open.last === null ? null : { ...open.last },
+				pending: pending === null ? null : {
+					elapsedMs: round1(performance.now() - pending.t0),
+					warm: pending.warm === true,
+					chars: pending.chars,
+					selected: sessionRowSelected(openRowNode(pending)),
+				},
+				completed: open.completed,
+				canceled: open.canceled,
+				canceledLast: open.canceledLast,
+				listening: open.listening === true,
+			};
 		}
 
 		function round1(value) {
@@ -3843,6 +4296,12 @@ window.__ModuleLoader__.load({
 			arm: (seconds) => armNow(seconds),
 			armed: armedStatus,
 			disarm: () => disarmArmed('manual'),
+			/**
+			 * 现场「打开 / 切换会话」耗时(方向 3):openCost() 给 ring(最近 20 次)+ 聚合
+			 * (n / p50 / p95)+ 正在等的那一次的进度。**不含会话 id / 标题**。
+			 * 口径:单次读数是粗参照,跨运行中位抖动 ±20~70ms —— 别拿单次差异当回归证据。
+			 */
+			openCost: openCostStatus,
 			link: () => state.host.link,
 			verification,
 		};
@@ -4733,6 +5192,8 @@ window.__ModuleLoader__.load({
 				overviewLine1,
 				overviewLine2,
 				overviewTitle,
+				// 主界面「最近趋势」下面那一行:最近一次"打开 / 切换"耗时(没有样本返回 null)
+				openCostText,
 				packPreview,
 				pickAuto,
 				pickList,

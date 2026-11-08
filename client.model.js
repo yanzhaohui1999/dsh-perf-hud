@@ -93,6 +93,8 @@ window.__ModuleLoader__.load({
 				markResolved,
 				natives,
 				noiseFloor,
+				// 打开 / 切换耗时的事故包段:ring 在 client.js 里采,形状与口径只由 openCostContext 一处给
+				openCostContext,
 				perfOrigin,
 				pluginTable,
 				primaryBlame,
@@ -2012,7 +2014,7 @@ window.__ModuleLoader__.load({
 				capabilities: caps,
 				// 这份包**不含**什么:与 redactionReport 的 neverCollected 是同一份口径
 				notIncluded: [
-					'聊天正文与提示词(本插件从不读取被测量的 DOM 内容)',
+					'聊天正文与提示词(打开耗时那一层只读正文字符数、不读内容;其余层不碰正文 DOM,也不读提示词)',
 					'Cookie / Token / 请求头(只读 performance 观察器与自己的宿主路由回执)',
 					// 宿主 CPU 采样是**按需**的:采到的那一段在 incident.json 的 context.hostCpuProfile,
 					// 没采到时 capabilities.host.cpuProfile 与 context.missing 会写明原因 —— 所以这里
@@ -2258,7 +2260,7 @@ window.__ModuleLoader__.load({
 					'viewport / devicePixelRatio / hardwareConcurrency / 时区 —— 解读帧耗时与分位要用',
 				],
 				neverCollected: [
-					'聊天正文与提示词(本插件从不读取被测量的 DOM 内容)',
+					'聊天正文与提示词:**只读正文字符数、不读内容**(打开 / 切换耗时那一层要判断"正文到了没有",所以读一次 textContent.length;文本本身不缓存、不比较、不进包、不落盘,其余层不碰正文 DOM)',
 					'Cookie / Token / 请求头(只读 performance 观察器与自己的宿主路由回执)',
 					'宿主进程内存 / 磁盘 / 进程树(那是 dsh-perf-lens 的地盘)',
 				],
@@ -2464,6 +2466,10 @@ window.__ModuleLoader__.load({
 			const timeline = armedTimeline === null ? incidentTimeline(incident, state.host.hostCpuProfile) : armedTimeline;
 			// 武装窗口是**可选**段:没开过、这条也不是窗口里采的 → 键不出现。
 			const armed = armedContext(state.render.armed, incident, state.host.armedProfiles);
+			// 打开 / 切换耗时也是**可选**段:页面里一条样本都没有 → 键不出现(不是空对象、不是 0)。
+			// 它是**导出时刻**的读数(与 context.recorder 同一条规矩),不属于这条事故的窗口 ——
+			// 形状与口径由 openCostContext 一处给(面板 / 控制台 / 事故包读同一份 ring)。
+			const openCost = openCostContext(state.render.openCost);
 			const payload = {
 				plugin: PKG,
 				kind: 'perf-hud-incident',
@@ -2485,6 +2491,9 @@ window.__ModuleLoader__.load({
 					// 武装窗口(可选):这段事故是不是在窗口里采的、窗口参数、宿主分段采到了几段。
 					// 读包的人靠它判断"这份帧读数带着多少插桩开销"。
 					...(armed === null ? null : { armed }),
+					// 打开 / 切换耗时(可选):最近 OPEN_RING_MAX 次的 ring 聚合 + 最近一次。
+					// 只读正文字符数、不读正文,不带会话标题 / ID(见 howToRead 那一条)。
+					...(openCost === null ? null : { openCost }),
 					// 记录器自身开销:与整机导出件 `context.recorder` **同一个结构**(selfStats 给的
 					// p99 / max / samples),不另创一套。它是**导出时刻**的读数(与整机件同一时间基准);
 					// 事故那一刻的帧数据在 incident.frames / incident.summary 里,两者别混读。
@@ -2507,6 +2516,7 @@ window.__ModuleLoader__.load({
 						'incident.baseline 是**除这一段之外**整个帧环的分布(故意排除本窗口,否则"比会话最差还差"永远不成立)—— 拿它和 summary 比,才知道这一段是真的比平时差还是这台机器一直这样',
 						'context.sessionBaselines 是**跨会话**的帧分布(每个会话一条,最多 20 条;只进导出件,面板不显示)。它是**粗参照,不是回归判定**:会话之间的负载、视口、是否插桩都不同,帧数量级也能差一个数量级 —— 只看"这次是不是比平时差一个量级",别拿它下"变慢了"的结论',
 						'context.recorder 是**记录器自己**的 rAF 回调开销(p99 / max / samples,最近 600 帧;p99 与 max 是毫秒):它回答"这一层记录器贵不贵",**不是页面开销**;它是导出时刻的读数,`samples = 0` 表示还没采到(HUD 没跑过一帧)',
+						'context.openCost(可选)是**打开 / 切换会话**的端到端耗时:起点是"capture click 落在会话行且该行不是当前选中行",终点是"目标会话正文节点出现 + 正文 ≥1200 字符 + 该行 aria-selected=true"三个事实同时成立。ring 只留最近 20 次,`n` 是样本数,`p50`/`p95` 是最近秩分位(`n<20` 时 p95 只是"看到过的下界"),`last` 是**时间上最近**的一次(不是最差的)。`chars` 只是正文字符数 —— **只读长度、不读内容**,会话标题 / ID / 哈希一个都不进包;`warm` 为真表示点击那一刻目标会话的正文节点已经在 DOM 里(切换而不是首次打开)。它是**导出时刻**的读数,不属于这条事故的窗口。⚠️ 口诀:单次读数是粗参照 —— 同一次打开内它与 CDP 口径差 ≤1 帧,但跨运行的中位本身有 ±20~70ms 抖动,别拿两次的差判回归',
 						'context.hostCpuProfile 是**宿主进程(Node)的 CPU 采样**,不是页面开销 —— 别把它和 incident.frames / incident.summary 的帧时间相加或互相印证:一个测的是宿主 Node 进程里谁在烧 CPU,一个测的是浏览器渲染帧里花在哪。`state` 是最近一次尝试的结局(collected / running / failed / none);`meta` / `summary` / `raw` 来自最近一次**成功**的采样,所以"这次失败"不会吞掉上一次的证据。`meta.seconds` 是宿主实测窗口、`meta.samples` 是采样点数、`meta.nodes` 是调用树节点数、`meta.pid` / `meta.nodeVersion` 说明采的是哪个进程,`collections` 是宿主进程累计采到过几次(跨页面,不是本页面点了几次)。采样是**按需**触发的,所以它不一定和这条事故同时:`collectedAt` 与 `incident.at` 一比就知道是事故前还是事故后采的;它只在内存里、不落盘 —— 刷新页面后这一段就没了(要留证据就当场导出)',
 						'context.hostCpuProfile.summary.topSelf 是**自热**排行:`selfMs` 只算"采样点落在该函数自身"的时间(不含子调用,子调用的时间记在子函数上),`share` = selfMs / sampledMs。它是**抽样**:1 秒约 200 个样本,某函数 1% ≈ 2 个样本 —— 份额低于约 5% 的行只能当"出现过",不能当结论。**第一个样本被跳过**并记进 `leadingMs`:它的 timeDelta 是"profile 起点 → 第一个样本"的间隔(真宿主实测 520~560ms,含 inspector 启用的时间),不是任何函数的 CPU 时间 —— 不跳过会把宿主 setup 的函数顶到榜首。`durationMs` 是 profile 自带跨度(≈ sampledMs + leadingMs),与 `meta.seconds`(宿主墙钟)可能差半秒左右,那半秒就是这段预滚;`sampledMs` 才是真正计入自热的毫秒。`fn` 为 (idle) / (program) 是 V8 的空闲 / 非 JS 采样点,不是插件代码',
 						'context.hostCpuProfile.raw 是标准 .cpuprofile(可被 speedscope / Chrome DevTools 直接打开),只在体积 ≤ 上限时随包;超限时 `raw = null`、`rawOmitted` 写明字节数与去哪拿(面板「宿主与链路 → 宿主 CPU 采样 → 下载 .cpuprofile」)。原始文件里的脚本路径按导出规则做了脱敏(/Users/<用户名> → ~,再加去协议与主机),所以对不上本机路径是正常的;`rawBytes` 是脱敏后的字节数。`summary.topSelf[].file` 同理(路径里的用户名是 ~)',

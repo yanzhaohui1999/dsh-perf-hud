@@ -141,6 +141,8 @@ function makeDeps(state) {
 		hudDodge: () => null,
 		// 场景 / 健康:主界面第一屏要判断"顺不顺"
 		healthVerdict: () => ({ level: 'ok', reason: '' }),
+		// 打开 / 切换耗时那一行:真实现是纯函数(logic.mjs 有断言),这里只回答"有这个样本时那一行渲染得出来"
+		openCostText: (rows) => (Array.isArray(rows) && rows.length > 0 ? '打开 4.2s' : null),
 		healthText: () => '流畅',
 		healthIcon: () => '●',
 		sceneChip: () => ({ text: '空闲', color: 'var(--x)' }),
@@ -227,6 +229,11 @@ const SCREENS = [
 		state.ui.view = 'incident'; state.ui.collapsed = false; state.watch.mode = 'incident';
 		state.render.armed = { ...state.render.armed, phase: 'ended', windowSeconds: 60, startedAt: Date.now() - 70000, endsAt: Date.now() - 10000, endedAt: Date.now() - 10000, captured: 2, restored: 1 };
 	}, expect: ['武装结束', '已还原', '武装 60 秒'] },
+	// 主界面「最近趋势」下面的打开耗时那一行:有样本才渲染(没样本时那一行整条不出现)
+	{ name: '主界面 · 打开耗时', setup: (state) => {
+		state.ui.view = 'main'; state.ui.collapsed = false; state.watch.mode = 'live';
+		state.render.openCost.ring = [{ ms: 4200, chars: 51234, warm: false, at: '2026-11-08T02:40:00.000Z' }];
+	}, expect: ['打开 4.2s'] },
 	{ name: '开发者详情 · 帧与归因', setup: (state) => { state.ui.view = 'dev'; state.ui.devTab = 'frames'; state.ui.collapsed = false }, expect: [...DEV_TABS, '深录'] },
 	{ name: '开发者详情 · DOM 与堆', setup: (state) => { state.ui.view = 'dev'; state.ui.devTab = 'dom'; state.ui.collapsed = false }, expect: DEV_TABS },
 	{ name: '开发者详情 · 宿主与链路', setup: (state) => { state.ui.view = 'dev'; state.ui.devTab = 'host'; state.ui.collapsed = false }, expect: DEV_TABS },
