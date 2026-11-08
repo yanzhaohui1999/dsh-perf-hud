@@ -73,7 +73,7 @@ tar xzf dsh-perf-hud-0.9.0.tgz
 
 - `package.json#version` = **1.0.0**;CHANGELOG 的 `[Unreleased]` 收成 `## [1.0.0] - 2026-11-08`。
 - 本地提交与 tag:`git tag -a v1.0.0 -m "1.0.0: 导出包契约冻结"`(提交号见 `git tag -n v1.0.0`)。
-- **没有做**:push、GitHub Release、`npm publish` —— 等维护者确认后由 `release.yml` 走 OIDC 发布。
+- **已发布(2026-11-08)**:push `main` + tag → GitHub Release → `release.yml`(OIDC)自动 publish;registry 上 `latest = 1.0.0`、`fileCount 38`、`dist.attestations` 是 SLSA provenance。Release:<https://github.com/yanzhaohui1999/dsh-perf-hud/releases/tag/v1.0.0>。
 
 ## 7. 未结项(如实写)
 

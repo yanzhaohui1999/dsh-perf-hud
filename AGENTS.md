@@ -270,7 +270,7 @@ bump `package.json.version` → 打 `vX.Y.Z` tag(与 version 一致)→ GitHub R
 
 ## 11. 当前状态
 
-v0.9.0 已发布(2026-11-04);**1.0.0 已完成发布门前置**(2026-11-08:763 条断言、五个真页面验收器、真 0.9.0 兼容夹具、本地 tag `v1.0.0`,包内 **38 个文件 / 433.9 kB tarball**),push / GitHub Release / npm publish 待确认。0.7.0 → 0.8.0 是九屏改版 + 脚本证据两段式 + 外壳 sourcemap 接入(可选);收录 PR [#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814) 已于 2026-10-19 合并。0.6.0 → 0.7.0 之间的 32 个提交里 8 个是 `feat`(面板可拖动 / 近 60 秒帧分布 / 守夜留存第三档 / 设置页占用 / 可疑脚本合并…),所以走 minor。**未还的债、上游证据、能力边界**见 [REVIEW.md](REVIEW.md);发版流水见 [CHANGELOG.md](CHANGELOG.md);历史证据见 [验收档案](docs/plans/2026-10-11-acceptance-evidence.md)。
+v0.9.0 已发布(2026-11-04);**v1.0.0 已发布(2026-11-08)**:tag `v1.0.0` → GitHub Release → `release.yml` 走 OIDC 自动 publish,包内 **38 个文件 / 433.9 kB tarball / 带 provenance**;发布门记录见 [1.0.0 发布验收](docs/plans/2026-11-08-v1-release-acceptance.md)。0.7.0 → 0.8.0 是九屏改版 + 脚本证据两段式 + 外壳 sourcemap 接入(可选);收录 PR [#7814](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/7814) 已于 2026-10-19 合并。0.6.0 → 0.7.0 之间的 32 个提交里 8 个是 `feat`(面板可拖动 / 近 60 秒帧分布 / 守夜留存第三档 / 设置页占用 / 可疑脚本合并…),所以走 minor。**未还的债、上游证据、能力边界**见 [REVIEW.md](REVIEW.md);发版流水见 [CHANGELOG.md](CHANGELOG.md);历史证据见 [验收档案](docs/plans/2026-10-11-acceptance-evidence.md)。
 
 ---
 
