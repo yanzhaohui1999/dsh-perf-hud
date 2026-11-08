@@ -141,7 +141,7 @@ dsh plugin --profile web add dsh-perf-hud
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
 node tests/logic.mjs         # 685 条:从 client.js 与其分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
 node tests/host.mjs          # 41 条:用假 ctx 驱动真实 index.js
-node tests/compat.mjs        # 12 条:上一版 schemaVersion 的夹具包喂当前读方
+node tests/compat.mjs        # 17 条:上一版 schemaVersion 的夹具包喂当前读方
 node tests/replay.mjs        # 9 条:回放站读包,现算摘要与包里 summary 逐项一致
 node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不需要浏览器)
 node tools/gen-prefix-table.mjs --check  # 诊断 Skill §2.6 的前缀表与 capabilityMissing() 一致
