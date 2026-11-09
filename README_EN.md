@@ -15,6 +15,15 @@
 
 Docs are maintained in Chinese — [README.md](README.md) is the primary version, this page is a summary.
 
+## Why this exists
+
+With DSH, the chat panel sometimes freezes without warning — typing lags, scrolling drops frames — and you cannot tell whether it is the browser, the host, or one plugin eating the main thread. Browser DevTools will tell you "that frame took 155ms", but not which layer it went to: which plugin, which component, which DOM write, or the host event loop. By the time you go looking, the stall is over and nothing was kept.
+
+So the main thing here is not a dashboard but a dashcam: it watches with zero instrumentation, keeps the 10s before + 3s after any frame over 100ms, retains the worst frames by severity, and lets you replay them frame by frame, attribute them to packages, and export the evidence in one pack. When you open the panel, it answers five questions: is it smooth right now, how slow was that stall, who might be responsible, what is the trend, and what to check next.
+
+<p align="center"><img src="docs/images/00-why-main.png" width="396" alt="Real capture: a 21.2 fps page; the latest 155ms stall was saved automatically"></p>
+<p align="center"><sub>Real capture: a 21.2 fps page; the latest 155ms stall was saved automatically.</sub></p>
+
 ## Which reader are you?
 
 - **Installing it?** → [Install](#install) → [Three modes](#three-modes) → [Reading the panel](#reading-the-panel)
