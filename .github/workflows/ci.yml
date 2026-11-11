@@ -32,11 +32,12 @@ jobs:
       # 两个「半边」先过语法:client.js 是浏览器脚本(靠模块表拿 react),
       # index.js 是宿主插件。node --check 只看语法,不执行。
       # tools/*.mjs 也是只做语法检查 —— 真页面验证器要浏览器与运行中的 dsh web,不进 CI。
+      # scripts/*.mjs 是 CI 自己的工具(清单门禁),同样只过语法。
       - name: Syntax check
         run: |
           node --check index.js
           node --check client.js
-          for file in tools/*.mjs; do node --check "$file"; done
+          for file in tools/*.mjs scripts/*.mjs; do node --check "$file"; done
 
       # 938 条离线断言:attribution 11 / logic 802 / host 99 / compat 17 / replay 9。
       # logic.mjs 会把 client.js 里的真函数抽进沙箱,所以它同时是客户端半的回归门;
@@ -78,3 +79,34 @@ jobs:
           for doc in README.md README_EN.md REVIEW.md AGENTS.md CONTRIBUTING.md; do
             grep -q "938" "$doc" || { echo "$doc 里没有 938"; exit 1; }
           done
+
+  # 发货门禁单开一个 job:它跟 Node 版本无关,没必要在 22 / 24 两条腿上各跑一遍,
+  # 也不该让矩阵里的某一条腿红了就把它一起挡掉。
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # 清单完整性:package.json#dsh 的形状,以及 bundle.patch / exports["./client"] /
+      # icon 指向的文件到底在不在。三个插件仓库共用同一份脚本(sha256 一致)。
+      # 这一条挡的是「npm publish 绿灯、用户装完面板 404 或 profile 起不来」。
+      - name: Plugin manifest
+        run: node scripts/check-plugin-manifest.mjs
+
+      # 本仓库自己的发货清单(工具只读文件系统,零依赖):必带 12 份文件 + tools/locale/skills
+      # 三个目录齐全,且目录里的每个文件都进了包;外加 dshReleases 兼容矩阵的核对。
+      # 以前这条只在发版路径上跑,PR 里漏登记 files 要等 tag 打完才红。
+      - name: Shipping list (files ↔ package.json)
+        run: node tools/check-pack.mjs
+
+      # 包内容:以 npm 自己的打包结果为准(不自写 files 通配匹配器),
+      # 核两件事 —— 清单引用的文件都在包里;包里没有 node_modules/.e2e/截图/日志。
+      - name: Package contents
+        run: |
+          npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
+          node scripts/check-plugin-manifest.mjs --pack "$RUNNER_TEMP/pack.json"
