@@ -30,6 +30,10 @@
 
 - **评审 P3-1 / P3-2:宿主采样世代与 setBundle 一次性票据**:`createCpuProfiler` 加 `generation` token,`start()` 递增、`finish()` 只在 token 匹配时提交 `profile` / `meta` / `running` / `session` —— 采样进行中关掉 HUD 再立刻打开,旧一代的 `Profiler.stop` 不再把新一代的 `running` 打回 false、也不再覆盖缓存。`setBundle` 不再认调用方自带的 `confirm:true`:面板先 `POST {op:"arm"}` 领一张 30 秒有效、单次使用的票据,`setBundle` 带 `ticket` 校验;过期 / 复用 / 伪造 / 无票据一律 403。断言 839 → **856**(host 61 → 78,新增 17 条:世代隔离 9 条 + 票据 8 条)。同轮清文档数字漂移:词典键数改为见断言、`client.js` 分片清单 5 → 7 个文件、`docs/` 8 → 9 份、W1 离线断言 11 → 12 条,行数快照改成量级写法。
 
+### 文档
+
+- **对外形态整理**:`package.json#description` 从功能罗列改成一句「解决什么问题」(中英);README 按「现状 → 安装 → 用法 → 限制」重排,章节标题、链接与读数口径不变。代码、断言与 `files` 打包清单未动(仍是 938 条)。
+
 离线断言合并后总数 **938**(attribution 11 / logic 802 / host 99 / compat 17 / replay 9)。
 
 
