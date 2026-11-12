@@ -76,6 +76,13 @@ jobs:
       - name: Offline render smoke
         run: node tools/render-smoke.mjs
 
+      # 文档与发货清单门禁:发版前也跑,避免「CI 绿、tag 打完才发现文档断链/文件没进包」。
+      - name: Docs links (breakage + orphans)
+        run: npm run docs:check
+
+      - name: Shipping list (files ↔ package.json)
+        run: npm run pack:check
+
       # 与 ci.yml 同一条:诊断 Skill §2.6 的前缀表是生成出来的,改了代码没重跑生成器 → 红
       - name: Missing-prefix table has no drift
         run: node tools/gen-prefix-table.mjs --check

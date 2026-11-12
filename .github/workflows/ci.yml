@@ -39,6 +39,11 @@ jobs:
           node --check client.js
           for file in tools/*.mjs scripts/*.mjs; do node --check "$file"; done
 
+      # 文档门禁:断链 + 孤儿(docs/ 下每篇 md 至少被另一篇链接)。它只读文件系统、
+      # 零依赖,所以放在安装/测试之前;以前它只在本地手动跑,断链/漏登记能静默到发版。
+      - name: Docs links (breakage + orphans)
+        run: npm run docs:check
+
       # 938 条离线断言:attribution 11 / logic 802 / host 99 / compat 17 / replay 9。
       # logic.mjs 会把 client.js 里的真函数抽进沙箱,所以它同时是客户端半的回归门;
       # compat.mjs 用**上一版 schemaVersion** 的夹具包喂当前读方(1.0 的冻结承诺靠它)。
