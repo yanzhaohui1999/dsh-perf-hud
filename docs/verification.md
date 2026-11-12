@@ -5,7 +5,7 @@
 ## 2. 环境与改动生效方式(决定你能不能验证)
 
 基线环境:DSH **`0.2.1-rc.1`**,profile 目录 `~/.dsh/profiles/web`,本仓库以 `link:` 装进该 profile
-(`dsh plugin --profile web add /Users/y/workspace/dsh-perf-hud`)—— **宿主加载的就是这个检出**,所以下面这张表直接决定"你改的东西什么时候真的在跑":
+(`dsh plugin --profile web add <本仓检出路径>`)—— **宿主加载的就是这个检出**,所以下面这张表直接决定"你改的东西什么时候真的在跑":
 
 | 改动 | 生效方式 |
 |---|---|
@@ -51,7 +51,7 @@ git worktree remove .worktrees/i18n                     # 收工;分支若不要
 
 **本仓库零运行时依赖、无构建步骤,所以 worktree 里不需要 `pnpm install`,建好就能 `npm test` / `node tests/*.mjs`**(实测:三套件在 worktree 里直接全绿)。
 
-⚠️ **但宿主加载的不是 worktree**:profile 里本包是 `link:/Users/y/workspace/dsh-perf-hud`(主检出),`dsh-client-hmr` 轮询的也是那个路径下的文件。所以在 worktree 里改 `client.js`,**浏览器里看不到**。要在浏览器里验证 worktree 的改动,只有三条路:
+⚠️ **但宿主加载的不是 worktree**:profile 里本包是 `link:<本仓检出路径>`(主检出),`dsh-client-hmr` 轮询的也是那个路径下的文件。所以在 worktree 里改 `client.js`,**浏览器里看不到**。要在浏览器里验证 worktree 的改动,只有三条路:
 
 1. **改完先合回主检出**(推荐,最省事);
 2. 临时把 profile 指过去:`dsh plugin --profile web add "$PWD/.worktrees/i18n"`,验完再指回主检出 —— 注意这改的是 **profile 的持久化依赖行**,验完务必指回来;
@@ -106,7 +106,7 @@ cd ~/workspace/dsh/harness-rc3 && pnpm install && pnpm run build
 
 # 3. 校验:产物必须与发行包**逐字节一致**,否则 map 的 charPos 对不上
 shasum -a 256 apps/web/dist/assets/index-*.js \
-  /Users/y/tools/.../@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js
+  <dsh 安装目录>/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js
 
 # 4. 把两张 map 放进发行包的 assets(升级 dsh 后要重做)
 cp apps/web/dist/assets/index-*.js.map apps/web/dist/assets/vendor-*.js.map \

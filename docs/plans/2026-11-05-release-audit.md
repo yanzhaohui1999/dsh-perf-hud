@@ -2,8 +2,8 @@
 
 > 复核对象:`v0.9.0`,tag 与 commit 都是 `1b53d20`(2026-11-04 23:53 本地建 tag / 建 Release)。
 > 每条结论后面标了证据来源;§1 里有一条 `⚠️` 是数据源自相矛盾,不是猜测。
-> 复核用 npm:`/Users/y/tools/node-v24.19.0-darwin-arm64/bin/npm`(11.17.0 / Node 24.19.0,即
-> [npm 发版](../release.md) §5 指定的那一套)。
+> 复核用 npm:Node 24.19.0 自带的 **11.17.0**(即 [npm 发版](../release.md) §5 指定的那一套,
+> 路径可用 `dirname "$(which node)"` 定位)。
 
 ## 1. 两条 workflow 的结果
 
@@ -82,7 +82,7 @@ ReferenceError: withShellSource is not defined
 
 ```sh
 # 沙箱里 npm 默认缓存目录不可写(EPERM ~/.npm/_cacache),把缓存挪进仓库即可
-npm_config_cache="$PWD/.tmp/npm-cache" /Users/y/tools/node-v24.19.0-darwin-arm64/bin/npm pack --dry-run
+npm_config_cache="$PWD/.tmp/npm-cache" npm pack --dry-run   # 用 Node 24.19.0 自带的那套 npm
 ```
 
 | 项 | 在不在 | 证据(大小 = 本地 pack,亦即线上 tarball) |
