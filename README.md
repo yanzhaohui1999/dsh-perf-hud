@@ -74,7 +74,9 @@ dsh plugin --profile web add dsh-perf-hud
 
 ### 在哪些 DSH 版本上真跑过
 
-只列**在本机真跑过五个真页面验收器**的版本 —— 1.0 起"声明即已验证":矩阵在 `package.json#dsh.compatibility.dshReleases`,`npm run pack:check` 逐条对着 [1.0 验收档案](docs/plans/2026-11-07-v1-acceptance.md) 的机器标记核,声明了却没跑过的版本会红。
+只列**在本机真跑过五个真页面验收器**的版本。
+
+⚠️ `package.json#dsh.compatibility.dshReleases` **不是运行时兼容契约**:DSH 0.2.1-rc.3 启动与运行都不读它,它只服务发布流程 —— 1.0 起"声明即已验证",`npm run pack:check` 逐条对着 [1.0 验收档案](docs/plans/2026-11-07-v1-acceptance.md) 的机器标记核,声明了却没跑过的版本会红。宿主真正读的安装门槛是 `engines.dsh`。
 
 | DSH | 验收时间 | 五个真页面验收器 |
 |---|---|---|

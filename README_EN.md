@@ -93,7 +93,7 @@ and marks host event-loop / host events as unavailable with the reason — it ne
 ### DSH compatibility (verified, not just declared)
 
 Only versions where all **five real-page verifiers** passed on a local `dsh web` are listed. Since 1.0,
-`package.json#dsh.compatibility.dshReleases` is checked against the machine markers in the
+`package.json#dsh.compatibility.dshReleases` is a release-process ledger, **not a runtime compatibility contract** (DSH does not read it at runtime). It is checked against the machine markers in the
 [1.0 acceptance archive](docs/plans/2026-11-07-v1-acceptance.md) by `npm run pack:check`; a declared but never
 run version fails the gate.
 
