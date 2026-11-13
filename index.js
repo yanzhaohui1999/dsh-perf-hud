@@ -857,7 +857,9 @@ function createCpuProfiler(inspector) {
 				seconds: round2((Date.now() - anchor) / 1000),
 				nodes: next.nodes.length,
 				samples: Array.isArray(next.samples) ? next.samples.length : 0,
-				bytes: JSON.stringify(next).length,
+				// 字段名是 bytes,值就必须是**真字节**:`JSON.stringify(next).length` 是 UTF-16
+				// 码元数(profile 里的中文函数名 1 码元 : 3 UTF-8 字节),客户端再按 MiB 除会低报。
+				bytes: Buffer.byteLength(JSON.stringify(next)),
 				pid: process.pid,
 				nodeVersion: process.version,
 			};

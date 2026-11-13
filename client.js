@@ -781,7 +781,7 @@ window.__ModuleLoader__.load({
 				ambientProfiles: [],
 				link: [],                // { t, kind, rtt, kbps?, error? }
 				loadState: 'pending',    // pending | ok | failed:吞吐那一格现在是哪种状态
-				loadKbps: null,          // 吞吐数值(KB/s),显示时 >=1024 折成 MB/s
+				loadKbps: null,          // 吞吐数值(KiB/s,1024 进制),显示时 >=1024 折成 MiB/s
 				linkAt: 0,
 				loadAt: 0,
 			},
@@ -912,6 +912,7 @@ window.__ModuleLoader__.load({
 				watchStatus,
 				worstLongTask,
 				zipStore,
+				utf8ByteLength,
 				resolveStamp: () => resolveSeq,
 			};
 		}
@@ -977,6 +978,7 @@ window.__ModuleLoader__.load({
 				start,
 				state,
 				uniqueInteractions,
+				utf8ByteLength,
 			};
 		}
 		function watch() {
@@ -1968,11 +1970,16 @@ window.__ModuleLoader__.load({
 			if (ms > entry.max) entry.max = ms;
 		}
 
-		/** 一个分相环的 p99 / 峰 / 样本数;空环照实给 null,不编 0。 */
+		/**
+		 * 一个分相环的 p99 / 峰 / 样本数;空环照实给 null,不编 0。
+		 * `samples` 是**环内**样本数(≤ SELF_RING / SELF_PHASE_RING),与 p99 同分母;
+		 * 累计调用次数在 `count` 里,不混进这个读数 —— 以前这里给的是累计数,长会话会印成
+		 * 「p99 12.3ms · 峰 45.6ms · 200000」,让人误以为 p99 算在 20 万个样本上。
+		 */
 		function selfPhaseStats(entry) {
 			if (entry === undefined || entry.ring.length === 0) return { p99: null, max: null, samples: 0 };
 			const sorted = entry.ring.slice().sort((a, b) => a - b);
-			return { p99: round1(percentile(sorted, 99)), max: round1(entry.max), samples: entry.count };   // percentile 的 p 是百分数
+			return { p99: round1(percentile(sorted, 99)), max: round1(entry.max), samples: entry.ring.length };   // percentile 的 p 是百分数
 		}
 
 		function selfStats() {
@@ -1998,7 +2005,8 @@ window.__ModuleLoader__.load({
 
 		function recorderText() {
 			const stats = selfStats();
-			return stats.p99 === null ? translate('none') : `p99 ${stats.p99}ms · ${translate('peak')} ${stats.max}ms · ${stats.samples}`;
+			// n= 写明这是**样本数**(环内,与 p99 同分母),不是裸数字 —— 不然读不出比例。
+			return stats.p99 === null ? translate('none') : `p99 ${stats.p99}ms · ${translate('peak')} ${stats.max}ms · n=${stats.samples}`;
 		}
 
 		/**
@@ -2796,7 +2804,7 @@ window.__ModuleLoader__.load({
 					const bytes = payload.pad === undefined ? 0 : payload.pad.length;
 					const kbps = rtt <= 0 ? 0 : round1(bytes / 1024 / (rtt / 1000));
 					state.host.link.push({ t: Date.now(), kind, rtt, kbps });
-					state.host.linkText = `${kbps}KB/s`;
+					state.host.linkText = `${kbps}KiB/s`;
 					state.host.loadKbps = kbps;
 					state.host.loadState = 'ok';
 				} else {
@@ -3765,13 +3773,13 @@ window.__ModuleLoader__.load({
 			return state.host.snapshot?.eventLoop?.p99 ?? null;
 		}
 
-		/** 吞吐显示:>=1024KB/s 折成 MB/s(这一行还要放 RTT 与判定,省宽度)。 */
+		/** 吞吐显示:数值按 1024 进制折算(应用层字节 / 秒),所以标签用 KiB/s、>=1024 折 MiB/s(省一行宽度)。 */
 		function throughputText() {
 			if (state.host.loadState === 'pending') return translate('sampling');
 			if (state.host.loadState === 'failed') return translate('failed');
 			const kbps = state.host.loadKbps;
 			if (typeof kbps !== 'number') return state.host.linkText;
-			return kbps >= 1024 ? `${Math.round(kbps / 1024 * 10) / 10}MB/s` : `${kbps}KB/s`;
+			return kbps >= 1024 ? `${Math.round(kbps / 1024 * 10) / 10}MiB/s` : `${kbps}KiB/s`;
 		}
 
 		/**
@@ -4136,7 +4144,21 @@ window.__ModuleLoader__.load({
 			const date = new Date(ms);
 			return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 		};
+		// MiB 数值(1024 进制)。**调用处的标签必须写 MiB**,不要印 MB(那是十进制,差 4.6%)。
 		const mb = (bytes) => (bytes / 1048576).toFixed(1);
+
+		/**
+		 * 一段文本的 **UTF-8 字节数**(落盘裁剪与 localStorage 占用统计共用同一个口径)。
+		 * `String.length` 是 UTF-16 码元数:CJK 一个字 1 码元、3 个 UTF-8 字节 ——
+		 * 拿码元数去比字节上限,同一份数据会差到 3 倍。浏览器优先 TextEncoder(没有就 Blob),
+		 * 两者都没有时退回码元 ×2(近似值:ASCII 偏高、CJK 偏低,但比裸码元数接近字节)。
+		 */
+		function utf8ByteLength(text) {
+			if (typeof text !== 'string' || text.length === 0) return 0;
+			if (typeof TextEncoder === 'function') return new TextEncoder().encode(text).length;
+			if (typeof Blob === 'function') return new Blob([text]).size;
+			return text.length * 2;
+		}
 
 		// ───────── 可能原因 / 诊断包 / 导出脱敏:实现在 client.model.js 分片里 ─────────
 		const CAUSE_MAX = 3;
@@ -5719,7 +5741,7 @@ window.__ModuleLoader__.load({
 		/** 堆增速用 60 秒窗口(2 秒一采样 → 30 点):12 秒窗口会被 GC 锯齿放大成假数字。 */
 		function heapRateText() {
 			const perMin = rate(state.render.heapSeries, 30);
-			return `${perMin >= 0 ? '+' : ''}${mb(perMin)}MB${translate('perMin')}`;
+			return `${perMin >= 0 ? '+' : ''}${mb(perMin)}MiB${translate('perMin')}`;
 		}
 
 		/** DOM 写入者 Top N + 其余(数字带 ≈:采样估算)。 */

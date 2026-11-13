@@ -129,7 +129,8 @@ window.__ModuleLoader__.load({
 				wallClock,
 				watchStatus,
 				worstLongTask,
-				zipStore
+				zipStore,
+				utf8ByteLength
 			} = deps;
 
 		function timeoutError(ms) {
@@ -2002,8 +2003,7 @@ window.__ModuleLoader__.load({
 		}
 		/**
 		 * 插件在 localStorage 里占了多少:按 key 归类(事故 / sourcemap 分段表 / 其余)。
-		 * 只读、不做任何清理 —— 给"现在占比怎么样"一个确切数字,别靠猜。
-		 * 字节按 UTF-16 码元 ×2 估(与浏览器配额的计量口径接近);枚举不到(某些沙箱)就返回全 0。
+		 * 只读、不做任何清理 —— 给"现在占比怎么样"一个确切数字;字节按 JSON 文本的 UTF-8 字节数计(与落盘裁剪同一口径,旧版 ×2 估会差 1/3)。
 		 */
 		function storageReport(storage) {
 			const report = { total: 0, incidents: 0, maps: 0, other: 0, keys: 0, cap: WATCH_PERSIST_MAX_BYTES, entries: [] };
@@ -2014,7 +2014,7 @@ window.__ModuleLoader__.load({
 					const key = store.key(i);
 					if (typeof key !== 'string' || key.indexOf(PKG) !== 0) continue;
 					const value = store.getItem(key) ?? '';
-					const bytes = (key.length + value.length) * 2;
+					const bytes = utf8ByteLength(key) + utf8ByteLength(value);
 					report.total += bytes;
 					report.keys += 1;
 					if (key === LS_INCIDENTS) report.incidents += bytes;
@@ -2026,11 +2026,11 @@ window.__ModuleLoader__.load({
 			report.entries.sort((a, b) => b.bytes - a.bytes);
 			return report;
 		}
-		/** 字节数的面板写法:>=1MB 保留一位小数,>=1KB 取整,其余按 B。 */
+		/** 字节数的面板写法(1024 进制,标签必须是 MiB / KiB):>=1MiB 保留一位小数,>=1KiB 取整,其余按 B。 */
 		function bytesText(bytes) {
 			const n = typeof bytes === 'number' && Number.isFinite(bytes) ? Math.max(0, bytes) : 0;
-			if (n >= 1048576) return `${Math.round((n / 1048576) * 10) / 10}MB`;
-			if (n >= 1024) return `${Math.round(n / 1024)}KB`;
+			if (n >= 1048576) return `${Math.round((n / 1048576) * 10) / 10}MiB`;
+			if (n >= 1024) return `${Math.round(n / 1024)}KiB`;
 			return `${Math.round(n)}B`;
 		}
 		function manifestFor(row, options) {
@@ -2592,7 +2592,7 @@ window.__ModuleLoader__.load({
 						'incident.interactions 是窗口内 ≥100ms 的交互(event / element timing):`ms` 是端到端(到下一次渲染更新为止),`waitMs` 是事件发生到处理器真正开始的输入延迟、`handlerMs` 是处理器本身(两个都是推导值,原始字段 processingStart/End 也在);`isInteraction` 为真的才是 interactionId>0 的真交互,pointerover 那类被动事件也会进来。**这一层不承诺帧内拆分**(输入延迟 / 处理 / 呈现得去 DevTools 的 Interactions 轨道看);`type: "element"` 的条目只可能来自带 `elementtiming` 属性的元素,DSH 页面上恒为 0',
 						'incident.baseline 是**除这一段之外**整个帧环的分布(故意排除本窗口,否则"比会话最差还差"永远不成立)—— 拿它和 summary 比,才知道这一段是真的比平时差还是这台机器一直这样',
 						'context.sessionBaselines 是**跨会话**的帧分布(每个会话一条,最多 20 条;只进导出件,面板不显示)。它是**粗参照,不是回归判定**:会话之间的负载、视口、是否插桩都不同,帧数量级也能差一个数量级 —— 只看"这次是不是比平时差一个量级",别拿它下"变慢了"的结论',
-						'context.recorder 是**记录器自己**的 rAF 回调开销(p99 / max / samples,最近 600 帧;p99 与 max 是毫秒);`phases` 另给 sampleTick / sampleDom / flush 三个常开定时器的分相读数。它回答"这一层记录器贵不贵",**不是页面开销**;它是导出时刻的读数,`samples = 0` 表示还没采到(HUD 没跑过一帧)',
+						'context.recorder 是**记录器自己**的 rAF 回调开销(p99 / max / samples;p99 与 max 是毫秒,`samples` 是**环内**样本数(≤600) —— 与 p99 同分母,不是累计回调次数);`phases` 另给 sampleTick / sampleDom / flush 三个常开定时器的分相读数。它回答"这一层记录器贵不贵",**不是页面开销**;它是导出时刻的读数,`samples = 0` 表示还没采到(HUD 没跑过一帧)',
 						'context.openCost(可选)是**打开 / 切换会话**的端到端耗时:起点是"capture click 落在会话行且该行不是当前选中行",终点是"目标会话正文节点出现 + 正文 ≥1200 字符 + 该行 aria-selected=true"三个事实同时成立。ring 只留最近 20 次,`n` 是样本数,`p50`/`p95` 是最近秩分位(`n<20` 时 p95 只是"看到过的下界"),`last` 是**时间上最近**的一次(不是最差的)。`chars` 只是正文字符数 —— **只读长度、不读内容**,会话标题 / ID / 哈希一个都不进包;`warm` 为真表示点击那一刻目标会话的正文节点已经在 DOM 里(切换而不是首次打开)。它是**导出时刻**的读数,不属于这条事故的窗口。⚠️ 口诀:单次读数是粗参照 —— 同一次打开内它与 CDP 口径差 ≤1 帧,但跨运行的中位本身有 ±20~70ms 抖动,别拿两次的差判回归',
 						'context.hostCpuProfile 是**宿主进程(Node)的 CPU 采样**,不是页面开销 —— 别把它和 incident.frames / incident.summary 的帧时间相加或互相印证:一个测的是宿主 Node 进程里谁在烧 CPU,一个测的是浏览器渲染帧里花在哪。`state` 是最近一次尝试的结局(collected / running / failed / none);`meta` / `summary` / `raw` 来自最近一次**成功**的采样,所以"这次失败"不会吞掉上一次的证据。`meta.seconds` 是宿主实测窗口、`meta.samples` 是采样点数、`meta.nodes` 是调用树节点数、`meta.pid` / `meta.nodeVersion` 说明采的是哪个进程,`collections` 是宿主进程累计采到过几次(跨页面,不是本页面点了几次)。采样是**按需**触发的,所以它不一定和这条事故同时:`collectedAt` 与 `incident.at` 一比就知道是事故前还是事故后采的;它只在内存里、不落盘 —— 刷新页面后这一段就没了(要留证据就当场导出)',
 						'context.hostCpuProfile.summary.topSelf 是**自热**排行:`selfMs` 只算"采样点落在该函数自身"的时间(不含子调用,子调用的时间记在子函数上),`share` = selfMs / sampledMs。它是**抽样**:1 秒约 200 个样本,某函数 1% ≈ 2 个样本 —— 份额低于约 5% 的行只能当"出现过",不能当结论。**第一个样本被跳过**并记进 `leadingMs`:它的 timeDelta 是"profile 起点 → 第一个样本"的间隔(真宿主实测 520~560ms,含 inspector 启用的时间),不是任何函数的 CPU 时间 —— 不跳过会把宿主 setup 的函数顶到榜首。`durationMs` 是 profile 自带跨度(≈ sampledMs + leadingMs),与 `meta.seconds`(宿主墙钟)可能差半秒左右,那半秒就是这段预滚;`sampledMs` 才是真正计入自热的毫秒。`fn` 为 (idle) / (program) 是 V8 的空闲 / 非 JS 采样点,不是插件代码',

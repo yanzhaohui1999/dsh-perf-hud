@@ -22,6 +22,8 @@
 
 ### 修复
 
+- **口径审计 6 条:字节轴 / 1024 进制标签 / 样本分母**:① 事故落盘裁剪与 localStorage 占用统计统一按 **UTF-8 真字节**(新增 `utf8ByteLength`:TextEncoder → Blob → 码元×2 兜底),不再拿 `String.length`(UTF-16 码元)比 `WATCH_PERSIST_MAX_BYTES`;同一份 CJK payload 旧判据会漏裁 3 倍。② `bytesText` 与面板其余体积/速率读数改用 **MiB / KiB**(`3,145,728B` 现在是 `3MiB`,不再印成 `3MB`),README 与词典的「3MB 上限」同步成 3MiB。③ 宿主 `meta.bytes` 从 `JSON.stringify().length` 改成 `Buffer.byteLength(...)`(CJK 1 码元 = 3 字节),客户端按 MiB 显示。④ JS 堆那一格(`mb()` 的调用点)与堆增速都印 **MiB**。⑤ 链路吞吐按 1024 进制折算,标签改为 **KiB/s / MiB/s**(旧标签 KB/s / MB/s 与数值差 2.4%)。⑥ `context.recorder` / 面板的 `samples` 改成**环内样本数**(与 p99 同分母,≤600),不再印累计回调次数;面板写成 `n=600`,导出件 README 同步口径。断言 938 → **943**(logic 802 → 806,host 99 → 100:新增 CJK 落盘裁剪 / CJK 占用统计 / 环内样本数 / MiB 堆标签 / 宿主 profile 真字节)。
+
 - **票据容器加上限(盲审遗留)**:`setBundle` 的一次性票据 Map 原来没有容量上限 —— 同源脚本循环 `arm` 时,30 秒 TTL 窗口内的 Map 会一直长。现在 `TICKET_MAX = 64`(`ticketMax` 仅测试注入):`arm` 先清过期,仍满员就按插入序驱逐最旧并累计 `evicted`;`arm` 回执与 GET `host.tickets` 都回 `{ max, live, evicted }`。断言 933 → **938**(host 94 → 99):超限后 `live` 不再增长 / 被驱逐的旧票 403 / 新票仍可写 / GET 可读计数 / 默认 64。
 
 - **30 天聚合恢复独立的 5 秒落盘(合并后回归)**:`fix/audit-followup` 合并后 `saveHistory()` 只剩 `flush()` 里一次调用,而 `FLUSH_INTERVAL_MS` 是 60 秒 —— W5 承诺的「每 5 秒落盘」被静默放宽 12 倍,两份注释还写着「不另开定时器 / 搭 flush 的 5 秒节拍」。现在 `start()` 单独接 `HISTORY_FLUSH_MS = 5000` 的 `historyTimer`(写前照旧按 dirty 去重),`stop()` 清掉并置 0;`flush()` 里的补写保留(pagehide / visibilitychange:hidden / 关 HUD 仍即时落盘)。新增 3 条断言(5 秒周期与 60 秒 ring flush 并列 / stop 清理且不续排 / flush(true) 补写),把 `HISTORY_FLUSH_MS` 改回 60000 时第一条必红;`state.render` 字段数 57 → 58。断言 930 → **933**(logic 799 → 802)。
@@ -34,7 +36,7 @@
 
 - **对外形态整理**:`package.json#description` 从功能罗列改成一句「解决什么问题」(中英);README 按「现状 → 安装 → 用法 → 限制」重排,章节标题、链接与读数口径不变。代码、断言与 `files` 打包清单未动(仍是 938 条)。
 
-离线断言合并后总数 **938**(attribution 11 / logic 802 / host 99 / compat 17 / replay 9)。
+离线断言合并后总数 **943**(attribution 11 / logic 806 / host 100 / compat 17 / replay 9)。
 
 
 ## [1.0.0] - 2026-11-08

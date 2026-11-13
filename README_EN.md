@@ -60,7 +60,7 @@ Four things to remember about night watch (full details in [reading-panel](docs/
   multi-second "gaps" from a hidden tab are tagged `gap` and are not stalls;
 - **"how often it happened" and "how many scenes were kept" are different numbers**: `detected` (a burst counts
   once) / `saved` (capacity-limited) / `lost`. The collapsed pill shows *detected in 24h*, not the kept count;
-- persistence is capped at **3MB** (trims the weakest first and says how many); kept incidents survive a reload
+- persistence is capped at **3MiB** (judged on the JSON text's UTF-8 byte length; trims the weakest first and says how many); kept incidents survive a reload
   (`watch().restored`). This layer **patches nothing** — only deep record installs wrappers, and `disable()` restores them.
 
 ## At a glance: four screens and how to reach them
@@ -174,13 +174,13 @@ the version policy; `tests/compat.mjs` proves packs from the previous schema ver
 
 ```sh
 node tests/attribution.mjs   # 11 assertions: script URL shapes → package name / bundle key
-node tests/logic.mjs         # 802 assertions: real functions extracted from client.js + static checks + coverage of the frozen contract
-node tests/host.mjs          # 99 assertions: real index.js driven by a fake ctx
+node tests/logic.mjs         # 806 assertions: real functions extracted from client.js + static checks + coverage of the frozen contract
+node tests/host.mjs          # 100 assertions: real index.js driven by a fake ctx
 node tests/compat.mjs        # 17 assertions: a previous-schemaVersion pack fed to the current readers
 node tests/replay.mjs        # 9 assertions: the replay site re-derives the summary from frames and matches the pack
 node tools/render-smoke.mjs  # offline render smoke: six screens + "HUD off", no browser needed
 node tools/gen-prefix-table.mjs --check  # diagnosis Skill §2.6 prefix table in sync with capabilityMissing()
-# 938 assertions + one smoke run, no running DSH required; `npm test` runs them all
+# 943 assertions + one smoke run, no running DSH required; `npm test` runs them all
 ```
 
 Any change to rendering / `apply()` / `start()` also needs a **real-page** pass (`node tools/check-panel.mjs` at

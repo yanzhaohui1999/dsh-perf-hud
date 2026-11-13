@@ -1391,6 +1391,7 @@ const newPieces = [
 	'function frameMixPctText(',
 	'function frameMixRows(',
 	'function storageReport(',
+	'function utf8ByteLength(',
 	'function uniqueInteractions(',
 	'function severityBasisText(',
 	'function evidenceGroups(',
@@ -1403,6 +1404,7 @@ const newPieces = [
 	'const pad = ',
 	'const clock = (ms) => {',
 	'const mb = ',
+	'function heapRateText(',
 	'function verification(',
 	'function snapshot(',
 	// 导出脱敏:导出件只有这一个出口,两个盒子都要有(否则 snapshot / incidentReport 一跑就 ReferenceError)
@@ -1523,6 +1525,7 @@ const box = new Function(`${sandbox}
 		setNativesTimeout: (fn) => { const previous = natives.setTimeout; natives.setTimeout = fn; return previous; },
 		stressSelfTest, stressReport, captureReceiptText,
 		SELF_RING, recordSelf, selfStats, recorderText,
+		heapRateText,
 		SELF_PHASE_RING, recordSelfPhase, selfPhaseStats,
 		RING_PERSIST_MAX, RING_PERSIST_BUDGET, RING_ENVELOPE_OVERHEAD, persistTail, FLUSH_INTERVAL_MS,
 		DOM_SAMPLE_MS, DOM_SAMPLE_SLOW_MS, DOM_SAMPLE_BIG_NODES, domSampleInterval,
@@ -2722,23 +2725,23 @@ box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 10 }, { t: Date.now(),
 box.state.host.loadState = 'pending';
 check('吞吐还没跑:写"吞吐采样中"而不是留空', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 吞吐采样中');
 box.state.host.loadState = 'ok';
-box.state.host.linkText = '1200.8KB/s';
+box.state.host.linkText = '1200.8KiB/s';
 box.state.host.loadKbps = 1200.8;
-check('吞吐就绪:>=1024KB/s 折成 MB/s', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 1.2MB/s');
+check('吞吐就绪:>=1024KiB/s 折成 MiB/s(1024 进制标签)', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 1.2MiB/s');
 box.state.host.loadKbps = 880;
-check('低于 1024 仍用 KB/s', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 880KB/s');
+check('低于 1024 仍用 KiB/s', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 880KiB/s');
 box.state.host.loadKbps = 1344.5;
-check('吞吐 >=1024KB/s 折成 MB/s(省一行宽度)', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 1.3MB/s');
+check('吞吐 >=1024KiB/s 折成 MiB/s(省一行宽度)', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 1.3MiB/s');
 box.state.host.loadState = 'failed';
 check('吞吐失败:如实写失败', EX.linkRowText(), 'p50 10ms · p99 20ms (n=2) · 吞吐失败');
 box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 400 }];
 box.state.host.loadState = 'ok';
 box.state.host.loadKbps = 1344.5;
 check('只有 1 个样本时不下结论(n=1 分不清抖动与常态)',
-	EX.linkRowText(), 'p50 400ms · p99 400ms (n=1) · 1.3MB/s');
+	EX.linkRowText(), 'p50 400ms · p99 400ms (n=1) · 1.3MiB/s');
 box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 12 }, { t: Date.now(), kind: 'rtt', rtt: 400 }];
 check('n>=2 且 RTT 尖峰 + FPS 正常:追加疑似链路',
-	EX.linkRowText(), 'p50 12ms · p99 400ms (n=2) · 1.3MB/s · 疑似链路');
+	EX.linkRowText(), 'p50 12ms · p99 400ms (n=2) · 1.3MiB/s · 疑似链路');
 
 // 单样本:分位退化成它自己(顺带把这一组放在最后,避免污染上面的样本)
 check('linkStats 单样本 p50 = p99 = 自身', (() => { box.state.host.link = [{ t: Date.now(), kind: 'rtt', rtt: 7 }]; return [EX.linkStats().p50, EX.linkStats().p99]; })(), [7, 7]);
@@ -3283,14 +3286,16 @@ check('交互计数:按 interactionId 合并,interactionId=0 的延迟事件不�
 		]);
 		return [list.length, list[0].name, list[0].ms];
 	})(), [1, 'pointerup', 128]);
-check('字节写法:MB / KB / B 三档,负数与坏值都落到 0',
+check('字节写法:MiB / KiB / B 三档(1024 进制标签),负数与坏值都落到 0',
 	[EX.bytesText(3145728), EX.bytesText(1234), EX.bytesText(999), EX.bytesText(-5), EX.bytesText(NaN)],
-	['3MB', '1KB', '999B', '0B', '0B']);
-check('存储占用报告:按 key 归类(事故 / sourcemap 缓存 / 其余),字节按 UTF-16 ×2 估',
+	['3MiB', '1KiB', '999B', '0B', '0B']);
+check('存储占用报告:按 key 归类(事故 / sourcemap 缓存 / 其余),字节按 UTF-8 真字节(CJK 1 码元 = 3 字节)',
 	(() => {
+		const incidentsKey = 'dsh-perf-hud:incidents:v1';
+		const incidentsValue = '渲染帧'.repeat(10);
 		const store = {
 			data: new Map([
-				['dsh-perf-hud:incidents:v1', 'x'.repeat(100)],
+				[incidentsKey, incidentsValue],
 				['dsh-perf-hud:map:abc', 'y'.repeat(50)],
 				['dsh-perf-hud:on', '1'],
 				['other-app:key', 'z'.repeat(999)],
@@ -3300,11 +3305,15 @@ check('存储占用报告:按 key 归类(事故 / sourcemap 缓存 / 其余),字
 			getItem(key) { return this.data.get(key) ?? null; },
 		};
 		const report = EX.storageReport(store);
+		const expectedIncidents = Buffer.byteLength(incidentsKey) + Buffer.byteLength(incidentsValue);
 		return [report.keys, report.incidents, report.maps, report.other,
 			report.total === report.incidents + report.maps + report.other,
-			EX.storageReport(null).total];
-	})(), [3, ('dsh-perf-hud:incidents:v1'.length + 100) * 2, ('dsh-perf-hud:map:abc'.length + 50) * 2,
-		('dsh-perf-hud:on'.length + 1) * 2, true, 0]);
+			EX.storageReport(null).total,
+			// 旧口径 (key.length + value.length) ×2 只有 2/3:CJK 那段必须按真字节算
+			report.incidents === expectedIncidents,
+			report.incidents > (incidentsKey.length + incidentsValue.length) * 2];
+	})(), [3, Buffer.byteLength('dsh-perf-hud:incidents:v1') + Buffer.byteLength('渲染帧'.repeat(10)),
+		'dsh-perf-hud:map:abc'.length + 50, 'dsh-perf-hud:on'.length + 1, true, 0, true, true]);
 
 // ═══════════ 收尾:最近 vs 最差的语义分离 / 人话原因 / 两条导出路径 ═══════════
 // 这一组盯三件事(都来自真实使用里"两个语义被混在一起"的教训):
@@ -3567,6 +3576,8 @@ const watchSource = (() => {
 })();
 const watchPieces = [
 	watchSource,
+	// 落盘裁剪按 UTF-8 真字节判定:helper 在 client.js 里(与 model 片共用同一份)
+	extract(source, 'function utf8ByteLength('),
 	`${extract(source, 'const frameRing = {')};`,
 	// 时间条的常量是三条独立 const:按行取(extract 会去找 '{',对它们不适用)
 	source.slice(source.indexOf('const SPARK_SECONDS'), source.indexOf('\n', source.indexOf('const SPARK_SECONDS'))),
@@ -5280,6 +5291,31 @@ check('A1 自身开销:环形缓冲有上限(不会无限长)', (() => {
 	box.state.render.selfRing.length = 0;
 	return length;
 })(), 600);
+check('A1 自身开销:样本数与 p99 同分母(环满后印环内 600,不印累计调用数)', (() => {
+	box.state.render.selfRing.length = 0;
+	box.state.render.selfAt = 0;
+	box.state.render.selfCount = 0;
+	box.state.render.selfMax = 0;
+	for (let i = 0; i < box.SELF_RING + 2000; i += 1) box.recordSelf(1);
+	const stats = box.selfStats();
+	const text = box.recorderText();
+	const out = [box.state.render.selfRing.length, box.state.render.selfCount, stats.samples,
+		text.includes('n=600'), text.includes('2600')];
+	box.state.render.selfRing.length = 0;
+	box.state.render.selfAt = 0;
+	box.state.render.selfCount = 0;
+	box.state.render.selfMax = 0;
+	return out;
+})(), [600, 2600, 600, true, false]);
+check('JS 堆读数按 MiB 标注(1024 进制):60 秒涨 1 MiB → +1.0MiB/分', (() => {
+	const saved = box.state.render.heapSeries;
+	box.state.render.heapSeries = [{ t: 0, n: 0 }, { t: 60000, n: 1048576 }];
+	const text = box.heapRateText();
+	box.state.render.heapSeries = saved;
+	return text;
+})(), '+1.0MiB/分');
+check('JS 堆那一格的单位与 mb() 的 1024 进制一致(印 MiB,不印 MB)',
+	/\$\{mb\(state\.render\.heap\)\}MiB/.test(renderSource), true);
 check('取件:下标 0 是最差,latest 是时刻最新 —— 面板那个按钮以前导的是最差', (() => {
 	const saved = watch.state.watch.incidents.slice();
 	watch.state.watch.incidents.length = 0;
@@ -5945,6 +5981,17 @@ check('落盘:缺少 at/cause 的条目不被当成重复吃掉', (() => {
 })(), [true, ['x', 'y']]);
 check('落盘:裁掉几条单独计数,不混进 dropped', [watch.state.watch.trimmedByBytes, watch.state.watch.dropped], [1, 0]);
 check('守夜行:裁过就写出来', watch.watchPanelText().includes('裁掉 1'), true);
+check('落盘:CJK 按 UTF-8 真字节裁(码元数没超上限、字节超了也必须裁)', (() => {
+	const cjk = '事'.repeat(1150000);   // 1.15M 码元 < 3MiB,但 UTF-8 是 3.45MB > 3,145,728
+	watch.state.watch.incidents = [
+		{ id: 'keep', severity: 100, at: '2026-10-07T00:00:11.000Z', cause: 'frame', frames: [], loaf: [], tier: 'recent' },
+		{ id: 'cjk', severity: 50, at: '2026-10-07T00:00:12.000Z', cause: 'frame', frames: [], loaf: [], tier: 'global', pad: cjk },
+	];
+	const codeUnits = JSON.stringify({ v: 1, savedAt: Date.now(), incidents: watch.state.watch.incidents }).length;
+	const saved = watch.saveIncidents();
+	return [saved, codeUnits < watch.WATCH_MAX_BYTES, Buffer.byteLength(cjk) > watch.WATCH_MAX_BYTES,
+		JSON.parse(watch.store.get('test:incidents')).incidents.map((row) => row.id)];
+})(), [true, true, true, ['keep']]);
 watch.state.watch.trimmedByBytes = 0;
 watch.state.watch.incidents.length = 0;
 check('落盘:清空后落盘的那份也是空的', [watch.saveIncidents(), JSON.parse(watch.store.get('test:incidents')).incidents.length], [true, 0]);

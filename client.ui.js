@@ -1551,7 +1551,7 @@ window.__ModuleLoader__.load({
 					}),
 					state.render.heap === null ? null : h('div', { style: S.row },
 						h('span', { style: S.label }, t('heap')),
-						h('span', { style: S.num }, `${mb(state.render.heap)}MB · ${heapRateText()}`)),
+						h('span', { style: S.num }, `${mb(state.render.heap)}MiB · ${heapRateText()}`)),
 					// DOM 写入属于「DOM 与堆」,不属于「取证明细」—— 那组回答的是"这一帧的时间去哪了"。
 					// 这两行只有插桩了才有意义(不插桩时计数恒为 0,那时它们只会被读成"没有开销")
 					state.render.deep !== true ? null : h('div', { style: S.row },

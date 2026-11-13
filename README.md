@@ -59,7 +59,7 @@ v1.0.0,已发布。主体不是仪表盘,而是**行车记录仪**:默认零插�
 
 - 一帧 > **100ms**(或 LoAF blocking > 100ms)就自动抓**前 10 秒 + 后 3 秒**原样切片;标签页隐藏造成的几百秒"间隙"标成 `gap`,不算卡顿。
 - **"发生了几次"和"留了几份现场"是两个数**:`检测到`(同一串触发只算一次)/ `已保存`(受容量限制)/ `丢失`。面板药丸上那格是"检测 N 次"(最近 24 小时,跨刷新),**不是**留存份数。
-- 落盘 **3MB** 上限,超了从最弱的开始裁(裁掉几条写在常显那行);刷新、重启浏览器之后还在,`watch().restored` 说读回了几条。
+- 落盘 **3MiB**(按 JSON 文本的 UTF-8 字节数判定)上限,超了从最弱的开始裁(裁掉几条写在常显那行);刷新、重启浏览器之后还在,`watch().restored` 说读回了几条。
 - 这一层**不包装任何原型**;深录才装插桩(`applyProbeState()`),`disable()` 后原型方法原样还原。
 
 ## 安装
@@ -157,13 +157,13 @@ dsh plugin --profile web add dsh-perf-hud
 
 ```sh
 node tests/attribution.mjs   # 11 条:脚本 URL 形状 → 包名 / bundle key
-node tests/logic.mjs         # 802 条:从 client.js 与其分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
-node tests/host.mjs          # 99 条:用假 ctx 驱动真实 index.js
+node tests/logic.mjs         # 806 条:从 client.js 与其分片抽真函数进沙箱 + 静态检查 + 长度预算 + 契约冻结
+node tests/host.mjs          # 100 条:用假 ctx 驱动真实 index.js
 node tests/compat.mjs        # 17 条:上一版 schemaVersion 的夹具包喂当前读方
 node tests/replay.mjs        # 9 条:回放站读包,现算摘要与包里 summary 逐项一致
 node tools/render-smoke.mjs  # 离线渲染冒烟:六个屏 + 关闭态各渲染一遍(不需要浏览器)
 node tools/gen-prefix-table.mjs --check  # 诊断 Skill §2.6 的前缀表与 capabilityMissing() 一致
-# 938 条断言 + 一条冒烟,离线,无需 DSH 在跑;npm test 一条命令跑完
+# 943 条断言 + 一条冒烟,离线,无需 DSH 在跑;npm test 一条命令跑完
 ```
 
 改到面板渲染 / `apply()` / `start()` 时**再跑一次真页面验收**(要浏览器 + 本机 `dsh web`,不进 CI):`node tools/check-panel.mjs`(必跑),`check-incident` / `check-counts` / `check-storage` / `check-interaction` 视改动。规则、提交规范、状态四片与全部门禁见 [AGENTS.md](AGENTS.md);供应链与发版门槛见 [REVIEW.md](REVIEW.md)。

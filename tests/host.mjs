@@ -66,6 +66,8 @@ const fakeProfile = {
 	endTime: 61000,
 	samples: [1, 1, 2],
 	timeDeltas: [100, 200, 300],
+	// profile 里会有中文函数名 / 脚本内容:CJK 1 码元 = 3 UTF-8 字节,用来钉住 bytes 不是 .length
+	title: '渲染帧'.repeat(4),
 };
 const fakeInspector = {
 	Session: class {
@@ -296,6 +298,10 @@ check('带回自描述元信息(时长/节点/采样/字节/pid)',
 	collected.meta?.bytes > 0 && collected.meta?.nodes === 2 && collected.meta?.samples === 3
 	&& collected.meta?.pid === process.pid && collected.running === false && collected.collections === 1,
 	JSON.stringify(collected.meta));
+check('元信息里的 bytes 是 UTF-8 真字节(CJK 1 码元 = 3 字节),不是 JSON.stringify().length',
+	collected.meta?.bytes === Buffer.byteLength(JSON.stringify(fakeProfile))
+	&& collected.meta?.bytes > JSON.stringify(fakeProfile).length,
+	`bytes=${collected.meta?.bytes} chars=${JSON.stringify(fakeProfile).length}`);
 check('采完断开 inspector 会话(不留常开句柄)',
 	inspectorCalls.filter((m) => m === 'Profiler.stop').length === 1 && inspectorCalls.at(-1) === 'disconnect',
 	JSON.stringify(inspectorCalls));

@@ -47,7 +47,8 @@ window.__ModuleLoader__.load({
 				scriptEvidence,
 				start,
 				state,
-				uniqueInteractions
+				uniqueInteractions,
+				utf8ByteLength
 			} = deps;
 
 		/**
@@ -666,7 +667,9 @@ window.__ModuleLoader__.load({
 					bumpTally('failed', Date.now());
 					return false;
 				}
-				if (payload.length > WATCH_PERSIST_MAX_BYTES && list.length > 1) {
+				// 上限是**字节**,不是 UTF-16 码元:同一份 CJK payload 的 .length 只有真字节的 1/3,
+				// 拿 .length 比会漏裁(实测 3,145,728 个「事」= 3.0M 码元,UTF-8 是 9.0MiB,旧判据判不超限)。
+				if (utf8ByteLength(payload) > WATCH_PERSIST_MAX_BYTES && list.length > 1) {
 					// 按严重度降序裁最弱的那条,但**最近档**最后才动:它是使用者回头要点的那几条。
 					// 全清单只剩最近档时退回"丢掉最弱的",否则会死循环。
 					let at = list.length - 1;
