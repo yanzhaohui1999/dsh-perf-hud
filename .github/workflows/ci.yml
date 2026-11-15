@@ -44,10 +44,10 @@ jobs:
       - name: Docs links (breakage + orphans)
         run: npm run docs:check
 
-      # npm 页面只渲染根 README.md,而 docs/ 不进 package.json#files —— 相对路径的截图
-      # 在 GitHub 上正常、在 npm 上是裂图。门禁:README 里每张图要么是绝对 URL,
-      # 要么真的在 files 展开的清单里(两种修法都认)。
-      - name: README images (absolute or shipped)
+      # npm 页面只渲染根 README.md,而 docs/ 不进 package.json#files —— 相对路径在 GitHub 上
+      # 正常、在 npm 上是裂图 / 死链。门禁:每张图与每条链接要么是绝对 URL,要么真的在
+      # files 展开的清单里;页内锚点还必须有同名标题。
+      - name: README links & images (absolute or shipped)
         run: npm run readme:check
 
       # 943 条离线断言:attribution 11 / logic 806 / host 100 / compat 17 / replay 9。

@@ -32,7 +32,7 @@
     "test": "node tests/attribution.mjs && node tests/logic.mjs && node tests/host.mjs && node tests/compat.mjs && node tools/render-smoke.mjs && node tests/replay.mjs",
     "docs:check": "node tools/check-docs.mjs",
     "pack:check": "node tools/check-pack.mjs",
-    "readme:check": "node tools/check-readme-images.mjs",
+    "readme:check": "node tools/check-readme-links.mjs",
     "prefix:gen": "node tools/gen-prefix-table.mjs",
     "prefix:check": "node tools/gen-prefix-table.mjs --check",
     "timeline:check": "node tools/check-timeline.mjs"
