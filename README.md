@@ -85,6 +85,22 @@ v1.1.0,已发布。主体不是仪表盘,而是**行车记录仪**:默认零插�
 - 落盘 **3MiB**(按 JSON 文本的 UTF-8 字节数判定)上限,超了从最弱的开始裁(裁掉几条写在常显那行);刷新、重启浏览器之后还在,`watch().restored` 说读回了几条。
 - 这一层**不包装任何原型**;深录才装插桩(`applyProbeState()`),`disable()` 后原型方法原样还原。
 
+## 1.1 新增
+
+五项都不改默认采集档:武装窗口与后台宿主采样要手动打开,另外三项自动记录。
+
+**武装窗口** —— 卡顿详情(点主界面的事故行)结论层有「武装 60 秒」:窗口内临时装上深录插桩 + 精确归因,宿主每 10 秒采一段 CPU profile(最多 12 段);下一次过线的卡顿会带 `env.armed` 与文件 / 行号,宿主可用时还会带 `incident.timeline[]`。超时、点「取消」、关 HUD 或关深录都会还原到窗口前的档位;窗口里没等到卡顿就不会新增事故(已采到的宿主段仍留在内存里,等下一次导出)。用法:点按钮,或 `__perfHud.arm(60)` → `armed()` → `disarm()`;宿主半没加载时客户端仍会武装,只是面板照实写「宿主采样未开」。
+
+**30 天趋势** —— 不用开:HUD 开着时按天聚合活跃分钟、帧 p50/p99、最差帧、流式 / 空闲秒和事故数,只留 30 个日历日,存在 `dsh-perf-hud:history:v1`,不存原始帧、不占事故留存的 3MiB。主界面「最近趋势」下方会出现一排柱子(柱高 = 当天 p99,封顶 500ms),悬停看当天数字;攒到第一天数据之前不渲染。用法:正常开着 HUD 用;`__perfHud.history()` 或事故包里的 `context.history` 拿同一份日聚合。分位取直方图桶上沿,是粗参照,不是回归判定。
+
+**打开耗时** —— 不用开:HUD 开着时点一个未选中的会话行,计时到「正文节点出现 + 正文 ≥1200 字符 + 该行选中」为止;最近 20 次只留在内存里(刷新即清),主界面「最近趋势」下会出现一行 `打开 1.4s`。只读正文字符数,不读内容,也不记标题 / ID。用法:像平常一样点会话;`__perfHud.openCost()` 看 ring(最近 20 次)、p50/p95 和正在等的那一次。限制:只量鼠标点击(键盘切换不算),30 秒没等到就放弃;单次读数跨运行有 ±20–70ms 抖动。
+
+**后台宿主采样** —— 设置(标题栏齿轮)→「后台宿主采样」,默认关。打开后宿主每 5 分钟采 1 秒 CPU profile,内存里留最近 3 段(约覆盖 15 分钟);客户端每 10 秒续租约,关 HUD、关开关或租约过期都会停。它与手动采样、武装窗口共用一台 profiler,优先级手动 > 武装 > 后台。用法:设置页打开,或 `__perfHud.ambient()` / `ambientOn()` / `ambientOff()`。限制:老宿主没有这个 op 时默认不显示这一行(升级后要重启一次宿主;之前开过的人除外);每段只有 1 秒,多数事故没有重叠段 —— 包里的 `timeline[].mode:"ambient"` 才是后台采的;采样有开销,所以默认关。
+
+**可见冻结** —— 不用开:页面可见时 rAF 被挂起 ≥1000ms(且时间源一致,或有 longtask / LoAF 重叠)会判成 `visible-freeze` 并起一次捕获。它仍是 `gap:true`,所以 `worstFrameMs` 可能只有 16.7ms;包里带 `frames[].gapReason` 与 `summary.visibleFreezeMs / visibleFreezeFrames`,事故详情的回放范围会写「可见冻结 2008ms」。切后台的 `hidden` 与睡眠 / 改时钟的 `time-jump` 不算。用法:正常用;打开事故详情或导出包看这几项。同一份 `summary` 里还有 `refreshHz`(按非 gap 帧估的刷新率)和 `budgetMisses`(帧时长 >1.5× 刷新预算的条数)。
+
+验证状态:可见冻结与打开耗时的单次路径已在真页面跑过;武装窗口的宿主段、后台采样的实际开销与覆盖、30 天趋势的长期表现还没真机验证,读数按「待验证」看待(明细见 [CHANGELOG](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/CHANGELOG.md))。
+
 ## 用法
 
 ### 看一眼:四屏与走法
@@ -140,9 +156,12 @@ v1.1.0,已发布。主体不是仪表盘,而是**行车记录仪**:默认零插�
 | `enable()` / `disable()` / `setPrecise(on)` / `setDeep(on)` | 总开关 / 精确归因 / 深录(会装插桩) |
 | `mark(note)` / `tally(ms)` / `stress(nodes, burnMs)` | 场景标记 / 计数窗口 / 渲染型卡顿自测(三条腿各测到什么) |
 | `hostEvents(on)` / `experiment()` / `abortExperiment()` | 宿主事件延迟开关 / 隔离实验启停 |
+| `arm(seconds?)` / `armed()` / `disarm()` | 武装窗口:临时深录 + 精确归因 + 宿主分段 profile;下一次卡顿自动带 timeline |
 | `openCost()` | 打开 / 切换会话的 ring(最近 20 次)+ p50/p95 + 当前等待进度(只读字符数,不含会话标题 / ID) |
+| `history(atMs?)` | 30 天日聚合(只含有样本的天;与面板 sparkline 同源) |
+| `ambient()` / `ambientOn()` / `ambientOff()` | 后台宿主采样:状态 / 开 / 关(默认关) |
 
-`localStorage` 键位(`dsh-perf-hud:` 前缀):`:ring:v1` 帧环、`:tally:v1` 计数桶、`:on` / `:deep` / `:precise`(这三个才改变采集成本)、`:collapsed` / `:groups` / `:view:v1`(界面状态,不含读数)、`:incidents:v1` / `:watchui:v1` / `:sessions:v1`(留存与基线)、`:map:<rev>:<len>`(sourcemap 分段表,只留最近 8 个 rev)。
+`localStorage` 键位(`dsh-perf-hud:` 前缀):`:ring:v1` 帧环、`:tally:v1` 计数桶、`:history:v1` 30 天日聚合(独立于 3MiB 事故留存)、`:on` / `:deep` / `:precise`(这三个才改变采集成本)、`:ambient`(后台采样开关)、`:collapsed` / `:groups` / `:view:v1`(界面状态,不含读数)、`:incidents:v1` / `:watchui:v1` / `:sessions:v1`(留存与基线)、`:map:<rev>:<len>`(sourcemap 分段表,只留最近 8 个 rev)。
 
 ## 限制
 
