@@ -5,7 +5,7 @@
 > **守夜层**默认常开:偶发卡顿自动留存最差几次,连证据一次性导出。
 
 <p>
-<img alt="status" src="https://img.shields.io/badge/status-v1.0.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" />
+<img alt="status" src="https://img.shields.io/badge/status-v1.1.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.3-4d6bfe" />
 </p>
@@ -24,7 +24,7 @@
 
 ## 现状
 
-v1.0.0,已发布。主体不是仪表盘,而是**行车记录仪**:默认零插桩地守着,一帧超过 100ms 就自动留下前 10 秒 + 后 3 秒的现场,并按严重度留住最差的那几帧;事后能逐帧回放、按包归因,连证据一次性导出。
+v1.1.0,已发布。主体不是仪表盘,而是**行车记录仪**:默认零插桩地守着,一帧超过 100ms 就自动留下前 10 秒 + 后 3 秒的现场,并按严重度留住最差的那几帧;事后能逐帧回放、按包归因,连证据一次性导出。
 
 ### 为什么做这个
 

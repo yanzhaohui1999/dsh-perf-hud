@@ -6,7 +6,7 @@
 > few stalls and exports the evidence in one pack.
 
 <p>
-<img alt="status" src="https://img.shields.io/badge/status-v1.0.0%20%C2%B7%20released-green" />
+<img alt="status" src="https://img.shields.io/badge/status-v1.1.0%20%C2%B7%20released-green" />
 <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.3-4d6bfe" />
 </p>

@@ -2,7 +2,7 @@
 
 本项目遵循 [Conventional Commits](https://www.conventionalcommits.org/),版本号遵循 SemVer。
 
-## [Unreleased]
+## [1.1.0] - 2026-11-15
 
 ### 新增
 
@@ -35,6 +35,8 @@
 ### 文档
 
 - **对外形态整理**:`package.json#description` 从功能罗列改成一句「解决什么问题」(中英);README 按「现状 → 安装 → 用法 → 限制」重排,章节标题、链接与读数口径不变。代码、断言与 `files` 打包清单未动(仍是 938 条)。
+
+- **npm 页面截图不再裂图**:两份 README 的 8 处截图引用从相对路径改成 `raw.githubusercontent.com` 绝对 URL(`docs/` 不进包,1.0.0 起 npm 页面上一直是裂图,GitHub 上却看不出来);`docs/images/` 链接改 GitHub tree 地址。新增 `tools/check-readme-images.mjs` 门禁 —— 每张图要么是绝对 URL、要么真的在 `files` 展开的清单里,`readme:check` 接进 CI 与 `release.yml`。
 
 离线断言合并后总数 **943**(attribution 11 / logic 806 / host 100 / compat 17 / replay 9)。
 
