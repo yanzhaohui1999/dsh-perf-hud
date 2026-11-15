@@ -44,6 +44,12 @@ jobs:
       - name: Docs links (breakage + orphans)
         run: npm run docs:check
 
+      # npm 页面只渲染根 README.md,而 docs/ 不进 package.json#files —— 相对路径的截图
+      # 在 GitHub 上正常、在 npm 上是裂图。门禁:README 里每张图要么是绝对 URL,
+      # 要么真的在 files 展开的清单里(两种修法都认)。
+      - name: README images (absolute or shipped)
+        run: npm run readme:check
+
       # 943 条离线断言:attribution 11 / logic 806 / host 100 / compat 17 / replay 9。
       # logic.mjs 会把 client.js 里的真函数抽进沙箱,所以它同时是客户端半的回归门;
       # compat.mjs 用**上一版 schemaVersion** 的夹具包喂当前读方(1.0 的冻结承诺靠它)。

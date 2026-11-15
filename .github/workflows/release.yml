@@ -80,6 +80,10 @@ jobs:
       - name: Docs links (breakage + orphans)
         run: npm run docs:check
 
+      # 与 ci.yml 同一条:README 里的图不能在 npm 页面上裂开(绝对 URL 或随包发布)。
+      - name: README images (absolute or shipped)
+        run: npm run readme:check
+
       - name: Shipping list (files ↔ package.json)
         run: npm run pack:check
 
