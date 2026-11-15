@@ -1,19 +1,39 @@
 # dsh-perf-hud
 
-> **Client-side performance HUD**: a floating panel in the bottom-right corner that answers *is it janky right
-> now, and whose fault is it?* Frames · long tasks (four-leg attribution) · per-plugin callback cost · DOM growth
-> and writers · JS heap · host event loop & link RTT · an always-on **night-watch** recorder that keeps the worst
-> few stalls and exports the evidence in one pack.
+> **Client-side performance HUD**: a floating panel in the bottom-right that answers *is it janky right now, and
+> whose fault is it?* Frames · long tasks (four-leg attribution) · per-plugin callback cost · DOM growth and writers ·
+> JS heap · host event loop & link RTT · an always-on **night-watch** recorder that keeps the worst stalls and exports the evidence in one pack.
 
-<p>
-<img alt="status" src="https://img.shields.io/badge/status-v1.1.0%20%C2%B7%20released-green" />
-<img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
-<img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.3-4d6bfe" />
-</p>
+<p><img alt="status" src="https://img.shields.io/badge/status-v1.1.0%20%C2%B7%20released-green" /> <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" /> <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.3-4d6bfe" /></p>
 
 <p align="center">🌏 <a href="https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/README.md"><b>中文</b></a> · <b>English</b></p>
 
+## Install
+
+```sh
+dsh plugin --profile web add dsh-perf-hud
+```
+
+Reload the page to see the panel (drag the title bar to move; double-click to reset). Changes take effect:
+`client.js` / shards → reload the page (`touch client.js` after editing a shard only); `index.js` → restart the
+host; `package.json#dsh.*` → reinstall or restart. The host half is **optional**: without it the panel still works
+and marks host event-loop / host events as unavailable with the reason — it never fakes success.
+
 Docs are maintained in Chinese — [README.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/README.md) is the primary version, this page is a summary.
+
+### DSH compatibility (verified, not just declared)
+
+Only versions where all **five real-page verifiers** passed on a local `dsh web` are listed. Since 1.0,
+`package.json#dsh.compatibility.dshReleases` is a release-process ledger, **not a runtime compatibility contract** (DSH does not read it at runtime). It is checked against the machine markers in the
+[1.0 acceptance archive](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/plans/2026-11-07-v1-acceptance.md) by `npm run pack:check`; a declared but never
+run version fails the gate.
+
+| DSH | Verified | Five real-page verifiers |
+|---|---|---|
+| `0.2.1-rc.3` | 2026-11-07 | all green |
+| `0.2.1-rc.1` | 2026-10-19 ~ 11-04 | all green |
+
+`engines.dsh` is wider (`>=0.2.0-rc.2 <0.3.0-0`): that is the "it loads" boundary, not "we ran on it".
 
 ## Why this exists
 
@@ -63,6 +83,22 @@ Four things to remember about night watch (full details in [reading-panel](https
 - persistence is capped at **3MiB** (judged on the JSON text's UTF-8 byte length; trims the weakest first and says how many); kept incidents survive a reload
   (`watch().restored`). This layer **patches nothing** — only deep record installs wrappers, and `disable()` restores them.
 
+## New in 1.1
+
+None of these changes the default capture tier: the armed window and host background sampling are opt-in, the other three record automatically.
+
+**Armed window.** In stall detail (click a stall row on the main screen) press **Arm 60s**. For that window the client temporarily switches on deep record and precise attribution, and the host samples CPU in 10-second segments (up to 12); the next stall past the trigger line then carries `env.armed` and file and line, plus `incident.timeline[]` when the host is available. Timeout, Cancel, closing the HUD, or turning deep record off restores the tier you had before; a window with no stall adds no incident (host segments already collected stay in memory for the next export). Use the button, or `__perfHud.arm(60)` → `armed()` → `disarm()`. Without the host half the client still arms, and the row says "host sampling off".
+
+**30-day trend.** No switch: while the HUD is on, frames are aggregated per calendar day — active minutes, p50/p99, worst frame, streaming/idle seconds, incident count — kept for 30 days in `dsh-perf-hud:history:v1`, with no raw frames and no use of the 3MiB incident budget. The sparkline appears below "trend" on the main screen once there is at least one day (bar height = that day's p99, capped at 500ms; hover for the numbers). Use it as it runs, or read `__perfHud.history()` / `context.history` in a pack. Quantiles are histogram bucket upper edges — a rough reference, not a regression verdict.
+
+**Open / switch cost.** No switch: with the HUD on, clicking a session row that is not selected is timed until the transcript node is present, at least 1200 characters long, and the row is selected. The last 20 samples stay in memory only (a reload clears them), and one `open 1.4s` line appears under "trend" on the main screen. Only the character count is read — never the text, title, or session ID. Use it by clicking sessions as usual, or read `__perfHud.openCost()` for the ring, p50/p95 and the pending wait. Limits: clicks only (keyboard navigation is not timed), a 30s timeout, and single readings drift ±20–70ms between runs.
+
+**Host background sampling.** Settings (the gear) → **Host background sampling**, off by default. When on, the host samples a 1s CPU profile every 5 minutes and keeps the last 3 segments (about 15 minutes); the client renews a lease every 10s, and closing the HUD, switching it off, or losing the lease stops it. It shares one profiler with manual sampling and the armed window (priority: manual > armed > background). Use the switch, or `__perfHud.ambient()` / `ambientOn()` / `ambientOff()`. Limits: the row is normally absent when the host does not advertise the op (restart the host after upgrading); a 1s segment often misses a stall, so `timeline[].mode:"ambient"` may simply be absent; sampling costs CPU, hence off by default.
+
+**Visible freeze.** No switch: an rAF gap of at least 1000ms while the page is visible (with consistent clocks, or a long task / LoAF overlapping) is classified `visible-freeze` and captured. It stays `gap:true`, so `worstFrameMs` can still read 16.7ms; the pack carries `frames[].gapReason` and `summary.visibleFreezeMs / visibleFreezeFrames`, and the replay-scope line in stall detail says "visible freeze 2008ms". Hidden-tab gaps and sleep-like `time-jump`s are not counted. Open a stall or export a pack to see it; the same summary also adds `refreshHz` (estimated from non-gap intervals) and `budgetMisses` (frames over 1.5× the refresh budget).
+
+Verification status: visible freeze and the single open-cost path were exercised on a real page; the armed window's host segments, background sampling's cost and coverage, and the 30-day trend over time are not real-machine verified yet — treat those readings as provisional (details in [CHANGELOG](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/CHANGELOG.md)).
+
 ## At a glance: four screens and how to reach them
 
 <img src="https://raw.githubusercontent.com/yanzhaohui1999/dsh-perf-hud/main/docs/images/01-main.png" width="300"> <img src="https://raw.githubusercontent.com/yanzhaohui1999/dsh-perf-hud/main/docs/images/08-incident.png" width="300"> <img src="https://raw.githubusercontent.com/yanzhaohui1999/dsh-perf-hud/main/docs/images/07-settings.png" width="300">
@@ -79,31 +115,6 @@ them by absolute URL and they render on both npm and GitHub).
    → "generate and export".
 4. **Local debugging**: "full technical export" under dev details · raw data **keeps** your note — it is not the
    redacted pack, do not hand it out.
-
-## Install
-
-```sh
-dsh plugin --profile web add dsh-perf-hud
-```
-
-Reload the page to see the panel (drag the title bar to move; double-click to reset). Changes take effect:
-`client.js` / shards → reload the page (`touch client.js` after editing a shard only); `index.js` → restart the
-host; `package.json#dsh.*` → reinstall or restart. The host half is **optional**: without it the panel still works
-and marks host event-loop / host events as unavailable with the reason — it never fakes success.
-
-### DSH compatibility (verified, not just declared)
-
-Only versions where all **five real-page verifiers** passed on a local `dsh web` are listed. Since 1.0,
-`package.json#dsh.compatibility.dshReleases` is a release-process ledger, **not a runtime compatibility contract** (DSH does not read it at runtime). It is checked against the machine markers in the
-[1.0 acceptance archive](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/plans/2026-11-07-v1-acceptance.md) by `npm run pack:check`; a declared but never
-run version fails the gate.
-
-| DSH | Verified | Five real-page verifiers |
-|---|---|---|
-| `0.2.1-rc.3` | 2026-11-07 | all green |
-| `0.2.1-rc.1` | 2026-10-19 ~ 11-04 | all green |
-
-`engines.dsh` is wider (`>=0.2.0-rc.2 <0.3.0-0`): that is the "it loads" boundary, not "we ran on it".
 
 ## Reading the panel
 
@@ -154,10 +165,13 @@ the version policy; `tests/compat.mjs` proves packs from the previous schema ver
 | `enable()` / `disable()` / `setPrecise(on)` / `setDeep(on)` | master switch / precise attribution / deep record (installs instrumentation) |
 | `mark(note)` / `tally(ms)` / `stress(nodes, burnMs)` | scenario mark / counter window / synthetic render-stall self-test (three legs) |
 | `hostEvents(on)` / `experiment()` / `abortExperiment()` | host event-latency watch / isolation experiment on & off |
+| `arm(seconds?)` / `armed()` / `disarm()` | armed window: temporary deep record + precise attribution + host segments; the next stall carries a timeline |
 | `openCost()` | open / switch-session ring (latest 20) + p50/p95 + the pending wait (character count only, no title / ID) |
+| `history(atMs?)` | 30-day daily aggregates (only days with samples; same source as the sparkline) |
+| `ambient()` / `ambientOn()` / `ambientOff()` | host background sampling: status / on / off (off by default) |
 
-`localStorage` keys (`dsh-perf-hud:` prefix): `:ring:v1` frame ring, `:tally:v1` counters, `:on` / `:deep` / `:precise`
-(the three that change capture cost), `:collapsed` / `:groups` / `:view:v1` (UI state, no readings),
+`localStorage` keys (`dsh-perf-hud:` prefix): `:ring:v1` frame ring, `:tally:v1` counters, `:history:v1` 30-day aggregates (separate from the 3MiB incident budget), `:on` / `:deep` / `:precise`
+(the three that change capture cost), `:ambient` (background sampling switch), `:collapsed` / `:groups` / `:view:v1` (UI state, no readings),
 `:incidents:v1` / `:watchui:v1` / `:sessions:v1`, `:map:<rev>:<len>` (sourcemap sections, last 8 revs).
 
 ## Risks and boundaries (read this)
