@@ -11,9 +11,9 @@
 <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.3-4d6bfe" />
 </p>
 
-<p align="center">🌏 <a href="./README.md"><b>中文</b></a> · <b>English</b></p>
+<p align="center">🌏 <a href="https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/README.md"><b>中文</b></a> · <b>English</b></p>
 
-Docs are maintained in Chinese — [README.md](README.md) is the primary version, this page is a summary.
+Docs are maintained in Chinese — [README.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/README.md) is the primary version, this page is a summary.
 
 ## Why this exists
 
@@ -27,10 +27,10 @@ So the main thing here is not a dashboard but a dashcam: it watches with zero in
 ## Which reader are you?
 
 - **Installing it?** → [Install](#install) → [Three modes](#three-modes) → [Reading the panel](#reading-the-panel)
-- **Reading a pack (or handing one to an AI)?** → [Diagnostic pack](#diagnostic-pack) → [diagnosis Skill](skills/dsh-perf-diagnosis/SKILL.md) → [pack contract](docs/pack-schema.md)
-- **Working on the code / releasing?** → [AGENTS.md](AGENTS.md) (rules & gates) · [CONTRIBUTING.md](CONTRIBUTING.md) · [REVIEW.md](REVIEW.md) (gates & debts)
+- **Reading a pack (or handing one to an AI)?** → [Diagnostic pack](#diagnostic-pack) → [diagnosis Skill](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/skills/dsh-perf-diagnosis/SKILL.md) → [pack contract](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/pack-schema.md)
+- **Working on the code / releasing?** → [AGENTS.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/AGENTS.md) (rules & gates) · [CONTRIBUTING.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/CONTRIBUTING.md) · [REVIEW.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/REVIEW.md) (gates & debts)
 
-Full document map: [docs/README.md](docs/README.md).
+Full document map: [docs/README.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/README.md).
 
 ## What it answers
 
@@ -54,7 +54,7 @@ reported. Shortcut `Cmd/Ctrl+Shift+U` toggles the panel (macOS / Windows; not bo
 | **Live** (panel open) | When curious | the five questions on the main screen; technical data behind five dev tabs | negligible |
 | **Deep record** (explicit) | Need everything | instrumentation (1/10 DOM-write sampling, scheduler stacks) + precise attribution | has a cost; must be turned on |
 
-Four things to remember about night watch (full details in [reading-panel](docs/reading-panel.md)):
+Four things to remember about night watch (full details in [reading-panel](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/reading-panel.md)):
 
 - a frame over **100ms** (or LoAF blocking over 100ms) is sliced automatically: **10s before + 3s after**;
   multi-second "gaps" from a hidden tab are tagged `gap` and are not stalls;
@@ -95,7 +95,7 @@ and marks host event-loop / host events as unavailable with the reason — it ne
 
 Only versions where all **five real-page verifiers** passed on a local `dsh web` are listed. Since 1.0,
 `package.json#dsh.compatibility.dshReleases` is a release-process ledger, **not a runtime compatibility contract** (DSH does not read it at runtime). It is checked against the machine markers in the
-[1.0 acceptance archive](docs/plans/2026-11-07-v1-acceptance.md) by `npm run pack:check`; a declared but never
+[1.0 acceptance archive](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/plans/2026-11-07-v1-acceptance.md) by `npm run pack:check`; a declared but never
 run version fails the gate.
 
 | DSH | Verified | Five real-page verifiers |
@@ -108,21 +108,21 @@ run version fails the gate.
 ## Reading the panel
 
 Full conventions (scenario label / frame severity / attribution / missing / replay / recorder reliability) in
-[reading-panel](docs/reading-panel.md); layout and copy rules in [panel-rules](docs/panel-rules.md). Six rules to
+[reading-panel](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/reading-panel.md); layout and copy rules in [panel-rules](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/panel-rules.md). Six rules to
 start with:
 
 1. **Read the scenario label first** (`streaming` / `idle Ns`) — every number is interpreted against it.
 2. **One severity definition**: `max(blocking, frame duration)` — judgement, ordering and labels share one function.
 3. **Every piece of evidence carries provenance**: measured / inferred / unknown. Inferences are never written as root causes.
 4. **Missing evidence is spelled out**: `context.missing` lines are `prefix: reason` (`precise:`, `loaf-pkg:`, …); the
-   prefix table is generated from `capabilityMissing()` into the [diagnosis Skill §2.6](skills/dsh-perf-diagnosis/SKILL.md).
+   prefix table is generated from `capabilityMissing()` into the [diagnosis Skill §2.6](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/skills/dsh-perf-diagnosis/SKILL.md).
 5. **Live and historical are two contexts**, switched only in `detailContext()`; the detail header says which one you are in.
 6. **The kept list is ordered by severity** (index 0 = worst); "view this frame" switches to the historical context and
    everything is read from the pack — so cross-session incidents replay frame by frame.
 
 ## Diagnostic pack
 
-Four files in a fixed order (`manifest.json` first). The [pack contract](docs/pack-schema.md) freezes every key and
+Four files in a fixed order (`manifest.json` first). The [pack contract](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/pack-schema.md) freezes every key and
 the version policy; `tests/compat.mjs` proves packs from the previous schema version still read.
 
 | File | Purpose |
@@ -141,7 +141,7 @@ the version policy; `tests/compat.mjs` proves packs from the previous schema ver
   the text itself is never kept, and no other layer touches the transcript DOM). `context.redaction` states all three lists.
 - **One timeline for host + page**: run `__perfHud.cpuProfile(5)`, reproduce the stall, then export that incident — `incident.timeline[0].share.hostPct` gives the host share, with the raw `host.samples[]` / `frames[]` sequences alongside. Acceptance: `node tools/check-timeline.mjs`.
 - **Read one incident**: `node tools/inspect-incident.mjs <file.json>`; **hand it to an AI**: send the `-ai.zip` — the
-  bundled [diagnosis Skill](skills/dsh-perf-diagnosis/SKILL.md) reads it by its field table and prefix table.
+  bundled [diagnosis Skill](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/skills/dsh-perf-diagnosis/SKILL.md) reads it by its field table and prefix table.
 
 ## Console API and storage keys
 
@@ -186,14 +186,14 @@ node tools/gen-prefix-table.mjs --check  # diagnosis Skill §2.6 prefix table in
 
 Any change to rendering / `apply()` / `start()` also needs a **real-page** pass (`node tools/check-panel.mjs` at
 minimum; `check-incident` / `check-counts` / `check-storage` / `check-interaction` as relevant — browser + a local
-`dsh web`, not in CI). Rules, commit conventions, the four state slices and every gate: [AGENTS.md](AGENTS.md);
-supply-chain and release gates: [REVIEW.md](REVIEW.md).
+`dsh web`, not in CI). Rules, commit conventions, the four state slices and every gate: [AGENTS.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/AGENTS.md);
+supply-chain and release gates: [REVIEW.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/REVIEW.md).
 
 ## Contributing
 
 Bug reports and PRs are welcome. Run the four offline suites plus the render smoke before pushing, and read
-[CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). Changelog: [CHANGELOG.md](CHANGELOG.md); historical
-decisions and measurements live in [docs/plans/](docs/plans/) (not required reading).
+[CONTRIBUTING.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/CONTRIBUTING.md) and [AGENTS.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/AGENTS.md). Changelog: [CHANGELOG.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/CHANGELOG.md); historical
+decisions and measurements live in [docs/plans/](https://github.com/yanzhaohui1999/dsh-perf-hud/tree/main/docs/plans/) (not required reading).
 
 ## License
 

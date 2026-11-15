@@ -4,23 +4,46 @@
 > 帧 · Longtask(四条腿归因)· 每插件回调耗时 · DOM 增长与写入者 · JS 堆 · 宿主 event-loop 与链路;
 > **守夜层**默认常开:偶发卡顿自动留存最差几次,连证据一次性导出。
 
-<p>
-<img alt="status" src="https://img.shields.io/badge/status-v1.1.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" />
-<img alt="license" src="https://img.shields.io/badge/license-MIT-blue" />
-<img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.3-4d6bfe" />
-</p>
+<p><img alt="status" src="https://img.shields.io/badge/status-v1.1.0%20%C2%B7%20%E5%B7%B2%E5%8F%91%E5%B8%83-green" /> <img alt="license" src="https://img.shields.io/badge/license-MIT-blue" /> <img alt="dsh" src="https://img.shields.io/badge/DSH-0.2.1--rc.3-4d6bfe" /></p>
 
-<p align="center">🌏 <b>中文</b> · <a href="./README_EN.md">English</a></p>
+<p align="center">🌏 <b>中文</b> · <a href="https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/README_EN.md">English</a></p>
+
+## 安装
+
+```sh
+dsh plugin --profile web add dsh-perf-hud
+```
+
+1. **展开**:点右下角药丸的 `+` → 主界面;五个问题一眼看完。
+2. **看那一次卡顿**:点整块事故行 → 结论与时间轴;「▸ 技术细节」展开这一帧的去向。
+3. **交给 AI**:事故行右侧下载图标 → 预览 → 生成并导出诊断包(备注已置空)。
+
+装完刷新页面即可看到右下角浮层(标题栏可拖动、位置会记住;双击回右下角)。改动生效方式:`client.js` 与其分片 `client.*.js` → 刷新页面(只改分片时先 `touch client.js`,rev 才更新);`index.js` → 重启宿主;`package.json` 的 `dsh.*` → 重装或重启。
+
+> 宿主半是**可选**的:它没加载时面板照常工作,只是「宿主 event-loop」「宿主事件到达」显示不可用并写明原因 —— 不假装成功。
+
+### 在哪些 DSH 版本上真跑过
+
+只列**在本机真跑过五个真页面验收器**的版本。
+
+⚠️ `package.json#dsh.compatibility.dshReleases` **不是运行时兼容契约**:DSH 0.2.1-rc.3 启动与运行都不读它,它只服务发布流程 —— 1.0 起"声明即已验证",`npm run pack:check` 逐条对着 [1.0 验收档案](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/plans/2026-11-07-v1-acceptance.md) 的机器标记核,声明了却没跑过的版本会红。宿主真正读的安装门槛是 `engines.dsh`。
+
+| DSH | 验收时间 | 五个真页面验收器 |
+|---|---|---|
+| `0.2.1-rc.3` | 2026-11-07 | 全绿 |
+| `0.2.1-rc.1` | 2026-10-19 ~ 11-04 | 全绿 |
+
+`engines.dsh` 的范围更宽(`>=0.2.0-rc.2 <0.3.0-0`)—— 那是"装上不会崩"的边界,不等于"这一版我们跑过"。
 
 **先看这里:你是哪类读者**
 
 | 你想做什么 | 从哪开始 |
 |---|---|
 | **第一次装**,想知道装完看什么 | [安装](#安装) → [三种模式](#三种模式) → [面板怎么读](#面板怎么读) |
-| **读别人发来的包**,或把这包交给 AI | [诊断包](#诊断包) → [诊断 Skill](skills/dsh-perf-diagnosis/SKILL.md) → [导出包契约](docs/pack-schema.md) |
-| **改代码 / 发版** | [AGENTS.md](AGENTS.md)(规则与门禁)· [CONTRIBUTING.md](CONTRIBUTING.md)· [REVIEW.md](REVIEW.md)(门槛与债) |
+| **读别人发来的包**,或把这包交给 AI | [诊断包](#诊断包) → [诊断 Skill](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/skills/dsh-perf-diagnosis/SKILL.md) → [导出包契约](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/pack-schema.md) |
+| **改代码 / 发版** | [AGENTS.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/AGENTS.md)(规则与门禁)· [CONTRIBUTING.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/CONTRIBUTING.md)· [REVIEW.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/REVIEW.md)(门槛与债) |
 
-完整文档地图:[docs/README.md](docs/README.md)。
+完整文档地图:[docs/README.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/README.md)。
 
 ## 现状
 
@@ -55,35 +78,12 @@ v1.1.0,已发布。主体不是仪表盘,而是**行车记录仪**:默认零插�
 | **现场**(展开面板) | 想看一眼 | 五个问题在主界面;技术数据进开发者详情五页签(帧与归因 / DOM 与堆 / 宿主与链路 / 工具箱 / 原始数据) | 可忽略 |
 | **深录**(显式打开) | 要抓全 | 才开原型插桩(DOM 写入 1/10 采样 + 调度点抓栈)与精确归因 | 有代价,必须显式开 |
 
-守夜层要记住的四件事(细则见 [读数口径](docs/reading-panel.md)):
+守夜层要记住的四件事(细则见 [读数口径](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/reading-panel.md)):
 
 - 一帧 > **100ms**(或 LoAF blocking > 100ms)就自动抓**前 10 秒 + 后 3 秒**原样切片;标签页隐藏造成的几百秒"间隙"标成 `gap`,不算卡顿。
 - **"发生了几次"和"留了几份现场"是两个数**:`检测到`(同一串触发只算一次)/ `已保存`(受容量限制)/ `丢失`。面板药丸上那格是"检测 N 次"(最近 24 小时,跨刷新),**不是**留存份数。
 - 落盘 **3MiB**(按 JSON 文本的 UTF-8 字节数判定)上限,超了从最弱的开始裁(裁掉几条写在常显那行);刷新、重启浏览器之后还在,`watch().restored` 说读回了几条。
 - 这一层**不包装任何原型**;深录才装插桩(`applyProbeState()`),`disable()` 后原型方法原样还原。
-
-## 安装
-
-```sh
-dsh plugin --profile web add dsh-perf-hud
-```
-
-装完刷新页面即可看到右下角浮层(标题栏可拖动、位置会记住;双击回右下角)。改动生效方式:`client.js` 与其分片 `client.*.js` → 刷新页面(只改分片时先 `touch client.js`,rev 才更新);`index.js` → 重启宿主;`package.json` 的 `dsh.*` → 重装或重启。
-
-> 宿主半是**可选**的:它没加载时面板照常工作,只是「宿主 event-loop」「宿主事件到达」显示不可用并写明原因 —— 不假装成功。
-
-### 在哪些 DSH 版本上真跑过
-
-只列**在本机真跑过五个真页面验收器**的版本。
-
-⚠️ `package.json#dsh.compatibility.dshReleases` **不是运行时兼容契约**:DSH 0.2.1-rc.3 启动与运行都不读它,它只服务发布流程 —— 1.0 起"声明即已验证",`npm run pack:check` 逐条对着 [1.0 验收档案](docs/plans/2026-11-07-v1-acceptance.md) 的机器标记核,声明了却没跑过的版本会红。宿主真正读的安装门槛是 `engines.dsh`。
-
-| DSH | 验收时间 | 五个真页面验收器 |
-|---|---|---|
-| `0.2.1-rc.3` | 2026-11-07 | 全绿 |
-| `0.2.1-rc.1` | 2026-10-19 ~ 11-04 | 全绿 |
-
-`engines.dsh` 的范围更宽(`>=0.2.0-rc.2 <0.3.0-0`)—— 那是"装上不会崩"的边界,不等于"这一版我们跑过"。
 
 ## 用法
 
@@ -103,18 +103,18 @@ dsh plugin --profile web add dsh-perf-hud
 
 ### 面板怎么读
 
-完整口径(场景标签 / 帧严重度 / 归因 / 缺失 / 回放 / 记录器可靠性)在 [docs/reading-panel.md](docs/reading-panel.md);布局与文案规则在 [docs/panel-rules.md](docs/panel-rules.md)。上手只需要六条:
+完整口径(场景标签 / 帧严重度 / 归因 / 缺失 / 回放 / 记录器可靠性)在 [docs/reading-panel.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/reading-panel.md);布局与文案规则在 [docs/panel-rules.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/panel-rules.md)。上手只需要六条:
 
 1. **先看标题栏的场景标签**(`流式` / `空闲 Ns`),它是解读所有数字的前提;空闲基线要 60 秒净增为 0 才算真的空闲。
 2. **帧严重度只有一个口径**:`max(blocking, 帧时长)` —— 判据、排序、标签共用同一个函数;`blocking = 0` 不等于没卡。
 3. **每条证据都标出处**:直接测量 / 归因推断 / 无法确认三档;不会把推断写成"根因"。
-4. **缺什么会写出来**:`context.missing` 按 `前缀:说明` 给(如 `precise:`、`loaf-pkg:`、`host-snapshot:`),前缀表由 [诊断 Skill §2.6](skills/dsh-perf-diagnosis/SKILL.md) 定义、`tools/gen-prefix-table.mjs` 生成。
+4. **缺什么会写出来**:`context.missing` 按 `前缀:说明` 给(如 `precise:`、`loaf-pkg:`、`host-snapshot:`),前缀表由 [诊断 Skill §2.6](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/skills/dsh-perf-diagnosis/SKILL.md) 定义、`tools/gen-prefix-table.mjs` 生成。
 5. **实时与历史是两个上下文**,分流只在 `detailContext()` 一处:详情区第一行会写明 `实时监控 · 当前帧` 还是 `历史事故 i12 · 历史帧 3/305`,不混数据源。
 6. **取值卡的那一条**:工具箱清单按严重度排(索引 0 最差);「看这一帧」会把上下文切到历史事故,数据全部来自事故包,所以跨会话读回也能逐帧回放。
 
 ### 诊断包
 
-四个文件、固定顺序(`manifest.json` 是入口):[导出包契约](docs/pack-schema.md) 冻结了全部键与版本策略,`tests/compat.mjs` 保证上一版的包仍读得出来。
+四个文件、固定顺序(`manifest.json` 是入口):[导出包契约](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/docs/pack-schema.md) 冻结了全部键与版本策略,`tests/compat.mjs` 保证上一版的包仍读得出来。
 
 | 文件 | 用处 |
 |---|---|
@@ -127,7 +127,7 @@ dsh plugin --profile web add dsh-perf-hud
 - **脱敏是减法,不是匿名化**:页面地址只留 origin + path(查询串整段丢);脚本 URL 去协议与主机、保留 `rev`;敏感参数的值换 `<redacted>`;`/Users/<名>` 换 `~`;UA 只留主版本 + 系统。本来就没采:聊天正文、提示词、Cookie、Token、请求头 —— **正文只读字符数、不读内容**(打开 / 切换耗时那一层要判断"正文到了没有",读一次 `textContent.length`),其余层不碰正文 DOM。`context.redaction` 三个数组如实交代做了什么、没做什么。
 - **本地回放(仓库内)**:`preview/replay.html` 拖进 zip / incident.json 就能看 —— 帧条、按包、可疑脚本、longtask,并**并列显示**"包内 summary"与"回放器从 frames 现算"的逐项差异(不一致直接标红)。离线断言见 `tests/replay.mjs`。
 - **宿主 + 页面同一时间轴**:先 `__perfHud.cpuProfile(5)` 采一段宿主 CPU,复现卡顿后导出那条事故 —— `incident.timeline[0].share.hostPct` 给「宿主占比 X%」,`host.samples[]` / `frames[]` 是两段可复核的原始序列(只给百分比不算完)。验收命令:`node tools/check-timeline.mjs`。
-- **人读一份事故**:`node tools/inspect-incident.mjs <file.json>`(帧条带 / 窗口内 longtask / LoAF / 按耗时排序的脚本);**交给 AI**:直接给它那份 `-ai.zip` —— 随包发货的 [诊断 Skill](skills/dsh-perf-diagnosis/SKILL.md) 会按 §2.1 的字段表与 §2.6 的前缀表读它。
+- **人读一份事故**:`node tools/inspect-incident.mjs <file.json>`(帧条带 / 窗口内 longtask / LoAF / 按耗时排序的脚本);**交给 AI**:直接给它那份 `-ai.zip` —— 随包发货的 [诊断 Skill](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/skills/dsh-perf-diagnosis/SKILL.md) 会按 §2.1 的字段表与 §2.6 的前缀表读它。
 
 ### 控制台 API 与存储键位
 
@@ -166,11 +166,11 @@ node tools/gen-prefix-table.mjs --check  # 诊断 Skill §2.6 的前缀表与 ca
 # 943 条断言 + 一条冒烟,离线,无需 DSH 在跑;npm test 一条命令跑完
 ```
 
-改到面板渲染 / `apply()` / `start()` 时**再跑一次真页面验收**(要浏览器 + 本机 `dsh web`,不进 CI):`node tools/check-panel.mjs`(必跑),`check-incident` / `check-counts` / `check-storage` / `check-interaction` 视改动。规则、提交规范、状态四片与全部门禁见 [AGENTS.md](AGENTS.md);供应链与发版门槛见 [REVIEW.md](REVIEW.md)。
+改到面板渲染 / `apply()` / `start()` 时**再跑一次真页面验收**(要浏览器 + 本机 `dsh web`,不进 CI):`node tools/check-panel.mjs`(必跑),`check-incident` / `check-counts` / `check-storage` / `check-interaction` 视改动。规则、提交规范、状态四片与全部门禁见 [AGENTS.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/AGENTS.md);供应链与发版门槛见 [REVIEW.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/REVIEW.md)。
 
 ## 参与贡献
 
-欢迎报 bug 与提 PR。提交前跑完上面五套离线断言 + 渲染冒烟,并读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [AGENTS.md](AGENTS.md)。变更历史见 [CHANGELOG.md](CHANGELOG.md);历史决策与实测证据在 [docs/plans/](docs/plans/)(不是必读)。
+欢迎报 bug 与提 PR。提交前跑完上面五套离线断言 + 渲染冒烟,并读 [CONTRIBUTING.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/CONTRIBUTING.md) 与 [AGENTS.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/AGENTS.md)。变更历史见 [CHANGELOG.md](https://github.com/yanzhaohui1999/dsh-perf-hud/blob/main/CHANGELOG.md);历史决策与实测证据在 [docs/plans/](https://github.com/yanzhaohui1999/dsh-perf-hud/tree/main/docs/plans)(不是必读)。
 
 ## License
 
