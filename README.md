@@ -32,7 +32,7 @@ v1.0.0,已发布。主体不是仪表盘,而是**行车记录仪**:默认零插�
 
 展开面板时,它只回答五个问题:现在卡不卡、刚才那一下多慢、可能是谁、趋势如何、下一步看什么。
 
-<p align="center"><img src="docs/images/00-why-main.png" width="396" alt="真机截图:21.2 fps 的页面,最近一次卡顿 155ms,现场已自动保存"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/yanzhaohui1999/dsh-perf-hud/main/docs/images/00-why-main.png" width="396" alt="真机截图:21.2 fps 的页面,最近一次卡顿 155ms,现场已自动保存"></p>
 <p align="center"><sub>真机截图:21.2 fps 的页面,最近一次卡顿 155ms,现场已自动保存。</sub></p>
 
 ### 它回答什么问题
@@ -91,9 +91,9 @@ dsh plugin --profile web add dsh-perf-hud
 
 | **主界面**(默认) | **卡顿详情** | **设置** |
 |---|---|---|
-| <img src="docs/images/01-main.png" width="300"> | <img src="docs/images/08-incident.png" width="300"> | <img src="docs/images/07-settings.png" width="300"> |
+| <img src="https://raw.githubusercontent.com/yanzhaohui1999/dsh-perf-hud/main/docs/images/01-main.png" width="300"> | <img src="https://raw.githubusercontent.com/yanzhaohui1999/dsh-perf-hud/main/docs/images/08-incident.png" width="300"> | <img src="https://raw.githubusercontent.com/yanzhaohui1999/dsh-perf-hud/main/docs/images/07-settings.png" width="300"> |
 
-开发者详情五个页签的样子在 [docs/images/](docs/images/)(截图由 `node tools/shots.mjs` 生成,要本机 `dsh web`;**图片不进 npm 包**,npm 页面上会是空图)。
+开发者详情五个页签的样子在 [docs/images/](https://github.com/yanzhaohui1999/dsh-perf-hud/tree/main/docs/images)(截图由 `node tools/shots.mjs` 生成,要本机 `dsh web`;截图不进 npm 包,README 里用绝对 URL,所以 npm 与 GitHub 上都能显示)。
 
 1. **展开**:点药丸上的 `+` → 主界面;折叠时那颗药丸写着 fps / 最差帧 / 最近 24 小时检测到几次。
 2. **看那一次卡顿**:点主界面整块事故行(左边琥珀色竖条)→ 卡顿详情;这一屏默认只给结论与时间轴,想看这一帧的时间去向就展开「▸ 技术细节」。
